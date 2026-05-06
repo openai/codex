@@ -349,6 +349,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -470,6 +471,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -516,6 +518,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -637,6 +640,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 

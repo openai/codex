@@ -18,6 +18,12 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PreToolUseCommandInput;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreToolUsePermissionDecision {
+    Allow,
+    Ask { reason: Option<String> },
+}
+
 #[derive(Debug, Clone)]
 pub struct PreToolUseRequest {
     pub session_id: ThreadId,
@@ -38,6 +44,8 @@ pub struct PreToolUseOutcome {
     pub should_block: bool,
     pub block_reason: Option<String>,
     pub additional_contexts: Vec<String>,
+    pub updated_input: Option<Value>,
+    pub permission_decision: Option<PreToolUsePermissionDecision>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -45,6 +53,8 @@ struct PreToolUseHandlerData {
     should_block: bool,
     block_reason: Option<String>,
     additional_contexts_for_model: Vec<String>,
+    updated_input: Option<Value>,
+    permission_decision: Option<PreToolUsePermissionDecision>,
 }
 
 pub(crate) fn preview(
@@ -81,6 +91,8 @@ pub(crate) async fn run(
             should_block: false,
             block_reason: None,
             additional_contexts: Vec::new(),
+            updated_input: None,
+            permission_decision: None,
         };
     }
 
@@ -116,6 +128,19 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
+    let (updated_input, permission_decision) = if should_block {
+        (None, None)
+    } else {
+        results
+            .iter()
+            .rev()
+            .find_map(|result| {
+                result.data.updated_input.clone().map(|updated_input| {
+                    (Some(updated_input), result.data.permission_decision.clone())
+                })
+            })
+            .unwrap_or((None, None))
+    };
 
     PreToolUseOutcome {
         hook_events: results
@@ -127,6 +152,8 @@ pub(crate) async fn run(
         should_block,
         block_reason,
         additional_contexts,
+        updated_input,
+        permission_decision,
     }
 }
 
@@ -161,6 +188,8 @@ fn parse_completed(
     let mut should_block = false;
     let mut block_reason = None;
     let mut additional_contexts_for_model = Vec::new();
+    let mut updated_input = None;
+    let mut permission_decision = None;
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -203,6 +232,10 @@ fn parse_completed(
                                 kind: HookOutputEntryKind::Feedback,
                                 text: reason,
                             });
+                        }
+                        if !should_block {
+                            updated_input = parsed.updated_input;
+                            permission_decision = parsed.permission_decision;
                         }
                     }
                 } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
@@ -258,6 +291,8 @@ fn parse_completed(
             should_block,
             block_reason,
             additional_contexts_for_model,
+            updated_input,
+            permission_decision,
         },
     }
 }
@@ -268,6 +303,8 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToo
         should_block: false,
         block_reason: None,
         additional_contexts: Vec::new(),
+        updated_input: None,
+        permission_decision: None,
     }
 }
 
@@ -283,6 +320,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::PreToolUseHandlerData;
+    use super::PreToolUsePermissionDecision;
     use super::command_input_json;
     use super::parse_completed;
     use super::preview;
@@ -320,6 +358,8 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -330,6 +370,60 @@ mod tests {
                 text: "do not run that".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn permission_decision_allow_can_update_input() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"echo rewritten"}}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+                additional_contexts_for_model: Vec::new(),
+                updated_input: Some(serde_json::json!({ "command": "echo rewritten" })),
+                permission_decision: Some(PreToolUsePermissionDecision::Allow),
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+        assert_eq!(parsed.completed.run.entries, vec![]);
+    }
+
+    #[test]
+    fn permission_decision_ask_can_update_input() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"please confirm","updatedInput":{"command":"echo rewritten"}}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+                additional_contexts_for_model: Vec::new(),
+                updated_input: Some(serde_json::json!({ "command": "echo rewritten" })),
+                permission_decision: Some(PreToolUsePermissionDecision::Ask {
+                    reason: Some("please confirm".to_string()),
+                }),
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+        assert_eq!(parsed.completed.run.entries, vec![]);
     }
 
     #[test]
@@ -350,6 +444,8 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -380,6 +476,8 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: vec!["remember this".to_string()],
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -416,6 +514,8 @@ mod tests {
                 should_block: false,
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -442,6 +542,8 @@ mod tests {
                 should_block: false,
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -472,6 +574,8 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: vec!["nope".to_string()],
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -504,6 +608,8 @@ mod tests {
                 should_block: false,
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -524,6 +630,8 @@ mod tests {
                 should_block: false,
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -550,6 +658,8 @@ mod tests {
                 should_block: true,
                 block_reason: Some("blocked by policy".to_string()),
                 additional_contexts_for_model: Vec::new(),
+                updated_input: None,
+                permission_decision: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);

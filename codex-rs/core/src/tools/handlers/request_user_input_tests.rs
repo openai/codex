@@ -53,6 +53,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
             })
             .to_string(),
         },
+        pre_tool_use_permission_decision: None,
     })
     .await;
 

@@ -43,7 +43,8 @@
           "type": "string"
         },
         "updatedInput": {
-          "default": null
+          "default": null,
+          "description": "Replaces the entire tool input object when paired with `allow` or `ask`."
         }
       },
       "required": [

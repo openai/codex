@@ -291,6 +291,7 @@ impl ToolRouter {
             tool_name,
             source,
             payload,
+            pre_tool_use_permission_decision: None,
         };
 
         self.registry.dispatch_any(invocation).await

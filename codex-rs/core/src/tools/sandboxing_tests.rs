@@ -35,6 +35,30 @@ fn bash_permission_request_payload_includes_description_when_present() {
 }
 
 #[test]
+fn bash_updated_input_noop_ignores_description() {
+    let payload = PermissionRequestPayload::bash(
+        "echo hi".to_string(),
+        Some("network-access example.com".to_string()),
+    );
+
+    assert!(payload.updated_input_is_noop(&json!({ "command": "echo hi" })));
+}
+
+#[test]
+fn non_bash_updated_input_noop_requires_full_equality() {
+    let payload = PermissionRequestPayload {
+        tool_name: HookToolName::apply_patch(),
+        tool_input: json!({ "command": "patch" }),
+    };
+
+    assert!(payload.updated_input_is_noop(&json!({ "command": "patch" })));
+    assert!(!payload.updated_input_is_noop(&json!({
+        "command": "patch",
+        "description": "ignored"
+    })));
+}
+
+#[test]
 fn external_sandbox_skips_exec_approval_on_request() {
     let sandbox_policy = SandboxPolicy::ExternalSandbox {
         network_access: NetworkAccess::Restricted,

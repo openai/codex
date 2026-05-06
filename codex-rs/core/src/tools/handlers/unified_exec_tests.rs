@@ -31,6 +31,7 @@ async fn invocation_for_payload(
         tool_name: codex_tools::ToolName::plain(tool_name),
         source: ToolCallSource::Direct,
         payload,
+        pre_tool_use_permission_decision: None,
     }
 }
 
@@ -196,6 +197,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            pre_tool_use_permission_decision: None,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
@@ -222,6 +224,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             tool_name: codex_tools::ToolName::plain("write_stdin"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            pre_tool_use_permission_decision: None,
         }),
         None
     );

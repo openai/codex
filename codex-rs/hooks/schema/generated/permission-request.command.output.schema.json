@@ -37,7 +37,7 @@
         },
         "updatedInput": {
           "default": null,
-          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+          "description": "Replaces the entire tool input object when `behavior` is `allow`."
         },
         "updatedPermissions": {
           "default": null,

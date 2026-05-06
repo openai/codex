@@ -14,6 +14,8 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -162,6 +164,27 @@ impl ToolHandler for ExecCommandHandler {
             })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported exec_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "exec_command",
+                "cmd",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -177,6 +200,7 @@ impl ToolHandler for ExecCommandHandler {
             tracker,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -190,7 +214,10 @@ impl ToolHandler for ExecCommandHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let context = UnifiedExecContext {
+            pre_tool_use_permission_decision,
+            ..UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone())
+        };
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
         let Some(turn_environment) =
             resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
@@ -307,6 +334,7 @@ impl ToolHandler for ExecCommandHandler {
             Some(&tracker),
             &context.call_id,
             "exec_command",
+            context.pre_tool_use_permission_decision.clone(),
         )
         .await?
         {
@@ -349,6 +377,9 @@ impl ToolHandler for ExecCommandHandler {
             .await
         {
             Ok(response) => Ok(response),
+            Err(UnifiedExecError::UpdatedInput(updated_input)) => {
+                Err(FunctionCallError::UpdatedInput(updated_input))
+            }
             Err(UnifiedExecError::SandboxDenied { output, .. }) => {
                 let output_text = output.aggregated_output.text;
                 let original_token_count = approx_token_count(&output_text);

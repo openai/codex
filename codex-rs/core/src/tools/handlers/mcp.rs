@@ -48,6 +48,26 @@ impl ToolHandler for McpHandler {
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        invocation.payload = match invocation.payload {
+            ToolPayload::Mcp { server, tool, .. } => ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments: serde_json::to_string(&updated_input).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to serialize rewritten MCP arguments: {err}"
+                    ))
+                })?,
+            },
+            payload => payload,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -73,6 +93,7 @@ impl ToolHandler for McpHandler {
             turn,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -101,6 +122,7 @@ impl ToolHandler for McpHandler {
             tool,
             self.tool_name.display(),
             arguments_str,
+            pre_tool_use_permission_decision,
         )
         .await;
 
@@ -162,6 +184,7 @@ mod tests {
                 tool_name: codex_tools::ToolName::namespaced("mcp__memory__", "create_entities"),
                 source: ToolCallSource::Direct,
                 payload,
+                pre_tool_use_permission_decision: None,
             }),
             Some(PreToolUsePayload {
                 tool_name: HookToolName::new("mcp__memory__create_entities"),
@@ -215,6 +238,7 @@ mod tests {
             tool_name: codex_tools::ToolName::namespaced("mcp__filesystem__", "read_file"),
             source: ToolCallSource::Direct,
             payload,
+            pre_tool_use_permission_decision: None,
         };
         assert_eq!(
             handler.post_tool_use_payload(&invocation, &output),

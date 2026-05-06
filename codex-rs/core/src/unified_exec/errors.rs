@@ -1,4 +1,5 @@
 use codex_protocol::exec_output::ExecToolCallOutput;
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,6 +24,8 @@ pub(crate) enum UnifiedExecError {
         message: String,
         output: ExecToolCallOutput,
     },
+    #[error("tool input rewritten by hook")]
+    UpdatedInput(Value),
 }
 
 impl UnifiedExecError {

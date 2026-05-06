@@ -22,6 +22,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -323,6 +325,29 @@ impl ToolHandler for ApplyPatchHandler {
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let patch = updated_hook_command(&updated_input)?;
+        invocation.payload = match invocation.payload {
+            ToolPayload::Function { arguments } => ToolPayload::Function {
+                arguments: rewrite_function_string_argument(
+                    &arguments,
+                    "apply_patch",
+                    "input",
+                    patch,
+                )?,
+            },
+            ToolPayload::Custom { .. } => ToolPayload::Custom {
+                input: patch.to_string(),
+            },
+            payload => payload,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -348,6 +373,7 @@ impl ToolHandler for ApplyPatchHandler {
             call_id,
             tool_name,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -426,6 +452,8 @@ impl ToolHandler for ApplyPatchHandler {
                             turn: turn.clone(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.display(),
+                            pre_tool_use_permission_decision: pre_tool_use_permission_decision
+                                .clone(),
                         };
                         let out = orchestrator
                             .run(
@@ -478,6 +506,7 @@ pub(crate) async fn intercept_apply_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
+    pre_tool_use_permission_decision: Option<codex_hooks::PreToolUsePermissionDecision>,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn
         .environments
@@ -534,6 +563,7 @@ pub(crate) async fn intercept_apply_patch(
                         turn: turn.clone(),
                         call_id: call_id.to_string(),
                         tool_name: tool_name.to_string(),
+                        pre_tool_use_permission_decision: pre_tool_use_permission_decision.clone(),
                     };
                     let out = orchestrator
                         .run(

@@ -7,6 +7,7 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
+use codex_hooks::PreToolUsePermissionDecision;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -54,6 +55,7 @@ pub struct ToolInvocation {
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
+    pub pre_tool_use_permission_decision: Option<PreToolUsePermissionDecision>,
 }
 
 #[derive(Clone, Debug)]

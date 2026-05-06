@@ -25,6 +25,9 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::rewrite_function_arguments;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -98,6 +101,7 @@ struct RunExecLikeArgs {
     call_id: String,
     freeform: bool,
     shell_runtime_backend: ShellRuntimeBackend,
+    pre_tool_use_permission_decision: Option<codex_hooks::PreToolUsePermissionDecision>,
 }
 
 impl ShellHandler {
@@ -234,6 +238,7 @@ impl ToolHandler for ShellHandler {
             tracker,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -263,6 +268,7 @@ impl ToolHandler for ShellHandler {
             call_id,
             freeform: false,
             shell_runtime_backend: ShellRuntimeBackend::Generic,
+            pre_tool_use_permission_decision,
         })
         .await
     }
@@ -312,6 +318,7 @@ impl ToolHandler for ContainerExecHandler {
             tracker,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -341,6 +348,7 @@ impl ToolHandler for ContainerExecHandler {
             call_id,
             freeform: false,
             shell_runtime_backend: ShellRuntimeBackend::Generic,
+            pre_tool_use_permission_decision,
         })
         .await
     }
@@ -376,6 +384,41 @@ impl ToolHandler for LocalShellHandler {
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: JsonValue,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let command = updated_hook_command(&updated_input)?;
+        invocation.payload = match invocation.payload {
+            ToolPayload::Function { arguments } => {
+                let command = shlex::split(command).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "hook returned shell input with an invalid command string".to_string(),
+                    )
+                })?;
+                ToolPayload::Function {
+                    arguments: rewrite_function_arguments(&arguments, "shell", |arguments| {
+                        arguments.insert(
+                            "command".to_string(),
+                            JsonValue::Array(command.into_iter().map(JsonValue::String).collect()),
+                        );
+                    })?,
+                }
+            }
+            ToolPayload::LocalShell { mut params } => {
+                params.command = shlex::split(command).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "hook returned shell input with an invalid command string".to_string(),
+                    )
+                })?;
+                ToolPayload::LocalShell { params }
+            }
+            payload => payload,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -399,6 +442,7 @@ impl ToolHandler for LocalShellHandler {
             tracker,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -422,6 +466,7 @@ impl ToolHandler for LocalShellHandler {
             call_id,
             freeform: false,
             shell_runtime_backend: ShellRuntimeBackend::Generic,
+            pre_tool_use_permission_decision,
         })
         .await
     }
@@ -491,6 +536,27 @@ impl ToolHandler for ShellCommandHandler {
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: JsonValue,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported shell_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "shell_command",
+                "command",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -514,6 +580,7 @@ impl ToolHandler for ShellCommandHandler {
             tracker,
             call_id,
             payload,
+            pre_tool_use_permission_decision,
             ..
         } = invocation;
 
@@ -554,6 +621,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             freeform: true,
             shell_runtime_backend: self.shell_runtime_backend(),
+            pre_tool_use_permission_decision,
         })
         .await
     }
@@ -573,6 +641,7 @@ impl ShellHandler {
             call_id,
             freeform,
             shell_runtime_backend,
+            pre_tool_use_permission_decision,
         } = args;
 
         let mut exec_params = exec_params;
@@ -656,6 +725,7 @@ impl ShellHandler {
             Some(&tracker),
             &call_id,
             tool_name.as_str(),
+            pre_tool_use_permission_decision.clone(),
         )
         .await?
         {
@@ -727,6 +797,7 @@ impl ShellHandler {
             turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
+            pre_tool_use_permission_decision,
         };
         let out = orchestrator
             .run(

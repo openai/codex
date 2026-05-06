@@ -1,9 +1,9 @@
 //! Permission-request hook execution.
 //!
 //! This event runs in the approval path, before guardian or user approval UI is
-//! shown. Unlike `pre_tool_use`, handlers do not rewrite tool input or block by
-//! stopping execution outright; instead they can return a concrete allow/deny
-//! decision, or decline to decide and let the normal approval flow continue.
+//! shown. Handlers can return a concrete allow/deny decision, or decline to
+//! decide and let the normal approval flow continue. `allow` decisions may also
+//! replace tool input before the request is evaluated again.
 //!
 //! The event also mirrors the rest of the hook system's lifecycle:
 //!
@@ -47,7 +47,7 @@ pub struct PermissionRequestRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
-    Allow,
+    Allow { updated_input: Option<Value> },
     Deny { message: String },
 }
 
@@ -154,8 +154,10 @@ fn resolve_permission_request_decision<'a>(
     let mut resolved_allow = None;
     for decision in decisions {
         match decision {
-            PermissionRequestDecision::Allow => {
-                resolved_allow = Some(PermissionRequestDecision::Allow);
+            PermissionRequestDecision::Allow { updated_input } => {
+                resolved_allow = Some(PermissionRequestDecision::Allow {
+                    updated_input: updated_input.clone(),
+                });
             }
             PermissionRequestDecision::Deny { message } => {
                 return Some(PermissionRequestDecision::Deny {
@@ -219,8 +221,8 @@ fn parse_completed(
                         });
                     } else if let Some(parsed_decision) = parsed.decision {
                         match parsed_decision {
-                            output_parser::PermissionRequestDecision::Allow => {
-                                decision = Some(PermissionRequestDecision::Allow);
+                            output_parser::PermissionRequestDecision::Allow { updated_input } => {
+                                decision = Some(PermissionRequestDecision::Allow { updated_input });
                             }
                             output_parser::PermissionRequestDecision::Deny { message } => {
                                 status = HookRunStatus::Blocked;
@@ -294,7 +296,9 @@ mod tests {
     #[test]
     fn permission_request_deny_overrides_earlier_allow() {
         let decisions = [
-            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Allow {
+                updated_input: None,
+            },
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
             },
@@ -311,13 +315,38 @@ mod tests {
     #[test]
     fn permission_request_returns_allow_when_no_handler_denies() {
         let decisions = [
-            PermissionRequestDecision::Allow,
-            PermissionRequestDecision::Allow,
+            PermissionRequestDecision::Allow {
+                updated_input: None,
+            },
+            PermissionRequestDecision::Allow {
+                updated_input: None,
+            },
         ];
 
         assert_eq!(
             resolve_permission_request_decision(decisions.iter()),
-            Some(PermissionRequestDecision::Allow)
+            Some(PermissionRequestDecision::Allow {
+                updated_input: None,
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_keeps_highest_precedence_allow_update() {
+        let decisions = [
+            PermissionRequestDecision::Allow {
+                updated_input: Some(serde_json::json!({ "command": "first" })),
+            },
+            PermissionRequestDecision::Allow {
+                updated_input: Some(serde_json::json!({ "command": "second" })),
+            },
+        ];
+
+        assert_eq!(
+            resolve_permission_request_decision(decisions.iter()),
+            Some(PermissionRequestDecision::Allow {
+                updated_input: Some(serde_json::json!({ "command": "second" })),
+            })
         );
     }
 

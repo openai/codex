@@ -420,7 +420,21 @@ impl CoreShellActionProvider {
                 )
                 .await
                 {
-                    Some(PermissionRequestDecision::Allow) => {
+                    Some(PermissionRequestDecision::Allow {
+                        updated_input: Some(_),
+                    }) => {
+                        return PromptDecision {
+                            decision: ReviewDecision::Denied,
+                            guardian_review_id: None,
+                            rejection_message: Some(
+                                "updatedInput is not supported for intercepted exec approvals"
+                                    .to_string(),
+                            ),
+                        };
+                    }
+                    Some(PermissionRequestDecision::Allow {
+                        updated_input: None,
+                    }) => {
                         return PromptDecision {
                             decision: ReviewDecision::Approved,
                             guardian_review_id: None,

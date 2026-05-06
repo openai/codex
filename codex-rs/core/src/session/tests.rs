@@ -978,6 +978,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         turn: Arc::clone(&turn),
         call_id: "probe-call".to_string(),
         tool_name: "probe".to_string(),
+        pre_tool_use_permission_decision: None,
     };
 
     orchestrator
@@ -8264,6 +8265,7 @@ async fn create_goal_tool_rejects_existing_goal() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await
         .expect("initial create_goal should succeed");
@@ -8284,6 +8286,7 @@ async fn create_goal_tool_rejects_existing_goal() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -8327,6 +8330,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await
         .expect("initial create_goal should succeed");
@@ -8346,6 +8350,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -8388,6 +8393,7 @@ async fn update_goal_tool_marks_goal_complete() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await
         .expect("initial create_goal should succeed");
@@ -8407,6 +8413,7 @@ async fn update_goal_tool_marks_goal_complete() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await
         .expect("update_goal should mark the goal complete");
@@ -8494,6 +8501,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 
@@ -8567,6 +8575,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
                 })
                 .to_string(),
             },
+            pre_tool_use_permission_decision: None,
         })
         .await;
 

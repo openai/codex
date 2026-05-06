@@ -473,7 +473,29 @@ impl NetworkApprovalService {
         .await
         {
             match permission_request_decision {
-                PermissionRequestDecision::Allow => {
+                PermissionRequestDecision::Allow {
+                    updated_input: Some(_),
+                } => {
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByPolicy(
+                                "updatedInput is not supported for network approval requests"
+                                    .to_string(),
+                            ),
+                        )
+                        .await;
+                    }
+                    pending.set_decision(PendingApprovalDecision::Deny).await;
+                    let mut pending_approvals = self.pending_host_approvals.lock().await;
+                    pending_approvals.remove(&key);
+                    return NetworkDecision::deny(
+                        "updatedInput is not supported for network approval requests",
+                    );
+                }
+                PermissionRequestDecision::Allow {
+                    updated_input: None,
+                } => {
                     pending
                         .set_decision(PendingApprovalDecision::AllowOnce)
                         .await;

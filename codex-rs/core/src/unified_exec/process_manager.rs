@@ -221,6 +221,9 @@ async fn finish_deferred_network_approval_for_session(
 fn network_approval_error_message(err: ToolError) -> String {
     match err {
         ToolError::Rejected(message) => message,
+        ToolError::UpdatedInput(_) => {
+            "updatedInput is not supported for deferred network approvals".to_string()
+        }
         ToolError::Codex(err) => err.to_string(),
     }
 }
@@ -1041,6 +1044,7 @@ impl UnifiedExecProcessManager {
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
+            pre_tool_use_permission_decision: context.pre_tool_use_permission_decision.clone(),
         };
         orchestrator
             .run(
@@ -1062,6 +1066,9 @@ impl UnifiedExecProcessManager {
                         output.aggregated_output.text.clone()
                     };
                     UnifiedExecError::sandbox_denied(message, output)
+                }
+                ToolError::UpdatedInput(updated_input) => {
+                    UnifiedExecError::UpdatedInput(updated_input)
                 }
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
