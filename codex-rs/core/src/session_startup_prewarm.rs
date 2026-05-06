@@ -232,7 +232,7 @@ async fn schedule_startup_prewarm_inner(
             &startup_turn_context.session_telemetry,
             startup_turn_context.reasoning_effort,
             startup_turn_context.reasoning_summary,
-            startup_turn_context.config.service_tier,
+            startup_turn_context.config.service_tier.clone(),
             startup_turn_metadata_header.as_deref(),
         )
         .await?;

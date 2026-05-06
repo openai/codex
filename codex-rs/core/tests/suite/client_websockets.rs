@@ -15,6 +15,7 @@ use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
@@ -87,7 +88,8 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
-    conversation_id: ThreadId,
+    session_id: SessionId,
+    thread_id: ThreadId,
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
@@ -125,7 +127,15 @@ async fn responses_websocket_streams_request() {
     );
     assert_eq!(
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
-        Some(harness.conversation_id.to_string())
+        Some(harness.thread_id.to_string())
+    );
+    assert_eq!(
+        handshake.header("session_id"),
+        Some(harness.session_id.to_string())
+    );
+    assert_eq!(
+        handshake.header("thread_id"),
+        Some(harness.thread_id.to_string())
     );
     assert_eq!(
         handshake.header(USER_AGENT_HEADER),
@@ -157,6 +167,93 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_sends_response_processed_when_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hi"),
+            ev_completed("resp-1"),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::ResponsesWebsocketResponseProcessed)
+            .expect("test config should allow feature update");
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should send response.processed after processing");
+
+    let processed = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
+        .await;
+    assert_eq!(
+        processed.body_json(),
+        json!({
+            "type": "response.processed",
+            "response_id": "resp-1",
+        })
+    );
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 3);
+    assert_eq!(
+        connection[1].body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_omits_response_processed_without_feature() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hi"),
+            ev_completed("resp-1"),
+        ],
+        vec![],
+    ]])
+    .await;
+    let mut builder = test_codex();
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should complete without response.processed");
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
 
     server.shutdown().await;
 }
@@ -1827,7 +1924,8 @@ async fn websocket_harness_with_provider_options(
     }
     let config = Arc::new(config);
     let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let session_id = SessionId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let exporter = InMemoryMetricExporter::default();
@@ -1837,7 +1935,7 @@ async fn websocket_harness_with_provider_options(
     )
     .expect("in-memory metrics client");
     let session_telemetry = SessionTelemetry::new(
-        conversation_id,
+        thread_id,
         MODEL,
         model_info.slug.as_str(),
         /*account_id*/ None,
@@ -1853,7 +1951,8 @@ async fn websocket_harness_with_provider_options(
     let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        session_id,
+        thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
@@ -1866,7 +1965,8 @@ async fn websocket_harness_with_provider_options(
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
-        conversation_id,
+        session_id,
+        thread_id,
         model_info,
         effort,
         summary,
@@ -1935,7 +2035,7 @@ async fn stream_until_complete_with_request_metadata(
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            service_tier,
+            service_tier.map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )

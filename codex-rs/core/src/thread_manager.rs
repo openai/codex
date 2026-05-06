@@ -6,6 +6,7 @@ use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
+use crate::resolve_installation_id;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -39,12 +40,12 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -173,6 +174,7 @@ pub struct StartThreadOptions {
     pub config: Config,
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
+    pub thread_source: Option<ThreadSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
@@ -205,6 +207,7 @@ pub(crate) struct ThreadManagerState {
     state_db: StateDbHandle,
     agent_graph_store: Arc<dyn AgentGraphStore>,
     session_source: SessionSource,
+    installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
@@ -268,6 +271,7 @@ impl ThreadManager {
         state_db: StateDbHandle,
         thread_store: Arc<dyn ThreadStore>,
         agent_graph_store: Arc<dyn AgentGraphStore>,
+        installation_id: String,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
@@ -296,6 +300,7 @@ impl ThreadManager {
                 agent_graph_store,
                 auth_manager,
                 session_source,
+                installation_id,
                 analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
@@ -323,12 +328,21 @@ impl ThreadManager {
             OPENAI_PROVIDER_ID.to_string(),
         )
         .await;
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
+        let installation_id = resolve_installation_id(&skills_codex_home)
+            .await
+            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
         let mut manager = Self::with_models_provider_and_home_and_state_db_for_tests(
             auth,
             provider,
             codex_home.clone(),
             Arc::new(EnvironmentManager::default_for_tests()),
             state_db,
+            skills_codex_home,
+            installation_id,
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
         manager
@@ -348,12 +362,21 @@ impl ThreadManager {
             OPENAI_PROVIDER_ID.to_string(),
         )
         .await;
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
+        let installation_id = resolve_installation_id(&skills_codex_home)
+            .await
+            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
         Self::with_models_provider_and_home_and_state_db_for_tests(
             auth,
             provider,
             codex_home,
             environment_manager,
             state_db,
+            skills_codex_home,
+            installation_id,
         )
     }
 
@@ -363,13 +386,11 @@ impl ThreadManager {
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
         state_db: StateDbHandle,
+        skills_codex_home: AbsolutePathBuf,
+        installation_id: String,
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
@@ -407,6 +428,7 @@ impl ThreadManager {
                 agent_graph_store,
                 auth_manager,
                 session_source: SessionSource::Exec,
+                installation_id,
                 analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
@@ -471,27 +493,6 @@ impl ThreadManager {
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.state.list_thread_ids().await
-    }
-
-    pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
-        let threads = self
-            .state
-            .threads
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for thread in threads {
-            if let Err(err) = thread
-                .submit(Op::RefreshMcpServers {
-                    config: refresh_config.clone(),
-                })
-                .await
-            {
-                warn!("failed to request MCP server refresh: {err}");
-            }
-        }
     }
 
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
@@ -569,6 +570,7 @@ impl ThreadManager {
             config,
             initial_history: InitialHistory::New,
             session_source: None,
+            thread_source: None,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
@@ -585,12 +587,16 @@ impl ThreadManager {
         let session_source = options
             .session_source
             .unwrap_or_else(|| self.state.session_source.clone());
+        let thread_source = options
+            .thread_source
+            .or_else(|| options.initial_history.get_resumed_thread_source());
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            thread_source,
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
@@ -633,11 +639,13 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
+        let thread_source = initial_history.get_resumed_thread_source();
         Box::pin(self.state.spawn_thread(
             config,
             initial_history,
             auth_manager,
             self.agent_control(),
+            thread_source,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -662,6 +670,7 @@ impl ThreadManager {
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            /*thread_source*/ None,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -684,11 +693,13 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
+        let thread_source = initial_history.get_resumed_thread_source();
         Box::pin(self.state.spawn_thread(
             config,
             initial_history,
             auth_manager,
             self.agent_control(),
+            thread_source,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -766,6 +777,7 @@ impl ThreadManager {
         snapshot: S,
         config: Config,
         path: PathBuf,
+        thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
@@ -778,6 +790,7 @@ impl ThreadManager {
             snapshot,
             config,
             history,
+            thread_source,
             persist_extended_history,
             parent_trace,
         )
@@ -790,6 +803,7 @@ impl ThreadManager {
         snapshot: S,
         config: Config,
         history: InitialHistory,
+        thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
@@ -800,6 +814,7 @@ impl ThreadManager {
             snapshot.into(),
             config,
             history,
+            thread_source,
             persist_extended_history,
             parent_trace,
         )
@@ -811,6 +826,7 @@ impl ThreadManager {
         snapshot: ForkSnapshot,
         config: Config,
         history: InitialHistory,
+        thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -825,6 +841,7 @@ impl ThreadManager {
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            thread_source,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -940,6 +957,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
@@ -955,6 +973,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -970,6 +989,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            thread_source,
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
@@ -996,12 +1016,14 @@ impl ThreadManagerState {
         } = options;
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
+        let thread_source = initial_history.get_resumed_thread_source();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            thread_source,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -1021,6 +1043,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
+        thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
@@ -1035,6 +1058,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            thread_source,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -1055,6 +1079,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -1068,6 +1093,7 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            thread_source,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -1088,6 +1114,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -1129,6 +1156,7 @@ impl ThreadManagerState {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
+            installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
@@ -1137,6 +1165,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             conversation_history: initial_history,
             session_source,
+            thread_source,
             agent_control,
             dynamic_tools,
             persist_extended_history,

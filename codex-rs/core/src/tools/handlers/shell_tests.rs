@@ -247,9 +247,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
-    };
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
@@ -279,9 +277,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         success: Some(true),
         post_tool_use_response: Some(json!("shell output")),
     };
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
-    };
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
     let (session, turn) = make_session_and_context().await;
     let invocation = ToolInvocation {
         session: session.into(),

@@ -1,4 +1,6 @@
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
+use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -30,15 +32,16 @@ impl EnvironmentContextEnvironment {
         }
     }
 
-    fn from_turn_environments(
-        environments: &[crate::session::turn_context::TurnEnvironment],
-    ) -> Vec<Self> {
+    fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
         environments
             .iter()
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd.clone(),
-                shell: environment.shell.clone(),
+                shell: environment
+                    .shell
+                    .clone()
+                    .unwrap_or_else(|| shell.name().to_string()),
             })
             .collect()
     }
@@ -174,10 +177,11 @@ impl EnvironmentContext {
         )
     }
 
-    pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
+                shell,
             ),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),

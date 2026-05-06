@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
+use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -112,6 +113,7 @@ pub async fn run_main(
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<IncomingMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -144,6 +146,7 @@ pub async fn run_main(
             arg0_paths,
             Arc::new(config),
             environment_manager,
+            installation_id,
         )
         .await;
         async move {

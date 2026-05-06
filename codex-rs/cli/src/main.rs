@@ -123,6 +123,10 @@ enum Subcommand {
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
+    /// Internal: start a Codex-shipped MCP server (stdio).
+    #[clap(hide = true, name = "builtin-mcp")]
+    BuiltinMcp(BuiltinMcpCommand),
+
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
@@ -173,6 +177,13 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+}
+
+#[derive(Debug, Args)]
+struct BuiltinMcpCommand {
+    name: String,
+    #[arg(long)]
+    codex_home: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -808,6 +819,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "mcp-server",
             )?;
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
+        }
+        Some(Subcommand::BuiltinMcp(command)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "builtin-mcp",
+            )?;
+            let codex_home = AbsolutePathBuf::try_from(command.codex_home)?;
+            codex_builtin_mcps::run_builtin_mcp_server(&command.name, &codex_home).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(

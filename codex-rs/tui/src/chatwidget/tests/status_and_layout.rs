@@ -1324,6 +1324,34 @@ async fn warning_event_adds_warning_history_cell() {
 }
 
 #[tokio::test]
+async fn repeated_model_metadata_warning_is_hidden_for_same_slug() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let warning = "Model metadata for `unknown-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+
+    handle_warning(&mut chat, warning);
+    handle_warning(&mut chat, warning);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("unknown-model"),
+        "warning cell missing model slug: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn repeated_generic_warning_is_not_hidden() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_warning(&mut chat, "test warning message");
+    handle_warning(&mut chat, "test warning message");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 2, "expected both warning history cells");
+}
+
+#[tokio::test]
 async fn status_line_invalid_items_warn_once() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec![
@@ -1863,8 +1891,7 @@ async fn session_configured_clears_goal_status_footer() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     });

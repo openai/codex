@@ -55,6 +55,7 @@ impl MessageProcessor {
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         environment_manager: Arc<EnvironmentManager>,
+        installation_id: String,
     ) -> Option<Self> {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
@@ -74,6 +75,7 @@ impl MessageProcessor {
             state_db,
             thread_store,
             agent_graph_store,
+            installation_id,
         ));
         Some(Self {
             outgoing,

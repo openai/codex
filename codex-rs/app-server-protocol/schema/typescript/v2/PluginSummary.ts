@@ -11,4 +11,4 @@ export type PluginSummary = { id: string, name: string, source: PluginSource, in
 /**
  * Availability state for installing and using the plugin.
  */
-availability: PluginAvailability, interface: PluginInterface | null, };
+availability: PluginAvailability, interface: PluginInterface | null, keywords: Array<string>, };

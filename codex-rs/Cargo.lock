@@ -1945,6 +1945,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "toml 0.9.11+spec-1.1.0",
@@ -2127,6 +2128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-builtin-mcps"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-config",
+ "codex-memories-mcp",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-bwrap"
 version = "0.0.0"
 dependencies = [
@@ -2171,6 +2183,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
+ "codex-builtin-mcps",
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",
@@ -3008,6 +3021,7 @@ dependencies = [
  "async-channel",
  "codex-api",
  "codex-async-utils",
+ "codex-builtin-mcps",
  "codex-config",
  "codex-exec-server",
  "codex-login",
@@ -3127,6 +3141,19 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "codex-message-history"
+version = "0.0.0"
+dependencies = [
+ "codex-config",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3671,6 +3698,7 @@ dependencies = [
  "codex-install-context",
  "codex-login",
  "codex-mcp",
+ "codex-message-history",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -4258,6 +4286,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "shlex",
+ "similar",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

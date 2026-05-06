@@ -1,0 +1,43 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "context_snapshot::format_request_body_diff_snapshot(scenario,\n\"Last Normal /responses Request\", &normal_request,\n\"Remote /responses/compact Request\", &compact_request,\n&ContextSnapshotOptions::default(),)"
+---
+Scenario: After five varied ChatGPT-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.
+
+--- Last Normal /responses Request
++++ Remote /responses/compact Request
+-  "client_metadata": {
+-    "x-codex-installation-id": "<UUID>"
+-  },
+-  "include": [
+-    "reasoning.encrypted_content"
+-  ],
++    },
++    {
++      "content": [
++        {
++          "text": "turn five raw content",
++          "type": "reasoning_text"
++        }
++      ],
++      "encrypted_content": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYnR1cm4gZml2ZSByYXcgY29udGVudA==",
++      "summary": [
++        {
++          "text": "TURN_FIVE_REASONING",
++          "type": "summary_text"
++        }
++      ],
++      "type": "reasoning"
++    },
++    {
++      "content": [
++        {
++          "text": "TURN_FIVE_ASSISTANT",
++          "type": "output_text"
++        }
++      ],
++      "role": "assistant",
++      "type": "message"
+-  "store": false,
+-  "stream": true,
+-  "tool_choice": "auto",

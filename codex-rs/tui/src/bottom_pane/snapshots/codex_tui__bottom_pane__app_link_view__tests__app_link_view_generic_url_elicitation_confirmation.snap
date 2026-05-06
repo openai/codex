@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/app_link_view.rs
+expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))"
+---
+
+  Finish in Browser
+
+  Complete the requested action in the browser window that just
+  opened.
+  Then return here and select "I finished".
+
+  Link:
+  https://payments.example/checkout/123
+
+  › 1. I finished
+    2. Back
+  Use tab / ↑ ↓ to move, enter to select, esc to close

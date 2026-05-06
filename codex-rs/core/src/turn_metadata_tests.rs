@@ -4,8 +4,7 @@ use crate::sandbox_tags::sandbox_tag;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -95,7 +94,8 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -107,25 +107,26 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
+    let thread_id = json.get("thread_id").and_then(Value::as_str);
     let thread_source = json.get("thread_source").and_then(Value::as_str);
 
     let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
+    assert_eq!(thread_id, Some("thread-a"));
     assert_eq!(thread_source, Some("user"));
     assert!(json.get("session_source").is_none());
 }
 
 #[test]
-fn turn_metadata_state_classifies_subagent_thread_source() {
+fn turn_metadata_state_uses_explicit_subagent_thread_source() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
-    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
-
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &session_source,
+        "thread-a".to_string(),
+        Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -148,7 +149,8 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -174,7 +176,8 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -218,7 +221,8 @@ fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -244,7 +248,8 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -260,6 +265,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "client-supplied".to_string(),
         ),
         ("session_id".to_string(), "client-supplied".to_string()),
+        ("thread_id".to_string(), "client-supplied".to_string()),
         ("thread_source".to_string(), "client-supplied".to_string()),
         (
             "turn_started_at_unix_ms".to_string(),
@@ -278,6 +284,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
+    assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert_eq!(

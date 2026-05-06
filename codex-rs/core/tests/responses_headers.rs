@@ -80,13 +80,13 @@ async fn responses_stream_includes_subagent_header_on_review() {
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let session_telemetry = SessionTelemetry::new(
-        conversation_id,
+        thread_id,
         model.as_str(),
         model_info.slug.as_str(),
         /*account_id*/ None,
@@ -100,7 +100,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        thread_id.into(),
+        thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
@@ -141,7 +142,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }
 
     let request = request_recorder.single_request();
-    let expected_window_id = format!("{conversation_id}:0");
+    let expected_window_id = format!("{thread_id}:0");
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
@@ -205,14 +206,14 @@ async fn responses_stream_includes_subagent_header_on_other() {
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
 
     let session_telemetry = SessionTelemetry::new(
-        conversation_id,
+        thread_id,
         model.as_str(),
         model_info.slug.as_str(),
         /*account_id*/ None,
@@ -226,7 +227,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        thread_id.into(),
+        thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
@@ -317,7 +319,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let model = config.model.clone().expect("model configured");
     let config = Arc::new(config);
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let auth_mode =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"))
             .auth_mode()
@@ -327,7 +329,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let session_telemetry = SessionTelemetry::new(
-        conversation_id,
+        thread_id,
         model.as_str(),
         model_info.slug.as_str(),
         /*account_id*/ None,
@@ -341,7 +343,8 @@ async fn responses_respects_model_info_overrides_from_config() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        thread_id.into(),
+        thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
@@ -452,7 +455,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         initial_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
 
     let git_config_global = cwd.join("empty-git-config");
@@ -565,13 +568,13 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         first_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
     assert_eq!(
         second_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
     assert_eq!(
         first_turn_id, second_turn_id,

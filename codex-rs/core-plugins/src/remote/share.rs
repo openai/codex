@@ -26,6 +26,46 @@ pub struct RemotePluginShareSaveResult {
     pub share_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemotePluginShareAccessPolicy {
+    pub discoverability: Option<RemotePluginShareDiscoverability>,
+    pub share_targets: Option<Vec<RemotePluginShareTarget>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RemotePluginShareDiscoverability {
+    Listed,
+    Unlisted,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemotePluginSharePrincipalType {
+    User,
+    Group,
+    Workspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemotePluginShareTarget {
+    pub principal_type: RemotePluginSharePrincipalType,
+    pub principal_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RemotePluginSharePrincipal {
+    pub principal_type: RemotePluginSharePrincipalType,
+    pub principal_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginShareUpdateTargetsResult {
+    pub principals: Vec<RemotePluginSharePrincipal>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RemoteWorkspacePluginUploadUrlRequest<'a> {
     filename: &'a str,
@@ -46,6 +86,10 @@ struct RemoteWorkspacePluginUploadUrlResponse {
 struct RemoteWorkspacePluginCreateRequest {
     file_id: String,
     etag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discoverability: Option<RemotePluginShareDiscoverability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_targets: Option<Vec<RemotePluginShareTarget>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -54,12 +98,23 @@ struct RemoteWorkspacePluginCreateResponse {
     share_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RemotePluginShareUpdateTargetsRequest {
+    targets: Vec<RemotePluginShareTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RemotePluginShareUpdateTargetsResponse {
+    principals: Vec<RemotePluginSharePrincipal>,
+}
+
 pub async fn save_remote_plugin_share(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     codex_home: &Path,
     plugin_path: &AbsolutePathBuf,
     remote_plugin_id: Option<&str>,
+    access_policy: RemotePluginShareAccessPolicy,
 ) -> Result<RemotePluginShareSaveResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let plugin_path_for_archive = plugin_path.as_path().to_path_buf();
@@ -89,6 +144,8 @@ pub async fn save_remote_plugin_share(
         RemoteWorkspacePluginCreateRequest {
             file_id: upload.file_id,
             etag,
+            discoverability: access_policy.discoverability,
+            share_targets: access_policy.share_targets,
         },
     )
     .await?;
@@ -171,6 +228,24 @@ pub async fn delete_remote_plugin_share(
         );
     }
     Ok(())
+}
+
+pub async fn update_remote_plugin_share_targets(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    remote_plugin_id: &str,
+    targets: Vec<RemotePluginShareTarget>,
+) -> Result<RemotePluginShareUpdateTargetsResult, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/public/plugins/{remote_plugin_id}/shares");
+    let client = build_reqwest_client();
+    let request = authenticated_request(client.put(&url), auth)?
+        .json(&RemotePluginShareUpdateTargetsRequest { targets });
+    let response: RemotePluginShareUpdateTargetsResponse = send_and_decode(request, &url).await?;
+    Ok(RemotePluginShareUpdateTargetsResult {
+        principals: response.principals,
+    })
 }
 
 async fn fetch_created_workspace_plugins(
