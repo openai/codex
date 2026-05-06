@@ -445,7 +445,7 @@ async fn assert_remote_manual_compact_request_parity(
     let mut builder = test_codex().with_auth(auth);
     if let Some(service_tier) = configured_service_tier {
         builder = builder.with_config(move |config| {
-            config.service_tier = Some(service_tier);
+            config.service_tier = Some(service_tier.request_value().to_string());
         });
     }
     let harness = TestCodexHarness::with_builder(builder).await?;
