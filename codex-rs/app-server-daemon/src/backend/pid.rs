@@ -86,12 +86,8 @@ impl PidBackend {
         }
     }
 
+    #[cfg(unix)]
     pub(crate) async fn start(&self) -> Result<Option<u32>> {
-        #[cfg(not(unix))]
-        {
-            bail!("pid-managed app-server startup is unsupported on this platform");
-        }
-
         if let Some(parent) = self.pid_file.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -192,6 +188,11 @@ impl PidBackend {
         }
         drop(reservation_lock);
         Ok(Some(pid))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) async fn start(&self) -> Result<Option<u32>> {
+        bail!("pid-managed app-server startup is unsupported on this platform")
     }
 
     pub(crate) async fn stop(&self) -> Result<()> {
