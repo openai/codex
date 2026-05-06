@@ -3522,7 +3522,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -3638,7 +3637,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -3674,7 +3672,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -3857,7 +3854,6 @@ async fn make_session_with_config_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5153,7 +5149,6 @@ where
     )
     .await
     .expect("state db should initialize");
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -5189,7 +5184,6 @@ where
         skills_manager,
         plugins_manager,
         mcp_manager,
-        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),

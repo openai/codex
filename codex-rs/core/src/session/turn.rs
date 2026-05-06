@@ -1508,7 +1508,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
