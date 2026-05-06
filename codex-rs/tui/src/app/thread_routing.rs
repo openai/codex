@@ -278,22 +278,31 @@ impl App {
                 {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))
                 } else {
-                    let codex_app_server_protocol::McpServerElicitationRequest::Form {
-                        message,
-                        ..
-                    } = &params.request
-                    else {
-                        return None;
-                    };
-                    Some(ThreadInteractiveRequest::Approval(
-                        ApprovalRequest::McpElicitation {
-                            thread_id,
-                            thread_label,
-                            server_name: params.server_name.clone(),
-                            request_id: request_id.clone(),
-                            message: message.clone(),
-                        },
-                    ))
+                    match &params.request {
+                        codex_app_server_protocol::McpServerElicitationRequest::Form {
+                            message,
+                            ..
+                        } => Some(ThreadInteractiveRequest::Approval(
+                            ApprovalRequest::McpElicitation {
+                                thread_id,
+                                thread_label,
+                                server_name: params.server_name.clone(),
+                                request_id: request_id.clone(),
+                                message: message.clone(),
+                            },
+                        )),
+                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                            self.app_event_tx.resolve_elicitation(
+                                thread_id,
+                                params.server_name.clone(),
+                                request_id.clone(),
+                                codex_app_server_protocol::McpServerElicitationAction::Decline,
+                                /*content*/ None,
+                                /*meta*/ None,
+                            );
+                            None
+                        }
+                    }
                 }
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => Some(
