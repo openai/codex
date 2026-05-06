@@ -262,7 +262,7 @@ impl App {
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                if let Some(params) = AppLinkViewParams::from_auth_url_app_server_request(
+                if let Some(params) = AppLinkViewParams::from_url_app_server_request(
                     thread_id,
                     &params.server_name,
                     request_id.clone(),

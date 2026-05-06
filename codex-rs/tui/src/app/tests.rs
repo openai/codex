@@ -2766,12 +2766,12 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
         params: McpServerElicitationRequestParams {
             thread_id: thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
-            server_name: "github_mcp".to_string(),
+            server_name: "payments".to_string(),
             request: McpServerElicitationRequest::Url {
                 meta: None,
-                message: "Sign in to GitHub to continue.".to_string(),
-                url: "https://github.example/login/device".to_string(),
-                elicitation_id: "github-auth-123".to_string(),
+                message: "Review the payment details to continue.".to_string(),
+                url: "https://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
             },
         },
     };
@@ -2783,14 +2783,14 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
         panic!("expected app link request");
     };
 
-    assert_eq!(params.title, "Authentication required");
-    assert_eq!(params.description, Some("Server: github_mcp".to_string()));
-    assert_eq!(params.url, "https://github.example/login/device");
+    assert_eq!(params.title, "Action required");
+    assert_eq!(params.description, Some("Server: payments".to_string()));
+    assert_eq!(params.url, "https://payments.example/checkout/123");
     assert_eq!(
         params.elicitation_target,
         Some(crate::bottom_pane::AppLinkElicitationTarget {
             thread_id,
-            server_name: "github_mcp".to_string(),
+            server_name: "payments".to_string(),
             request_id: AppServerRequestId::Integer(9),
         })
     );
