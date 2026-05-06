@@ -17,6 +17,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::app_server_rate_limit_snapshots;
+use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -219,6 +220,7 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
+    AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
 }
@@ -953,6 +955,7 @@ See the Codex keymap documentation for supported actions and examples."
 
         tui.frame_requester().schedule_frame();
         app.refresh_startup_skills(&app_server);
+        app.refresh_startup_hooks(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {

@@ -32,6 +32,7 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::init_state_db_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -281,6 +282,9 @@ async fn build_test_processor(
         outgoing_tx,
         analytics_events_client.clone(),
     ));
+    let state_db = init_state_db_from_config(config.as_ref())
+        .await
+        .expect("tracing test processor requires state db");
     let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         analytics_events_client,
@@ -290,7 +294,7 @@ async fn build_test_processor(
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         feedback: CodexFeedback::new(),
         log_db: None,
-        state_db: None,
+        state_db,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         auth_manager,

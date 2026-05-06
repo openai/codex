@@ -52,6 +52,7 @@ mod thread_processor_behavior_tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudRequirementsLoader;
     use codex_config::LoaderOverrides;
@@ -156,6 +157,22 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("Codex-App_2".to_string()),
+            name: "lookup-ticket_2".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
     fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
         let tools = vec![
             ApiDynamicToolSpec {
@@ -205,6 +222,7 @@ mod thread_processor_behavior_tests {
                     text_elements: Vec::new(),
                 }],
             }],
+            items_view: TurnItemsView::Full,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,
@@ -259,6 +277,104 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: None,
+            name: "lookup.ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("invalid name");
+        assert!(err.contains("lookup.ticket"), "unexpected error: {err}");
+        assert!(
+            err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_namespace_not_supported_by_responses() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("codex.app".to_string()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("invalid namespace");
+        assert!(err.contains("codex.app"), "unexpected error: {err}");
+        assert!(
+            err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_name_longer_than_responses_limit() {
+        let long_name = "a".repeat(129);
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: None,
+            name: long_name.clone(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("name too long");
+        assert!(err.contains("at most 128"), "unexpected error: {err}");
+        assert!(err.contains(&long_name), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_namespace_longer_than_responses_limit() {
+        let long_namespace = "a".repeat(65);
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some(long_namespace.clone()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
+        assert!(err.contains("at most 64"), "unexpected error: {err}");
+        assert!(err.contains(&long_namespace), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_reserved_responses_namespace() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("functions".to_string()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("reserved Responses namespace");
+        assert!(err.contains("functions"), "unexpected error: {err}");
+        assert!(err.contains("Responses API"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn summary_from_stored_thread_preserves_millisecond_precision() {
         let created_at =
             DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
@@ -281,6 +397,7 @@ mod thread_processor_behavior_tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: Some(codex_protocol::protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -538,6 +655,7 @@ mod thread_processor_behavior_tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
+            thread_source: None,
         };
 
         assert_eq!(
@@ -826,6 +944,7 @@ mod thread_processor_behavior_tests {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
             agent_nickname: Some("atlas".to_string()),
             agent_role: Some("explorer".to_string()),
             model_provider: Some("test-provider".to_string()),
@@ -847,6 +966,7 @@ mod thread_processor_behavior_tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        assert_eq!(thread.thread_source, None);
         Ok(())
     }
 
@@ -973,6 +1093,7 @@ mod thread_processor_behavior_tests {
             PathBuf::from("/"),
             "0.0.0".to_string(),
             source,
+            Some(codex_protocol::protocol::ThreadSource::Subagent),
             Some("atlas".to_string()),
             Some("explorer".to_string()),
             /*git_sha*/ None,

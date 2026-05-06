@@ -29,7 +29,6 @@ pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
-pub use codex_app_server::in_process::StateDbHandle;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -47,6 +46,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+pub use codex_core::StateDbHandle;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentManagerArgs;
@@ -1154,6 +1154,7 @@ mod tests {
             thread_id: "thread".to_string(),
             turn: codex_app_server_protocol::Turn {
                 id: "turn".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
@@ -1984,6 +1985,7 @@ mod tests {
                         thread_id: "thread".to_string(),
                         turn: codex_app_server_protocol::Turn {
                             id: "turn".to_string(),
+                            items_view: codex_app_server_protocol::TurnItemsView::Full,
                             items: Vec::new(),
                             status: codex_app_server_protocol::TurnStatus::Completed,
                             error: None,

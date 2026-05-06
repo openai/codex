@@ -25,6 +25,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::InferenceTraceContext;
@@ -243,6 +244,7 @@ impl MemoryStartupContext {
                 session_source: Some(SessionSource::Internal(
                     InternalSessionSource::MemoryConsolidation,
                 )),
+                thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
                 persist_extended_history: false,
                 metrics_service_name: None,

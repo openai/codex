@@ -1576,6 +1576,30 @@
             },
             "method": {
               "enum": [
+                "plugin/share/updateTargets"
+              ],
+              "title": "Plugin/share/updateTargetsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginShareUpdateTargetsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/share/updateTargetsRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/list"
               ],
               "title": "Plugin/share/listRequestMethod",
@@ -2334,6 +2358,29 @@
             "params"
           ],
           "title": "WindowsSandbox/setupStartRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "windowsSandbox/readiness"
+              ],
+              "title": "WindowsSandbox/readinessRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "WindowsSandbox/readinessRequest",
           "type": "object"
         },
         {
@@ -6377,6 +6424,9 @@
             "null"
           ]
         },
+        "currentHash": {
+          "type": "string"
+        },
         "displayOrder": {
           "format": "int64",
           "type": "integer"
@@ -6424,9 +6474,13 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "trustStatus": {
+          "$ref": "#/definitions/HookTrustStatus"
         }
       },
       "required": [
+        "currentHash",
         "displayOrder",
         "enabled",
         "eventName",
@@ -6435,7 +6489,8 @@
         "key",
         "source",
         "sourcePath",
-        "timeoutSec"
+        "timeoutSec",
+        "trustStatus"
       ],
       "type": "object"
     },
@@ -6624,6 +6679,15 @@
       ],
       "title": "HookStartedNotification",
       "type": "object"
+    },
+    "HookTrustStatus": {
+      "enum": [
+        "managed",
+        "untrusted",
+        "trusted",
+        "modified"
+      ],
+      "type": "string"
     },
     "HooksListEntry": {
       "properties": {
@@ -9050,6 +9114,14 @@
       "title": "PluginShareDeleteResponse",
       "type": "object"
     },
+    "PluginShareDiscoverability": {
+      "enum": [
+        "LISTED",
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
     "PluginShareListItem": {
       "properties": {
         "localPluginPath": {
@@ -9096,15 +9168,61 @@
       "title": "PluginShareListResponse",
       "type": "object"
     },
+    "PluginSharePrincipal": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        }
+      },
+      "required": [
+        "name",
+        "principalId",
+        "principalType"
+      ],
+      "type": "object"
+    },
+    "PluginSharePrincipalType": {
+      "enum": [
+        "user",
+        "group",
+        "workspace"
+      ],
+      "type": "string"
+    },
     "PluginShareSaveParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "discoverability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginShareDiscoverability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pluginPath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
         "remotePluginId": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -9130,6 +9248,57 @@
         "shareUrl"
       ],
       "title": "PluginShareSaveResponse",
+      "type": "object"
+    },
+    "PluginShareTarget": {
+      "properties": {
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        }
+      },
+      "required": [
+        "principalId",
+        "principalType"
+      ],
+      "type": "object"
+    },
+    "PluginShareUpdateTargetsParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "remotePluginId",
+        "shareTargets"
+      ],
+      "title": "PluginShareUpdateTargetsParams",
+      "type": "object"
+    },
+    "PluginShareUpdateTargetsResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "principals": {
+          "items": {
+            "$ref": "#/definitions/PluginSharePrincipal"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "principals"
+      ],
+      "title": "PluginShareUpdateTargetsResponse",
       "type": "object"
     },
     "PluginSkillReadParams": {
@@ -9280,6 +9449,13 @@
               "type": "null"
             }
           ]
+        },
+        "keywords": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "name": {
           "type": "string"
@@ -13071,6 +13247,17 @@
           ],
           "description": "Current runtime status for the thread."
         },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional analytics source classification for this thread."
+        },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
           "items": {
@@ -13285,6 +13472,17 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional client-supplied analytics source classification for this forked thread."
         }
       },
       "required": [
@@ -14970,6 +15168,14 @@
       ],
       "type": "string"
     },
+    "ThreadSource": {
+      "enum": [
+        "user",
+        "subagent",
+        "memory_consolidation"
+      ],
+      "type": "string"
+    },
     "ThreadSourceKind": {
       "enum": [
         "cli",
@@ -15104,6 +15310,17 @@
               "type": "null"
             }
           ]
+        },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional client-supplied analytics source classification for this thread."
         }
       },
       "title": "ThreadStartParams",
@@ -15539,11 +15756,20 @@
           "type": "string"
         },
         "items": {
-          "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
+          "description": "Thread items currently included in this turn payload.",
           "items": {
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
+        },
+        "itemsView": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TurnItemsView"
+            }
+          ],
+          "default": "full",
+          "description": "Describes how much of `items` has been loaded for this turn."
         },
         "startedAt": {
           "description": "Unix timestamp (in seconds) when the turn started.",
@@ -15667,6 +15893,31 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "TurnInterruptResponse",
       "type": "object"
+    },
+    "TurnItemsView": {
+      "oneOf": [
+        {
+          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+          "enum": [
+            "notLoaded"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains only a display summary for this turn.",
+          "enum": [
+            "summary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TurnPlanStep": {
       "properties": {
@@ -16249,6 +16500,27 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WindowsSandboxReadiness": {
+      "enum": [
+        "ready",
+        "notConfigured",
+        "updateRequired"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxReadinessResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/WindowsSandboxReadiness"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "WindowsSandboxReadinessResponse",
       "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {

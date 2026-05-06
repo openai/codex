@@ -7,6 +7,10 @@ pub(crate) struct Handler;
 impl ToolHandler for Handler {
     type Output = SendInputResult;
 
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("send_input")
+    }
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }

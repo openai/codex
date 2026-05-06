@@ -172,6 +172,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "display_name": "Linear",
     "description": "Track work in Linear",
     "app_ids": [],
+    "keywords": ["issue-tracking", "project management"],
     "interface": {
       "short_description": "Plan and track work",
       "capabilities": ["Read", "Write"],
@@ -280,6 +281,13 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(
         response.plugin.description.as_deref(),
         Some("Track work in Linear")
+    );
+    assert_eq!(
+        response.plugin.summary.keywords,
+        vec![
+            "issue-tracking".to_string(),
+            "project management".to_string()
+        ]
     );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(response.plugin.skills[0].name, "plan-work");
@@ -580,6 +588,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
         r##"{
   "name": "demo-plugin",
   "description": "Longer manifest description",
+  "keywords": ["api-key", "developer tools"],
   "interface": {
     "displayName": "Plugin Display Name",
     "shortDescription": "Short description for subtitle",
@@ -739,6 +748,10 @@ enabled = true
             "Draft the reply".to_string(),
             "Find my next action".to_string()
         ])
+    );
+    assert_eq!(
+        response.plugin.summary.keywords,
+        vec!["api-key".to_string(), "developer tools".to_string()]
     );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(

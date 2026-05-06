@@ -231,21 +231,14 @@ impl AppsRequestProcessor {
         &self,
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -257,11 +250,7 @@ impl AppsRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn workspace_codex_plugins_enabled(
@@ -319,11 +308,9 @@ fn paginate_apps(
 ) -> Result<AppsListResponse, JSONRPCErrorError> {
     let total = connectors.len();
     if start > total {
-        return Err(JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("cursor {start} exceeds total apps {total}"),
-            data: None,
-        });
+        return Err(invalid_request(format!(
+            "cursor {start} exceeds total apps {total}"
+        )));
     }
 
     let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;

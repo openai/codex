@@ -628,6 +628,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginShareSaveResponse,
     },
+    PluginShareUpdateTargets => "plugin/share/updateTargets" {
+        params: v2::PluginShareUpdateTargetsParams,
+        serialization: global("config"),
+        response: v2::PluginShareUpdateTargetsResponse,
+    },
     PluginShareList => "plugin/share/list" {
         params: v2::PluginShareListParams,
         serialization: global("config"),
@@ -842,6 +847,11 @@ client_request_definitions! {
         params: v2::WindowsSandboxSetupStartParams,
         serialization: global("windows-sandbox-setup"),
         response: v2::WindowsSandboxSetupStartResponse,
+    },
+    WindowsSandboxReadiness => "windowsSandbox/readiness" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("config"),
+        response: v2::WindowsSandboxReadinessResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -2180,6 +2190,7 @@ mod tests {
                     cwd: cwd.clone(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
+                    thread_source: None,
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
@@ -2223,6 +2234,7 @@ mod tests {
                         "cwd": absolute_path_string("tmp"),
                         "cliVersion": "0.0.0",
                         "source": "exec",
+                        "threadSource": null,
                         "agentNickname": null,
                         "agentRole": null,
                         "gitInfo": null,

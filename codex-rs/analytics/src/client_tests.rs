@@ -87,6 +87,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         cwd: test_path_buf("/tmp").abs(),
         cli_version: "0.0.0".to_string(),
         source: AppServerSessionSource::Exec,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -156,6 +157,7 @@ fn sample_turn_start_response() -> ClientResponsePayload {
     ClientResponsePayload::TurnStart(TurnStartResponse {
         turn: Turn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: AppServerTurnStatus::InProgress,
             error: None,

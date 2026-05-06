@@ -4,6 +4,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -77,6 +78,10 @@ impl CodeModeExecuteHandler {
 
 impl ToolHandler for CodeModeExecuteHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(PUBLIC_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

@@ -37,6 +37,8 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
@@ -297,6 +299,17 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
 
     assert!(!ignored);
     assert!(app.transcript_cells.is_empty());
+}
+
+#[test]
+fn hooks_needing_review_startup_warning_snapshot() {
+    let message = startup_prompts::hooks_needing_review_warning(/*count*/ 2)
+        .expect("review-needed hooks should produce a startup warning");
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(message).display_lines(/*width*/ 80),
+    );
+
+    assert_app_snapshot!("hooks_needing_review_startup_warning", rendered);
 }
 
 #[tokio::test]
@@ -2745,6 +2758,84 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
 }
 
 #[tokio::test]
+async fn inactive_thread_url_elicitation_routes_to_app_link() {
+    let app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let request = ServerRequest::McpServerElicitationRequest {
+        request_id: AppServerRequestId::Integer(9),
+        params: McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "payments".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Review the payment details to continue.".to_string(),
+                url: "https://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
+            },
+        },
+    };
+
+    let Some(ThreadInteractiveRequest::AppLink(params)) = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await
+    else {
+        panic!("expected app link request");
+    };
+
+    assert_eq!(params.title, "Action required");
+    assert_eq!(params.description, Some("Server: payments".to_string()));
+    assert_eq!(params.url, "https://payments.example/checkout/123");
+    assert_eq!(
+        params.elicitation_target,
+        Some(crate::bottom_pane::AppLinkElicitationTarget {
+            thread_id,
+            server_name: "payments".to_string(),
+            request_id: AppServerRequestId::Integer(9),
+        })
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_invalid_url_elicitation_is_declined() {
+    let (app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let request = ServerRequest::McpServerElicitationRequest {
+        request_id: AppServerRequestId::Integer(10),
+        params: McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "payments".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Review the payment details to continue.".to_string(),
+                url: "http://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
+            },
+        },
+    };
+
+    assert!(
+        app.interactive_request_for_thread_request(thread_id, &request)
+            .await
+            .is_none()
+    );
+    assert_matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::SubmitThreadOp {
+            thread_id: op_thread_id,
+            op: Op::ResolveElicitation {
+                server_name,
+                request_id: AppServerRequestId::Integer(10),
+                decision: codex_app_server_protocol::McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            },
+        }) if op_thread_id == thread_id && server_name == "payments"
+    );
+}
+
+#[tokio::test]
 async fn inactive_thread_approval_badge_clears_after_turn_completion_notification() -> Result<()> {
     let mut app = make_test_app().await;
     let main_thread_id =
@@ -2860,6 +2951,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
@@ -2941,6 +3033,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
@@ -2995,6 +3088,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         cwd: test_path_buf("/tmp/read").abs(),
         cli_version: "0.0.0".to_string(),
         source: codex_app_server_protocol::SessionSource::Unknown,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -4078,6 +4172,7 @@ async fn height_shrink_schedules_resize_reflow() {
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
         items,
         status,
         error: None,
@@ -4656,6 +4751,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
             turns: vec![
                 Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
                         content: vec![AppServerUserInput::Text {
@@ -4671,6 +4767,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                 },
                 Turn {
                     id: "turn-2".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),
@@ -4955,6 +5052,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: SessionSource::Cli,
+                thread_source: None,
                 agent_nickname: None,
                 agent_role: None,
                 git_info: None,

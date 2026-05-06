@@ -30,8 +30,11 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::McpInvocation;
+use codex_tools::ToolName;
 
-pub struct McpResourceHandler;
+pub struct ListMcpResourcesHandler;
+pub struct ListMcpResourceTemplatesHandler;
+pub struct ReadMcpResourceHandler;
 
 #[derive(Debug, Deserialize, Default)]
 struct ListResourcesArgs {
@@ -178,8 +181,280 @@ struct ReadResourcePayload {
     result: ReadResourceResult,
 }
 
-impl ToolHandler for McpResourceHandler {
+impl ToolHandler for ListMcpResourcesHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("list_mcp_resources")
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource listing reads through the session-owned manager guard"
+    )]
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
+
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "list_mcp_resources handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let arguments = parse_arguments(arguments.as_str())?;
+        let args: ListResourcesArgs = parse_args_with_default(arguments.clone())?;
+        let ListResourcesArgs { server, cursor } = args;
+        let server = normalize_optional_string(server);
+        let cursor = normalize_optional_string(cursor);
+
+        let invocation = McpInvocation {
+            server: server.clone().unwrap_or_else(|| "codex".to_string()),
+            tool: "list_mcp_resources".to_string(),
+            arguments: arguments.clone(),
+        };
+
+        emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
+        let start = Instant::now();
+
+        let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
+            if let Some(server_name) = server.clone() {
+                let params = cursor.clone().map(|value| PaginatedRequestParams {
+                    meta: None,
+                    cursor: Some(value),
+                });
+                let result = session
+                    .list_resources(&server_name, params)
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!("resources/list failed: {err:#}"))
+                    })?;
+                Ok(ListResourcesPayload::from_single_server(
+                    server_name,
+                    result,
+                ))
+            } else {
+                if cursor.is_some() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "cursor can only be used when a server is specified".to_string(),
+                    ));
+                }
+
+                let resources = session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await
+                    .list_all_resources()
+                    .await;
+                Ok(ListResourcesPayload::from_all_servers(resources))
+            }
+        }
+        .await;
+
+        match payload_result {
+            Ok(payload) => match serialize_function_output(payload) {
+                Ok(output) => {
+                    let content = function_call_output_content_items_to_text(&output.body)
+                        .unwrap_or_default();
+                    let duration = start.elapsed();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Ok(call_tool_result_from_content(&content, output.success)),
+                    )
+                    .await;
+                    Ok(output)
+                }
+                Err(err) => {
+                    let duration = start.elapsed();
+                    let message = err.to_string();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Err(message.clone()),
+                    )
+                    .await;
+                    Err(err)
+                }
+            },
+            Err(err) => {
+                let duration = start.elapsed();
+                let message = err.to_string();
+                emit_tool_call_end(
+                    &session,
+                    turn.as_ref(),
+                    &call_id,
+                    invocation,
+                    duration,
+                    Err(message.clone()),
+                )
+                .await;
+                Err(err)
+            }
+        }
+    }
+}
+
+impl ToolHandler for ListMcpResourceTemplatesHandler {
+    type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("list_mcp_resource_templates")
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource template listing reads through the session-owned manager guard"
+    )]
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
+
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "list_mcp_resource_templates handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let arguments = parse_arguments(arguments.as_str())?;
+        let args: ListResourceTemplatesArgs = parse_args_with_default(arguments.clone())?;
+        let ListResourceTemplatesArgs { server, cursor } = args;
+        let server = normalize_optional_string(server);
+        let cursor = normalize_optional_string(cursor);
+
+        let invocation = McpInvocation {
+            server: server.clone().unwrap_or_else(|| "codex".to_string()),
+            tool: "list_mcp_resource_templates".to_string(),
+            arguments: arguments.clone(),
+        };
+
+        emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
+        let start = Instant::now();
+
+        let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
+            if let Some(server_name) = server.clone() {
+                let params = cursor.clone().map(|value| PaginatedRequestParams {
+                    meta: None,
+                    cursor: Some(value),
+                });
+                let result = session
+                    .list_resource_templates(&server_name, params)
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "resources/templates/list failed: {err:#}"
+                        ))
+                    })?;
+                Ok(ListResourceTemplatesPayload::from_single_server(
+                    server_name,
+                    result,
+                ))
+            } else {
+                if cursor.is_some() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "cursor can only be used when a server is specified".to_string(),
+                    ));
+                }
+
+                let templates = session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await
+                    .list_all_resource_templates()
+                    .await;
+                Ok(ListResourceTemplatesPayload::from_all_servers(templates))
+            }
+        }
+        .await;
+
+        match payload_result {
+            Ok(payload) => match serialize_function_output(payload) {
+                Ok(output) => {
+                    let content = function_call_output_content_items_to_text(&output.body)
+                        .unwrap_or_default();
+                    let duration = start.elapsed();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Ok(call_tool_result_from_content(&content, output.success)),
+                    )
+                    .await;
+                    Ok(output)
+                }
+                Err(err) => {
+                    let duration = start.elapsed();
+                    let message = err.to_string();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Err(message.clone()),
+                    )
+                    .await;
+                    Err(err)
+                }
+            },
+            Err(err) => {
+                let duration = start.elapsed();
+                let message = err.to_string();
+                emit_tool_call_end(
+                    &session,
+                    turn.as_ref(),
+                    &call_id,
+                    invocation,
+                    duration,
+                    Err(message.clone()),
+                )
+                .await;
+                Err(err)
+            }
+        }
+    }
+}
+
+impl ToolHandler for ReadMcpResourceHandler {
+    type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("read_mcp_resource")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -190,7 +465,6 @@ impl ToolHandler for McpResourceHandler {
             session,
             turn,
             call_id,
-            tool_name,
             payload,
             ..
         } = invocation;
@@ -199,124 +473,80 @@ impl ToolHandler for McpResourceHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "mcp_resource handler received unsupported payload".to_string(),
+                    "read_mcp_resource handler received unsupported payload".to_string(),
                 ));
             }
         };
 
-        let arguments_value = parse_arguments(arguments.as_str())?;
+        let arguments = parse_arguments(arguments.as_str())?;
+        let args: ReadResourceArgs = parse_args(arguments.clone())?;
+        let ReadResourceArgs { server, uri } = args;
+        let server = normalize_required_string("server", server)?;
+        let uri = normalize_required_string("uri", uri)?;
 
-        match tool_name.name.as_str() {
-            "list_mcp_resources" => {
-                handle_list_resources(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id.clone(),
-                    arguments_value.clone(),
-                )
-                .await
-            }
-            "list_mcp_resource_templates" => {
-                handle_list_resource_templates(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id.clone(),
-                    arguments_value.clone(),
-                )
-                .await
-            }
-            "read_mcp_resource" => {
-                handle_read_resource(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id,
-                    arguments_value,
-                )
-                .await
-            }
-            other => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported MCP resource tool: {other}"
-            ))),
-        }
-    }
-}
+        let invocation = McpInvocation {
+            server: server.clone(),
+            tool: "read_mcp_resource".to_string(),
+            arguments: arguments.clone(),
+        };
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP resource listing reads through the session-owned manager guard"
-)]
-async fn handle_list_resources(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    call_id: String,
-    arguments: Option<Value>,
-) -> Result<FunctionToolOutput, FunctionCallError> {
-    let args: ListResourcesArgs = parse_args_with_default(arguments.clone())?;
-    let ListResourcesArgs { server, cursor } = args;
-    let server = normalize_optional_string(server);
-    let cursor = normalize_optional_string(cursor);
+        emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
+        let start = Instant::now();
 
-    let invocation = McpInvocation {
-        server: server.clone().unwrap_or_else(|| "codex".to_string()),
-        tool: "list_mcp_resources".to_string(),
-        arguments: arguments.clone(),
-    };
-
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
-    let start = Instant::now();
-
-    let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
-        if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| PaginatedRequestParams {
-                meta: None,
-                cursor: Some(value),
-            });
+        let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
             let result = session
-                .list_resources(&server_name, params)
+                .read_resource(
+                    &server,
+                    ReadResourceRequestParams {
+                        meta: None,
+                        uri: uri.clone(),
+                    },
+                )
                 .await
                 .map_err(|err| {
-                    FunctionCallError::RespondToModel(format!("resources/list failed: {err:#}"))
+                    FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
                 })?;
-            Ok(ListResourcesPayload::from_single_server(
-                server_name,
+
+            Ok(ReadResourcePayload {
+                server,
+                uri,
                 result,
-            ))
-        } else {
-            if cursor.is_some() {
-                return Err(FunctionCallError::RespondToModel(
-                    "cursor can only be used when a server is specified".to_string(),
-                ));
-            }
-
-            let resources = session
-                .services
-                .mcp_connection_manager
-                .read()
-                .await
-                .list_all_resources()
-                .await;
-            Ok(ListResourcesPayload::from_all_servers(resources))
+            })
         }
-    }
-    .await;
+        .await;
 
-    match payload_result {
-        Ok(payload) => match serialize_function_output(payload) {
-            Ok(output) => {
-                let content =
-                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
-                let duration = start.elapsed();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Ok(call_tool_result_from_content(&content, output.success)),
-                )
-                .await;
-                Ok(output)
-            }
+        match payload_result {
+            Ok(payload) => match serialize_function_output(payload) {
+                Ok(output) => {
+                    let content = function_call_output_content_items_to_text(&output.body)
+                        .unwrap_or_default();
+                    let duration = start.elapsed();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Ok(call_tool_result_from_content(&content, output.success)),
+                    )
+                    .await;
+                    Ok(output)
+                }
+                Err(err) => {
+                    let duration = start.elapsed();
+                    let message = err.to_string();
+                    emit_tool_call_end(
+                        &session,
+                        turn.as_ref(),
+                        &call_id,
+                        invocation,
+                        duration,
+                        Err(message.clone()),
+                    )
+                    .await;
+                    Err(err)
+                }
+            },
             Err(err) => {
                 let duration = start.elapsed();
                 let message = err.to_string();
@@ -331,221 +561,6 @@ async fn handle_list_resources(
                 .await;
                 Err(err)
             }
-        },
-        Err(err) => {
-            let duration = start.elapsed();
-            let message = err.to_string();
-            emit_tool_call_end(
-                &session,
-                turn.as_ref(),
-                &call_id,
-                invocation,
-                duration,
-                Err(message.clone()),
-            )
-            .await;
-            Err(err)
-        }
-    }
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP resource template listing reads through the session-owned manager guard"
-)]
-async fn handle_list_resource_templates(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    call_id: String,
-    arguments: Option<Value>,
-) -> Result<FunctionToolOutput, FunctionCallError> {
-    let args: ListResourceTemplatesArgs = parse_args_with_default(arguments.clone())?;
-    let ListResourceTemplatesArgs { server, cursor } = args;
-    let server = normalize_optional_string(server);
-    let cursor = normalize_optional_string(cursor);
-
-    let invocation = McpInvocation {
-        server: server.clone().unwrap_or_else(|| "codex".to_string()),
-        tool: "list_mcp_resource_templates".to_string(),
-        arguments: arguments.clone(),
-    };
-
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
-    let start = Instant::now();
-
-    let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
-        if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| PaginatedRequestParams {
-                meta: None,
-                cursor: Some(value),
-            });
-            let result = session
-                .list_resource_templates(&server_name, params)
-                .await
-                .map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "resources/templates/list failed: {err:#}"
-                    ))
-                })?;
-            Ok(ListResourceTemplatesPayload::from_single_server(
-                server_name,
-                result,
-            ))
-        } else {
-            if cursor.is_some() {
-                return Err(FunctionCallError::RespondToModel(
-                    "cursor can only be used when a server is specified".to_string(),
-                ));
-            }
-
-            let templates = session
-                .services
-                .mcp_connection_manager
-                .read()
-                .await
-                .list_all_resource_templates()
-                .await;
-            Ok(ListResourceTemplatesPayload::from_all_servers(templates))
-        }
-    }
-    .await;
-
-    match payload_result {
-        Ok(payload) => match serialize_function_output(payload) {
-            Ok(output) => {
-                let content =
-                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
-                let duration = start.elapsed();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Ok(call_tool_result_from_content(&content, output.success)),
-                )
-                .await;
-                Ok(output)
-            }
-            Err(err) => {
-                let duration = start.elapsed();
-                let message = err.to_string();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Err(message.clone()),
-                )
-                .await;
-                Err(err)
-            }
-        },
-        Err(err) => {
-            let duration = start.elapsed();
-            let message = err.to_string();
-            emit_tool_call_end(
-                &session,
-                turn.as_ref(),
-                &call_id,
-                invocation,
-                duration,
-                Err(message.clone()),
-            )
-            .await;
-            Err(err)
-        }
-    }
-}
-
-async fn handle_read_resource(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    call_id: String,
-    arguments: Option<Value>,
-) -> Result<FunctionToolOutput, FunctionCallError> {
-    let args: ReadResourceArgs = parse_args(arguments.clone())?;
-    let ReadResourceArgs { server, uri } = args;
-    let server = normalize_required_string("server", server)?;
-    let uri = normalize_required_string("uri", uri)?;
-
-    let invocation = McpInvocation {
-        server: server.clone(),
-        tool: "read_mcp_resource".to_string(),
-        arguments: arguments.clone(),
-    };
-
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
-    let start = Instant::now();
-
-    let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
-        let result = session
-            .read_resource(
-                &server,
-                ReadResourceRequestParams {
-                    meta: None,
-                    uri: uri.clone(),
-                },
-            )
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
-            })?;
-
-        Ok(ReadResourcePayload {
-            server,
-            uri,
-            result,
-        })
-    }
-    .await;
-
-    match payload_result {
-        Ok(payload) => match serialize_function_output(payload) {
-            Ok(output) => {
-                let content =
-                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
-                let duration = start.elapsed();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Ok(call_tool_result_from_content(&content, output.success)),
-                )
-                .await;
-                Ok(output)
-            }
-            Err(err) => {
-                let duration = start.elapsed();
-                let message = err.to_string();
-                emit_tool_call_end(
-                    &session,
-                    turn.as_ref(),
-                    &call_id,
-                    invocation,
-                    duration,
-                    Err(message.clone()),
-                )
-                .await;
-                Err(err)
-            }
-        },
-        Err(err) => {
-            let duration = start.elapsed();
-            let message = err.to_string();
-            emit_tool_call_end(
-                &session,
-                turn.as_ref(),
-                &call_id,
-                invocation,
-                duration,
-                Err(message.clone()),
-            )
-            .await;
-            Err(err)
         }
     }
 }

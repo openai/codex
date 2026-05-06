@@ -6,6 +6,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerEntry;
 use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -44,6 +45,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -550,11 +552,13 @@ fn config_toml_deserializes_model_availability_nux() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -658,6 +662,53 @@ fn test_tui_vim_mode_default_true() {
             .expect("config should include tui section")
             .vim_mode_default
     );
+}
+
+#[test]
+fn test_tui_raw_output_mode_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_true() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_uses_tui_raw_output_mode() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let cfg_toml: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(cfg.tui_raw_output_mode);
 }
 
 #[test]
@@ -2109,6 +2160,31 @@ fn tui_theme_defaults_to_none() {
 }
 
 #[test]
+fn tui_session_picker_view_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+session_picker_view = "dense"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        Some(SessionPickerViewMode::Dense),
+    );
+}
+
+#[test]
+fn tui_session_picker_view_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        None,
+    );
+}
+
+#[test]
 fn tui_config_missing_notifications_field_defaults_to_enabled() {
     let cfg = r#"
 [tui]
@@ -2125,11 +2201,13 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -2192,6 +2270,78 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     assert_eq!(
         cfg.terminal_resize_reflow.max_rows,
         TerminalResizeReflowMaxRows::Disabled
+    );
+}
+
+#[test]
+fn profile_tui_rejects_unsupported_settings() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[profiles.work.tui]
+theme = "dark"
+"#,
+    )
+    .expect_err("profile TUI config should only accept supported fields");
+
+    assert!(err.to_string().contains("unknown field"));
+    assert!(err.to_string().contains("theme"));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_session_picker_view_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                session_picker_view: Some(SessionPickerViewMode::Comfortable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load root override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg_toml = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[tui]
+session_picker_view = "dense"
+
+[profiles.work.tui]
+session_picker_view = "comfortable"
+"#,
+    )
+    .expect("parse profile scoped tui config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load profile override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
     );
 }
 
@@ -2694,6 +2844,307 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
             )
         )])
     );
+}
+
+#[tokio::test]
+async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let project_dot_codex =
+        AbsolutePathBuf::resolve_path_against_base("project/.codex", codex_home.path());
+    let mcp_requirements = BTreeMap::from([
+        (
+            "session_overrides_user".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "session-command".to_string(),
+                },
+            },
+        ),
+        (
+            "managed_overrides_session".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "managed-command".to_string(),
+                },
+            },
+        ),
+        (
+            "fresh_global".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "fresh-global-command".to_string(),
+                },
+            },
+        ),
+        (
+            "fresh_project".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "fresh-project-command".to_string(),
+                },
+            },
+        ),
+    ]);
+    let requirements_toml = codex_config::ConfigRequirementsToml {
+        mcp_servers: Some(mcp_requirements.clone()),
+        ..Default::default()
+    };
+    let requirements = codex_config::ConfigRequirements {
+        mcp_servers: Some(Sourced::new(mcp_requirements, RequirementSource::Unknown)),
+        ..Default::default()
+    };
+    let refreshed_layer_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "new-user-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "new-user-command"
+                    [mcp_servers.fresh_global]
+                    command = "fresh-global-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.fresh_project]
+                    command = "fresh-project-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                toml::toml! {
+                    [mcp_servers.managed_overrides_session]
+                    command = "managed-command"
+                }
+                .into(),
+            ),
+        ],
+        requirements,
+        requirements_toml,
+    )
+    .map_err(std::io::Error::other)?;
+    let refreshed_toml = refreshed_layer_stack
+        .effective_config()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let refreshed_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        refreshed_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        refreshed_layer_stack,
+    )
+    .await?;
+    let thread_layer_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "old-user-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "old-user-command"
+                    [mcp_servers.fresh_global]
+                    command = "old-global-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex,
+                },
+                toml::toml! {
+                    [mcp_servers.fresh_project]
+                    command = "old-project-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::SessionFlags,
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "session-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "session-command"
+                    [mcp_servers.blocked_session]
+                    command = "blocked-session-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                toml::toml! {
+                    [mcp_servers.managed_overrides_session]
+                    command = "old-managed-command"
+                }
+                .into(),
+            ),
+        ],
+        Default::default(),
+        Default::default(),
+    )
+    .map_err(std::io::Error::other)?;
+    let thread_toml = thread_layer_stack
+        .effective_config()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let thread_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        thread_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        thread_layer_stack,
+    )
+    .await?;
+    let config = thread_config
+        .rebuild_preserving_session_layers(&refreshed_config)
+        .await?;
+
+    assert_eq!(
+        config.mcp_servers.get(),
+        &HashMap::from([
+            (
+                "session_overrides_user".to_string(),
+                stdio_mcp("session-command"),
+            ),
+            (
+                "managed_overrides_session".to_string(),
+                stdio_mcp("managed-command"),
+            ),
+            (
+                "fresh_global".to_string(),
+                stdio_mcp("fresh-global-command"),
+            ),
+            (
+                "fresh_project".to_string(),
+                stdio_mcp("fresh-project-command"),
+            ),
+            (
+                "blocked_session".to_string(),
+                McpServerConfig {
+                    enabled: false,
+                    disabled_reason: Some(McpServerDisabledReason::Requirements {
+                        source: RequirementSource::Unknown,
+                    }),
+                    ..stdio_mcp("blocked-session-command")
+                },
+            ),
+        ])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    )?;
+
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let refreshed_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            toml::toml! {
+                [features]
+                plugins = true
+
+                [plugins."sample@test"]
+                enabled = true
+            }
+            .into(),
+        )],
+        Default::default(),
+        Default::default(),
+    )?;
+    let refreshed_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        refreshed_layer_stack.effective_config().try_into()?,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        refreshed_layer_stack,
+    )
+    .await?;
+    let thread_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User { file: user_file },
+            toml::toml! {
+                [features]
+                plugins = false
+
+                [plugins."sample@test"]
+                enabled = true
+            }
+            .into(),
+        )],
+        Default::default(),
+        Default::default(),
+    )?;
+    let thread_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        thread_layer_stack.effective_config().try_into()?,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        thread_layer_stack,
+    )
+    .await?;
+    let config = thread_config
+        .rebuild_preserving_session_layers(&refreshed_config)
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config.configured_mcp_servers.get("sample"),
+        Some(&http_mcp("https://sample.example/mcp"))
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -6450,6 +6901,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
             tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6461,6 +6913,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6652,6 +7105,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6663,6 +7117,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6808,6 +7263,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6819,6 +7275,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6949,6 +7406,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6960,6 +7418,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 

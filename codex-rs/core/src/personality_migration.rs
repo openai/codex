@@ -25,7 +25,7 @@ pub enum PersonalityMigrationStatus {
 pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
-    state_db: Option<StateDbHandle>,
+    state_db: StateDbHandle,
 ) -> io::Result<PersonalityMigrationStatus> {
     let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
@@ -65,16 +65,13 @@ pub async fn maybe_migrate_personality(
 async fn has_recorded_sessions(
     codex_home: &Path,
     default_provider: &str,
-    state_db: Option<StateDbHandle>,
+    state_db: StateDbHandle,
 ) -> io::Result<bool> {
-    let store = LocalThreadStore::new(
-        LocalThreadStoreConfig {
-            codex_home: codex_home.to_path_buf(),
-            sqlite_home: codex_home.to_path_buf(),
-            default_model_provider_id: default_provider.to_string(),
-        },
-        state_db,
-    );
+    let config = LocalThreadStoreConfig {
+        codex_home: codex_home.to_path_buf(),
+        default_model_provider_id: default_provider.to_string(),
+    };
+    let store = LocalThreadStore::new(config, state_db);
     if has_threads(&store, /*archived*/ false).await? {
         return Ok(true);
     }

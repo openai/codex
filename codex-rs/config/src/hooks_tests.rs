@@ -90,6 +90,7 @@ fn hooks_toml_deserializes_inline_events_and_state_map() {
         r#"
 [state."/tmp/hooks.json:pre_tool_use:0:0"]
 enabled = false
+trusted_hash = "sha256:abc123"
 
 [[PreToolUse]]
 matcher = "^Bash$"
@@ -120,6 +121,7 @@ command = "python3 /tmp/pre.py"
                 "/tmp/hooks.json:pre_tool_use:0:0".to_string(),
                 super::HookStateToml {
                     enabled: Some(false),
+                    trusted_hash: Some("sha256:abc123".to_string()),
                 },
             )]),
         }

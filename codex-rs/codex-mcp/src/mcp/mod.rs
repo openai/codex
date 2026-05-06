@@ -198,7 +198,7 @@ pub fn with_codex_apps_mcp(
     auth: Option<&CodexAuth>,
     config: &McpConfig,
 ) -> HashMap<String, McpServerConfig> {
-    if config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend) {
+    if host_owned_codex_apps_enabled(config, auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             codex_apps_mcp_server_config(config),
@@ -207,6 +207,10 @@ pub fn with_codex_apps_mcp(
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
     }
     servers
+}
+
+pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
+    config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
 }
 
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
@@ -233,6 +237,7 @@ pub async fn read_mcp_resource(
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
+    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     mcp_servers.retain(|name, _| name == server);
     let auth_statuses = compute_auth_statuses(
         mcp_servers.iter(),
@@ -253,6 +258,7 @@ pub async fn read_mcp_resource(
         runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
+        host_owned_codex_apps_enabled,
         tool_plugin_provenance(config),
         auth,
     )
@@ -287,6 +293,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
+    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
@@ -318,6 +325,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
+        host_owned_codex_apps_enabled,
         tool_plugin_provenance,
         auth,
     )
