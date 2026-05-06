@@ -1211,15 +1211,46 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     }
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home)?;
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"
-[hooks]
-
-[[hooks.SessionStart]]
-hooks = [{ type = "command", command = "python3 /tmp/user.py" }]
-"#,
-    )?;
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    #[derive(serde::Serialize)]
+    struct NormalizedHookIdentity {
+        event_name: &'static str,
+        #[serde(flatten)]
+        group: codex_config::MatcherGroup,
+    }
+    let trusted_hash = {
+        let identity = NormalizedHookIdentity {
+            event_name: "session_start",
+            group: codex_config::MatcherGroup {
+                matcher: None,
+                hooks: vec![codex_config::HookHandlerConfig::Command {
+                    command: "python3 /tmp/user.py".to_string(),
+                    timeout_sec: Some(600),
+                    r#async: false,
+                    status_message: None,
+                }],
+            },
+        };
+        let identity = codex_config::TomlValue::try_from(identity)?;
+        codex_config::version_for_toml(&identity)
+    };
+    let hook_key = format!("{}:session_start:0:0", config_toml_path.display());
+    let trusted_user_config: codex_config::TomlValue = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "python3 /tmp/user.py",
+                }],
+            }],
+            "state": {
+                hook_key: {
+                    "trusted_hash": trusted_hash,
+                },
+            },
+        },
+    }))?;
+    std::fs::write(&config_toml_path, toml::to_string(&trusted_user_config)?)?;
 
     let request = codex_hooks::SessionStartRequest {
         session_id: session.conversation_id,
