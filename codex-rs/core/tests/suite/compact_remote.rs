@@ -665,9 +665,9 @@ async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> 
     assert_remote_manual_compact_request_parity(
         CodexAuth::from_api_key("dummy"),
         Some(ServiceTier::Fast),
-        /*expected_service_tier*/ None,
+        Some("priority"),
         "remote_manual_compact_api_auth_prompt_cache_key_request_diff",
-        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses prompt_cache_key while omitting API-key service_tier and responses-only fields.",
+        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
     )
     .await?;
 

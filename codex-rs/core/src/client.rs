@@ -439,22 +439,13 @@ impl ModelClient {
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
         );
-        let compact_service_tier = if client_setup
-            .auth
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-        {
-            settings.service_tier
-        } else {
-            None
-        };
         let request = self.build_responses_request(
             &client_setup.api_provider,
             prompt,
             model_info,
             settings.effort,
             settings.summary,
-            compact_service_tier,
+            settings.service_tier,
         )?;
         let ResponsesApiRequest {
             model,
