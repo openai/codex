@@ -826,6 +826,9 @@ pub struct PermissionsRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    /// Unix timestamp (in milliseconds) when this approval request started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     pub cwd: AbsolutePathBuf,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,

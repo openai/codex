@@ -224,6 +224,7 @@ fn command_execution_request_approval_rejects_relative_additional_permission_pat
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "command": "cat file",
         "cwd": absolute_path_string("tmp"),
         "commandActions": null,
@@ -264,6 +265,7 @@ fn permissions_request_approval_uses_request_permission_profile() {
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "cwd": absolute_path_string("repo"),
         "reason": "Select a workspace root",
         "permissions": {
@@ -326,6 +328,7 @@ fn permissions_request_approval_rejects_macos_permissions() {
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "cwd": absolute_path_string("repo"),
         "reason": "Select a workspace root",
         "permissions": {
