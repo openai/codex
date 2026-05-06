@@ -105,13 +105,11 @@ codex app-server stop
 codex app-server version
 ```
 
-These commands print one JSON object to stdout. `start` prefers a user-scoped
-`systemd` backend when it is available and falls back to a pidfile-backed
-detached process otherwise. Both backends launch app-server on the default Unix
-control socket and wait until the JSON-RPC initialize handshake succeeds before
-reporting success. `version` connects through that same control socket and
-reports both the local CLI version and the version reported by the running
-app-server.
+These commands print one JSON object to stdout. They launch app-server as a
+pidfile-backed detached process on the default Unix control socket and wait until
+the JSON-RPC initialize handshake succeeds before reporting success. `version`
+connects through that same control socket and reports both the local CLI version
+and the version reported by the running app-server.
 
 For a fresh remote machine, first install the standalone CLI, then bootstrap the
 durable app-server service:
@@ -122,19 +120,13 @@ $HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-con
 ```
 
 `bootstrap` also prints one JSON object. It requires the standalone managed
-install, persists the launch settings used by later lifecycle commands, and
-starts app-server with `remote_control` enabled when requested. On systems with
-user-scoped `systemd`, it installs home-scoped app-server and hourly update
-timer units that refresh the standalone install and then reload the service.
-Reloads keep an unbounded app-server graceful drain, while ordinary systemd
-restarts wait up to one minute for active work before forcing completion. Without
-user-scoped `systemd`, `bootstrap` falls back to the pidfile backend and starts a
-detached updater loop that periodically refreshes the standalone install while
-the machine remains up.
+install, persists the launch settings used by later lifecycle commands, starts
+app-server with `remote_control` enabled when requested, and starts a detached
+updater loop that periodically refreshes the standalone install while the
+machine remains up.
 
-For backend selection details, persisted state, and reload versus restart
-semantics, including how `brew`/`npm`, standalone installs, and out-of-band
-binary updates behave, see
+For persisted state and install/update behavior, including how `brew`/`npm`,
+standalone installs, and out-of-band binary updates behave, see
 [`app-server-daemon/README.md`](../app-server-daemon/README.md).
 
 ## Initialization

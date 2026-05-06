@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use backend::Backend;
 pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server::app_server_control_socket_path;
@@ -161,21 +160,21 @@ impl Daemon {
             ));
         }
 
-        if let Some(backend) = self.running_backend_instance(&settings).await? {
+        if self.running_backend_instance(&settings).await?.is_some() {
             let info = self.wait_until_ready().await?;
             return Ok(self.output(
                 LifecycleStatus::AlreadyRunning,
-                Some(backend.kind()),
+                Some(BackendKind::Pid),
                 None,
                 Some(info.app_server_version),
             ));
         }
 
-        let (backend, pid) = self.start_managed_backend(&settings).await?;
+        let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         Ok(self.output(
             LifecycleStatus::Started,
-            Some(backend.kind()),
+            Some(BackendKind::Pid),
             pid,
             Some(info.app_server_version),
         ))
@@ -195,11 +194,11 @@ impl Daemon {
             backend.stop().await?;
         }
 
-        let (backend, pid) = self.start_managed_backend(&settings).await?;
+        let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         Ok(self.output(
             LifecycleStatus::Restarted,
-            Some(backend.kind()),
+            Some(BackendKind::Pid),
             pid,
             Some(info.app_server_version),
         ))
@@ -227,9 +226,8 @@ impl Daemon {
     async fn stop(&self) -> Result<LifecycleOutput> {
         let settings = self.load_settings().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
-            let kind = backend.kind();
             backend.stop().await?;
-            return Ok(self.output(LifecycleStatus::Stopped, Some(kind), None, None));
+            return Ok(self.output(LifecycleStatus::Stopped, Some(BackendKind::Pid), None, None));
         }
 
         if client::probe(&self.socket_path).await.is_ok() {
@@ -302,41 +300,19 @@ impl Daemon {
             backend.stop().await?;
         }
 
-        let (backend, auto_update_enabled) = if backend::SystemdBackend::is_available().await {
-            let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-            if updater.is_starting_or_running().await? {
-                updater.stop().await?;
-            }
-            backend::SystemdBackend::bootstrap(
-                &self.codex_home,
-                &self.managed_codex_bin,
-                settings.remote_control_enabled,
-            )
-            .await?;
-            (
-                Backend::Systemd(backend::SystemdBackend::new(
-                    self.codex_home.clone(),
-                    self.managed_codex_bin.clone(),
-                    settings.remote_control_enabled,
-                )),
-                true,
-            )
-        } else {
-            let fallback = backend::pid_backend(self.backend_paths(&settings));
-            fallback.start().await?;
-            let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-            if updater.is_starting_or_running().await? {
-                updater.stop().await?;
-            }
-            updater.start().await?;
-            (fallback, true)
-        };
+        let backend = backend::pid_backend(self.backend_paths(&settings));
+        backend.start().await?;
+        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
+        if updater.is_starting_or_running().await? {
+            updater.stop().await?;
+        }
+        updater.start().await?;
 
         let info = self.wait_until_ready().await?;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
-            backend: backend.kind(),
-            auto_update_enabled,
+            backend: BackendKind::Pid,
+            auto_update_enabled: true,
             remote_control_enabled: settings.remote_control_enabled,
             managed_codex_path: self.managed_codex_bin.clone(),
             socket_path: self.socket_path.clone(),
@@ -349,45 +325,27 @@ impl Daemon {
         Ok(self
             .running_backend_instance(settings)
             .await?
-            .map(|backend| backend.kind()))
+            .map(|_| BackendKind::Pid))
     }
 
-    async fn running_backend_instance(&self, settings: &DaemonSettings) -> Result<Option<Backend>> {
-        for backend in backend::managed_backends(self.backend_paths(settings)) {
-            if backend.is_starting_or_running().await? {
-                return Ok(Some(backend));
-            }
+    async fn running_backend_instance(
+        &self,
+        settings: &DaemonSettings,
+    ) -> Result<Option<backend::PidBackend>> {
+        let backend = backend::pid_backend(self.backend_paths(settings));
+        if backend.is_starting_or_running().await? {
+            return Ok(Some(backend));
         }
         Ok(None)
     }
 
-    async fn start_managed_backend(
-        &self,
-        settings: &DaemonSettings,
-    ) -> Result<(Backend, Option<u32>)> {
-        let backend = backend::preferred_backend(self.backend_paths(settings)).await;
-        match backend.start().await {
-            Ok(pid) => Ok((backend, pid)),
-            Err(systemd_err) if backend.kind() == BackendKind::SystemdUser => {
-                if backend.is_starting_or_running().await? {
-                    self.wait_until_ready().await?;
-                    return Ok((backend, None));
-                }
-                let fallback = backend::pid_backend(self.backend_paths(settings));
-                let pid = fallback.start().await.with_context(|| {
-                    format!(
-                        "failed to start app server through user systemd ({systemd_err}); pid fallback also failed"
-                    )
-                })?;
-                Ok((fallback, pid))
-            }
-            Err(err) => Err(err),
-        }
+    async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
+        let backend = backend::pid_backend(self.backend_paths(settings));
+        backend.start().await
     }
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
         BackendPaths {
-            codex_home: self.codex_home.clone(),
             codex_bin: preferred_codex_bin(&self.codex_home, self.current_exe.clone()),
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
