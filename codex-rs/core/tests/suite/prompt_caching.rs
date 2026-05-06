@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
+use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -54,7 +55,7 @@ fn assert_default_env_context(text: &str, cwd: &str) {
         "expected cwd in environment context: {text}"
     );
     assert!(
-        text.contains("<shell>bash</shell>"),
+        text.contains(&format!("<shell>{}</shell>", default_user_shell().name())),
         "expected shell in environment context: {text}"
     );
     assert!(
