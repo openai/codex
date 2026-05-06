@@ -240,6 +240,7 @@ pub(crate) async fn run_turn(
         turn_context.as_ref(),
         &cancellation_token,
         &mentioned_skills,
+        Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
 
@@ -1509,7 +1510,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::DeprecationNotice(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::McpListToolsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

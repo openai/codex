@@ -1,4 +1,7 @@
 pub use connection_manager::McpConnectionManager;
+pub use elicitation::ElicitationReviewRequest;
+pub use elicitation::ElicitationReviewer;
+pub use elicitation::ElicitationReviewerHandle;
 pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use runtime::McpRuntimeEnvironment;
 pub use runtime::SandboxState;
@@ -32,7 +35,6 @@ pub use mcp::with_codex_apps_mcp;
 pub use mcp::McpServerStatusSnapshot;
 pub use mcp::McpSnapshotDetail;
 pub use mcp::collect_mcp_server_status_snapshot_with_detail;
-pub use mcp::collect_mcp_snapshot_from_manager;
 pub use mcp::read_mcp_resource;
 
 pub use mcp::McpAuthStatusEntry;

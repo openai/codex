@@ -7114,6 +7114,39 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+    let mut cfg = fixture.cfg.clone();
+    cfg.otel = Some(OtelConfigToml {
+        exporter: Some(OtelExporterKind::OtlpHttp {
+            endpoint: "http://localhost:14318/v1/logs".to_string(),
+            headers: HashMap::new(),
+            protocol: codex_config::types::OtelHttpProtocol::Binary,
+            tls: None,
+        }),
+        metrics_exporter: Some(OtelExporterKind::None),
+        ..Default::default()
+    });
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert!(matches!(
+        config.otel.exporter,
+        OtelExporterKind::OtlpHttp { .. }
+    ));
+    assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 

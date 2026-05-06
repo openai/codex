@@ -31,7 +31,6 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
-use codex_protocol::protocol::McpListToolsResponseEvent;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
@@ -265,6 +264,7 @@ pub async fn read_mcp_resource(
         host_owned_codex_apps_enabled,
         tool_plugin_provenance(config),
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 
@@ -332,6 +332,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         host_owned_codex_apps_enabled,
         tool_plugin_provenance,
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 
@@ -345,18 +346,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     cancel_token.cancel();
 
     snapshot
-}
-
-pub async fn collect_mcp_snapshot_from_manager(
-    mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
-) -> McpListToolsResponseEvent {
-    collect_mcp_snapshot_from_manager_with_detail(
-        mcp_connection_manager,
-        auth_status_entries,
-        McpSnapshotDetail::Full,
-    )
-    .await
 }
 
 pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
@@ -589,44 +578,6 @@ async fn collect_mcp_server_status_snapshot_from_manager(
 
     McpServerStatusSnapshot {
         tools_by_server,
-        resources: convert_mcp_resources(resources),
-        resource_templates: convert_mcp_resource_templates(resource_templates),
-        auth_statuses: auth_statuses_from_entries(&auth_status_entries),
-    }
-}
-
-async fn collect_mcp_snapshot_from_manager_with_detail(
-    mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
-    detail: McpSnapshotDetail,
-) -> McpListToolsResponseEvent {
-    let (tools, resources, resource_templates) = tokio::join!(
-        mcp_connection_manager.list_all_tools(),
-        async {
-            if detail.include_resources() {
-                mcp_connection_manager.list_all_resources().await
-            } else {
-                HashMap::new()
-            }
-        },
-        async {
-            if detail.include_resources() {
-                mcp_connection_manager.list_all_resource_templates().await
-            } else {
-                HashMap::new()
-            }
-        },
-    );
-
-    let tools = tools
-        .into_iter()
-        .filter_map(|(name, tool)| {
-            protocol_tool_from_rmcp_tool(&name, &tool.tool).map(|tool| (name, tool))
-        })
-        .collect::<HashMap<_, _>>();
-
-    McpListToolsResponseEvent {
-        tools,
         resources: convert_mcp_resources(resources),
         resource_templates: convert_mcp_resource_templates(resource_templates),
         auth_statuses: auth_statuses_from_entries(&auth_status_entries),

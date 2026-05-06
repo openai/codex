@@ -30,9 +30,6 @@ use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
 use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
-use crate::mcp::Resource as McpResource;
-use crate::mcp::ResourceTemplate as McpResourceTemplate;
-use crate::mcp::Tool as McpTool;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ActivePermissionProfile;
 use crate::models::BaseInstructions;
@@ -722,10 +719,6 @@ pub enum Op {
         response: DynamicToolResponse,
     },
 
-    /// Request the list of MCP tools available across all configured servers.
-    /// Reply is delivered via `EventMsg::McpListToolsResponse`.
-    ListMcpTools,
-
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
 
@@ -862,7 +855,6 @@ impl Op {
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
-            Self::ListMcpTools => "list_mcp_tools",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
@@ -1405,9 +1397,6 @@ pub enum EventMsg {
     PatchApplyEnd(PatchApplyEndEvent),
 
     TurnDiff(TurnDiffEvent),
-
-    /// List of MCP tools available to the agent.
-    McpListToolsResponse(McpListToolsResponseEvent),
 
     /// List of voices supported by realtime conversation streams.
     RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
@@ -3245,18 +3234,6 @@ pub enum PatchApplyStatus {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnDiffEvent {
     pub unified_diff: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct McpListToolsResponseEvent {
-    /// Fully qualified tool name -> tool definition.
-    pub tools: std::collections::HashMap<String, McpTool>,
-    /// Known resources grouped by server name.
-    pub resources: std::collections::HashMap<String, Vec<McpResource>>,
-    /// Known resource templates grouped by server name.
-    pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
-    /// Authentication status for each configured MCP server.
-    pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

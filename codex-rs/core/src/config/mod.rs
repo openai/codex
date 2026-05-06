@@ -3209,7 +3209,10 @@ impl Config {
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
-                let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
+                // OTLP HTTP endpoints are signal-specific in our config, so
+                // enabling log export must not implicitly send spans to a
+                // /v1/logs endpoint.
+                let trace_exporter = t.trace_exporter.unwrap_or(OtelExporterKind::None);
                 let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,

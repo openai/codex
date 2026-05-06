@@ -156,6 +156,7 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 
 enum InitialOperation {
     UserTurn {
@@ -222,6 +223,14 @@ fn exec_root_span() -> tracing::Span {
     )
 }
 
+fn exec_stderr_env_filter() -> EnvFilter {
+    // OTEL export is best-effort; keep exporter self-diagnostics out of
+    // headless command output unless the caller opts in with RUST_LOG.
+    EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(EXEC_DEFAULT_LOG_FILTER))
+        .unwrap_or_else(|_| EnvFilter::new("error"))
+}
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     #[allow(clippy::print_stderr)]
     if let Some(message) = cli.removed_full_auto_warning() {
@@ -268,18 +277,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
-        .with_filter(env_filter);
+        .with_filter(exec_stderr_env_filter());
 
     let sandbox_mode = if removed_full_auto {
         Some(SandboxMode::WorkspaceWrite)
