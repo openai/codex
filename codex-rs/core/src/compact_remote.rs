@@ -174,7 +174,7 @@ async fn run_remote_compact_task_inner_impl(
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort,
                 summary: turn_context.reasoning_summary,
-                service_tier: turn_context.config.service_tier,
+                service_tier: turn_context.config.service_tier.clone(),
             },
             &turn_context.session_telemetry,
             &compaction_trace,
