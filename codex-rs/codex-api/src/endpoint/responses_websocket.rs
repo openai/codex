@@ -211,21 +211,32 @@ impl ResponsesWebsocketConnection {
         skip_all,
         fields(transport = "responses_websocket", api.path = "responses")
     )]
-    pub fn send_response_processed(&self, response_id: String) {
-        let stream = Arc::clone(&self.stream);
-        let idle_timeout = self.idle_timeout;
-        let telemetry = self.telemetry.clone();
-        tokio::spawn(
-            async move {
-                if let Err(err) =
-                    send_response_processed_request(stream, response_id, idle_timeout, telemetry)
-                        .await
-                {
-                    debug!("failed to send response.processed websocket request: {err}");
-                }
-            }
-            .instrument(Span::current()),
-        );
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the guard serializes exclusive use of the websocket while sending a request frame"
+    )]
+    pub async fn send_response_processed(&self, response_id: String) -> Result<(), ApiError> {
+        let request =
+            ResponsesWsRequest::ResponseProcessed(ResponseProcessedWsRequest { response_id });
+        let request_body = serde_json::to_value(&request).map_err(|err| {
+            ApiError::Stream(format!("failed to encode websocket request: {err}"))
+        })?;
+
+        let mut guard = self.stream.lock().await;
+        let Some(ws_stream) = guard.as_mut() else {
+            return Err(ApiError::Stream(
+                "websocket connection is closed".to_string(),
+            ));
+        };
+
+        send_websocket_request(
+            ws_stream,
+            request_body,
+            self.idle_timeout,
+            self.telemetry.as_ref(),
+            /*connection_reused*/ true,
+        )
+        .await
     }
 
     #[instrument(
@@ -712,37 +723,6 @@ async fn send_websocket_request(
     result?;
 
     Ok(())
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "the guard serializes exclusive use of the websocket while sending a request frame"
-)]
-async fn send_response_processed_request(
-    stream: Arc<Mutex<Option<WsStream>>>,
-    response_id: String,
-    idle_timeout: Duration,
-    telemetry: Option<Arc<dyn WebsocketTelemetry>>,
-) -> Result<(), ApiError> {
-    let request = ResponsesWsRequest::ResponseProcessed(ResponseProcessedWsRequest { response_id });
-    let request_body = serde_json::to_value(&request)
-        .map_err(|err| ApiError::Stream(format!("failed to encode websocket request: {err}")))?;
-
-    let mut guard = stream.lock().await;
-    let Some(ws_stream) = guard.as_mut() else {
-        return Err(ApiError::Stream(
-            "websocket connection is closed".to_string(),
-        ));
-    };
-
-    send_websocket_request(
-        ws_stream,
-        request_body,
-        idle_timeout,
-        telemetry.as_ref(),
-        /*connection_reused*/ true,
-    )
-    .await
 }
 
 #[cfg(test)]

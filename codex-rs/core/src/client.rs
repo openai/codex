@@ -100,6 +100,7 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -902,11 +903,16 @@ impl ModelClientSession {
             .set_connection_reused(/*connection_reused*/ false);
     }
 
-    pub(crate) fn send_response_processed(&self, response_id: &str) {
+    pub(crate) async fn send_response_processed(&self, response_id: &str) {
         let Some(connection) = self.websocket_session.connection.as_ref() else {
             return;
         };
-        connection.send_response_processed(response_id.to_string());
+        if let Err(err) = connection
+            .send_response_processed(response_id.to_string())
+            .await
+        {
+            debug!("failed to send response.processed websocket request: {err}");
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

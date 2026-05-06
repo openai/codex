@@ -2247,7 +2247,7 @@ async fn try_run_sampling_request(
         && outcome.is_ok()
         && let Some(response_id) = completed_response_id.as_deref()
     {
-        client_session.send_response_processed(response_id);
+        client_session.send_response_processed(response_id).await;
     }
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
