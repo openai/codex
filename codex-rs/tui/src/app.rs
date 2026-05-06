@@ -41,13 +41,11 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
-use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::legacy_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;

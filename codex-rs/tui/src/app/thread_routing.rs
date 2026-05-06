@@ -394,10 +394,6 @@ impl App {
     ) -> Result<()> {
         crate::session_log::log_outbound_op(&op);
 
-        if self.try_handle_local_history_op(thread_id, &op).await? {
-            return Ok(());
-        }
-
         if self
             .try_resolve_app_server_request(app_server, thread_id, &op)
             .await?
@@ -422,70 +418,62 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task that fetches MCP server status from the app-server
-    /// via paginated RPCs, then delivers the result back through
-    /// `AppEvent::McpInventoryLoaded`.
-    ///
-    /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
-    /// result may arrive after the user has moved on. We currently accept that
-    /// tradeoff because the effect is limited to stale inventory output in history,
-    /// while request-token invalidation would add cross-cutting async state for a
-    /// low-severity path.
-    pub(super) async fn try_handle_local_history_op(
-        &mut self,
-        thread_id: ThreadId,
-        op: &AppCommand,
-    ) -> Result<bool> {
-        match op {
-            AppCommand::AddToHistory { text } => {
-                let text = text.to_string();
-                let config = self.chat_widget.config_ref().clone();
-                tokio::spawn(async move {
-                    if let Err(err) = append_message_history_entry(&text, &thread_id, &config).await
-                    {
-                        tracing::warn!(
-                            thread_id = %thread_id,
-                            error = %err,
-                            "failed to append to message history"
-                        );
-                    }
-                });
-                Ok(true)
+    /// Persist prompt text in the local cross-session message history.
+    pub(super) fn append_message_history_entry(&self, thread_id: ThreadId, text: String) {
+        let history_config = codex_message_history::HistoryConfig::new(
+            self.chat_widget.config_ref().codex_home.clone(),
+            &self.chat_widget.config_ref().history,
+        );
+        tokio::spawn(async move {
+            if let Err(err) =
+                codex_message_history::append_entry(&text, thread_id, &history_config).await
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to append to message history"
+                );
             }
-            AppCommand::GetHistoryEntryRequest { offset, log_id } => {
-                let config = self.chat_widget.config_ref().clone();
-                let app_event_tx = self.app_event_tx.clone();
-                let offset = *offset;
-                let log_id = *log_id;
-                tokio::spawn(async move {
-                    let entry_opt = tokio::task::spawn_blocking(move || {
-                        lookup_message_history_entry(log_id, offset, &config)
-                    })
-                    .await
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(error = %err, "history lookup task failed");
-                        None
-                    });
+        });
+    }
 
-                    app_event_tx.send(AppEvent::ThreadHistoryEntryResponse {
-                        thread_id,
-                        event: HistoryLookupResponse {
-                            offset,
-                            log_id,
-                            entry: entry_opt.map(|entry| {
-                                codex_protocol::message_history::HistoryEntry {
-                                    conversation_id: entry.session_id,
-                                    ts: entry.ts,
-                                    text: entry.text,
-                                }
-                            }),
-                        },
-                    });
-                });
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+    /// Fetch one local cross-session message history entry for the active thread.
+    pub(super) async fn lookup_message_history_entry(
+        &mut self,
+        offset: usize,
+        log_id: u64,
+    ) -> Result<()> {
+        let Some(thread_id) = self.active_thread_id else {
+            self.chat_widget
+                .add_error_message("No active thread is available.".to_string());
+            return Ok(());
+        };
+
+        let history_config = codex_message_history::HistoryConfig::new(
+            self.chat_widget.config_ref().codex_home.clone(),
+            &self.chat_widget.config_ref().history,
+        );
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let entry_opt = tokio::task::spawn_blocking(move || {
+                codex_message_history::lookup(log_id, offset, &history_config)
+            })
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "history lookup task failed");
+                None
+            });
+
+            app_event_tx.send(AppEvent::ThreadHistoryEntryResponse {
+                thread_id,
+                event: HistoryLookupResponse {
+                    offset,
+                    log_id,
+                    entry: entry_opt.map(|entry| entry.text),
+                },
+            });
+        });
+        Ok(())
     }
 
     pub(super) async fn try_submit_active_thread_op_via_app_server(
@@ -922,8 +910,7 @@ impl App {
         } else if rollout_path.is_some() {
             session.model.clear();
         }
-        session.history_log_id = 0;
-        session.history_entry_count = 0;
+        session.message_history = None;
         session.rollout_path = rollout_path;
         self.upsert_agent_picker_thread(
             thread_id,

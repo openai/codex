@@ -4,11 +4,9 @@
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 use crate::bottom_pane::FeedbackAudience;
-#[cfg(test)]
-use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::message_history_metadata;
 use crate::permission_compat::legacy_compatible_permission_profile;
+use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
@@ -1467,8 +1465,9 @@ async fn thread_session_state_from_thread_response(
         .map(ThreadId::from_string)
         .transpose()
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
-    let (history_log_id, history_entry_count) = message_history_metadata(config).await;
-    let history_entry_count = u64::try_from(history_entry_count).unwrap_or(u64::MAX);
+    let history_config =
+        codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+    let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
         thread_id,
         forked_from_id,
@@ -1484,8 +1483,10 @@ async fn thread_session_state_from_thread_response(
         cwd,
         instruction_source_paths,
         reasoning_effort,
-        history_log_id,
-        history_entry_count,
+        message_history: Some(MessageHistoryMetadata {
+            log_id,
+            entry_count,
+        }),
         network_proxy: None,
         rollout_path,
     })
@@ -1958,10 +1959,13 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
 
-        append_message_history_entry("older", &thread_id, &config)
+        let history_config =
+            codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+
+        codex_message_history::append_entry("older", &thread_id, &history_config)
             .await
             .expect("history append should succeed");
-        append_message_history_entry("newer", &thread_id, &config)
+        codex_message_history::append_entry("newer", &thread_id, &history_config)
             .await
             .expect("history append should succeed");
 
@@ -1985,8 +1989,11 @@ mod tests {
         .await
         .expect("session should map");
 
-        assert_ne!(session.history_log_id, 0);
-        assert_eq!(session.history_entry_count, 2);
+        let metadata = session
+            .message_history
+            .expect("session should include message-history metadata");
+        assert_ne!(metadata.log_id, 0);
+        assert_eq!(metadata.entry_count, 2);
     }
 
     #[tokio::test]

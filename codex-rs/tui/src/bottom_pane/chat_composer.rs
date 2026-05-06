@@ -849,8 +849,8 @@ impl ChatComposer {
             && self.remote_image_urls.is_empty()
     }
 
-    /// Record the history metadata advertised by `SessionConfiguredEvent` so
-    /// that the composer can navigate cross-session history.
+    /// Record local persistent-history metadata so the composer can navigate
+    /// cross-session history.
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.history.set_metadata(log_id, entry_count);
     }

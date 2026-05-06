@@ -2043,10 +2043,9 @@ impl ChatWidget {
         self.visible_user_turn_count = 0;
         self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = false;
-        let history_entry_count =
-            usize::try_from(session.history_entry_count).unwrap_or(usize::MAX);
+        let history_metadata = session.message_history.unwrap_or_default();
         self.bottom_pane
-            .set_history_metadata(session.history_log_id, history_entry_count);
+            .set_history_metadata(history_metadata.log_id, history_metadata.entry_count);
         self.set_skills(/*skills*/ None);
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
@@ -4034,7 +4033,7 @@ impl ChatWidget {
             entry,
         } = event;
         self.bottom_pane
-            .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
+            .on_history_entry_response(log_id, offset, entry);
     }
 
     fn on_shutdown_complete(&mut self) {
@@ -5564,7 +5563,7 @@ impl ChatWidget {
     ) -> QueueDrain {
         let drain = self.submit_shell_command(command);
         if drain == QueueDrain::Stop {
-            self.submit_op(AppCommand::add_to_history(history_text.to_string()));
+            self.append_message_history_entry(history_text.to_string());
         }
         drain
     }
@@ -5895,7 +5894,7 @@ impl ChatWidget {
             }
         };
         if let Some(history_text) = history_text {
-            self.submit_op(AppCommand::add_to_history(history_text));
+            self.append_message_history_entry(history_text);
         }
 
         if let Some(pending_steer) = pending_steer {
@@ -10520,6 +10519,15 @@ impl ChatWidget {
             }
         }
         true
+    }
+
+    fn append_message_history_entry(&self, text: String) {
+        let Some(thread_id) = self.thread_id else {
+            tracing::warn!("failed to append to message history: no active thread id");
+            return;
+        };
+        self.app_event_tx
+            .send(AppEvent::AppendMessageHistoryEntry { thread_id, text });
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {

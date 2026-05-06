@@ -72,12 +72,9 @@ pub mod legacy_core {
     pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
     pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
-    pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
-    pub use codex_core::lookup_message_history_entry;
-    pub use codex_core::message_history_metadata;
     pub use codex_core::web_search_detail;
 
     pub mod config {

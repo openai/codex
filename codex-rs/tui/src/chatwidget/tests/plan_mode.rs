@@ -1219,8 +1219,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1463,8 +1462,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };

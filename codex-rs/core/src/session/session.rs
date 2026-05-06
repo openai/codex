@@ -444,19 +444,6 @@ impl Session {
         ));
         let state_db_ctx = if config.ephemeral { None } else { state_db };
 
-        let is_subagent = session_configuration.session_source.is_non_root_agent();
-        let history_meta_fut = async {
-            if is_subagent {
-                (0, 0)
-            } else {
-                crate::message_history::history_metadata(&config).await
-            }
-        }
-        .instrument(info_span!(
-            "session_init.history_metadata",
-            otel.name = "session_init.history_metadata",
-            session_init.is_subagent = is_subagent,
-        ));
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -479,11 +466,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            thread_persistence_result,
-            (history_log_id, history_entry_count),
-            (auth, mcp_servers, auth_statuses),
-        ) = tokio::join!(thread_persistence_fut, history_meta_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, (auth, mcp_servers, auth_statuses)) =
+            tokio::join!(thread_persistence_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -885,8 +869,6 @@ impl Session {
                     active_permission_profile: session_configuration.active_permission_profile(),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
-                    history_log_id,
-                    history_entry_count,
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {
                         Self::managed_network_proxy_active_for_permission_profile(

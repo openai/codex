@@ -104,13 +104,6 @@ pub(crate) enum AppCommand {
     Review {
         target: ReviewTarget,
     },
-    AddToHistory {
-        text: String,
-    },
-    GetHistoryEntryRequest {
-        offset: usize,
-        log_id: u64,
-    },
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
@@ -274,14 +267,6 @@ impl AppCommand {
 
     pub(crate) fn review(target: ReviewTarget) -> Self {
         Self::Review { target }
-    }
-
-    pub(crate) fn add_to_history(text: String) -> Self {
-        Self::AddToHistory { text }
-    }
-
-    pub(crate) fn history_lookup(offset: usize, log_id: u64) -> Self {
-        Self::GetHistoryEntryRequest { offset, log_id }
     }
 
     pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {

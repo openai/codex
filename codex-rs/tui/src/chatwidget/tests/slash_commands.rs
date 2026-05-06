@@ -38,14 +38,16 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
-fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
     loop {
-        match op_rx.try_recv() {
-            Ok(Op::AddToHistory { text }) => return text,
+        match rx.try_recv() {
+            Ok(AppEvent::AppendMessageHistoryEntry { text, .. }) => return text,
             Ok(_) => continue,
-            Err(TryRecvError::Empty) => panic!("expected AddToHistory op but queue was empty"),
+            Err(TryRecvError::Empty) => {
+                panic!("expected AppendMessageHistoryEntry event but queue was empty")
+            }
             Err(TryRecvError::Disconnected) => {
-                panic!("expected AddToHistory op but channel closed")
+                panic!("expected AppendMessageHistoryEntry event but channel closed")
             }
         }
     }
@@ -116,15 +118,6 @@ async fn queued_slash_review_with_args_dispatches_after_active_turn() {
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
     match op_rx.try_recv() {
-        Ok(Op::AddToHistory { .. }) => match op_rx.try_recv() {
-            Ok(Op::Review { target }) => assert_eq!(
-                target,
-                ReviewTarget::Custom {
-                    instructions: "check regressions".to_string(),
-                }
-            ),
-            other => panic!("expected queued /review to submit review op, got {other:?}"),
-        },
         Ok(Op::Review { target }) => assert_eq!(
             target,
             ReviewTarget::Custom {
@@ -152,7 +145,7 @@ async fn queued_slash_review_with_args_restores_for_edit() {
 
 #[tokio::test]
 async fn queued_bang_shell_dispatches_after_active_turn() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -171,10 +164,7 @@ async fn queued_bang_shell_dispatches_after_active_turn() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::AddToHistory { text }) if text == "!echo hi"
-    );
+    assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -217,7 +207,7 @@ async fn queued_empty_bang_shell_reports_help_when_dequeued_and_drains_next_inpu
 
 #[tokio::test]
 async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -230,10 +220,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::AddToHistory { text }) if text == "!echo hi"
-    );
+    assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
     assert_eq!(chat.queued_user_messages.len(), 1);
 
     let begin = begin_exec_with_source(
@@ -412,10 +399,10 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         ),
         other => panic!("expected first queued message after /rename, got {other:?}"),
     }
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::AddToHistory { text }) if text == "first after rename"
-    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::AppendMessageHistoryEntry { text, .. } if text == "first after rename"
+    )));
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["second after rename"]
@@ -945,7 +932,7 @@ fn merged_history_record_remaps_override_image_placeholders() {
 
 #[tokio::test]
 async fn interrupted_merged_message_history_encodes_mentions_once() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -977,7 +964,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         other => panic!("expected user turn, got {other:?}"),
     }
     let encoded = "use [$figma](app://figma) now";
-    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+    assert_eq!(next_add_to_history_event(&mut rx), encoded);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     next_interrupt_op(&mut op_rx);
@@ -997,7 +984,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         }
         other => panic!("expected resubmitted user turn, got {other:?}"),
     }
-    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+    assert_eq!(next_add_to_history_event(&mut rx), encoded);
 }
 
 #[tokio::test]

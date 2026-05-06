@@ -73,8 +73,7 @@ impl App {
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
-                history_log_id: 0,
-                history_entry_count: 0,
+                message_history: None,
                 network_proxy: None,
                 rollout_path: thread.path.clone(),
             });
@@ -93,8 +92,7 @@ impl App {
         } else if thread.path.is_some() {
             session.model.clear();
         }
-        session.history_log_id = 0;
-        session.history_entry_count = 0;
+        session.message_history = None;
         session
     }
 
@@ -150,8 +148,7 @@ mod tests {
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }

@@ -326,6 +326,12 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
+                self.append_message_history_entry(thread_id, text);
+            }
+            AppEvent::LookupMessageHistoryEntry { offset, log_id } => {
+                self.lookup_message_history_entry(offset, log_id).await?;
+            }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
                     .approve_recent_auto_review_denial(thread_id, id);

@@ -14,7 +14,6 @@ pub mod exec_output;
 pub mod items;
 pub mod mcp;
 pub mod memory_citation;
-pub mod message_history;
 pub mod models;
 pub mod network_policy;
 pub mod num_format;

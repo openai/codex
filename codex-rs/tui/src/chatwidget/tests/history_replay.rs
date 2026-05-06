@@ -31,8 +31,7 @@ async fn resumed_initial_messages_render_history() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -102,8 +101,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -171,8 +169,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -271,8 +268,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         cwd: expected_cwd.clone(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };
@@ -328,8 +324,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         cwd: test_path_buf("/home/user/external").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };
@@ -367,8 +362,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -422,8 +416,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -693,8 +686,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         cwd: test_project_path().abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     });
@@ -739,8 +731,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         cwd: test_project_path().abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     });

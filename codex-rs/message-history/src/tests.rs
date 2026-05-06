@@ -1,6 +1,5 @@
 use super::*;
-use crate::config::ConfigBuilder;
-use codex_protocol::ThreadId;
+use codex_config::types::History;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::Write;
@@ -88,14 +87,9 @@ async fn lookup_uses_stable_log_id_after_appends() {
 #[tokio::test]
 async fn append_entry_trims_history_when_beyond_max_bytes() {
     let codex_home = TempDir::new().expect("create temp dir");
-
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load config");
-
-    let conversation_id = ThreadId::new();
+    let mut history = History::default();
+    let mut config = HistoryConfig::new(codex_home.path(), &history);
+    let conversation_id = "conversation-id";
 
     let entry_one = "a".repeat(200);
     let entry_two = "b".repeat(200);
@@ -109,8 +103,8 @@ async fn append_entry_trims_history_when_beyond_max_bytes() {
     let first_len = std::fs::metadata(&history_path).expect("metadata").len();
     let limit_bytes = first_len + 10;
 
-    config.history.max_bytes =
-        Some(usize::try_from(limit_bytes).expect("limit should fit into usize"));
+    history.max_bytes = Some(usize::try_from(limit_bytes).expect("limit should fit into usize"));
+    config = HistoryConfig::new(codex_home.path(), &history);
 
     append_entry(&entry_two, &conversation_id, &config)
         .await
@@ -135,14 +129,9 @@ async fn append_entry_trims_history_when_beyond_max_bytes() {
 #[tokio::test]
 async fn append_entry_trims_history_to_soft_cap() {
     let codex_home = TempDir::new().expect("create temp dir");
-
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load config");
-
-    let conversation_id = ThreadId::new();
+    let mut history = History::default();
+    let mut config = HistoryConfig::new(codex_home.path(), &history);
+    let conversation_id = "conversation-id";
 
     let short_entry = "a".repeat(200);
     let long_entry = "b".repeat(400);
@@ -165,10 +154,11 @@ async fn append_entry_trims_history_to_soft_cap() {
         .checked_sub(short_entry_len)
         .expect("second entry length should be larger than first entry length");
 
-    config.history.max_bytes = Some(
+    history.max_bytes = Some(
         usize::try_from((2 * long_entry_len) + (short_entry_len / 2))
             .expect("max bytes should fit into usize"),
     );
+    config = HistoryConfig::new(codex_home.path(), &history);
 
     append_entry(&long_entry, &conversation_id, &config)
         .await
@@ -185,10 +175,7 @@ async fn append_entry_trims_history_to_soft_cap() {
     assert_eq!(entries[0].text, long_entry);
 
     let pruned_len = std::fs::metadata(&history_path).expect("metadata").len();
-    let max_bytes = config
-        .history
-        .max_bytes
-        .expect("max bytes should be configured") as u64;
+    let max_bytes = config.max_bytes.expect("max bytes should be configured") as u64;
 
     assert!(pruned_len <= max_bytes);
 

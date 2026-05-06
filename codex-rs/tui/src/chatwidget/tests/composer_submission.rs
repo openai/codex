@@ -29,8 +29,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -133,8 +132,7 @@ async fn submission_includes_configured_permission_profile() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -183,8 +181,7 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -225,8 +222,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -319,8 +315,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -383,8 +378,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -422,8 +416,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -461,8 +454,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -503,8 +495,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };

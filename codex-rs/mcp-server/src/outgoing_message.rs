@@ -308,8 +308,6 @@ mod tests {
                 active_permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffort::default()),
-                history_log_id: 1,
-                history_entry_count: 1000,
                 initial_messages: None,
                 network_proxy: None,
                 rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -353,8 +351,6 @@ mod tests {
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffort::default()),
-            history_log_id: 1,
-            history_entry_count: 1000,
             initial_messages: None,
             network_proxy: None,
             rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -392,8 +388,6 @@ mod tests {
                 "permission_profile": session_configured_event.permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": session_configured_event.reasoning_effort,
-                "history_log_id": session_configured_event.history_log_id,
-                "history_entry_count": session_configured_event.history_entry_count,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
         });
@@ -421,8 +415,6 @@ mod tests {
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffort::default()),
-            history_log_id: 1,
-            history_entry_count: 1000,
             initial_messages: None,
             network_proxy: None,
             rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -461,8 +453,6 @@ mod tests {
                 "permission_profile": session_configured_event.permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": session_configured_event.reasoning_effort,
-                "history_log_id": session_configured_event.history_log_id,
-                "history_entry_count": session_configured_event.history_entry_count,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
         });

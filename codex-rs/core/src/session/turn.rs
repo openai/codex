@@ -1505,7 +1505,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::DeprecationNotice(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
