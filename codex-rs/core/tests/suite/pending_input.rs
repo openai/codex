@@ -164,14 +164,14 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         .await
         .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
     codex
-        .submit(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: false,
+        .submit(Op::GetHistoryEntryRequest {
+            offset: 0,
+            log_id: 0,
         })
         .await
-        .unwrap_or_else(|err| panic!("submit list-skills barrier: {err}"));
+        .unwrap_or_else(|err| panic!("submit history-entry barrier: {err}"));
     wait_for_event(codex, |event| {
-        matches!(event, EventMsg::ListSkillsResponse(_))
+        matches!(event, EventMsg::GetHistoryEntryResponse(_))
     })
     .await;
 }

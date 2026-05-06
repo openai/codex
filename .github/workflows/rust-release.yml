@@ -96,7 +96,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -108,7 +108,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -255,7 +255,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - if: ${{ contains(matrix.target, 'linux') }}
+      - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
         name: Build bwrap and export digest
         shell: bash
         run: |
@@ -296,7 +296,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
-          binaries: ${{ matrix.binaries }} bwrap
+          binaries: ${{ matrix.binaries }}
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
@@ -378,12 +378,6 @@ jobs:
                 "$dest/${binary}-${{ matrix.target }}.sigstore"
             fi
           done
-
-          if [[ "${{ matrix.target }}" == *linux* && "${{ matrix.bundle }}" == "primary" ]]; then
-            cp "target/${{ matrix.target }}/release/bwrap" "$dest/bwrap-${{ matrix.target }}"
-            cp "target/${{ matrix.target }}/release/bwrap.sigstore" \
-              "$dest/bwrap-${{ matrix.target }}.sigstore"
-          fi
 
           if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
