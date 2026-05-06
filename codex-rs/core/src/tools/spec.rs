@@ -19,7 +19,6 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
-use codex_tools::augment_tool_spec_for_code_mode;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -154,12 +153,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            let spec = if config.code_mode_enabled {
-                augment_tool_spec_for_code_mode(spec)
-            } else {
-                spec
-            };
-            builder.push_spec(spec);
+            builder.push_configured_spec(
+                spec,
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
         }
         builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
