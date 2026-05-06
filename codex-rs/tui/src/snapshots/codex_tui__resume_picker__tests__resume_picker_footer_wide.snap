@@ -1,0 +1,7 @@
+---
+source: tui/src/resume_picker.rs
+expression: "footer_snapshot(&state, 220, 20)"
+---
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 0 / 0 · 100% ─
+ enter resume   esc start new   ctrl+c quit   tab focus sort/filter   ←/→ change option
+ ctrl+o dense view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse

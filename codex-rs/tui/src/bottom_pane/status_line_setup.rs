@@ -117,6 +117,9 @@ pub(crate) enum StatusLineItem {
     /// Whether Fast mode is currently active.
     FastMode,
 
+    /// Whether raw scrollback mode is currently active.
+    RawOutput,
+
     /// Current thread title (if set by user).
     ThreadTitle,
 
@@ -163,6 +166,7 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
             StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
@@ -191,6 +195,7 @@ impl StatusLineItem {
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }

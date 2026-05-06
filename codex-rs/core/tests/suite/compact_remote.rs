@@ -273,6 +273,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
+    let thread_id = harness.test().session_configured.thread_id.to_string();
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -340,6 +341,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert_eq!(
         compact_request.header("session_id").as_deref(),
         Some(session_id.as_str())
+    );
+    assert_eq!(
+        compact_request.header("thread_id").as_deref(),
+        Some(thread_id.as_str())
     );
     let compact_body = compact_request.body_json();
     assert_eq!(
@@ -713,6 +718,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
+    let thread_id = harness.test().session_configured.thread_id.to_string();
 
     mount_sse_once(
         harness.server(),
@@ -763,6 +769,10 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             .header("session_id")
             .as_deref(),
         Some(session_id.as_str())
+    );
+    assert_eq!(
+        compact_mock.single_request().header("thread_id").as_deref(),
+        Some(thread_id.as_str())
     );
     let follow_up_request = responses_mock.single_request();
     let follow_up_body = follow_up_request.body_json().to_string();

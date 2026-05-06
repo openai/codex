@@ -29,7 +29,6 @@ pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
-pub use codex_app_server::in_process::StateDbHandle;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -47,6 +46,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+pub use codex_core::StateDbHandle;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentManagerArgs;
@@ -954,9 +954,13 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::config::ConfigBuilder;
+    use codex_core::init_state_db_from_config;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use std::ops::Deref;
+    use std::path::Path;
+    use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -975,19 +979,59 @@ mod tests {
         }
     }
 
+    async fn build_test_config_for_codex_home(codex_home: &Path) -> Config {
+        match ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .build()
+            .await
+        {
+            Ok(config) => config,
+            Err(_) => Config::load_default_with_cli_overrides_for_codex_home(
+                codex_home.to_path_buf(),
+                Vec::new(),
+            )
+            .await
+            .expect("default config should load"),
+        }
+    }
+
+    struct TestClient {
+        _codex_home: TempDir,
+        client: InProcessAppServerClient,
+    }
+
+    impl Deref for TestClient {
+        type Target = InProcessAppServerClient;
+
+        fn deref(&self) -> &Self::Target {
+            &self.client
+        }
+    }
+
+    impl TestClient {
+        async fn shutdown(self) -> IoResult<()> {
+            self.client.shutdown().await
+        }
+    }
+
     async fn start_test_client_with_capacity(
         session_source: SessionSource,
         channel_capacity: usize,
-    ) -> InProcessAppServerClient {
-        InProcessAppServerClient::start(InProcessClientStartArgs {
+    ) -> TestClient {
+        let codex_home = TempDir::new().expect("temp dir");
+        let config = Arc::new(build_test_config_for_codex_home(codex_home.path()).await);
+        let state_db = init_state_db_from_config(config.as_ref())
+            .await
+            .expect("state db should initialize for in-process test");
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
+            config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            state_db: None,
+            state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
@@ -999,10 +1043,15 @@ mod tests {
             channel_capacity,
         })
         .await
-        .expect("in-process app-server client should start")
+        .expect("in-process app-server client should start");
+
+        TestClient {
+            _codex_home: codex_home,
+            client,
+        }
     }
 
-    async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
+    async fn start_test_client(session_source: SessionSource) -> TestClient {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
@@ -1154,6 +1203,7 @@ mod tests {
             thread_id: "thread".to_string(),
             turn: codex_app_server_protocol::Turn {
                 id: "turn".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
@@ -1984,6 +2034,7 @@ mod tests {
                         thread_id: "thread".to_string(),
                         turn: codex_app_server_protocol::Turn {
                             id: "turn".to_string(),
+                            items_view: codex_app_server_protocol::TurnItemsView::Full,
                             items: Vec::new(),
                             status: codex_app_server_protocol::TurnStatus::Completed,
                             error: None,

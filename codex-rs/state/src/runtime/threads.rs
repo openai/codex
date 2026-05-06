@@ -13,6 +13,7 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
+    threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,
     threads.agent_path,
@@ -486,6 +487,7 @@ INSERT INTO threads (
     created_at_ms,
     updated_at_ms,
     source,
+    thread_source,
     agent_nickname,
     agent_role,
     agent_path,
@@ -505,7 +507,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -516,6 +518,11 @@ ON CONFLICT(id) DO NOTHING
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
+        .bind(
+            metadata
+                .thread_source
+                .map(codex_protocol::protocol::ThreadSource::as_str),
+        )
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
@@ -683,6 +690,7 @@ INSERT INTO threads (
     created_at_ms,
     updated_at_ms,
     source,
+    thread_source,
     agent_nickname,
     agent_role,
     agent_path,
@@ -702,7 +710,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -710,6 +718,7 @@ ON CONFLICT(id) DO UPDATE SET
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms,
     source = excluded.source,
+    thread_source = excluded.thread_source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
     agent_path = excluded.agent_path,
@@ -737,6 +746,11 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
+        .bind(
+            metadata
+                .thread_source
+                .map(codex_protocol::protocol::ThreadSource::as_str),
+        )
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
@@ -958,6 +972,7 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
+    threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,
     threads.agent_path,
@@ -1361,6 +1376,7 @@ mod tests {
                 originator: String::new(),
                 cli_version: String::new(),
                 source: SessionSource::Cli,
+                thread_source: None,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1419,6 +1435,7 @@ mod tests {
                 originator: String::new(),
                 cli_version: String::new(),
                 source: SessionSource::Cli,
+                thread_source: None,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,

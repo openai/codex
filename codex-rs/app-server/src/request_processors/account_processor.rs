@@ -168,7 +168,7 @@ impl AccountRequestProcessor {
         {
             Ok(config) => {
                 let refresh_thread_manager = Arc::clone(thread_manager);
-                let refresh_config = config.clone();
+                let refresh_config_manager = config_manager.clone();
                 thread_manager
                     .plugins_manager()
                     .maybe_start_remote_installed_plugins_cache_refresh(
@@ -177,7 +177,7 @@ impl AccountRequestProcessor {
                         Some(Arc::new(move || {
                             Self::spawn_effective_plugins_changed_task(
                                 Arc::clone(&refresh_thread_manager),
-                                refresh_config.clone(),
+                                refresh_config_manager.clone(),
                             );
                         })),
                     );
@@ -190,19 +190,17 @@ impl AccountRequestProcessor {
         }
     }
 
-    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+    fn spawn_effective_plugins_changed_task(
+        thread_manager: Arc<ThreadManager>,
+        config_manager: ConfigManager,
+    ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_manager().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            if let Err(err) =
-                McpRequestProcessor::queue_mcp_server_refresh_for_config(&thread_manager, &config)
-                    .await
-            {
-                warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
-            }
+            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
         });
     }
 
@@ -243,12 +241,9 @@ impl AccountRequestProcessor {
     }
 
     fn external_auth_active_error(&self) -> JSONRPCErrorError {
-        JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it."
-                .to_string(),
-            data: None,
-        }
+        invalid_request(
+            "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it.",
+        )
     }
 
     async fn login_api_key_common(
@@ -263,11 +258,9 @@ impl AccountRequestProcessor {
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
         ) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "API key login is disabled. Use ChatGPT login instead.",
+            ));
         }
 
         // Cancel any active login attempt.
@@ -287,11 +280,7 @@ impl AccountRequestProcessor {
                 self.auth_manager.reload().await;
                 Ok(())
             }
-            Err(err) => Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to save api key: {err}"),
-                data: None,
-            }),
+            Err(err) => Err(internal_error(format!("failed to save api key: {err}"))),
         }
     }
 
@@ -321,11 +310,9 @@ impl AccountRequestProcessor {
         }
 
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "ChatGPT login is disabled. Use API key login instead.".to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "ChatGPT login is disabled. Use API key login instead.",
+            ));
         }
 
         let opts = LoginServerOptions {
@@ -354,18 +341,10 @@ impl AccountRequestProcessor {
 
     fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {
         let is_not_found = err.kind() == std::io::ErrorKind::NotFound;
-        JSONRPCErrorError {
-            code: if is_not_found {
-                INVALID_REQUEST_ERROR_CODE
-            } else {
-                INTERNAL_ERROR_CODE
-            },
-            message: if is_not_found {
-                err.to_string()
-            } else {
-                format!("failed to request device code: {err}")
-            },
-            data: None,
+        if is_not_found {
+            invalid_request(err.to_string())
+        } else {
+            internal_error(format!("failed to request device code: {err}"))
         }
     }
 
@@ -698,11 +677,7 @@ impl AccountRequestProcessor {
         match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}
             Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("logout failed: {err}"),
-                    data: None,
-                });
+                return Err(internal_error(format!("logout failed: {err}")));
             }
         }
 
@@ -885,28 +860,19 @@ impl AccountRequestProcessor {
         params: SendAddCreditsNudgeEmailParams,
     ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "codex account authentication required to notify workspace owner"
-                    .to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "codex account authentication required to notify workspace owner",
+            ));
         };
 
         if !auth.uses_codex_backend() {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "chatgpt authentication required to notify workspace owner".to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "chatgpt authentication required to notify workspace owner",
+            ));
         }
 
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to construct backend client: {err}"),
-                data: None,
-            })?;
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
         match client
             .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
@@ -916,11 +882,9 @@ impl AccountRequestProcessor {
             Err(err) if err.status().is_some_and(|status| status.as_u16() == 429) => {
                 Ok(AddCreditsNudgeEmailStatus::CooldownActive)
             }
-            Err(err) => Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to notify workspace owner: {err}"),
-                data: None,
-            }),
+            Err(err) => Err(internal_error(format!(
+                "failed to notify workspace owner: {err}"
+            ))),
         }
     }
 
@@ -941,42 +905,28 @@ impl AccountRequestProcessor {
         JSONRPCErrorError,
     > {
         let Some(auth) = self.auth_manager.auth().await else {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "codex account authentication required to read rate limits".to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "codex account authentication required to read rate limits",
+            ));
         };
 
         if !auth.uses_codex_backend() {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "chatgpt authentication required to read rate limits".to_string(),
-                data: None,
-            });
+            return Err(invalid_request(
+                "chatgpt authentication required to read rate limits",
+            ));
         }
 
         let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to construct backend client: {err}"),
-                data: None,
-            })?;
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
         let snapshots = client
             .get_rate_limits_many()
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to fetch codex rate limits: {err}"),
-                data: None,
-            })?;
+            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if snapshots.is_empty() {
-            return Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "failed to fetch codex rate limits: no snapshots returned".to_string(),
-                data: None,
-            });
+            return Err(internal_error(
+                "failed to fetch codex rate limits: no snapshots returned",
+            ));
         }
 
         let rate_limits_by_limit_id: HashMap<String, CoreRateLimitSnapshot> = snapshots

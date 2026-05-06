@@ -168,6 +168,8 @@ pub struct StoredThread {
     pub token_usage_json: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "23")]
     pub history: ::core::option::Option<StoredThreadHistory>,
+    #[prost(string, optional, tag = "24")]
+    pub thread_source: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionSource {

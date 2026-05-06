@@ -1,0 +1,18 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  PreToolUse hooks                                                                                              
+  1 hook needs review before it can run.                                                                        
+                                                                                                                
+  [!] Hook 1 · new                                                                                              
+                                                                                                                
+  Event     PreToolUse                                                                                          
+  Matcher   Bash                                                                                                
+  Source    User config - /tmp/hooks.json                                                                       
+  Command   /tmp/pre-tool-use-check.sh                                                                          
+  Timeout   30s                                                                                                 
+  Trust     New hook - review required                                                                          
+                                                                                                                
+  Press t to trust; esc to go back

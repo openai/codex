@@ -1,6 +1,5 @@
 use super::*;
 use crate::CodexThread;
-use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
@@ -8,7 +7,6 @@ use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
-use crate::init_state_db;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -86,7 +84,6 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
 struct AgentControlHarness {
     _home: TempDir,
     config: Config,
-    state_db: Option<StateDbHandle>,
     manager: ThreadManager,
     control: AgentControl,
 }
@@ -94,19 +91,17 @@ struct AgentControlHarness {
 impl AgentControlHarness {
     async fn new() -> Self {
         let (home, config) = test_config().await;
-        let state_db = init_state_db(&config).await;
-        let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.to_path_buf(),
             std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-            state_db.clone(),
-        );
+        )
+        .await;
         let control = manager.agent_control();
         Self {
             _home: home,
             config,
-            state_db,
             manager,
             control,
         }
@@ -955,7 +950,8 @@ async fn spawn_agent_respects_max_threads_limit() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let _ = manager
@@ -1007,7 +1003,8 @@ async fn spawn_agent_releases_slot_after_shutdown() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let first_agent_id = control
@@ -1050,7 +1047,8 @@ async fn spawn_agent_limit_shared_across_clones() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
     let cloned = control.clone();
 
@@ -1095,7 +1093,8 @@ async fn resume_agent_respects_max_threads_limit() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let resumable_id = control
@@ -1151,7 +1150,8 @@ async fn resume_agent_releases_slot_after_resume_failure() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let _ = control
@@ -1543,19 +1543,17 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
-    let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        state_db.clone(),
-    );
+    )
+    .await;
     let control = manager.agent_control();
     let harness = AgentControlHarness {
         _home: home,
         config,
-        state_db,
         manager,
         control,
     };
@@ -1706,7 +1704,12 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .expect("child shutdown should succeed");
     let store = LocalThreadStore::new(
         LocalThreadStoreConfig::from_config(&harness.config),
-        harness.state_db.clone(),
+        codex_state::StateRuntime::init(
+            harness.config.sqlite_home.clone(),
+            harness.config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize"),
     );
     store
         .archive_thread(ArchiveThreadParams {

@@ -64,6 +64,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use sha1::Digest;
 use std::collections::HashMap;
@@ -147,7 +148,7 @@ enum MissingAnalyticsContext {
 
 #[derive(Clone)]
 struct ThreadMetadataState {
-    thread_source: Option<&'static str>,
+    thread_source: Option<ThreadSource>,
     initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
@@ -156,6 +157,7 @@ struct ThreadMetadataState {
 impl ThreadMetadataState {
     fn from_thread_metadata(
         session_source: &SessionSource,
+        thread_source: Option<ThreadSource>,
         initialization_mode: ThreadInitializationMode,
     ) -> Self {
         let (subagent_source, parent_thread_id) = match session_source {
@@ -172,7 +174,7 @@ impl ThreadMetadataState {
             | SessionSource::Unknown => (None, None),
         };
         Self {
-            thread_source: session_source.thread_source_name(),
+            thread_source,
             initialization_mode,
             subagent_source,
             parent_thread_id,
@@ -348,7 +350,7 @@ impl AnalyticsReducer {
         thread_state
             .metadata
             .get_or_insert_with(|| ThreadMetadataState {
-                thread_source: Some("subagent"),
+                thread_source: Some(ThreadSource::Subagent),
                 initialization_mode: ThreadInitializationMode::New,
                 subagent_source: Some(subagent_source_name(&input.subagent_source)),
                 parent_thread_id,
@@ -749,13 +751,16 @@ impl AnalyticsReducer {
         initialization_mode: ThreadInitializationMode,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let thread_source: SessionSource = thread.source.into();
+        let session_source: SessionSource = thread.source.into();
         let thread_id = thread.id;
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        let thread_metadata =
-            ThreadMetadataState::from_thread_metadata(&thread_source, initialization_mode);
+        let thread_metadata = ThreadMetadataState::from_thread_metadata(
+            &session_source,
+            thread.thread_source.map(Into::into),
+            initialization_mode,
+        );
         self.threads.insert(
             thread_id.clone(),
             ThreadAnalyticsState {
@@ -857,7 +862,7 @@ impl AnalyticsReducer {
                 accepted_turn_id,
                 app_server_client: connection_state.app_server_client.clone(),
                 runtime: connection_state.runtime.clone(),
-                thread_source: thread_metadata.thread_source.map(str::to_string),
+                thread_source: thread_metadata.thread_source,
                 subagent_source: thread_metadata.subagent_source.clone(),
                 parent_thread_id: thread_metadata.parent_thread_id.clone(),
                 num_input_images: pending_request.num_input_images,
@@ -1023,7 +1028,7 @@ fn codex_turn_event_params(
         runtime,
         submission_type,
         ephemeral,
-        thread_source: thread_metadata.thread_source.map(str::to_string),
+        thread_source: thread_metadata.thread_source,
         initialization_mode: thread_metadata.initialization_mode,
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),

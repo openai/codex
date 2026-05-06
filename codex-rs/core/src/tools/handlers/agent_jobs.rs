@@ -19,6 +19,7 @@ use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -35,7 +36,8 @@ use tokio::time::Instant;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-pub struct BatchJobHandler;
+pub struct SpawnAgentsOnCsvHandler;
+pub struct ReportAgentJobResultHandler;
 
 const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
@@ -99,8 +101,12 @@ struct ActiveJobItem {
     status_rx: Option<Receiver<AgentStatus>>,
 }
 
-impl ToolHandler for BatchJobHandler {
+impl ToolHandler for SpawnAgentsOnCsvHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("spawn_agents_on_csv")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -114,7 +120,6 @@ impl ToolHandler for BatchJobHandler {
         let ToolInvocation {
             session,
             turn,
-            tool_name,
             payload,
             ..
         } = invocation;
@@ -128,13 +133,40 @@ impl ToolHandler for BatchJobHandler {
             }
         };
 
-        match tool_name.name.as_str() {
-            "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
-            "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
-            other => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported agent job tool {other}"
-            ))),
-        }
+        spawn_agents_on_csv::handle(session, turn, arguments).await
+    }
+}
+
+impl ToolHandler for ReportAgentJobResultHandler {
+    type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("report_agent_job_result")
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session, payload, ..
+        } = invocation;
+
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "report_agent_job_result handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        report_agent_job_result::handle(session, arguments).await
     }
 }
 

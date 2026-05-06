@@ -61,6 +61,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
@@ -88,6 +89,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
@@ -164,6 +166,7 @@ impl RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
@@ -172,6 +175,7 @@ impl RolloutRecorderParams {
             conversation_id,
             forked_from_id,
             source,
+            thread_source,
             base_instructions,
             dynamic_tools,
             event_persistence_mode,
@@ -667,6 +671,7 @@ impl RolloutRecorder {
                     conversation_id,
                     forked_from_id,
                     source,
+                    thread_source,
                     base_instructions,
                     dynamic_tools,
                     event_persistence_mode,
@@ -695,6 +700,7 @@ impl RolloutRecorder {
                         agent_role: source.get_agent_role(),
                         agent_path: source.get_agent_path().map(Into::into),
                         source,
+                        thread_source,
                         model_provider: Some(config.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
                         dynamic_tools: if dynamic_tools.is_empty() {

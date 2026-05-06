@@ -5,5 +5,6 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { HookEventName } from "./HookEventName";
 import type { HookHandlerType } from "./HookHandlerType";
 import type { HookSource } from "./HookSource";
+import type { HookTrustStatus } from "./HookTrustStatus";
 
-export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, };
+export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, currentHash: string, trustStatus: HookTrustStatus, };

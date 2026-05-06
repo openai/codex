@@ -248,6 +248,16 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn auth_elicitation_is_under_development() {
+    assert_eq!(Feature::AuthElicitation.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::AuthElicitation.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("auth_elicitation"),
+        Some(Feature::AuthElicitation)
+    );
+}
+
+#[test]
 fn remote_control_is_under_development() {
     assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);

@@ -161,8 +161,10 @@ pub(crate) async fn run_pre_tool_use_hooks(
         hook_events,
         should_block,
         block_reason,
+        additional_contexts,
     } = hooks.run_pre_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
+    record_additional_contexts(sess, turn_context, additional_contexts).await;
 
     if should_block {
         block_reason.map(|reason| {

@@ -331,6 +331,7 @@ def codex_rust_crate(
         rust_test(
             name = unit_test_binary,
             crate = name,
+            crate_features = crate_features,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             # Unit tests also compile to standalone Windows executables, so
             # keep their stack reserve aligned with binaries and integration

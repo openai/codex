@@ -14,5 +14,6 @@ expression: "render_lines(&view, 112)"
   Source    Plugin - superpowers@openai-curated                                                                 
   Command   ${CODEX_PLUGIN_ROOT}/hooks/pre-tool-use-check.sh                                                    
   Timeout   30s                                                                                                 
+  Trust     Trusted                                                                                             
                                                                                                                 
   Press space or enter to toggle; esc to go back

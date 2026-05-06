@@ -106,6 +106,8 @@ pub struct TuiGlobalKeymap {
     pub toggle_vim_mode: Option<KeybindingsSpec>,
     /// Toggle Fast mode.
     pub toggle_fast_mode: Option<KeybindingsSpec>,
+    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub toggle_raw_output: Option<KeybindingsSpec>,
 }
 
 /// Chat context keybindings.

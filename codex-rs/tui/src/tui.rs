@@ -40,6 +40,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::insert_history::HistoryLineWrapPolicy;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -369,7 +370,7 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
+    pending_history_lines: Vec<PendingHistoryLines>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -383,6 +384,11 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+}
+
+struct PendingHistoryLines {
+    lines: Vec<Line<'static>>,
+    wrap_policy: HistoryLineWrapPolicy,
 }
 
 impl Tui {
@@ -582,7 +588,25 @@ impl Tui {
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_history_lines.extend(lines);
+        self.insert_history_lines_with_wrap_policy(lines, HistoryLineWrapPolicy::PreWrap);
+    }
+
+    pub fn insert_history_lines_with_wrap_policy(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        wrap_policy: HistoryLineWrapPolicy,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        if let Some(last) = self.pending_history_lines.last_mut()
+            && last.wrap_policy == wrap_policy
+        {
+            last.lines.extend(lines);
+        } else {
+            self.pending_history_lines
+                .push(PendingHistoryLines { lines, wrap_policy });
+        }
         self.frame_requester().schedule_frame();
     }
 
@@ -698,18 +722,21 @@ impl Tui {
     /// invalidate the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
-        pending_history_lines: &mut Vec<Line<'static>>,
+        pending_history_lines: &mut Vec<PendingHistoryLines>,
         is_zellij: bool,
     ) -> Result<bool> {
         if pending_history_lines.is_empty() {
             return Ok(false);
         }
 
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
-        )?;
+        for batch in pending_history_lines.iter() {
+            crate::insert_history::insert_history_lines_with_mode_and_wrap_policy(
+                terminal,
+                batch.lines.clone(),
+                crate::insert_history::InsertHistoryMode::new(is_zellij),
+                batch.wrap_policy,
+            )?;
+        }
         pending_history_lines.clear();
         Ok(is_zellij)
     }

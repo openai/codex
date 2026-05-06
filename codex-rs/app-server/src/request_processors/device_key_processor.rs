@@ -33,8 +33,8 @@ use codex_device_key::RemoteControlClientConnectionAudience;
 use codex_device_key::RemoteControlClientConnectionSignPayload;
 use codex_device_key::RemoteControlClientEnrollmentAudience;
 use codex_device_key::RemoteControlClientEnrollmentSignPayload;
+use codex_rollout::state_db::StateDbHandle;
 use codex_state::DeviceKeyBindingRecord;
-use codex_state::StateRuntime;
 
 #[derive(Clone)]
 pub(crate) struct DeviceKeyRequestProcessor {
@@ -43,10 +43,7 @@ pub(crate) struct DeviceKeyRequestProcessor {
 }
 
 impl DeviceKeyRequestProcessor {
-    pub(crate) fn new(
-        outgoing: Arc<OutgoingMessageSender>,
-        state_db: Option<Arc<StateRuntime>>,
-    ) -> Self {
+    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>, state_db: StateDbHandle) -> Self {
         Self {
             outgoing,
             store: DeviceKeyStore::new(Arc::new(StateDeviceKeyBindingStore::new(state_db))),
@@ -170,25 +167,18 @@ async fn sign_device_key(
 }
 
 struct StateDeviceKeyBindingStore {
-    state_db: Option<Arc<StateRuntime>>,
+    state_db: StateDbHandle,
 }
 
 impl StateDeviceKeyBindingStore {
-    fn new(state_db: Option<Arc<StateRuntime>>) -> Self {
+    fn new(state_db: StateDbHandle) -> Self {
         Self { state_db }
-    }
-
-    async fn state_db(&self) -> Result<Arc<StateRuntime>, DeviceKeyError> {
-        self.state_db
-            .clone()
-            .ok_or_else(|| DeviceKeyError::Platform("sqlite state db unavailable".to_string()))
     }
 }
 
 impl fmt::Debug for StateDeviceKeyBindingStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StateDeviceKeyBindingStore")
-            .field("has_state_db", &self.state_db.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -196,7 +186,7 @@ impl fmt::Debug for StateDeviceKeyBindingStore {
 #[async_trait]
 impl DeviceKeyBindingStore for StateDeviceKeyBindingStore {
     async fn get_binding(&self, key_id: &str) -> Result<Option<DeviceKeyBinding>, DeviceKeyError> {
-        let state_db = self.state_db().await?;
+        let state_db = self.state_db.clone();
         state_db
             .get_device_key_binding(key_id)
             .await
@@ -214,7 +204,7 @@ impl DeviceKeyBindingStore for StateDeviceKeyBindingStore {
         key_id: &str,
         binding: &DeviceKeyBinding,
     ) -> Result<(), DeviceKeyError> {
-        let state_db = self.state_db().await?;
+        let state_db = self.state_db.clone();
         state_db
             .upsert_device_key_binding(&DeviceKeyBindingRecord {
                 key_id: key_id.to_string(),

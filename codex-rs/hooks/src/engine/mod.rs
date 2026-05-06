@@ -26,6 +26,7 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
+use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,8 @@ pub struct HookListEntry {
     pub display_order: i64,
     pub enabled: bool,
     pub is_managed: bool,
+    pub current_hash: String,
+    pub trust_status: HookTrustStatus,
 }
 
 #[derive(Clone)]

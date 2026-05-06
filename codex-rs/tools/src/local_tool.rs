@@ -17,6 +17,13 @@ pub struct ShellToolOptions {
 }
 
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
+    create_exec_command_tool_with_environment_id(options, /*include_environment_id*/ false)
+}
+
+pub(crate) fn create_exec_command_tool_with_environment_id(
+    options: CommandToolOptions,
+    include_environment_id: bool,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -60,6 +67,14 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             "login".to_string(),
             JsonSchema::boolean(Some(
                 "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+            )),
+        );
+    }
+    if include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional environment id from the <environment_context> block. If omitted, uses the primary environment.".to_string(),
             )),
         );
     }

@@ -9,6 +9,10 @@ pub(crate) struct Handler;
 impl ToolHandler for Handler {
     type Output = FunctionToolOutput;
 
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("followup_task")
+    }
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }

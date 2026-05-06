@@ -35,7 +35,6 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
-use crate::rollout::recorder::RolloutRecorder;
 use crate::session::Codex;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -774,12 +773,11 @@ async fn append_guardian_followup_reminder(review_session: &GuardianReviewSessio
 async fn load_rollout_items_for_fork(
     session: &Session,
 ) -> anyhow::Result<Option<Vec<RolloutItem>>> {
+    session.try_ensure_rollout_materialized().await?;
     session.flush_rollout().await?;
-    let Some(rollout_path) = session.current_rollout_path().await? else {
-        return Ok(None);
-    };
-    let history = RolloutRecorder::get_rollout_history(rollout_path.as_path()).await?;
-    Ok(Some(history.get_rollout_items()))
+    let live_thread = session.live_thread_for_persistence("guardian review fork")?;
+    let history = live_thread.load_history(/*include_archived*/ true).await?;
+    Ok(Some(history.items))
 }
 
 async fn wait_for_guardian_review(
