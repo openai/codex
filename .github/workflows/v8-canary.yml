@@ -70,21 +70,49 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
+            bazel_config: ci-v8
+            platform: linux_amd64
+            sandbox: true
+            target: x86_64-unknown-linux-gnu
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
+            platform: linux_arm64
+            sandbox: true
+            target: aarch64-unknown-linux-gnu
+            variant: ptrcomp-sandbox
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_amd64
+            sandbox: true
+            target: x86_64-apple-darwin
+            variant: ptrcomp-sandbox
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_arm64
+            sandbox: true
+            target: aarch64-apple-darwin
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04
+            bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: false
             target: x86_64-unknown-linux-musl
             variant: release
           - runner: ubuntu-24.04
+            bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: true
             target: x86_64-unknown-linux-musl
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: false
             target: aarch64-unknown-linux-musl
             variant: release
           - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: true
             target: aarch64-unknown-linux-musl
@@ -118,30 +146,31 @@ jobs:
 
           target_suffix="${TARGET//-/_}"
           pair_kind="release_pair"
-          bazel_config_args=(--config=v8-release-compat)
           if [[ "${SANDBOX}" == "true" ]]; then
             pair_kind="sandbox_release_pair"
-            bazel_config_args=()
           fi
           pair_target="//third_party/v8:rusty_v8_${pair_kind}_${target_suffix}"
-          extra_targets=(
-            "@llvm//runtimes/libcxx:libcxx.static"
-            "@llvm//runtimes/libcxx:libcxxabi.static"
-          )
 
           bazel_args=(
             build
             "--platforms=@llvm//platforms:${PLATFORM}"
-            "${bazel_config_args[@]}"
             "${pair_target}"
-            "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
+          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
+            bazel_args+=(
+              "@llvm//runtimes/libcxx:libcxx.static"
+              "@llvm//runtimes/libcxx:libcxxabi.static"
+            )
+          fi
+          if [[ "${SANDBOX}" != "true" ]]; then
+            bazel_args+=(--config=v8-release-compat)
+          fi
 
           bazel \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
-            --config=ci-v8 \
+            "--config=${{ matrix.bazel_config }}" \
             "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair

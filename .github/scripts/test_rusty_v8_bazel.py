@@ -23,6 +23,10 @@ class RustyV8BazelTest(unittest.TestCase):
             rusty_v8_bazel.release_pair_label("x86_64-unknown-linux-musl", sandbox=True),
         )
         self.assertEqual(
+            "//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_apple_darwin",
+            rusty_v8_bazel.release_pair_label("x86_64-apple-darwin", sandbox=True),
+        )
+        self.assertEqual(
             "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
             rusty_v8_bazel.staged_archive_name(
                 "x86_64-unknown-linux-musl",
