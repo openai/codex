@@ -109,7 +109,7 @@ mod tests {
                     "builtin-mcp".to_string(),
                     "memories".to_string(),
                     "--codex-home".to_string(),
-                    "/tmp/codex-home".to_string(),
+                    codex_home.as_path().to_string_lossy().into_owned(),
                 ],
                 env: None,
                 env_vars: Vec::new(),
