@@ -15,6 +15,9 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::tools::handlers::parse_arguments;
+
 mod exec_command;
 mod write_stdin;
 
