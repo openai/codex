@@ -184,6 +184,53 @@ fn has_model_resume_override(
 }
 
 fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
+    const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
+    const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
+    const DYNAMIC_TOOL_IDENTIFIER_PATTERN: &str = "^[a-zA-Z0-9_-]+$";
+    const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
+        "api_tool",
+        "browser",
+        "computer",
+        "container",
+        "file_search",
+        "functions",
+        "image_gen",
+        "multi_tool_use",
+        "python",
+        "python_user_visible",
+        "submodel_delegator",
+        "terminal",
+        "tool_search",
+        "web",
+    ];
+
+    fn escape_identifier_for_error(value: &str) -> String {
+        value.escape_default().to_string()
+    }
+
+    fn validate_dynamic_tool_identifier(
+        value: &str,
+        label: &str,
+        max_len: usize,
+    ) -> Result<(), String> {
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(format!(
+                "{label} must match {DYNAMIC_TOOL_IDENTIFIER_PATTERN} to match Responses API: {}",
+                escape_identifier_for_error(value),
+            ));
+        }
+        if value.chars().count() > max_len {
+            return Err(format!(
+                "{label} must be at most {max_len} characters to match Responses API: {}",
+                escape_identifier_for_error(value),
+            ));
+        }
+        Ok(())
+    }
+
     let mut seen = HashSet::new();
     for tool in tools {
         let name = tool.name.trim();
@@ -193,9 +240,10 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         if name != tool.name {
             return Err(format!(
                 "dynamic tool name has leading/trailing whitespace: {}",
-                tool.name
+                escape_identifier_for_error(&tool.name),
             ));
         }
+        validate_dynamic_tool_identifier(name, "dynamic tool name", DYNAMIC_TOOL_NAME_MAX_LEN)?;
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
         }
@@ -209,11 +257,23 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
             if Some(namespace) != tool.namespace.as_deref() {
                 return Err(format!(
                     "dynamic tool namespace has leading/trailing whitespace for {name}: {namespace}",
+                    name = escape_identifier_for_error(name),
+                    namespace = escape_identifier_for_error(namespace),
                 ));
             }
+            validate_dynamic_tool_identifier(
+                namespace,
+                "dynamic tool namespace",
+                DYNAMIC_TOOL_NAMESPACE_MAX_LEN,
+            )?;
             if namespace == "mcp" || namespace.starts_with("mcp__") {
                 return Err(format!(
                     "dynamic tool namespace is reserved for {name}: {namespace}"
+                ));
+            }
+            if RESERVED_RESPONSES_NAMESPACES.contains(&namespace) {
+                return Err(format!(
+                    "dynamic tool namespace collides with a reserved Responses API namespace for {name}: {namespace}",
                 ));
             }
         }
@@ -746,6 +806,7 @@ impl ThreadRequestProcessor {
             personality,
             ephemeral,
             session_start_source,
+            thread_source,
             environments,
             persist_extended_history,
         } = params;
@@ -799,6 +860,7 @@ impl ThreadRequestProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                thread_source.map(Into::into),
                 environment_selections,
                 service_name,
                 experimental_raw_events,
@@ -882,6 +944,7 @@ impl ThreadRequestProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -998,6 +1061,7 @@ impl ThreadRequestProcessor {
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
                 session_source: None,
+                thread_source,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
                 metrics_service_name: service_name,
@@ -1032,6 +1096,7 @@ impl ThreadRequestProcessor {
             .await;
         let mut thread = build_thread_from_snapshot(
             thread_id,
+            session_configured.session_id.to_string(),
             &config_snapshot,
             session_configured.rollout_path.clone(),
         );
@@ -1123,7 +1188,7 @@ impl ThreadRequestProcessor {
         &self,
         model: Option<String>,
         model_provider: Option<String>,
-        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+        service_tier: Option<Option<String>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
@@ -1464,9 +1529,9 @@ impl ThreadRequestProcessor {
             ..Default::default()
         };
 
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let updated_thread = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-            let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
             if let Some(loaded_thread) = loaded_thread.as_ref() {
                 if loaded_thread.config_snapshot().await.ephemeral {
                     return Err(invalid_request(format!(
@@ -1487,12 +1552,14 @@ impl ThreadRequestProcessor {
             }
             .map_err(|err| thread_store_write_error("update thread metadata", err))?
         };
-
         let (mut thread, _) = thread_from_stored_thread(
             updated_thread,
             self.config.model_provider_id.as_str(),
             &self.config.cwd,
         );
+        if let Some(loaded_thread) = loaded_thread.as_ref() {
+            thread.session_id = loaded_thread.session_configured().session_id.to_string();
+        }
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -1538,18 +1605,16 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let fallback_provider = self.config.model_provider_id.clone();
-        let mut thread = self
+        let stored_thread = self
             .thread_store
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
-            .map_err(|err| thread_store_archive_error("unarchive", err))
-            .and_then(|stored_thread| {
-                summary_from_stored_thread(stored_thread, fallback_provider.as_str())
-                    .map(|summary| summary_to_thread(summary, &self.config.cwd))
-                    .ok_or_else(|| {
-                        internal_error(format!("failed to read unarchived thread {thread_id}"))
-                    })
+            .map_err(|err| thread_store_archive_error("unarchive", err))?;
+        let summary = summary_from_stored_thread(stored_thread, fallback_provider.as_str())
+            .ok_or_else(|| {
+                internal_error(format!("failed to read unarchived thread {thread_id}"))
             })?;
+        let mut thread = summary_to_thread(summary, &self.config.cwd);
 
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -1975,6 +2040,7 @@ impl ThreadRequestProcessor {
             if thread.path.is_none() {
                 thread.path = fallback_thread.path.clone();
             }
+            thread.session_id.clone_from(&fallback_thread.session_id);
             thread.ephemeral = fallback_thread.ephemeral;
             thread
         } else {
@@ -2158,8 +2224,12 @@ impl ThreadRequestProcessor {
     ) {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
-            let loaded_thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, thread.rollout_path());
+            let loaded_thread = build_thread_from_snapshot(
+                thread_id,
+                thread.session_configured().session_id.to_string(),
+                &config_snapshot,
+                thread.rollout_path(),
+            );
             self.thread_watch_manager.upsert_thread(loaded_thread).await;
         }
 
@@ -2382,6 +2452,11 @@ impl ThreadRequestProcessor {
                         return Ok(());
                     }
                 };
+                thread.thread_source = codex_thread
+                    .config_snapshot()
+                    .await
+                    .thread_source
+                    .map(Into::into);
 
                 self.thread_watch_manager
                     .upsert_thread(thread.clone())
@@ -2580,11 +2655,12 @@ impl ThreadRequestProcessor {
             }
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;
-            let thread_summary = self.stored_thread_to_api_thread(
+            let mut thread_summary = self.stored_thread_to_api_thread(
                 summary_source_thread,
                 config_snapshot.model_provider_id.as_str(),
                 /*include_turns*/ false,
             );
+            thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
@@ -2753,6 +2829,7 @@ impl ThreadRequestProcessor {
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
         let config_snapshot = thread.config_snapshot().await;
+        let session_id = thread.session_configured().session_id.to_string();
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
@@ -2814,6 +2891,7 @@ impl ThreadRequestProcessor {
             InitialHistory::Forked(items) => {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
+                    session_id.clone(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
@@ -2826,6 +2904,7 @@ impl ThreadRequestProcessor {
         };
         let mut thread = thread?;
         thread.id = thread_id.to_string();
+        thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
             let history_items = thread_history.get_rollout_items();
@@ -2869,6 +2948,7 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             ephemeral,
+            thread_source,
             exclude_turns,
             persist_extended_history,
         } = params;
@@ -2959,6 +3039,7 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
+                thread_source.map(Into::into),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
@@ -3005,8 +3086,12 @@ impl ThreadRequestProcessor {
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
-            let mut thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+            let mut thread = build_thread_from_snapshot(
+                thread_id,
+                session_configured.session_id.to_string(),
+                &config_snapshot,
+                /*path*/ None,
+            );
             thread.preview = preview_from_rollout_items(&history_items);
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
@@ -3018,6 +3103,12 @@ impl ThreadRequestProcessor {
             }
             thread
         };
+        thread.session_id = session_configured.session_id.to_string();
+        thread.thread_source = forked_thread
+            .config_snapshot()
+            .await
+            .thread_source
+            .map(Into::into);
 
         self.thread_watch_manager
             .upsert_thread_silently(thread.clone())
@@ -3601,8 +3692,10 @@ pub(crate) fn thread_from_stored_thread(
         thread.agent_role.clone(),
     );
     let history = thread.history;
+    let thread_id = thread.thread_id.to_string();
     let thread = Thread {
-        id: thread.thread_id.to_string(),
+        id: thread_id.clone(),
+        session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
         preview: thread.first_user_message.unwrap_or(thread.preview),
         ephemeral: false,
@@ -3620,6 +3713,7 @@ pub(crate) fn thread_from_stored_thread(
         agent_nickname: source.get_nickname(),
         agent_role: source.get_agent_role(),
         source: source.into(),
+        thread_source: thread.thread_source.map(Into::into),
         git_info,
         name: thread.name,
         turns: Vec::new(),
@@ -3682,6 +3776,7 @@ fn summary_from_state_db_metadata(
     cwd: PathBuf,
     cli_version: String,
     source: String,
+    _thread_source: Option<codex_protocol::protocol::ThreadSource>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     git_sha: Option<String>,
@@ -3732,6 +3827,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
         metadata.cwd.clone(),
         metadata.cli_version.clone(),
         metadata.source.clone(),
+        metadata.thread_source,
         metadata.agent_nickname.clone(),
         metadata.agent_role.clone(),
         metadata.git_sha.clone(),
@@ -3796,12 +3892,14 @@ fn permission_profile_trusts_project(
 
 fn build_thread_from_snapshot(
     thread_id: ThreadId,
+    session_id: String,
     config_snapshot: &ThreadConfigSnapshot,
     path: Option<PathBuf>,
 ) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
+        session_id,
         forked_from_id: None,
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
@@ -3815,6 +3913,7 @@ fn build_thread_from_snapshot(
         agent_nickname: config_snapshot.session_source.get_nickname(),
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
+        thread_source: config_snapshot.thread_source.map(Into::into),
         git_info: None,
         name: None,
         turns: Vec::new(),
@@ -3826,7 +3925,12 @@ fn build_thread_from_loaded_snapshot(
     config_snapshot: &ThreadConfigSnapshot,
     loaded_thread: &CodexThread,
 ) -> Thread {
-    build_thread_from_snapshot(thread_id, config_snapshot, loaded_thread.rollout_path())
+    build_thread_from_snapshot(
+        thread_id,
+        loaded_thread.session_configured().session_id.to_string(),
+        config_snapshot,
+        loaded_thread.rollout_path(),
+    )
 }
 
 #[cfg(test)]

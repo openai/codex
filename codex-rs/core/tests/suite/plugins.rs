@@ -74,6 +74,7 @@ fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
   "mcpServers": {{
     "sample": {{
       "command": "{command}",
+      "cwd": ".",
       "startup_timeout_sec": 60.0
     }}
   }}

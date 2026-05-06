@@ -370,10 +370,16 @@
             "apps_mcp_path_override": {
               "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
             },
+            "auth_elicitation": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
             "browser_use_external": {
+              "type": "boolean"
+            },
+            "builtin_mcp": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -3919,10 +3925,16 @@
         "apps_mcp_path_override": {
           "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
         },
+        "auth_elicitation": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "builtin_mcp": {
           "type": "boolean"
         },
         "child_agents_md": {

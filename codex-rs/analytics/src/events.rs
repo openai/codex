@@ -33,6 +33,7 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 
@@ -126,7 +127,7 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) model: String,
     pub(crate) ephemeral: bool,
-    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
@@ -647,7 +648,7 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) turn_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) trigger: CompactionTrigger,
@@ -680,7 +681,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) ephemeral: bool,
-    pub(crate) thread_source: Option<String>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
@@ -733,7 +734,7 @@ pub(crate) struct CodexTurnSteerEventParams {
     pub(crate) accepted_turn_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) thread_source: Option<String>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) num_input_images: usize,
@@ -836,7 +837,7 @@ pub(crate) fn codex_compaction_event_params(
     input: CodexCompactionEvent,
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
-    thread_source: Option<&'static str>,
+    thread_source: Option<ThreadSource>,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
 ) -> CodexCompactionEventParams {
@@ -940,7 +941,7 @@ pub(crate) fn subagent_thread_started_event_request(
         runtime: current_runtime_metadata(),
         model: input.model,
         ephemeral: input.ephemeral,
-        thread_source: Some("subagent"),
+        thread_source: Some(ThreadSource::Subagent),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: input

@@ -2,7 +2,7 @@
 {"ts":"2025-08-10T03:12:26.500Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-10T03:12:26.502Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] resume_path: None"}
 {"ts":"2025-08-10T03:12:26.502Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
-{"ts":"2025-08-10T03:12:26.519Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"8f7c4ac2-6141-42da-b4d5-7032a8e8df3b","model":"gpt-oss:20b","history_log_id":2532619,"history_entry_count":355}}}
+{"ts":"2025-08-10T03:12:26.519Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"8f7c4ac2-6141-42da-b4d5-7032a8e8df3b","model":"gpt-oss:20b"}}}
 {"ts":"2025-08-10T03:12:26.520Z","dir":"to_tui","kind":"insert_history","lines":9}
 {"ts":"2025-08-10T03:12:26.520Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-10T03:12:26.520Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}

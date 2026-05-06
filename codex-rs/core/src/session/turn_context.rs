@@ -4,7 +4,9 @@ use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -63,6 +65,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) environments: ResolvedTurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -248,6 +251,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            thread_source: self.thread_source,
             environments: self.environments.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -411,7 +415,7 @@ impl Session {
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
-        per_turn_config.service_tier = session_configuration.service_tier;
+        per_turn_config.service_tier = session_configuration.service_tier.clone();
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         per_turn_config.permissions.permission_profile =
@@ -437,7 +441,8 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_turn_context(
-        conversation_id: ThreadId,
+        thread_id: ThreadId,
+        session_id: SessionId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -519,8 +524,9 @@ impl Session {
 
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
-            conversation_id.to_string(),
-            &session_source,
+            session_id.to_string(),
+            thread_id.to_string(),
+            session_configuration.thread_source,
             sub_id.clone(),
             cwd.clone(),
             &session_configuration.permission_profile(),
@@ -540,6 +546,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            thread_source: session_configuration.thread_source,
             environments,
             cwd,
             current_date: Some(current_date),
@@ -714,7 +721,8 @@ impl Session {
         );
         let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();
         let mut turn_context: TurnContext = Self::make_turn_context(
-            self.conversation_id,
+            self.thread_id(),
+            self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),

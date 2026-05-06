@@ -5,16 +5,14 @@
 //! JSON-Lines tooling. Each record has the following schema:
 //!
 //! ````text
-//! {"conversation_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}
+//! {"session_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}
 //! ````
 //!
-//! To minimise the chance of interleaved writes when multiple processes are
+//! To minimize the chance of interleaved writes when multiple processes are
 //! appending concurrently, callers should *prepare the full line* (record +
 //! trailing `\n`) and write it with a **single `write(2)` system call** while
 //! the file descriptor is opened with the `O_APPEND` flag. POSIX guarantees
 //! that writes up to `PIPE_BUF` bytes are atomic in that case.
-//! Note: `conversation_id` stores the thread id; the field name is preserved for
-//! backwards compatibility with existing history files.
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -26,6 +24,7 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -34,11 +33,9 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 
-use crate::config::Config;
+use codex_config::types::History;
 use codex_config::types::HistoryPersistence;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
-use codex_protocol::ThreadId;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
@@ -60,7 +57,24 @@ pub struct HistoryEntry {
     pub text: String,
 }
 
-fn history_filepath(config: &Config) -> AbsolutePathBuf {
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryConfig {
+    pub codex_home: PathBuf,
+    pub persistence: HistoryPersistence,
+    pub max_bytes: Option<usize>,
+}
+
+impl HistoryConfig {
+    pub fn new(codex_home: impl Into<PathBuf>, history: &History) -> Self {
+        Self {
+            codex_home: codex_home.into(),
+            persistence: history.persistence,
+            max_bytes: history.max_bytes,
+        }
+    }
+}
+
+fn history_filepath(config: &HistoryConfig) -> PathBuf {
     config.codex_home.join(HISTORY_FILENAME)
 }
 
@@ -79,8 +93,12 @@ fn history_filepath(config: &Config) -> AbsolutePathBuf {
 /// Returns an I/O error if the history file cannot be opened/created, the
 /// system clock is before the Unix epoch, or the exclusive lock cannot be
 /// acquired after [`MAX_RETRIES`] attempts.
-pub async fn append_entry(text: &str, conversation_id: &ThreadId, config: &Config) -> Result<()> {
-    match config.history.persistence {
+pub async fn append_entry(
+    text: &str,
+    conversation_id: impl std::fmt::Display,
+    config: &HistoryConfig,
+) -> Result<()> {
+    match config.persistence {
         HistoryPersistence::SaveAll => {
             // Save everything: proceed.
         }
@@ -128,7 +146,7 @@ pub async fn append_entry(text: &str, conversation_id: &ThreadId, config: &Confi
     // Ensure permissions.
     ensure_owner_only_permissions(&history_file).await?;
 
-    let history_max_bytes = config.history.max_bytes;
+    let history_max_bytes = config.max_bytes;
 
     // Perform a blocking write under an advisory write lock using std::fs.
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -256,7 +274,7 @@ fn trim_target_bytes(max_bytes: u64, newest_entry_len: u64) -> u64 {
 /// `(0, 0)` when the file does not exist or its metadata cannot be read. If
 /// metadata succeeds but the file cannot be opened or scanned, returns
 /// `(log_id, 0)` so callers can still detect that a history file exists.
-pub async fn history_metadata(config: &Config) -> (u64, usize) {
+pub async fn history_metadata(config: &HistoryConfig) -> (u64, usize) {
     let path = history_filepath(config);
     history_metadata_for_file(&path).await
 }
@@ -271,7 +289,7 @@ pub async fn history_metadata(config: &Config) -> (u64, usize) {
 /// This function is synchronous because it acquires a shared advisory file lock
 /// via `File::try_lock_shared`. Callers on an async runtime should wrap it in
 /// `spawn_blocking`.
-pub fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
+pub fn lookup(log_id: u64, offset: usize, config: &HistoryConfig) -> Option<HistoryEntry> {
     let path = history_filepath(config);
     lookup_history_entry(&path, log_id, offset)
 }
@@ -300,7 +318,7 @@ async fn ensure_owner_only_permissions(_file: &File) -> Result<()> {
 
 async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
     let log_id = match fs::metadata(path).await {
-        Ok(metadata) => history_log_id(&metadata).unwrap_or(0),
+        Ok(metadata) => log_identity(&metadata).unwrap_or(0),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (0, 0),
         Err(_) => return (0, 0),
     };
@@ -347,7 +365,7 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
         }
     };
 
-    let current_log_id = history_log_id(&metadata)?;
+    let current_log_id = log_identity(&metadata)?;
 
     if log_id != 0 && current_log_id != log_id {
         return None;
@@ -397,22 +415,21 @@ fn lookup_history_entry(path: &Path, log_id: u64, offset: usize) -> Option<Histo
 }
 
 #[cfg(unix)]
-fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+fn log_identity(metadata: &std::fs::Metadata) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     Some(metadata.ino())
 }
 
 #[cfg(windows)]
-fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+fn log_identity(metadata: &std::fs::Metadata) -> Option<u64> {
     use std::os::windows::fs::MetadataExt;
     Some(metadata.creation_time())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
+fn log_identity(_metadata: &std::fs::Metadata) -> Option<u64> {
     None
 }
 
 #[cfg(test)]
-#[path = "message_history_tests.rs"]
 mod tests;

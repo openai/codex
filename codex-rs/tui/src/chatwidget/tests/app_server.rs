@@ -2,6 +2,42 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn invalid_url_elicitation_is_declined() {
+    let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_elicitation_request_now(
+        codex_app_server_protocol::RequestId::Integer(9),
+        codex_app_server_protocol::McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "payments".to_string(),
+            request: codex_app_server_protocol::McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Review the payment details to continue.".to_string(),
+                url: "http://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
+            },
+        },
+    );
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SubmitThreadOp {
+            thread_id: op_thread_id,
+            op: Op::ResolveElicitation {
+                server_name,
+                request_id: codex_app_server_protocol::RequestId::Integer(9),
+                decision: codex_app_server_protocol::McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            },
+        }) if op_thread_id == thread_id && server_name == "payments"
+    );
+}
+
+#[tokio::test]
 async fn collab_spawn_end_shows_requested_model_and_effort() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id = ThreadId::new();

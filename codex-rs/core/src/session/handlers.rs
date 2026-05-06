@@ -458,53 +458,6 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
-pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
-    let id = sess.conversation_id;
-    let config = Arc::clone(config);
-    tokio::spawn(async move {
-        if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await {
-            warn!("failed to append to message history: {e}");
-        }
-    });
-}
-
-pub async fn get_history_entry_request(
-    sess: &Arc<Session>,
-    config: &Arc<Config>,
-    sub_id: String,
-    offset: usize,
-    log_id: u64,
-) {
-    let config = Arc::clone(config);
-    let sess_clone = Arc::clone(sess);
-
-    tokio::spawn(async move {
-        // Run lookup in blocking thread because it does file IO + locking.
-        let entry_opt = tokio::task::spawn_blocking(move || {
-            crate::message_history::lookup(log_id, offset, &config)
-        })
-        .await
-        .unwrap_or(None);
-
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::GetHistoryEntryResponse(
-                codex_protocol::protocol::GetHistoryEntryResponseEvent {
-                    offset,
-                    log_id,
-                    entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
-                        conversation_id: e.session_id,
-                        ts: e.ts,
-                        text: e.text,
-                    }),
-                },
-            ),
-        };
-
-        sess_clone.send_event_raw(event).await;
-    });
-}
-
 pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
     let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
     *guard = Some(refresh_config);
@@ -877,14 +830,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::DynamicToolResponse { id, response } => {
                     dynamic_tool_response(&sess, id, response).await;
-                    false
-                }
-                Op::AddToHistory { text } => {
-                    add_to_history(&sess, &config, text).await;
-                    false
-                }
-                Op::GetHistoryEntryRequest { offset, log_id } => {
-                    get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id).await;
                     false
                 }
                 Op::RefreshMcpServers { config } => {

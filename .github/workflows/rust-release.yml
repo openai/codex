@@ -379,6 +379,17 @@ jobs:
             fi
           done
 
+          if [[ "${{ matrix.target }}" == *linux* && "${{ matrix.bundle }}" == "primary" ]]; then
+            bundle_root="${RUNNER_TEMP}/codex-${{ matrix.target }}-bundle"
+            rm -rf "$bundle_root"
+            mkdir -p "$bundle_root/codex-resources"
+            cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
+            cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
+            chmod 0755 "$bundle_root/codex" "$bundle_root/codex-resources/bwrap"
+            tar -C "$bundle_root" -cf - codex codex-resources/bwrap |
+              zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
+          fi
+
           if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
@@ -402,7 +413,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
@@ -422,8 +433,8 @@ jobs:
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.artifact_name }}
-          # Upload the per-binary .zst files as well as the new .tar.gz
-          # equivalents we generated in the previous step.
+          # Upload the per-binary .zst files, .tar.gz equivalents, and any
+          # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 

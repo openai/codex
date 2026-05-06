@@ -598,6 +598,8 @@ pub(super) async fn handle_pending_thread_resume_request(
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
+    let session_id = conversation.session_configured().session_id.to_string();
+    thread.session_id = session_id;
 
     let response = ThreadResumeResponse {
         thread,

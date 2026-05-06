@@ -73,6 +73,7 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
@@ -693,7 +694,11 @@ async fn track_turn_resolved_config_analytics(
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
-            service_tier: turn_context.config.service_tier,
+            service_tier: turn_context
+                .config
+                .service_tier
+                .as_deref()
+                .and_then(ServiceTier::from_request_value),
             approval_policy: turn_context.approval_policy.value(),
             approvals_reviewer: turn_context.config.approvals_reviewer,
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
@@ -1504,7 +1509,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::DeprecationNotice(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
@@ -1857,7 +1861,7 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier,
+            turn_context.config.service_tier.clone(),
             turn_metadata_header,
             &inference_trace,
         )

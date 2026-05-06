@@ -648,8 +648,7 @@ mod tests {
                 cwd: next_cwd.clone().abs(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
+                message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             });

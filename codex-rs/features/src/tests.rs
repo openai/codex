@@ -130,6 +130,13 @@ fn remote_compaction_v2_is_under_development() {
 }
 
 #[test]
+fn builtin_mcp_is_under_development() {
+    assert_eq!(Feature::BuiltInMcp.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::BuiltInMcp.default_enabled(), false);
+    assert_eq!(feature_for_key("builtin_mcp"), Some(Feature::BuiltInMcp));
+}
+
+#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),
@@ -245,6 +252,16 @@ fn js_repl_features_are_removed_feature_keys() {
 fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
     assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);
+}
+
+#[test]
+fn auth_elicitation_is_under_development() {
+    assert_eq!(Feature::AuthElicitation.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::AuthElicitation.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("auth_elicitation"),
+        Some(Feature::AuthElicitation)
+    );
 }
 
 #[test]

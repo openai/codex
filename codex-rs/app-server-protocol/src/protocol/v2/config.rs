@@ -5,7 +5,6 @@ use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -137,7 +136,7 @@ pub struct ProfileV2 {
     /// used.
     #[experimental("config/read.approvalsReviewer")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
@@ -248,7 +247,7 @@ pub struct Config {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]

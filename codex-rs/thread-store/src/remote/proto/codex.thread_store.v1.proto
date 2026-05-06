@@ -132,6 +132,7 @@ message StoredThread {
   optional string sandbox_policy_json = 21;
   optional string token_usage_json = 22;
   optional StoredThreadHistory history = 23;
+  optional string thread_source = 24;
 }
 
 message SessionSource {
