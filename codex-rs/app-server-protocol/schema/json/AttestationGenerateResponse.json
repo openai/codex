@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "headerValue": {
+      "description": "Opaque upstream `x-oai-attestation` header value.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "headerValue"
+  ],
+  "title": "AttestationGenerateResponse",
+  "type": "object"
+}

@@ -2,6 +2,7 @@ mod shared;
 
 mod account;
 mod apps;
+mod attestation;
 mod collaboration_mode;
 mod command_exec;
 mod config;
@@ -26,6 +27,7 @@ mod windows_sandbox;
 
 pub use account::*;
 pub use apps::*;
+pub use attestation::*;
 pub use collaboration_mode::*;
 pub use command_exec::*;
 pub use config::*;

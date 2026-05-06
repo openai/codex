@@ -1305,6 +1305,12 @@ server_request_definitions! {
         response: v2::ChatgptAuthTokensRefreshResponse,
     },
 
+    /// Generate a fresh upstream attestation result on demand.
+    AttestationGenerate => "attestation/generate" {
+        params: v2::AttestationGenerateParams,
+        response: v2::AttestationGenerateResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -1891,6 +1897,7 @@ mod tests {
                 },
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
+                    request_attestation: true,
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -1911,6 +1918,7 @@ mod tests {
                     },
                     "capabilities": {
                         "experimentalApi": true,
+                        "requestAttestation": true,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -1936,6 +1944,7 @@ mod tests {
                 },
                 "capabilities": {
                     "experimentalApi": true,
+                    "requestAttestation": true,
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -1956,6 +1965,7 @@ mod tests {
                     },
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
+                        request_attestation: true,
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -2069,6 +2079,28 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_attestation_generate_request() -> Result<()> {
+        let params = v2::AttestationGenerateParams {};
+        let request = ServerRequest::AttestationGenerate {
+            request_id: RequestId::Integer(9),
+            params: params.clone(),
+        };
+        assert_eq!(
+            json!({
+                "method": "attestation/generate",
+                "id": 9,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let payload = ServerRequestPayload::AttestationGenerate(params);
+        assert_eq!(request.id(), &RequestId::Integer(9));
+        assert_eq!(payload.request_with_id(RequestId::Integer(9)), request);
         Ok(())
     }
 

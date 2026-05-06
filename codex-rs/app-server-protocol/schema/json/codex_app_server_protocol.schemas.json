@@ -83,6 +83,25 @@
       "title": "ApplyPatchApprovalResponse",
       "type": "object"
     },
+    "AttestationGenerateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "AttestationGenerateParams",
+      "type": "object"
+    },
+    "AttestationGenerateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "headerValue": {
+          "description": "Opaque upstream `x-oai-attestation` header value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "headerValue"
+      ],
+      "title": "AttestationGenerateResponse",
+      "type": "object"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2608,6 +2627,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -5187,6 +5211,31 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "description": "Generate a fresh upstream attestation result on demand.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "attestation/generate"
+              ],
+              "title": "Attestation/generateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AttestationGenerateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Attestation/generateRequest",
           "type": "object"
         },
         {

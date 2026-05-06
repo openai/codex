@@ -1,5 +1,6 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
@@ -249,6 +250,7 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
+    attestation_provider: Option<AttestationProvider>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
@@ -294,6 +296,31 @@ impl ThreadManager {
         state_db: Option<StateDbHandle>,
         installation_id: String,
     ) -> Self {
+        Self::new_with_attestation_provider(
+            config,
+            auth_manager,
+            session_source,
+            environment_manager,
+            analytics_events_client,
+            thread_store,
+            state_db,
+            installation_id,
+            /*attestation_provider*/ None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_attestation_provider(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        state_db: Option<StateDbHandle>,
+        installation_id: String,
+        attestation_provider: Option<AttestationProvider>,
+    ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
@@ -319,6 +346,7 @@ impl ThreadManager {
                 mcp_manager,
                 skills_watcher,
                 thread_store,
+                attestation_provider,
                 auth_manager,
                 session_source,
                 installation_id,
@@ -420,6 +448,7 @@ impl ThreadManager {
                 mcp_manager,
                 skills_watcher,
                 thread_store,
+                attestation_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
@@ -1206,6 +1235,7 @@ impl ThreadManagerState {
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
+            attestation_provider: self.attestation_provider.clone(),
         })
         .await?;
         let new_thread = self

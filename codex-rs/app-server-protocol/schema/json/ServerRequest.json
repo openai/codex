@@ -121,6 +121,9 @@
       ],
       "type": "object"
     },
+    "AttestationGenerateParams": {
+      "type": "object"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "properties": {
         "previousAccountId": {
@@ -1898,6 +1901,31 @@
         "params"
       ],
       "title": "Account/chatgptAuthTokens/refreshRequest",
+      "type": "object"
+    },
+    {
+      "description": "Generate a fresh upstream attestation result on demand.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "attestation/generate"
+          ],
+          "title": "Attestation/generateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AttestationGenerateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Attestation/generateRequest",
       "type": "object"
     },
     {

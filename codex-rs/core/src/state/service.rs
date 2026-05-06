@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
@@ -66,6 +67,7 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) attestation_provider: Option<AttestationProvider>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
