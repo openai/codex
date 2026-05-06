@@ -2698,8 +2698,7 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
 }
 
 #[tokio::test]
-async fn rebuild_for_mcp_refresh_planning_preserves_session_layers_and_refreshes_requirements()
--> std::io::Result<()> {
+async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
     let project_dot_codex =
@@ -2867,7 +2866,7 @@ async fn rebuild_for_mcp_refresh_planning_preserves_session_layers_and_refreshes
     )
     .await?;
     let config = thread_config
-        .rebuild_for_mcp_refresh_planning(&refreshed_config)
+        .rebuild_preserving_session_layers(&refreshed_config)
         .await?;
 
     assert_eq!(
@@ -2906,8 +2905,8 @@ async fn rebuild_for_mcp_refresh_planning_preserves_session_layers_and_refreshes
 }
 
 #[tokio::test]
-async fn rebuild_for_mcp_refresh_planning_refreshes_plugin_derived_mcp_config() -> anyhow::Result<()>
-{
+async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
+-> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
         .path()
@@ -2986,7 +2985,7 @@ async fn rebuild_for_mcp_refresh_planning_refreshes_plugin_derived_mcp_config() 
     )
     .await?;
     let config = thread_config
-        .rebuild_for_mcp_refresh_planning(&refreshed_config)
+        .rebuild_preserving_session_layers(&refreshed_config)
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;

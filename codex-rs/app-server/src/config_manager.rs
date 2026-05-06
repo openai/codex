@@ -140,7 +140,7 @@ impl ConfigManager {
         .await
     }
 
-    pub(crate) async fn load_for_mcp_refresh_planning(
+    pub(crate) async fn load_latest_config_for_thread(
         &self,
         thread_config: &Config,
     ) -> std::io::Result<Config> {
@@ -148,7 +148,7 @@ impl ConfigManager {
             .load_latest_config(Some(thread_config.cwd.to_path_buf()))
             .await?;
         let mut config = thread_config
-            .rebuild_for_mcp_refresh_planning(&refreshed_config)
+            .rebuild_preserving_session_layers(&refreshed_config)
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);

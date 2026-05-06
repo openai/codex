@@ -1123,7 +1123,7 @@ impl Config {
         }
     }
 
-    pub async fn rebuild_for_mcp_refresh_planning(
+    pub async fn rebuild_preserving_session_layers(
         &self,
         refreshed_config: &Config,
     ) -> std::io::Result<Self> {

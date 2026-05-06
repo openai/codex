@@ -65,7 +65,7 @@ async fn build_refresh_config(
     thread_config: Arc<Config>,
 ) -> io::Result<McpServerRefreshConfig> {
     let config = config_manager
-        .load_for_mcp_refresh_planning(thread_config.as_ref())
+        .load_latest_config_for_thread(thread_config.as_ref())
         .await?;
     let mcp_servers = thread_manager
         .mcp_manager()
