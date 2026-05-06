@@ -4,11 +4,64 @@ from __future__ import annotations
 
 import textwrap
 import unittest
+from pathlib import Path
+from unittest.mock import Mock
+from unittest.mock import patch
 
+import rusty_v8_bazel
 import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
+    @patch("rusty_v8_bazel.ensure_bazel_output_files")
+    @patch("rusty_v8_bazel.subprocess.run")
+    def test_host_runnable_bazel_output_file_selects_runnable_candidate(
+        self,
+        run: Mock,
+        ensure_outputs: Mock,
+    ) -> None:
+        amd64_tool = Path("/tmp/llvm-amd64/bin/llvm-ar")
+        arm64_tool = Path("/tmp/llvm-arm64/bin/llvm-ar")
+        ensure_outputs.return_value = [amd64_tool, arm64_tool]
+        run.side_effect = [
+            OSError("Exec format error"),
+            Mock(returncode=0),
+        ]
+
+        self.assertEqual(
+            arm64_tool,
+            rusty_v8_bazel.host_runnable_bazel_output_file(
+                "linux_arm64_musl",
+                "@llvm//tools:llvm-ar",
+                "opt",
+            ),
+        )
+
+    @patch("rusty_v8_bazel.ensure_bazel_output_files")
+    @patch("rusty_v8_bazel.subprocess.run")
+    def test_host_runnable_bazel_output_file_rejects_ambiguous_candidates(
+        self,
+        run: Mock,
+        ensure_outputs: Mock,
+    ) -> None:
+        amd64_tool = Path("/tmp/llvm-amd64/bin/llvm-ar")
+        arm64_tool = Path("/tmp/llvm-arm64/bin/llvm-ar")
+        ensure_outputs.return_value = [amd64_tool, arm64_tool]
+        run.side_effect = [
+            Mock(returncode=0),
+            Mock(returncode=0),
+        ]
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            "expected exactly one host-runnable output",
+        ):
+            rusty_v8_bazel.host_runnable_bazel_output_file(
+                "linux_arm64_musl",
+                "@llvm//tools:llvm-ar",
+                "opt",
+            )
+
     def test_update_module_bazel_replaces_and_inserts_sha256(self) -> None:
         module_bazel = textwrap.dedent(
             """\

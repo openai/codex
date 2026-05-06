@@ -202,14 +202,51 @@ def single_bazel_output_file(
     return outputs[0]
 
 
+def host_runnable_bazel_output_file(
+    platform: str,
+    label: str,
+    compilation_mode: str = "fastbuild",
+    bazel_configs: list[str] | None = None,
+) -> Path:
+    outputs = ensure_bazel_output_files(platform, [label], compilation_mode, bazel_configs)
+    if len(outputs) == 1:
+        return outputs[0]
+
+    runnable_outputs = []
+    for output in outputs:
+        try:
+            result = subprocess.run(
+                [str(output), "--version"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            continue
+        if result.returncode == 0:
+            runnable_outputs.append(output)
+
+    if len(runnable_outputs) != 1:
+        raise SystemExit(
+            f"expected exactly one host-runnable output for {label}, "
+            f"found {runnable_outputs} from {outputs}"
+        )
+    return runnable_outputs[0]
+
+
 def merged_musl_archive(
     platform: str,
     lib_path: Path,
     compilation_mode: str = "fastbuild",
     bazel_configs: list[str] | None = None,
 ) -> Path:
-    llvm_ar = single_bazel_output_file(platform, LLVM_AR_LABEL, compilation_mode, bazel_configs)
-    llvm_ranlib = single_bazel_output_file(
+    llvm_ar = host_runnable_bazel_output_file(
+        platform,
+        LLVM_AR_LABEL,
+        compilation_mode,
+        bazel_configs,
+    )
+    llvm_ranlib = host_runnable_bazel_output_file(
         platform,
         LLVM_RANLIB_LABEL,
         compilation_mode,
