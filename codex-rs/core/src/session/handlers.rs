@@ -18,20 +18,12 @@ use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
 use crate::realtime_conversation::prefix_realtime_v2_text;
-use crate::session::spawn_review_thread;
-use codex_config::CloudRequirementsLoader;
-use codex_config::LoaderOverrides;
-use codex_config::loader::load_config_layers_state;
-use codex_exec_server::LOCAL_FS;
-use codex_utils_absolute_path::AbsolutePathBuf;
-
 use crate::review_prompts::resolve_review_request;
+use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
-use codex_mcp::collect_mcp_snapshot_from_manager;
-use codex_mcp::compute_auth_statuses;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -41,7 +33,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
@@ -49,10 +40,7 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SkillErrorInfo;
-use codex_protocol::protocol::SkillsListEntry;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
@@ -70,7 +58,6 @@ use codex_protocol::user_input::UserInput;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
@@ -268,8 +255,11 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
-            sess.refresh_mcp_servers_if_requested(&current_context)
-                .await;
+            sess.refresh_mcp_servers_if_requested(
+                &current_context,
+                Some(sess.mcp_elicitation_reviewer()),
+            )
+            .await;
             let accepted_items = items.clone();
             sess.spawn_task(
                 Arc::clone(&current_context),
@@ -471,53 +461,6 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
-pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
-    let id = sess.conversation_id;
-    let config = Arc::clone(config);
-    tokio::spawn(async move {
-        if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await {
-            warn!("failed to append to message history: {e}");
-        }
-    });
-}
-
-pub async fn get_history_entry_request(
-    sess: &Arc<Session>,
-    config: &Arc<Config>,
-    sub_id: String,
-    offset: usize,
-    log_id: u64,
-) {
-    let config = Arc::clone(config);
-    let sess_clone = Arc::clone(sess);
-
-    tokio::spawn(async move {
-        // Run lookup in blocking thread because it does file IO + locking.
-        let entry_opt = tokio::task::spawn_blocking(move || {
-            crate::message_history::lookup(log_id, offset, &config)
-        })
-        .await
-        .unwrap_or(None);
-
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::GetHistoryEntryResponse(
-                codex_protocol::protocol::GetHistoryEntryResponseEvent {
-                    offset,
-                    log_id,
-                    entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
-                        conversation_id: e.session_id,
-                        ts: e.ts,
-                        text: e.text,
-                    }),
-                },
-            ),
-        };
-
-        sess_clone.send_event_raw(event).await;
-    });
-}
-
 pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
     let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
     *guard = Some(refresh_config);
@@ -525,127 +468,6 @@ pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerR
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP tool listing reads through the session-owned manager guard"
-)]
-pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let auth = sess.services.auth_manager.auth().await;
-    let mcp_servers = sess
-        .services
-        .mcp_manager
-        .effective_servers(config, auth.as_ref())
-        .await;
-    let snapshot = collect_mcp_snapshot_from_manager(
-        &mcp_connection_manager,
-        compute_auth_statuses(
-            mcp_servers.iter(),
-            config.mcp_oauth_credentials_store_mode,
-            auth.as_ref(),
-        )
-        .await,
-    )
-    .await;
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::McpListToolsResponse(snapshot),
-    };
-    sess.send_event_raw(event).await;
-}
-
-pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, force_reload: bool) {
-    let default_cwd = {
-        let state = sess.state.lock().await;
-        state.session_configuration.cwd.to_path_buf()
-    };
-    let cwds = if cwds.is_empty() {
-        vec![default_cwd]
-    } else {
-        cwds
-    };
-
-    let skills_manager = &sess.services.skills_manager;
-    let plugins_manager = &sess.services.plugins_manager;
-    let fs = sess
-        .services
-        .environment_manager
-        .default_environment()
-        .map(|environment| environment.get_filesystem());
-    let config = sess.get_config().await;
-    let codex_home = sess.codex_home().await;
-    let mut skills = Vec::new();
-    let empty_cli_overrides: &[(String, toml::Value)] = &[];
-    for cwd in cwds {
-        let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
-            Ok(path) => path,
-            Err(err) => {
-                let error_path = cwd.clone();
-                skills.push(SkillsListEntry {
-                    cwd,
-                    skills: Vec::new(),
-                    errors: vec![SkillErrorInfo {
-                        path: error_path,
-                        message: err.to_string(),
-                    }],
-                });
-                continue;
-            }
-        };
-        let config_layer_stack = match load_config_layers_state(
-            LOCAL_FS.as_ref(),
-            &codex_home,
-            Some(cwd_abs.clone()),
-            empty_cli_overrides,
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-            &codex_config::NoopThreadConfigLoader,
-        )
-        .await
-        {
-            Ok(config_layer_stack) => config_layer_stack,
-            Err(err) => {
-                let error_path = cwd.clone();
-                skills.push(SkillsListEntry {
-                    cwd,
-                    skills: Vec::new(),
-                    errors: vec![SkillErrorInfo {
-                        path: error_path,
-                        message: err.to_string(),
-                    }],
-                });
-                continue;
-            }
-        };
-        let plugins_input = config.plugins_config_input();
-        let effective_skill_roots = plugins_manager
-            .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
-            .await;
-        let skills_input = crate::SkillsLoadInput::new(
-            cwd_abs.clone(),
-            effective_skill_roots,
-            config_layer_stack,
-            config.bundled_skills_enabled(),
-        );
-        let outcome = skills_manager
-            .skills_for_cwd(&skills_input, force_reload, fs.clone())
-            .await;
-        let errors = super::errors_to_info(&outcome.errors);
-        let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
-        skills.push(SkillsListEntry {
-            cwd,
-            skills: skills_metadata,
-            errors,
-        });
-    }
-
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
-    };
-    sess.send_event_raw(event).await;
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
@@ -763,21 +585,6 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     .await;
 }
 
-async fn persist_thread_name_update(
-    sess: &Arc<Session>,
-    event: ThreadNameUpdatedEvent,
-) -> anyhow::Result<EventMsg> {
-    let msg = EventMsg::ThreadNameUpdated(event);
-    let item = RolloutItem::EventMsg(msg.clone());
-    let live_thread = sess.live_thread_for_persistence("rename thread")?;
-    live_thread.persist().await?;
-    live_thread
-        .append_items(std::slice::from_ref(&item))
-        .await?;
-    live_thread.flush().await?;
-    Ok(msg)
-}
-
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,
@@ -790,65 +597,6 @@ pub(super) async fn persist_thread_memory_mode_update(
         .await?;
     live_thread.flush().await?;
     Ok(())
-}
-
-/// Persists the thread name in the rollout and state database, updates in-memory state, and
-/// emits a `ThreadNameUpdated` event on success.
-pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-    let Some(name) = crate::util::normalize_thread_name(&name) else {
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: "Thread name cannot be empty.".to_string(),
-                codex_error_info: Some(CodexErrorInfo::BadRequest),
-            }),
-        };
-        sess.send_event_raw(event).await;
-        return;
-    };
-
-    let updated = ThreadNameUpdatedEvent {
-        thread_id: sess.conversation_id,
-        thread_name: Some(name.clone()),
-    };
-
-    let msg = match persist_thread_name_update(sess, updated).await {
-        Ok(msg) => msg,
-        Err(err) => {
-            warn!("Failed to persist thread name update to rollout: {err}");
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: err.to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        }
-    };
-
-    if let Some(state_db) = sess.services.state_db.as_deref()
-        && let Err(err) = state_db
-            .update_thread_title(sess.conversation_id, &name)
-            .await
-    {
-        warn!("Failed to update thread title in state db: {err}");
-    }
-
-    {
-        let mut state = sess.state.lock().await;
-        state.session_configuration.thread_name = Some(name.clone());
-    }
-
-    let codex_home = sess.codex_home().await;
-    if let Err(err) =
-        crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
-    {
-        warn!("Failed to update legacy thread name index: {err}");
-    }
-
-    sess.deliver_event_raw(Event { id: sub_id, msg }).await;
 }
 
 /// Persists thread-level memory mode metadata for the active session.
@@ -934,7 +682,8 @@ pub async fn review(
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
         .await;
-    sess.refresh_mcp_servers_if_requested(&turn_context).await;
+    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
+        .await;
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
             spawn_review_thread(
@@ -1087,18 +836,6 @@ pub(super) async fn submission_loop(
                     dynamic_tool_response(&sess, id, response).await;
                     false
                 }
-                Op::AddToHistory { text } => {
-                    add_to_history(&sess, &config, text).await;
-                    false
-                }
-                Op::GetHistoryEntryRequest { offset, log_id } => {
-                    get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id).await;
-                    false
-                }
-                Op::ListMcpTools => {
-                    list_mcp_tools(&sess, &config, sub.id.clone()).await;
-                    false
-                }
                 Op::RefreshMcpServers { config } => {
                     refresh_mcp_servers(&sess, config).await;
                     false
@@ -1107,20 +844,12 @@ pub(super) async fn submission_loop(
                     reload_user_config(&sess).await;
                     false
                 }
-                Op::ListSkills { cwds, force_reload } => {
-                    list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
-                    false
-                }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {
                     thread_rollback(&sess, sub.id.clone(), num_turns).await;
-                    false
-                }
-                Op::SetThreadName { name } => {
-                    set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

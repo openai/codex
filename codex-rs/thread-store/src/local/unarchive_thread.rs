@@ -17,11 +17,11 @@ pub(super) async fn unarchive_thread(
     params: ArchiveThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    let state_db_ctx = store.state_db().await;
+    let state_db = store.state_db();
     let archived_path = find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
-        state_db_ctx.as_deref(),
+        Some(state_db.as_ref()),
     )
     .await
     .map_err(|err| ThreadStoreError::InvalidRequest {
@@ -73,11 +73,10 @@ pub(super) async fn unarchive_thread(
         message: format!("failed to update unarchived thread timestamp: {err}"),
     })?;
 
-    if let Some(ctx) = state_db_ctx {
-        let _ = ctx
-            .mark_unarchived(thread_id, restored_path.as_path())
-            .await;
-    }
+    let _ = store
+        .state_db()
+        .mark_unarchived(thread_id, restored_path.as_path())
+        .await;
 
     let item = read_thread_item_from_rollout(restored_path.clone())
         .await
@@ -112,13 +111,15 @@ mod tests {
     use super::*;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
+    use crate::local::test_support::init_test_state_db;
     use crate::local::test_support::test_config;
+    use crate::local::test_support::test_store;
     use crate::local::test_support::write_archived_session_file;
 
     #[tokio::test]
     async fn unarchive_thread_restores_rollout_and_returns_updated_thread() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let store = test_store(home.path()).await;
         let uuid = Uuid::from_u128(203);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let archived_path = write_archived_session_file(home.path(), "2025-01-03T13-00-00", uuid)
@@ -149,21 +150,12 @@ mod tests {
     async fn unarchive_thread_updates_sqlite_metadata_when_present() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
+        let runtime = init_test_state_db(&config).await;
+        let store = LocalThreadStore::new(config.clone(), runtime.clone());
         let uuid = Uuid::from_u128(204);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let archived_path = write_archived_session_file(home.path(), "2025-01-03T13-00-00", uuid)
             .expect("archived session file");
-        let runtime = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
-        runtime
-            .mark_backfill_complete(/*last_watermark*/ None)
-            .await
-            .expect("backfill should be complete");
         let mut builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             archived_path.clone(),

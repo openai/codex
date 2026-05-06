@@ -354,8 +354,7 @@ mod tests {
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -364,6 +363,7 @@ mod tests {
     fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
         Turn {
             id: turn_id.to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items,
             status,
             error: None,

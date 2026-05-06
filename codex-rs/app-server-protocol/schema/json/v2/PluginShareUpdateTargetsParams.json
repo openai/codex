@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PluginSharePrincipalType": {
+      "enum": [
+        "user",
+        "group",
+        "workspace"
+      ],
+      "type": "string"
+    },
+    "PluginShareTarget": {
+      "properties": {
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        }
+      },
+      "required": [
+        "principalId",
+        "principalType"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "remotePluginId": {
+      "type": "string"
+    },
+    "shareTargets": {
+      "items": {
+        "$ref": "#/definitions/PluginShareTarget"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "remotePluginId",
+    "shareTargets"
+  ],
+  "title": "PluginShareUpdateTargetsParams",
+  "type": "object"
+}

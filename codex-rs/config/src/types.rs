@@ -57,6 +57,30 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// Preferred layout for the resume/fork session picker.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionPickerViewMode {
+    Comfortable,
+    #[default]
+    Dense,
+}
+
+impl SessionPickerViewMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Comfortable => "comfortable",
+            Self::Dense => "dense",
+        }
+    }
+}
+
+impl fmt::Display for SessionPickerViewMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -617,6 +641,11 @@ pub struct Tui {
     #[serde(default)]
     pub vim_mode_default: bool,
 
+    /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub raw_output_mode: bool,
+
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
@@ -655,6 +684,10 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Preferred layout for resume/fork session picker results.
+    #[serde(default)]
+    pub session_picker_view: Option<SessionPickerViewMode>,
 
     /// Keybinding overrides for the TUI.
     ///

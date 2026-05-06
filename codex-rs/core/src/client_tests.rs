@@ -52,9 +52,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    let thread_id = ThreadId::new();
     ModelClient::new(
         /*auth_manager*/ None,
-        ThreadId::new(),
+        thread_id.into(),
+        thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
@@ -270,7 +272,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     client.advance_window_generation();
 
     let client_metadata = client.build_ws_client_metadata(Some(r#"{"turn_id":"turn-123"}"#));
-    let conversation_id = client.state.conversation_id;
+    let thread_id = client.state.thread_id;
     assert_eq!(
         client_metadata,
         std::collections::HashMap::from([
@@ -280,7 +282,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             ),
             (
                 X_CODEX_WINDOW_ID_HEADER.to_string(),
-                format!("{conversation_id}:1"),
+                format!("{thread_id}:1"),
             ),
             (
                 X_OPENAI_SUBAGENT_HEADER.to_string(),

@@ -77,8 +77,9 @@ impl McpRequestProcessor {
         &self,
         _params: Option<()>,
     ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config).await?;
+        crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
+            .await
+            .map_err(|err| internal_error(format!("failed to refresh MCP servers: {err}")))?;
         Ok(McpServerRefreshResponse {})
     }
 
@@ -89,78 +90,23 @@ impl McpRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn load_thread(
         &self,
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
-    }
-
-    pub(super) async fn queue_mcp_server_refresh_for_config(
-        thread_manager: &Arc<ThreadManager>,
-        config: &Config,
-    ) -> Result<(), JSONRPCErrorError> {
-        let configured_servers = thread_manager
-            .mcp_manager()
-            .configured_servers(config)
-            .await;
-        let mcp_servers = match serde_json::to_value(configured_servers) {
-            Ok(value) => value,
-            Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to serialize MCP servers: {err}"),
-                    data: None,
-                });
-            }
-        };
-
-        let mcp_oauth_credentials_store_mode =
-            match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
-                Ok(value) => value,
-                Err(err) => {
-                    return Err(JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!(
-                            "failed to serialize MCP OAuth credentials store mode: {err}"
-                        ),
-                        data: None,
-                    });
-                }
-            };
-
-        let refresh_config = McpServerRefreshConfig {
-            mcp_servers,
-            mcp_oauth_credentials_store_mode,
-        };
-
-        // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
-        // active turn to avoid work for threads that never resume.
-        thread_manager.refresh_mcp_servers(refresh_config).await;
-        Ok(())
     }
 
     async fn mcp_server_oauth_login_response(

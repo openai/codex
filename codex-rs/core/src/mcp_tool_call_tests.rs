@@ -1,9 +1,11 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use crate::config::ManagedFeatures;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
+use crate::turn_metadata::McpTurnMetadataContext;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AppConfig;
@@ -13,13 +15,16 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_features::Features;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use core_test_support::PathExt;
+use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -67,6 +72,13 @@ fn approval_metadata(
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+    }
+}
+
+fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {
+    McpTurnMetadataContext {
+        model: turn_context.model_info.slug.as_str(),
+        reasoning_effort: turn_context.effective_reasoning_effort(),
     }
 }
 
@@ -163,13 +175,24 @@ print({hook_output:?})
         .to_string(),
     )
     .expect("write hooks.json");
+    let hook_list = codex_hooks::list_hooks(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+    assert_eq!(hook_list.hooks.len(), 1);
+    let trusted_config_layer_stack = trusted_config_layer_stack(
+        &turn_context.config.config_layer_stack,
+        &turn_context.config.codex_home,
+        hook_list.hooks,
+    );
 
     session
         .services
         .hooks
         .store(Arc::new(Hooks::new(HooksConfig {
             feature_enabled: true,
-            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+            config_layer_stack: Some(trusted_config_layer_stack),
             shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
             shell_args: if cfg!(windows) {
                 Vec::new()
@@ -908,13 +931,10 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
 
     let meta = build_mcp_tool_call_request_meta(
         &turn_context,
@@ -923,6 +943,25 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         /*metadata*/ None,
     )
     .expect("custom servers should receive turn metadata");
+    let turn_metadata = meta
+        .get(crate::X_CODEX_TURN_METADATA_HEADER)
+        .expect("turn metadata should be present");
+
+    assert_eq!(
+        turn_metadata
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some(turn_context.model_info.slug.as_str())
+    );
+    assert_eq!(
+        turn_metadata
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str),
+        turn_context
+            .effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .as_deref()
+    );
 
     assert_eq!(
         meta,
@@ -961,13 +1000,10 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
@@ -1011,13 +1047,10 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
 
     assert_eq!(
         build_mcp_tool_call_request_meta(
@@ -1032,6 +1065,251 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
                 "call_id": "call_abc123xyz789",
             },
         }))
+    );
+}
+
+fn codex_apps_auth_failure_result() -> CallToolResult {
+    CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "Connector reauthentication required",
+        })],
+        structured_content: None,
+        is_error: Some(true),
+        meta: Some(serde_json::json!({
+            MCP_TOOL_CODEX_APPS_META_KEY: {
+                "connector_auth_failure": {
+                    "is_auth_failure": true,
+                    "auth_reason": "reauthentication_required",
+                    "connector_id": "connector_calendar",
+                    "connector_name": "Untrusted Calendar",
+                    "link_id": "link_123",
+                    "error_code": "UNAUTHORIZED",
+                    "error_http_status_code": 401,
+                    "error_action": "TRIGGER_REAUTHENTICATION",
+                },
+            },
+        })),
+    }
+}
+
+fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
+    approval_metadata(
+        Some("connector_calendar"),
+        Some("Google Calendar"),
+        Some("Manage events and schedules."),
+        Some("Create Event"),
+        Some("Create a calendar event."),
+    )
+}
+
+async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
+    let auth = session.services.auth_manager.auth().await;
+    let environment = session
+        .services
+        .environment_manager
+        .default_environment()
+        .unwrap_or_else(|| session.services.environment_manager.local_environment());
+    let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
+        &HashMap::new(),
+        turn_context.config.mcp_oauth_credentials_store_mode,
+        HashMap::new(),
+        &turn_context.approval_policy,
+        turn_context.sub_id.clone(),
+        session.get_tx_event(),
+        turn_context.permission_profile(),
+        codex_mcp::McpRuntimeEnvironment::new(environment, turn_context.cwd.to_path_buf()),
+        turn_context.config.codex_home.to_path_buf(),
+        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
+        /*host_owned_codex_apps_enabled*/ true,
+        codex_mcp::ToolPluginProvenance::default(),
+        auth.as_ref(),
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+    *session.services.mcp_connection_manager.write().await = manager;
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
+    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    let result = codex_apps_auth_failure_result();
+    let metadata = codex_apps_auth_failure_metadata();
+
+    let returned = maybe_request_codex_apps_auth_elicitation(
+        &session,
+        &turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&metadata),
+        result.clone(),
+    )
+    .await;
+
+    assert_eq!(returned, result);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_result() {
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AuthElicitation);
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .features = ManagedFeatures::from(features);
+    let result = codex_apps_auth_failure_result();
+    let metadata = codex_apps_auth_failure_metadata();
+
+    let returned = maybe_request_codex_apps_auth_elicitation(
+        &session,
+        &turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&metadata),
+        result.clone(),
+    )
+    .await;
+
+    assert_eq!(returned, result);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_result() {
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AuthElicitation);
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    turn_context.features = ManagedFeatures::from(features);
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
+    let result = codex_apps_auth_failure_result();
+    let metadata = codex_apps_auth_failure_metadata();
+
+    let returned = maybe_request_codex_apps_auth_elicitation(
+        &session,
+        turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&metadata),
+        result.clone(),
+    )
+    .await;
+
+    assert_eq!(returned, result);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_result() {
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AuthElicitation);
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    turn_context.features = ManagedFeatures::from(features);
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: false,
+        }))
+        .expect("test setup should allow updating approval policy");
+    let result = codex_apps_auth_failure_result();
+    let metadata = codex_apps_auth_failure_metadata();
+
+    let returned = maybe_request_codex_apps_auth_elicitation(
+        &session,
+        turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&metadata),
+        result.clone(),
+    )
+    .await;
+
+    assert_eq!(returned, result);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AuthElicitation);
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .features = ManagedFeatures::from(features);
+    let result = codex_apps_auth_failure_result();
+    let metadata = codex_apps_auth_failure_metadata();
+
+    let request_task = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        async move {
+            maybe_request_codex_apps_auth_elicitation(
+                &session,
+                &turn_context,
+                "call_123",
+                CODEX_APPS_MCP_SERVER_NAME,
+                Some(&metadata),
+                result,
+            )
+            .await
+        }
+    });
+
+    let request = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
+            .await
+            .expect("elicitation event timed out")
+            .expect("expected elicitation event");
+        if let EventMsg::ElicitationRequest(request) = event.msg {
+            break request;
+        }
+    };
+    assert_eq!(request.server_name, CODEX_APPS_MCP_SERVER_NAME);
+    assert_eq!(
+        request.id,
+        codex_protocol::mcp::RequestId::String("codex_apps_auth_call_123".to_string())
+    );
+    assert!(matches!(
+        request.request,
+        codex_protocol::approvals::ElicitationRequest::Url { .. }
+    ));
+
+    session
+        .resolve_elicitation(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            rmcp::model::RequestId::String("codex_apps_auth_call_123".into()),
+            ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: None,
+                meta: None,
+            },
+        )
+        .await
+        .expect("elicitation should resolve");
+    let returned = tokio::time::timeout(std::time::Duration::from_secs(1), request_task)
+        .await
+        .expect("auth elicitation task timed out")
+        .expect("auth elicitation task failed");
+    assert_eq!(
+        returned.content,
+        vec![serde_json::json!({
+            "type": "text",
+            "text": "Authentication for Google Calendar was requested and accepted. Retry this tool call now.",
+        })]
     );
 }
 

@@ -807,7 +807,7 @@ async fn wait_for_spawned_thread(test: &TestCodex) -> Result<Arc<CodexThread>> {
         let ids = test.thread_manager.list_thread_ids().await;
         if let Some(thread_id) = ids
             .iter()
-            .find(|id| **id != test.session_configured.session_id)
+            .find(|id| **id != test.session_configured.thread_id)
         {
             return test
                 .thread_manager

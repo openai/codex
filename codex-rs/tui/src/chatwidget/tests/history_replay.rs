@@ -14,10 +14,10 @@ use pretty_assertions::assert_eq;
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
-        thread_id: conversation_id,
+        thread_id,
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -31,8 +31,7 @@ async fn resumed_initial_messages_render_history() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -85,10 +84,10 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     )];
     let local_images = vec![PathBuf::from("/tmp/replay.png")];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
-        thread_id: conversation_id,
+        thread_id,
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -102,8 +101,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -154,10 +152,10 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     let message = "replayed with remote image".to_string();
     let remote_image_urls = vec!["https://example.com/image.png".to_string()];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
-        thread_id: conversation_id,
+        thread_id,
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -171,8 +169,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -271,8 +268,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         cwd: expected_cwd.clone(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };
@@ -328,8 +324,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         cwd: test_path_buf("/home/user/external").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };
@@ -350,10 +345,10 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 
     let remote_image_urls = vec!["https://example.com/remote-only.png".to_string()];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
-        thread_id: conversation_id,
+        thread_id,
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -367,8 +362,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -405,10 +399,10 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
 
     let local_images = [PathBuf::from("/tmp/replay-local-only.png")];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
-        thread_id: conversation_id,
+        thread_id,
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -422,8 +416,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -623,6 +616,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -692,8 +686,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         cwd: test_project_path().abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     });
@@ -738,8 +731,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         cwd: test_project_path().abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     });
@@ -774,6 +766,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -842,6 +835,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: AppServerTurnStatus::InProgress,
             error: None,

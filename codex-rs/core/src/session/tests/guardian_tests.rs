@@ -498,7 +498,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = UnifiedExecHandler;
+    let handler = ExecCommandHandler;
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -731,11 +731,17 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let thread_store = Arc::new(codex_thread_store::LocalThreadStore::new(
         codex_thread_store::LocalThreadStoreConfig::from_config(&config),
-        /*state_db*/ None,
+        codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize"),
     ));
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
+        installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -747,6 +753,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),
+        thread_source: None,
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -760,6 +767,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             turn_environments: Vec::new(),
         },
         analytics_events_client: None,
+        state_db: None,
         thread_store,
     })
     .await

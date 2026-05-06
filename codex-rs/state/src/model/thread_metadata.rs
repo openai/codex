@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
@@ -68,6 +69,8 @@ pub struct ThreadMetadata {
     pub updated_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
@@ -117,6 +120,8 @@ pub struct ThreadMetadataBuilder {
     pub updated_at: Option<DateTime<Utc>>,
     /// The session source.
     pub source: SessionSource,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to the session.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to the session.
@@ -157,6 +162,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at: None,
             source,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -188,6 +194,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
+            thread_source: self.thread_source,
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -313,6 +320,7 @@ pub(crate) struct ThreadRow {
     created_at: i64,
     updated_at: i64,
     source: String,
+    thread_source: Option<String>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     agent_path: Option<String>,
@@ -340,6 +348,7 @@ impl ThreadRow {
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
+            thread_source: row.try_get("thread_source")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             agent_path: row.try_get("agent_path")?,
@@ -371,6 +380,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             created_at,
             updated_at,
             source,
+            thread_source,
             agent_nickname,
             agent_role,
             agent_path,
@@ -389,12 +399,17 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_branch,
             git_origin_url,
         } = row;
+        let thread_source = thread_source
+            .map(|thread_source| thread_source.parse())
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
+            thread_source,
             agent_nickname,
             agent_role,
             agent_path,
@@ -480,6 +495,7 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
             source: "cli".to_string(),
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -508,6 +524,7 @@ mod tests {
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,

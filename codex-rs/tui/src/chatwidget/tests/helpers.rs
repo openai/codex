@@ -182,13 +182,17 @@ pub(super) async fn make_chatwidget_manual(
     };
     let current_collaboration_mode = base_mode;
     let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
-    let effective_service_tier = cfg.service_tier;
+    let effective_service_tier = cfg
+        .service_tier
+        .as_deref()
+        .and_then(ServiceTier::from_request_value);
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
         bottom_pane: bottom,
         active_cell: None,
         active_cell_revision: 0,
+        raw_output_mode: cfg.tui_raw_output_mode,
         config: cfg,
         effective_service_tier,
         current_collaboration_mode,
@@ -207,6 +211,7 @@ pub(super) async fn make_chatwidget_manual(
         plan_type: None,
         codex_rate_limit_reached_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
+        warning_display_state: WarningDisplayState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         add_credits_nudge_email_in_flight: None,
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
@@ -1085,6 +1090,7 @@ pub(super) fn app_server_turn(
 ) -> AppServerTurn {
     AppServerTurn {
         id: turn_id.to_string(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
         items: Vec::new(),
         status,
         error,
@@ -1446,6 +1452,7 @@ pub(super) fn plugins_test_summary(
             description,
             /*long_description*/ None,
         )),
+        keywords: Vec::new(),
     }
 }
 

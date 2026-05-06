@@ -58,6 +58,11 @@ impl LocalMemoriesBackend {
                 "must stay within the memories root",
             ));
         }
+        if relative.components().any(is_hidden_component) {
+            return Err(MemoriesBackendError::NotFound {
+                path: relative_path.to_string(),
+            });
+        }
 
         let components = relative.components().collect::<Vec<_>>();
         let mut scoped_path = self.root.clone();
@@ -122,6 +127,9 @@ impl MemoriesBackend for LocalMemoriesBackend {
         } else if metadata.is_dir() {
             let mut entries = Vec::new();
             for path in read_sorted_dir_paths(&start).await? {
+                if is_hidden_path(&path) {
+                    continue;
+                }
                 let Some(metadata) = Self::metadata_or_none(&path).await? else {
                     continue;
                 };
@@ -216,6 +224,12 @@ impl MemoriesBackend for LocalMemoriesBackend {
         if queries.is_empty() || queries.iter().any(std::string::String::is_empty) {
             return Err(MemoriesBackendError::EmptyQuery);
         }
+        if matches!(
+            request.match_mode,
+            SearchMatchMode::AllWithinLines { line_count: 0 }
+        ) {
+            return Err(MemoriesBackendError::InvalidMatchWindow);
+        }
 
         let max_results = request.max_results.min(MAX_SEARCH_RESULTS);
         let start = self.resolve_scoped_path(request.path.as_deref()).await?;
@@ -232,8 +246,12 @@ impl MemoriesBackend for LocalMemoriesBackend {
         };
         reject_symlink(&display_relative_path(&self.root, &start), &metadata)?;
 
-        let matcher =
-            SearchMatcher::new(queries.clone(), request.match_mode, request.case_sensitive);
+        let matcher = SearchMatcher::new(
+            queries.clone(),
+            request.match_mode.clone(),
+            request.case_sensitive,
+            request.normalized,
+        )?;
         let mut matches = Vec::new();
         search_entries(
             &self.root,
@@ -288,6 +306,9 @@ async fn search_entries(
     let mut pending = vec![current.to_path_buf()];
     while let Some(dir_path) = pending.pop() {
         for path in read_sorted_dir_paths(&dir_path).await? {
+            if is_hidden_path(&path) {
+                continue;
+            }
             let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
                 continue;
             };
@@ -318,64 +339,198 @@ async fn search_file(
         Err(err) => return Err(err.into()),
     };
     let lines = content.lines().collect::<Vec<_>>();
-    for (idx, line) in lines.iter().enumerate() {
-        let matched_queries = matcher.matched_queries(line);
-        if !matched_queries.is_empty() {
-            let start_index = idx.saturating_sub(context_lines);
-            let end_index = idx
-                .saturating_add(context_lines)
-                .saturating_add(1)
-                .min(lines.len());
-            matches.push(MemorySearchMatch {
-                path: display_relative_path(root, path),
-                match_line_number: idx + 1,
-                content_start_line_number: start_index + 1,
-                content: lines[start_index..end_index].join("\n"),
-                matched_queries,
-            });
+    let line_matches = lines
+        .iter()
+        .map(|line| matcher.matched_query_flags(line))
+        .collect::<Vec<_>>();
+    match &matcher.match_mode {
+        SearchMatchMode::Any => {
+            for (idx, matched_query_flags) in line_matches.iter().enumerate() {
+                if matched_query_flags.iter().any(|matched| *matched) {
+                    matches.push(build_search_match(
+                        root,
+                        path,
+                        &lines,
+                        idx,
+                        idx,
+                        context_lines,
+                        matcher.matched_queries(matched_query_flags),
+                    ));
+                }
+            }
+        }
+        SearchMatchMode::AllOnSameLine => {
+            for (idx, matched_query_flags) in line_matches.iter().enumerate() {
+                if matched_query_flags.iter().all(|matched| *matched) {
+                    matches.push(build_search_match(
+                        root,
+                        path,
+                        &lines,
+                        idx,
+                        idx,
+                        context_lines,
+                        matcher.matched_queries(matched_query_flags),
+                    ));
+                }
+            }
+        }
+        SearchMatchMode::AllWithinLines { line_count } => {
+            let mut windows = Vec::new();
+            for start_index in 0..lines.len() {
+                if !line_matches[start_index].iter().any(|matched| *matched) {
+                    continue;
+                }
+                let last_allowed_index = start_index
+                    .saturating_add(line_count.saturating_sub(1))
+                    .min(lines.len().saturating_sub(1));
+                let mut matched_query_flags = vec![false; matcher.queries.len()];
+                for (end_index, line_match_flags) in line_matches
+                    .iter()
+                    .enumerate()
+                    .take(last_allowed_index + 1)
+                    .skip(start_index)
+                {
+                    for (idx, matched) in line_match_flags.iter().enumerate() {
+                        matched_query_flags[idx] |= matched;
+                    }
+                    if matched_query_flags.iter().all(|matched| *matched) {
+                        windows.push((start_index, end_index, matched_query_flags));
+                        break;
+                    }
+                }
+            }
+            for (idx, (start_index, end_index, matched_query_flags)) in windows.iter().enumerate() {
+                let strictly_contains_another_window = windows.iter().enumerate().any(
+                    |(other_idx, (other_start_index, other_end_index, _))| {
+                        idx != other_idx
+                            && start_index <= other_start_index
+                            && end_index >= other_end_index
+                            && (start_index != other_start_index || end_index != other_end_index)
+                    },
+                );
+                if strictly_contains_another_window {
+                    continue;
+                }
+                matches.push(build_search_match(
+                    root,
+                    path,
+                    &lines,
+                    *start_index,
+                    *end_index,
+                    context_lines,
+                    matcher.matched_queries(matched_query_flags),
+                ));
+            }
         }
     }
     Ok(())
 }
 
+fn build_search_match(
+    root: &Path,
+    path: &Path,
+    lines: &[&str],
+    match_start_index: usize,
+    match_end_index: usize,
+    context_lines: usize,
+    matched_queries: Vec<String>,
+) -> MemorySearchMatch {
+    let content_start_index = match_start_index.saturating_sub(context_lines);
+    let content_end_index = match_end_index
+        .saturating_add(context_lines)
+        .saturating_add(1)
+        .min(lines.len());
+    MemorySearchMatch {
+        path: display_relative_path(root, path),
+        match_line_number: match_start_index + 1,
+        content_start_line_number: content_start_index + 1,
+        content: lines[content_start_index..content_end_index].join("\n"),
+        matched_queries,
+    }
+}
+
 struct SearchMatcher {
     queries: Vec<String>,
-    normalized_queries: Option<Vec<String>>,
+    prepared_queries: Vec<String>,
+    comparison: SearchComparison,
     match_mode: SearchMatchMode,
 }
 
 impl SearchMatcher {
-    fn new(queries: Vec<String>, match_mode: SearchMatchMode, case_sensitive: bool) -> Self {
-        let normalized_queries = (!case_sensitive).then(|| {
-            queries
-                .iter()
-                .map(|query| query.to_lowercase())
-                .collect::<Vec<_>>()
-        });
-        Self {
+    fn new(
+        queries: Vec<String>,
+        match_mode: SearchMatchMode,
+        case_sensitive: bool,
+        normalized: bool,
+    ) -> Result<Self, MemoriesBackendError> {
+        let comparison = SearchComparison::new(case_sensitive, normalized);
+        let prepared_queries = queries
+            .iter()
+            .map(|query| comparison.prepare(query))
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        if prepared_queries.iter().any(std::string::String::is_empty) {
+            return Err(MemoriesBackendError::EmptyQuery);
+        }
+        Ok(Self {
             queries,
-            normalized_queries,
+            prepared_queries,
+            comparison,
             match_mode,
+        })
+    }
+
+    fn matched_query_flags(&self, line: &str) -> Vec<bool> {
+        let line = self.comparison.prepare(line);
+        self.prepared_queries
+            .iter()
+            .map(|query| line.as_ref().contains(query))
+            .collect()
+    }
+
+    fn matched_queries(&self, matched_query_flags: &[bool]) -> Vec<String> {
+        self.queries
+            .iter()
+            .zip(matched_query_flags)
+            .filter_map(|(query, matched)| matched.then_some(query.clone()))
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SearchComparison {
+    case_sensitive: bool,
+    normalized: bool,
+}
+
+impl SearchComparison {
+    fn new(case_sensitive: bool, normalized: bool) -> Self {
+        Self {
+            case_sensitive,
+            normalized,
         }
     }
 
-    fn matched_queries(&self, line: &str) -> Vec<String> {
-        let line = match self.normalized_queries.as_ref() {
-            Some(_) => Cow::Owned(line.to_lowercase()),
-            None => Cow::Borrowed(line),
+    fn prepare<'a>(self, value: &'a str) -> Cow<'a, str> {
+        if self.case_sensitive && !self.normalized {
+            return Cow::Borrowed(value);
+        }
+
+        let value = if self.case_sensitive {
+            Cow::Borrowed(value)
+        } else {
+            Cow::Owned(value.to_lowercase())
         };
-        let queries = self.normalized_queries.as_deref().unwrap_or(&self.queries);
-        let mut matched_queries = Vec::new();
-        for (idx, query) in queries.iter().enumerate() {
-            if line.as_ref().contains(query) {
-                matched_queries.push(self.queries[idx].clone());
-            }
+        if !self.normalized {
+            return value;
         }
-        match self.match_mode {
-            SearchMatchMode::Any => matched_queries,
-            SearchMatchMode::All if matched_queries.len() == self.queries.len() => matched_queries,
-            SearchMatchMode::All => Vec::new(),
-        }
+
+        Cow::Owned(
+            value
+                .chars()
+                .filter(|ch| ch.is_alphanumeric())
+                .collect::<String>(),
+        )
     }
 }
 
@@ -401,6 +556,18 @@ fn reject_symlink(path: &str, metadata: &std::fs::Metadata) -> Result<(), Memori
         ));
     }
     Ok(())
+}
+
+fn is_hidden_component(component: Component<'_>) -> bool {
+    matches!(
+        component,
+        Component::Normal(name) if name.to_string_lossy().starts_with('.')
+    )
+}
+
+fn is_hidden_path(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with('.'))
 }
 
 fn display_relative_path(root: &Path, path: &Path) -> String {

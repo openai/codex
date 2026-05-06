@@ -77,6 +77,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
 
     assert_eq!(updated.id, thread.id);
+    assert_eq!(updated.session_id, thread.session_id);
     assert_eq!(
         updated.git_info,
         Some(GitInfo {
@@ -90,6 +91,10 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/metadata/update result.thread must be an object");
+    assert_eq!(
+        updated_thread_json.get("sessionId").and_then(Value::as_str),
+        Some(thread.session_id.as_str())
+    );
     let updated_git_info_json = updated_thread_json
         .get("gitInfo")
         .and_then(Value::as_object)

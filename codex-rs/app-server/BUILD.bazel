@@ -14,5 +14,8 @@ codex_rust_crate(
         "app-server-all-test": 16,
         "app-server-unit-tests": 8,
     },
+    extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
+    ],
     test_tags = ["no-sandbox"],
 )

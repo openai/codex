@@ -303,11 +303,11 @@ Example:
 { "id": 12, "result": { "thread": { "id": "thr_123", "turns": [], … } } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. The returned `thread.sessionId` identifies the current live session tree root. Root threads use their own `thread.id` as `thread.sessionId`; stored threads that are not loaded also report their own `thread.id`, because resuming one makes it the root of a new live session tree. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
 { "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
-{ "id": 12, "result": { "thread": { "id": "thr_456", … } } }
+{ "id": 12, "result": { "thread": { "id": "thr_456", "sessionId": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
@@ -426,6 +426,8 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 ### Example: List thread turns (experimental)
 
 Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a stored thread’s turn history without resuming it. By default, results are sorted descending so clients can start at the present and fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` on a later request with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
+
+Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Current `thread/turns/list` responses return `full` turns.
 
 ```json
 { "method": "thread/turns/list", "id": 24, "params": {
@@ -1391,6 +1393,12 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
 
+Dynamic tool identifiers follow the same constraints as Responses function tools:
+
+- `name` must match `^[a-zA-Z0-9_-]+$` and be between 1 and 128 characters.
+- `namespace`, when present, must match `^[a-zA-Z0-9_-]+$` and be between 1 and 64 characters.
+- `namespace` must not collide with reserved Responses runtime namespaces such as `functions`, `multi_tool_use`, `file_search`, `web`, `browser`, `image_gen`, `computer`, `container`, `terminal`, `python`, `python_user_visible`, `api_tool`, `tool_search`, or `submodel_delegator`.
+
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `code_mode`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
@@ -1539,7 +1547,11 @@ To enable or disable a skill by name:
 }
 ```
 
-Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Use `hooks/list` to fetch discovered hooks for one or more `cwds`. Each result is evaluated with that `cwd`'s effective config, so feature gates and discovered config layers can differ within a single response.
+
+Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
+
+For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {
@@ -1570,7 +1582,9 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entr
         "source": "user",
         "pluginId": null,
         "displayOrder": 0,
-        "enabled": true
+        "enabled": true,
+        "currentHash": "sha256:...",
+        "trustStatus": "untrusted"
       }],
       "warnings": [],
       "errors": []

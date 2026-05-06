@@ -263,8 +263,10 @@ pub(crate) fn summary_to_thread(
                 fallback_cwd.clone()
             });
 
+    let thread_id = conversation_id.to_string();
     Thread {
-        id: conversation_id.to_string(),
+        id: thread_id.clone(),
+        session_id: thread_id,
         forked_from_id: None,
         preview,
         ephemeral: false,
@@ -278,6 +280,7 @@ pub(crate) fn summary_to_thread(
         agent_nickname: source.get_nickname(),
         agent_role: source.get_agent_role(),
         source: source.into(),
+        thread_source: None,
         git_info,
         name: None,
         turns: Vec::new(),

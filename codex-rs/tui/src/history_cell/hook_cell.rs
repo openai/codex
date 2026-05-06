@@ -11,6 +11,7 @@
 //!    first drawn.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
+use super::plain_lines;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -338,6 +339,10 @@ impl HistoryCell for HookCell {
     /// Hook transcript output matches viewport output.
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(u16::MAX))
     }
 
     /// Produces a coarse cache key for transcript overlays while hook animations are active.

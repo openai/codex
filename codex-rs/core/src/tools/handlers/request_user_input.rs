@@ -8,6 +8,7 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::normalize_request_user_input_args;
 use codex_tools::request_user_input_unavailable_message;
 
@@ -17,6 +18,10 @@ pub struct RequestUserInputHandler {
 
 impl ToolHandler for RequestUserInputHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

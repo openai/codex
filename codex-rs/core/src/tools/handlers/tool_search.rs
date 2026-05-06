@@ -12,6 +12,7 @@ use bm25::SearchEngineBuilder;
 use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::coalesce_loadable_tool_specs;
 use std::collections::HashMap;
 
@@ -43,6 +44,10 @@ impl ToolSearchHandler {
 
 impl ToolHandler for ToolSearchHandler {
     type Output = ToolSearchOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(TOOL_SEARCH_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

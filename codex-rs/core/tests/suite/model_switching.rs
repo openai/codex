@@ -106,6 +106,7 @@ fn test_model_info(
         supports_search_tool: false,
         priority: 1,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -486,7 +487,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_123",
     );
     let _ = std::fs::remove_file(&saved_path);
@@ -600,7 +601,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_123",
     );
     let _ = std::fs::remove_file(&saved_path);
@@ -716,7 +717,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_rollback",
     );
     let _ = std::fs::remove_file(&saved_path);
@@ -818,6 +819,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         supports_search_tool: false,
         priority: 1,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

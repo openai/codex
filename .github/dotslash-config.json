@@ -11,11 +11,11 @@
           "path": "codex"
         },
         "linux-x86_64": {
-          "regex": "^codex-x86_64-unknown-linux-musl\\.zst$",
+          "regex": "^codex-x86_64-unknown-linux-musl-bundle\\.tar\\.zst$",
           "path": "codex"
         },
         "linux-aarch64": {
-          "regex": "^codex-aarch64-unknown-linux-musl\\.zst$",
+          "regex": "^codex-aarch64-unknown-linux-musl-bundle\\.tar\\.zst$",
           "path": "codex"
         },
         "windows-x86_64": {
@@ -81,6 +81,18 @@
         "windows-aarch64": {
           "regex": "^codex-responses-api-proxy-aarch64-pc-windows-msvc\\.exe\\.zst$",
           "path": "codex-responses-api-proxy.exe"
+        }
+      }
+    },
+    "bwrap": {
+      "platforms": {
+        "linux-x86_64": {
+          "regex": "^bwrap-x86_64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
+        },
+        "linux-aarch64": {
+          "regex": "^bwrap-aarch64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
         }
       }
     },

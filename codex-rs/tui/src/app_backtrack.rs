@@ -245,7 +245,7 @@ impl App {
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines(lines);
+            tui.insert_history_lines_with_wrap_policy(lines, self.history_line_wrap_policy());
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
@@ -261,7 +261,10 @@ impl App {
         if !self.transcript_cells.is_empty() {
             let width = tui.terminal.last_known_screen_size.width;
             for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
+                tui.insert_history_lines_with_wrap_policy(
+                    cell.display_lines_for_mode(width, self.chat_widget.history_render_mode()),
+                    self.history_line_wrap_policy(),
+                );
             }
         }
     }

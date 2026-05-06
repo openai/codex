@@ -61,6 +61,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
+use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
@@ -254,10 +255,11 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) state_db: StateDbHandle,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) installation_id: String,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
@@ -280,6 +282,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             auth_manager,
+            installation_id,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
@@ -291,14 +294,17 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
+        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
             environment_manager,
             Some(analytics_events_client.clone()),
-            Arc::clone(&thread_store),
             state_db.clone(),
+            Arc::clone(&thread_store),
+            agent_graph_store.clone(),
+            installation_id,
         ));
         thread_manager
             .plugins_manager()
@@ -344,7 +350,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             feedback,
             log_db,
-            state_db.clone(),
+            Some(state_db.clone()),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -385,7 +391,6 @@ impl MessageProcessor {
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             outgoing.clone(),
-            analytics_events_client.clone(),
             arg0_paths.clone(),
             Arc::clone(&config),
             config_manager.clone(),
@@ -395,7 +400,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db.clone(),
+            Some(state_db.clone()),
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
@@ -413,7 +418,7 @@ impl MessageProcessor {
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
             let on_effective_plugins_changed =
-                plugin_processor.effective_plugins_changed_callback((*config).clone());
+                plugin_processor.effective_plugins_changed_callback();
             thread_manager
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
@@ -831,6 +836,11 @@ impl MessageProcessor {
                 .read(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::WindowsSandboxReadiness { .. } => self
+                .windows_sandbox_processor
+                .windows_sandbox_readiness()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigDetect { params, .. } => self
                 .external_agent_config_processor
                 .detect(params)
@@ -949,12 +959,22 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadResume { params, .. } => {
                 self.thread_processor
-                    .thread_resume(request_id.clone(), params)
+                    .thread_resume(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
-                    .thread_fork(request_id.clone(), params)
+                    .thread_fork(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
@@ -1068,6 +1088,11 @@ impl MessageProcessor {
             }
             ClientRequest::PluginShareSave { params, .. } => {
                 self.plugin_processor.plugin_share_save(params).await
+            }
+            ClientRequest::PluginShareUpdateTargets { params, .. } => {
+                self.plugin_processor
+                    .plugin_share_update_targets(params)
+                    .await
             }
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor.plugin_share_list(params).await

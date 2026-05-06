@@ -371,6 +371,22 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
+      - name: Verify Bazel builds bwrap
+        if: runner.os == 'Linux'
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          ./.github/scripts/run-bazel-ci.sh \
+            --remote-download-toplevel \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=verify-bwrap \
+            -- \
+            //codex-rs/bwrap:bwrap
+
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true

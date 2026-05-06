@@ -25,6 +25,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
@@ -563,10 +564,7 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
         .with_pre_build_hook(write_unsupported_blocking_pre_compact_hook)
         .with_config(move |config| {
             config.model_provider = model_provider;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             set_test_compact_prompt(config);
         });
     let test = builder.build(&server).await.expect("create conversation");
@@ -638,10 +636,7 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
         .with_pre_build_hook(write_matching_compact_hooks)
         .with_config(move |config| {
             config.model_provider = model_provider;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             set_test_compact_prompt(config);
         });
     let test = builder.build(&server).await.expect("create conversation");

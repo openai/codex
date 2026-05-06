@@ -17,6 +17,7 @@ use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
@@ -70,6 +71,7 @@ use url::Url;
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
+    host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
 }
@@ -82,9 +84,11 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
+            host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.get().clone(),
+                /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
         }
@@ -116,6 +120,10 @@ impl McpConnectionManager {
         self.server_origins.get(server_name).map(String::as_str)
     }
 
+    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
+        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
+    }
+
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
@@ -126,6 +134,14 @@ impl McpConnectionManager {
         if let Ok(mut profile) = self.elicitation_requests.permission_profile.lock() {
             *profile = permission_profile;
         }
+    }
+
+    pub fn elicitations_auto_deny(&self) -> bool {
+        self.elicitation_requests.auto_deny()
+    }
+
+    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
+        self.elicitation_requests.set_auto_deny(auto_deny);
     }
 
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
@@ -140,15 +156,20 @@ impl McpConnectionManager {
         runtime_environment: McpRuntimeEnvironment,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        host_owned_codex_apps_enabled: bool,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests =
-            ElicitationRequestManager::new(approval_policy.value(), initial_permission_profile);
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_permission_profile,
+            elicitation_reviewer,
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth
@@ -240,6 +261,7 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_origins,
+            host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
         };

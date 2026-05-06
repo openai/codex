@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
+use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -83,7 +84,6 @@ pub async fn run_main(
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
     set_default_client_residency_requirement(config.enforce_residency.value());
-    let state_db = codex_core::init_state_db(&config).await;
 
     let otel = codex_core::otel_init::build_provider(
         &config,
@@ -113,6 +113,7 @@ pub async fn run_main(
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<IncomingMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -140,15 +141,19 @@ pub async fn run_main(
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
-        let mut processor = MessageProcessor::new(
+        let processor = MessageProcessor::new(
             outgoing_message_sender,
             arg0_paths,
             Arc::new(config),
             environment_manager,
-            state_db,
+            installation_id,
         )
         .await;
         async move {
+            let Some(mut processor) = processor else {
+                error!("failed to initialize MCP processor");
+                return;
+            };
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
                     JsonRpcMessage::Request(r) => processor.process_request(r).await,

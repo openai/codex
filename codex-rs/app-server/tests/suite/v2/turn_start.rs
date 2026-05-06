@@ -40,10 +40,12 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -115,6 +117,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -182,6 +185,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -355,6 +359,71 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
 }
 
 #[tokio::test]
+async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let service_tier_id = "experimental-tier-id".to_string();
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            service_tier: Some(Some(service_tier_id.clone())),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(
+        response_mock.single_request().body_json()["service_tier"],
+        json!(service_tier_id)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> Result<()> {
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -463,6 +532,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -868,6 +938,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         codex_app_server_protocol::TurnStatus::InProgress
     );
     assert_eq!(started.turn.id, turn.id);
+    assert_eq!(started.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(started.turn.items.is_empty());
 
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -882,6 +954,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(completed.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(completed.turn.items.is_empty());
 
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
@@ -915,6 +989,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(started2.thread_id, thread.id);
     assert_eq!(started2.turn.id, turn2.id);
     assert_eq!(started2.turn.status, TurnStatus::InProgress);
+    assert_eq!(started2.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(started2.turn.items.is_empty());
 
     let completed_notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -929,6 +1005,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed2.thread_id, thread.id);
     assert_eq!(completed2.turn.id, turn2.id);
     assert_eq!(completed2.turn.status, TurnStatus::Completed);
+    assert_eq!(completed2.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(completed2.turn.items.is_empty());
 
     Ok(())
 }

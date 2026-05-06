@@ -8,7 +8,6 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pub(super) analytics_events_client: AnalyticsEventsClient,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
@@ -147,23 +146,17 @@ pub(super) async fn ensure_conversation_listener(
     {
         Ok(conv) => conv,
         Err(_) => {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {conversation_id}"),
-                data: None,
-            });
+            return Err(invalid_request(format!(
+                "thread not found: {conversation_id}"
+            )));
         }
     };
     let thread_state = {
         let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
         if pending_thread_unloads.contains(&conversation_id) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!(
-                    "thread {conversation_id} is closing; retry after the thread is closed"
-                ),
-                data: None,
-            });
+            return Err(invalid_request(format!(
+                "thread {conversation_id} is closing; retry after the thread is closed"
+            )));
         }
         let Some(thread_state) = listener_task_context
             .thread_state_manager
@@ -229,13 +222,9 @@ pub(super) async fn ensure_listener_task_running(
     )
     .await
     else {
-        return Err(JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!(
-                "thread {conversation_id} is closing; retry after the thread is closed"
-            ),
-            data: None,
-        });
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
     };
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
@@ -249,7 +238,6 @@ pub(super) async fn ensure_listener_task_running(
         thread_manager,
         thread_state_manager,
         pending_thread_unloads,
-        analytics_events_client,
         thread_watch_manager,
         thread_list_state_permit,
         fallback_model_provider,
@@ -325,7 +313,6 @@ pub(super) async fn ensure_listener_task_running(
                         conversation_id,
                         conversation.clone(),
                         thread_manager.clone(),
-                        Some(analytics_events_client.clone()),
                         thread_outgoing,
                         thread_state.clone(),
                         thread_watch_manager.clone(),
@@ -608,6 +595,8 @@ pub(super) async fn handle_pending_thread_resume_request(
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
+    let session_id = conversation.session_configured().session_id.to_string();
+    thread.session_id = session_id;
 
     let response = ThreadResumeResponse {
         thread,

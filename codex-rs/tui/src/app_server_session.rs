@@ -4,11 +4,9 @@
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 use crate::bottom_pane::FeedbackAudience;
-#[cfg(test)]
-use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::message_history_metadata;
 use crate::permission_compat::legacy_compatible_permission_profile;
+use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
@@ -89,6 +87,7 @@ use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
@@ -111,6 +110,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -530,7 +530,7 @@ impl AppServerSession {
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
-        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
+        service_tier: Option<Option<String>>,
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         personality: Option<codex_protocol::config_types::Personality>,
         output_schema: Option<serde_json::Value>,
@@ -1046,6 +1046,15 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
             .collect(),
         supports_personality: model.supports_personality,
         additional_speed_tiers: model.additional_speed_tiers,
+        service_tiers: model
+            .service_tiers
+            .into_iter()
+            .map(|service_tier| ModelServiceTier {
+                id: service_tier.id,
+                name: service_tier.name,
+                description: service_tier.description,
+            })
+            .collect(),
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1187,6 +1196,7 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         session_start_source,
+        thread_source: Some(ThreadSource::User),
         persist_extended_history: false,
         ..ThreadStartParams::default()
     }
@@ -1252,6 +1262,7 @@ fn thread_fork_params_from_config(
         base_instructions: config.base_instructions.clone(),
         developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
+        thread_source: Some(ThreadSource::User),
         persist_extended_history: false,
         ..ThreadForkParams::default()
     }
@@ -1334,7 +1345,7 @@ async fn thread_session_state_from_thread_start_response(
         response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
-        response.service_tier,
+        response.service_tier.clone(),
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
@@ -1366,7 +1377,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
-        response.service_tier,
+        response.service_tier.clone(),
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
@@ -1398,7 +1409,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.thread.path.clone(),
         response.model.clone(),
         response.model_provider.clone(),
-        response.service_tier,
+        response.service_tier.clone(),
         response.approval_policy,
         response.approvals_reviewer.to_core(),
         permission_profile,
@@ -1440,7 +1451,7 @@ async fn thread_session_state_from_thread_response(
     rollout_path: Option<PathBuf>,
     model: String,
     model_provider_id: String,
-    service_tier: Option<codex_protocol::config_types::ServiceTier>,
+    service_tier: Option<String>,
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     permission_profile: PermissionProfile,
@@ -1457,8 +1468,9 @@ async fn thread_session_state_from_thread_response(
         .map(ThreadId::from_string)
         .transpose()
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
-    let (history_log_id, history_entry_count) = message_history_metadata(config).await;
-    let history_entry_count = u64::try_from(history_entry_count).unwrap_or(u64::MAX);
+    let history_config =
+        codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+    let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
         thread_id,
         forked_from_id,
@@ -1474,8 +1486,10 @@ async fn thread_session_state_from_thread_response(
         cwd,
         instruction_source_paths,
         reasoning_effort,
-        history_log_id,
-        history_entry_count,
+        message_history: Some(MessageHistoryMetadata {
+            log_id,
+            entry_count,
+        }),
         network_proxy: None,
         rollout_path,
     })
@@ -1550,6 +1564,7 @@ mod tests {
                 .map(permissions_selection_from_active_profile)
         );
         assert_eq!(params.model_provider, Some(config.model_provider_id));
+        assert_eq!(params.thread_source, Some(ThreadSource::User));
     }
 
     #[tokio::test]
@@ -1666,6 +1681,8 @@ mod tests {
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
+        assert_eq!(start.thread_source, Some(ThreadSource::User));
+        assert_eq!(fork.thread_source, Some(ThreadSource::User));
     }
 
     #[test]
@@ -1771,6 +1788,8 @@ mod tests {
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
+        assert_eq!(start.thread_source, Some(ThreadSource::User));
+        assert_eq!(fork.thread_source, Some(ThreadSource::User));
     }
 
     #[tokio::test]
@@ -1805,6 +1824,7 @@ mod tests {
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
+                session_id: ThreadId::new().to_string(),
                 forked_from_id: Some(forked_from_id.to_string()),
                 preview: "hello".to_string(),
                 ephemeral: false,
@@ -1816,12 +1836,14 @@ mod tests {
                 cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Cli,
+                thread_source: None,
                 agent_nickname: None,
                 agent_role: None,
                 git_info: None,
                 name: None,
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         codex_app_server_protocol::ThreadItem::UserMessage {
                             id: "user-1".to_string(),
@@ -1947,10 +1969,13 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
 
-        append_message_history_entry("older", &thread_id, &config)
+        let history_config =
+            codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+
+        codex_message_history::append_entry("older", &thread_id, &history_config)
             .await
             .expect("history append should succeed");
-        append_message_history_entry("newer", &thread_id, &config)
+        codex_message_history::append_entry("newer", &thread_id, &history_config)
             .await
             .expect("history append should succeed");
 
@@ -1974,8 +1999,11 @@ mod tests {
         .await
         .expect("session should map");
 
-        assert_ne!(session.history_log_id, 0);
-        assert_eq!(session.history_entry_count, 2);
+        let metadata = session
+            .message_history
+            .expect("session should include message-history metadata");
+        assert_ne!(metadata.log_id, 0);
+        assert_eq!(metadata.entry_count, 2);
     }
 
     #[tokio::test]

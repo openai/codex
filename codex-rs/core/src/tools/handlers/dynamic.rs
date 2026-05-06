@@ -19,10 +19,22 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-pub struct DynamicToolHandler;
+pub struct DynamicToolHandler {
+    tool_name: ToolName,
+}
+
+impl DynamicToolHandler {
+    pub fn new(tool_name: ToolName) -> Self {
+        Self { tool_name }
+    }
+}
 
 impl ToolHandler for DynamicToolHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -37,7 +49,6 @@ impl ToolHandler for DynamicToolHandler {
             session,
             turn,
             call_id,
-            tool_name,
             payload,
             ..
         } = invocation;
@@ -52,13 +63,19 @@ impl ToolHandler for DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
-            .await
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "dynamic tool call was cancelled before receiving a response".to_string(),
-                )
-            })?;
+        let response = request_dynamic_tool(
+            &session,
+            turn.as_ref(),
+            call_id,
+            self.tool_name.clone(),
+            args,
+        )
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "dynamic tool call was cancelled before receiving a response".to_string(),
+            )
+        })?;
 
         let DynamicToolResponse {
             content_items,
