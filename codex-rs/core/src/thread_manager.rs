@@ -329,7 +329,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            codex_home.clone(),
+            codex_home,
             config.bundled_skills_enabled(),
             restriction_product,
         ));
@@ -448,7 +448,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            skills_codex_home.clone(),
+            skills_codex_home,
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
