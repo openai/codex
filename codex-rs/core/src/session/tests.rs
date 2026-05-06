@@ -1199,13 +1199,16 @@ hooks = [{ type = "command", command = "python3 /tmp/user.py" }]
 
 #[tokio::test]
 async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
-    let session = make_session_with_config(|config| {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
         config
             .features
             .enable(Feature::CodexHooks)
             .expect("enable Codex hooks");
-    })
-    .await?;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home)?;
     std::fs::write(
