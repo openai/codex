@@ -379,12 +379,21 @@ impl ThreadManager {
             OPENAI_PROVIDER_ID.to_string(),
         )
         .await;
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
+        let installation_id = resolve_installation_id(&skills_codex_home)
+            .await
+            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
         let mut manager = Self::with_models_provider_and_home_and_state_db_for_tests(
             auth,
             provider,
             codex_home.clone(),
             Arc::new(EnvironmentManager::default_for_tests()),
             state_db,
+            skills_codex_home,
+            installation_id,
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
         manager
@@ -404,12 +413,21 @@ impl ThreadManager {
             OPENAI_PROVIDER_ID.to_string(),
         )
         .await;
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
+        let installation_id = resolve_installation_id(&skills_codex_home)
+            .await
+            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
         Self::with_models_provider_and_home_and_state_db_for_tests(
             auth,
             provider,
             codex_home,
             environment_manager,
             state_db,
+            skills_codex_home,
+            installation_id,
         )
     }
 
@@ -419,13 +437,11 @@ impl ThreadManager {
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
         state_db: StateDbHandle,
+        skills_codex_home: AbsolutePathBuf,
+        installation_id: String,
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
@@ -466,7 +482,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 codex_home: skills_codex_home,
-                installation_id: uuid::Uuid::new_v4().to_string(),
+                installation_id,
                 analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
