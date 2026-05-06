@@ -508,12 +508,7 @@ fn build_authorize_url(
         ("originator".to_string(), originator().value),
     ];
     if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
-        query.extend(
-            workspace_ids
-                .iter()
-                .cloned()
-                .map(|workspace_id| ("allowed_workspace_id".to_string(), workspace_id)),
-        );
+        query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
     }
     let qs = query
         .into_iter()
