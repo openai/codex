@@ -15,7 +15,6 @@ use backend::BackendPaths;
 use codex_app_server::app_server_control_socket_path;
 use codex_core::config::find_codex_home;
 use managed_install::managed_codex_bin;
-use managed_install::preferred_codex_bin;
 use serde::Serialize;
 use settings::DaemonSettings;
 use tokio::time::sleep;
@@ -100,9 +99,7 @@ pub async fn run_pid_update_loop() -> Result<()> {
 }
 
 struct Daemon {
-    codex_home: PathBuf,
     socket_path: PathBuf,
-    current_exe: PathBuf,
     pid_file: PathBuf,
     update_pid_file: PathBuf,
     operation_lock_file: PathBuf,
@@ -116,13 +113,9 @@ impl Daemon {
         let socket_path = app_server_control_socket_path(codex_home.as_path())?
             .as_path()
             .to_path_buf();
-        let current_exe =
-            std::env::current_exe().context("failed to resolve current executable")?;
         let state_dir = codex_home.as_path().join(STATE_DIR_NAME);
         Ok(Self {
-            codex_home: codex_home.as_path().to_path_buf(),
             socket_path,
-            current_exe,
             pid_file: state_dir.join(PID_FILE_NAME),
             update_pid_file: state_dir.join(UPDATE_PID_FILE_NAME),
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
@@ -346,7 +339,7 @@ impl Daemon {
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
         BackendPaths {
-            codex_bin: preferred_codex_bin(&self.codex_home, self.current_exe.clone()),
+            codex_bin: self.managed_codex_bin.clone(),
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,

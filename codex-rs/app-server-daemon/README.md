@@ -35,36 +35,20 @@ pidfile-backed detached process, and launches a detached updater loop.
 
 ## Installation and update cases
 
-Whether app-server becomes up to date automatically depends on how Codex was
-installed and whether `bootstrap` was used.
+The daemon assumes Codex is installed through `install.sh` and always launches
+the standalone managed binary under `CODEX_HOME`.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
-| Codex installed with `brew` or `npm` only | `start` uses the currently running `codex` executable path | No | No. Package-manager updates are out of band, and the daemon does not restart a running app-server automatically. |
-| Codex installed with `install.sh`, but only `start` is used | `start` prefers `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
-| Codex installed with `install.sh`, then `bootstrap` | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive. After a successful fetch, it restarts a currently running app-server onto the managed binary. |
-| Some other tool updates the binary path currently used by the daemon | The next fresh start or restart uses the updated file at that path | No | Not automatically. The existing process keeps the old executable image until an explicit `restart`. |
-
-### Package-manager installs
-
-For `brew`, `npm`, or any other install that does not place a standalone binary
-at `CODEX_HOME/packages/standalone/current/codex`:
-
-- `start`, `restart`, `stop`, and `version` work
-- `bootstrap` does not work, because it requires the standalone managed install
-- this daemon never invokes `brew`, `npm`, or any other package manager
-- if external tooling replaces the package-manager binary on disk, a running
-  app-server keeps using the old process image until it is restarted
-- if a caller needs Codex-managed freshness on that host, it should install the
-  standalone build and bootstrap that managed copy; the package-manager install
-  can coexist with it
+| `install.sh` has run, but only `start` is used | `start` uses `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
+| `install.sh` has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive. After a successful fetch, it restarts a currently running app-server onto the managed binary. |
+| Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | No | Not automatically. The existing process keeps the old executable image until an explicit `restart`. |
 
 ### Standalone installs
 
 For installs created by `install.sh`:
 
-- lifecycle commands prefer the standalone managed binary path, even if the
-  user invoked a different `codex` binary to issue the command
+- lifecycle commands always use the standalone managed binary path
 - `bootstrap` is supported
 - `bootstrap` starts a detached pid-backed updater loop that fetches via
   `install.sh`, then restarts app-server if it is running
