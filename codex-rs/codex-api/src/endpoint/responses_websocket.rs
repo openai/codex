@@ -211,6 +211,10 @@ impl ResponsesWebsocketConnection {
         skip_all,
         fields(transport = "responses_websocket", api.path = "responses")
     )]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the guard serializes exclusive use of the websocket while sending a request frame"
+    )]
     pub async fn send_response_processed(&self, response_id: String) -> Result<(), ApiError> {
         let request =
             ResponsesWsRequest::ResponseProcessed(ResponseProcessedWsRequest { response_id });
