@@ -12,7 +12,9 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
+use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use url::Url;
 
 const DEFAULT_LOGIN_PORT: u16 = 1455;
 const FALLBACK_LOGIN_PORT: u16 = 1457;
@@ -205,7 +207,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 }
 
 #[tokio::test]
-async fn login_server_includes_all_forced_workspace_query_params() -> Result<()> {
+async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
@@ -230,15 +232,14 @@ async fn login_server_includes_all_forced_workspace_query_params() -> Result<()>
         codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
-    assert!(
-        server
-            .auth_url
-            .contains("allowed_workspace_id=org-required-a")
-    );
-    assert!(
-        server
-            .auth_url
-            .contains("allowed_workspace_id=org-required-b")
+    let auth_url = Url::parse(&server.auth_url)?;
+    let allowed_workspace_ids = auth_url
+        .query_pairs()
+        .filter_map(|(key, value)| (key == "allowed_workspace_id").then(|| value.into_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        allowed_workspace_ids,
+        vec!["org-required-a,org-required-b".to_string()]
     );
 
     Ok(())
