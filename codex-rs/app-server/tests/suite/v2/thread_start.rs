@@ -121,12 +121,14 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     .await??;
     let resp_result = resp.result.clone();
     let ThreadStartResponse {
-        session_id,
         thread,
         model_provider,
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
-    assert!(!session_id.is_empty(), "session id should not be empty");
+    assert!(
+        thread.session_id.as_ref().is_some_and(|id| !id.is_empty()),
+        "session id should not be empty"
+    );
     assert!(!thread.id.is_empty(), "thread id should not be empty");
     assert!(
         thread.preview.is_empty(),
@@ -156,9 +158,19 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         .and_then(Value::as_object)
         .expect("thread/start result.thread must be an object");
     assert_eq!(
+        thread_json.get("sessionId").and_then(Value::as_str),
+        thread.session_id.as_deref(),
+        "new threads should serialize `sessionId` on the thread object"
+    );
+    assert_eq!(
         thread_json.get("name"),
         Some(&Value::Null),
         "new threads should serialize `name: null`"
+    );
+    assert_eq!(
+        resp_result.get("sessionId"),
+        None,
+        "thread/start should not serialize a top-level `sessionId`"
     );
     assert_eq!(
         thread_json.get("ephemeral").and_then(Value::as_bool),

@@ -265,6 +265,7 @@ pub(crate) fn summary_to_thread(
 
     Thread {
         id: conversation_id.to_string(),
+        session_id: None,
         forked_from_id: None,
         preview,
         ephemeral: false,

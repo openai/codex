@@ -13231,6 +13231,13 @@
           "description": "Usually the first user message in the thread, if available.",
           "type": "string"
         },
+        "sessionId": {
+          "description": "Session id shared by threads that belong to the same session tree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "source": {
           "allOf": [
             {
@@ -13549,11 +13556,6 @@
               "type": "null"
             }
           ]
-        },
-        "sessionId": {
-          "default": "",
-          "description": "Session id shared by threads that belong to the same session tree.",
-          "type": "string"
         },
         "thread": {
           "$ref": "#/definitions/Thread"
@@ -15062,11 +15064,6 @@
             }
           ]
         },
-        "sessionId": {
-          "default": "",
-          "description": "Session id shared by threads that belong to the same session tree.",
-          "type": "string"
-        },
         "thread": {
           "$ref": "#/definitions/Thread"
         }
@@ -15389,11 +15386,6 @@
               "type": "null"
             }
           ]
-        },
-        "sessionId": {
-          "default": "",
-          "description": "Session id shared by threads that belong to the same session tree.",
-          "type": "string"
         },
         "thread": {
           "$ref": "#/definitions/Thread"

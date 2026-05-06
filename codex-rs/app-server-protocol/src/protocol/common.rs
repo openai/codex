@@ -2176,9 +2176,9 @@ mod tests {
         let response = ClientResponse::ThreadStart {
             request_id: RequestId::Integer(7),
             response: v2::ThreadStartResponse {
-                session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    session_id: Some("67e55044-10b1-426f-9247-bb680e5fe0c7".to_string()),
                     forked_from_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
@@ -2218,9 +2218,9 @@ mod tests {
                 "method": "thread/start",
                 "id": 7,
                 "response": {
-                    "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                         "forkedFromId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
