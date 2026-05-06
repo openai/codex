@@ -123,7 +123,6 @@ pub(super) async fn spawn_review_thread(
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
-        service_tier: parent_turn_context.service_tier.clone(),
         session_source,
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
