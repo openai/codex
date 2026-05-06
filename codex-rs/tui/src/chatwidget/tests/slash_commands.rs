@@ -1584,7 +1584,13 @@ async fn slash_clear_requests_ui_clear_when_idle() {
 #[tokio::test]
 async fn slash_clear_after_ctrl_c_keeps_stashed_draft_recallable() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.bottom_pane
+        .set_history_metadata(thread_id, /*log_id*/ 1, /*entry_count*/ 0);
+
     submit_composer_text(&mut chat, "ok");
+    assert_eq!(next_add_to_history_event(&mut rx), "ok");
 
     let stashed_draft = "explain why history recall lost this draft";
 
@@ -1592,10 +1598,7 @@ async fn slash_clear_after_ctrl_c_keeps_stashed_draft_recallable() {
         .set_composer_text(stashed_draft.to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert_eq!(chat.bottom_pane.composer_text(), "");
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::AddToHistory { text })) if text == stashed_draft
-    );
+    assert_eq!(next_add_to_history_event(&mut rx), stashed_draft);
 
     chat.bottom_pane
         .set_composer_text("/clear".to_string(), Vec::new(), Vec::new());
