@@ -127,27 +127,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Ripgrep
-        Some("rg") => {
-            const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &[
-                // Takes an arbitrary command that is executed for each match.
-                "--pre",
-                // Takes a command that can be used to obtain the local hostname.
-                "--hostname-bin",
-            ];
-            const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &[
-                // Calls out to other decompression tools, so do not auto-approve
-                // out of an abundance of caution.
-                "--search-zip",
-                "-z",
-            ];
-
-            !command.iter().any(|arg| {
-                UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg.as_str())
-                    || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
-                        .iter()
-                        .any(|&opt| arg == opt || arg.starts_with(&format!("{opt}=")))
-            })
-        }
+        Some("rg") => is_safe_ripgrep_command(command),
 
         // Git
         Some("git") => is_safe_git_command(command),
@@ -166,6 +146,60 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
+}
+
+fn is_safe_ripgrep_command(command: &[String]) -> bool {
+    !command
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .any(is_unsafe_ripgrep_arg)
+}
+
+fn is_unsafe_ripgrep_arg(arg: &str) -> bool {
+    match arg {
+        // Takes an arbitrary command that is executed for each match.
+        "--pre"
+        // Takes a command that can be used to obtain the local hostname.
+        | "--hostname-bin"
+        // Calls out to other decompression tools, so do not auto-approve
+        // out of an abundance of caution.
+        | "--search-zip"
+        | "-z" => true,
+        _ => {
+            arg.starts_with("--pre=")
+                || arg.starts_with("--hostname-bin=")
+                || arg.starts_with("--search-zip=")
+                || ripgrep_short_options_contain_search_zip(arg)
+        }
+    }
+}
+
+fn ripgrep_short_options_contain_search_zip(arg: &str) -> bool {
+    let Some(short_options) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if short_options.is_empty() || short_options.starts_with('-') {
+        return false;
+    }
+
+    for option in short_options.chars() {
+        if option == 'z' {
+            return true;
+        }
+        if ripgrep_short_option_takes_value(option) {
+            return false;
+        }
+    }
+
+    false
+}
+
+fn ripgrep_short_option_takes_value(option: char) -> bool {
+    matches!(
+        option,
+        'A' | 'B' | 'C' | 'E' | 'M' | 'T' | 'd' | 'e' | 'f' | 'g' | 'j' | 'm' | 'r' | 't'
+    )
 }
 
 pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
@@ -588,7 +622,10 @@ mod tests {
         // Unsafe flags that do not take an argument (present verbatim).
         for args in [
             vec_str(&["rg", "--search-zip", "files"]),
+            vec_str(&["rg", "--search-zip=true", "files"]),
             vec_str(&["rg", "-z", "files"]),
+            vec_str(&["rg", "-zn", "files"]),
+            vec_str(&["rg", "-nz", "files"]),
         ] {
             assert!(
                 !is_safe_to_call_with_exec(&args),
@@ -606,6 +643,24 @@ mod tests {
             assert!(
                 !is_safe_to_call_with_exec(&args),
                 "expected {args:?} to be considered unsafe due to external-command flag",
+            );
+        }
+    }
+
+    #[test]
+    fn bash_lc_escaped_ripgrep_options_are_unsafe() {
+        for script in [
+            r"rg --pre\=./pre.sh files",
+            r"rg --\pre=./pre.sh files",
+            r"rg --hostname\-bin=hostname files",
+            r"rg -\z files",
+            r"rg -\zn needle .",
+            "rg --pr\\\ne=./pre.sh files",
+            "rg \"--pr\\\ne=./pre.sh\" files",
+        ] {
+            assert!(
+                !is_known_safe_command(&vec_str(&["bash", "-lc", script])),
+                "expected {script:?} to require approval after shell unescaping",
             );
         }
     }
