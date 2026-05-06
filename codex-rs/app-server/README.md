@@ -121,11 +121,11 @@ curl -fsSL https://chatgpt.com/codex/install.sh | sh
 $HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-control
 ```
 
-`bootstrap` also prints one JSON object. It requires the standalone managed
-install, persists the launch settings used by later lifecycle commands, starts
-app-server with `remote_control` enabled when requested, and starts a detached
-updater loop that periodically refreshes the standalone install while the
-machine remains up.
+On success, `bootstrap` also prints one JSON object. It requires the standalone
+managed install, persists the launch settings used by later lifecycle commands,
+starts app-server with `remote_control` enabled when requested, and starts a
+detached updater loop that periodically refreshes the standalone install while
+the machine remains up.
 
 For persisted state and install/update behavior, including how standalone and
 out-of-band binary updates behave, see

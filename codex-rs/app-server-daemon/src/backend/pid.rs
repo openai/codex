@@ -199,7 +199,7 @@ impl PidBackend {
             let Some(record) = self.wait_for_pid_start().await? else {
                 return Ok(());
             };
-            if !process_matches_record(&record).await? {
+            if !self.stop_target_is_active(&record).await? {
                 match self.refresh_after_stale_record(&record).await? {
                     PidFileState::Missing => return Ok(()),
                     PidFileState::Starting | PidFileState::Running(_) => continue,
@@ -212,7 +212,7 @@ impl PidBackend {
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             let mut forced = false;
             while tokio::time::Instant::now() < deadline {
-                if !process_matches_record(&record).await? {
+                if !self.stop_target_is_active(&record).await? {
                     match self.refresh_after_stale_record(&record).await? {
                         PidFileState::Missing => return Ok(()),
                         PidFileState::Starting | PidFileState::Running(_) => break,
@@ -225,7 +225,7 @@ impl PidBackend {
                 sleep(STOP_POLL_INTERVAL).await;
             }
 
-            if process_matches_record(&record).await? {
+            if self.stop_target_is_active(&record).await? {
                 bail!("timed out waiting for pid-managed app server {pid} to stop");
             }
         }
@@ -370,6 +370,18 @@ impl PidBackend {
             PidCommandKind::UpdateLoop => force_terminate_process_group(pid),
         }
     }
+
+    async fn stop_target_is_active(&self, record: &PidRecord) -> Result<bool> {
+        match self.command_kind {
+            PidCommandKind::AppServer { .. } => process_matches_record(record).await,
+            PidCommandKind::UpdateLoop => {
+                if process_matches_record(record).await? {
+                    return Ok(true);
+                }
+                Ok(process_group_exists(record.pid))
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -381,8 +393,22 @@ fn process_exists(pid: u32) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+#[cfg(unix)]
+fn process_group_exists(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    let result = unsafe { libc::kill(-pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 #[cfg(not(unix))]
 fn process_exists(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(not(unix))]
+fn process_group_exists(_pid: u32) -> bool {
     false
 }
 
