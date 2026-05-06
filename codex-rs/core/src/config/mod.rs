@@ -476,6 +476,8 @@ pub struct Config {
     pub compact_prompt: Option<String>,
 
     /// Optional commit attribution text for commit message co-author trailers.
+    /// This top-level setting only takes effect when `[features].codex_git_commit`
+    /// is enabled.
     ///
     /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
     /// - `Some("")` or whitespace-only: disable commit attribution
