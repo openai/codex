@@ -131,13 +131,6 @@
       ],
       "type": "string"
     },
-    "ServiceTier": {
-      "enum": [
-        "fast",
-        "flex"
-      ],
-      "type": "string"
-    },
     "ThreadSource": {
       "enum": [
         "user",
@@ -222,20 +215,9 @@
       ]
     },
     "serviceTier": {
-      "anyOf": [
-        {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "threadId": {

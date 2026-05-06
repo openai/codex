@@ -1263,7 +1263,8 @@ impl App {
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
-                self.config.service_tier = service_tier;
+                self.config.service_tier =
+                    service_tier.map(|service_tier| service_tier.request_value().to_string());
                 let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_service_tier(service_tier);

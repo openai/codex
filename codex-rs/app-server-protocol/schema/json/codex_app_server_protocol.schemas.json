@@ -7224,13 +7224,9 @@
             ]
           },
           "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "tools": {
@@ -13089,13 +13085,9 @@
             ]
           },
           "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "tools": {
@@ -14624,13 +14616,6 @@
         "title": "ServerRequestResolvedNotification",
         "type": "object"
       },
-      "ServiceTier": {
-        "enum": [
-          "fast",
-          "flex"
-        ],
-        "type": "string"
-      },
       "SessionMigration": {
         "properties": {
           "cwd": {
@@ -15573,20 +15558,9 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "threadId": {
@@ -15660,13 +15634,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -17091,20 +17061,9 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "threadId": {
@@ -17167,13 +17126,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -17399,20 +17354,9 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "sessionStartSource": {
@@ -17490,13 +17434,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -18163,22 +18103,11 @@
             "description": "Override the sandbox policy for this turn and subsequent turns."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Override the service tier for this turn and subsequent turns."
+            "description": "Override the service tier for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "summary": {
             "anyOf": [

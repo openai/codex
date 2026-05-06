@@ -1,6 +1,7 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use codex_protocol::SessionId;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
@@ -42,7 +43,7 @@ pub(crate) struct SessionConfiguration {
 
     pub(super) collaboration_mode: CollaborationMode,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
-    pub(super) service_tier: Option<ServiceTier>,
+    pub(super) service_tier: Option<String>,
 
     /// Developer instructions that supplement the base instructions.
     pub(super) developer_instructions: Option<String>,
@@ -136,7 +137,7 @@ impl SessionConfiguration {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
-            service_tier: self.service_tier,
+            service_tier: self.service_tier.clone(),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             permission_profile: self.permission_profile(),
@@ -182,8 +183,15 @@ impl SessionConfiguration {
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
         }
-        if let Some(service_tier) = updates.service_tier {
-            next_configuration.service_tier = service_tier;
+        if let Some(service_tier) = updates.service_tier.clone() {
+            // TODO(aibrahim): Remove once v2 clients no longer send the legacy
+            // "fast" service tier value.
+            next_configuration.service_tier = service_tier.map(|service_tier| {
+                ServiceTier::from_request_value(&service_tier)
+                    .map_or(service_tier, |service_tier| {
+                        service_tier.request_value().to_string()
+                    })
+            });
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
@@ -309,7 +317,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
-    pub(crate) service_tier: Option<Option<ServiceTier>>,
+    pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     /// Turn-local environment override. `None` inherits the sticky thread
     /// environments stored on `SessionConfiguration`; `Some([])` explicitly
@@ -905,7 +913,7 @@ impl Session {
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),
                     model_provider_id: config.model_provider_id.clone(),
-                    service_tier: session_configuration.service_tier,
+                    service_tier: session_configuration.service_tier.clone(),
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
                     permission_profile: session_configuration.permission_profile(),

@@ -623,7 +623,7 @@ impl App {
                             model.to_string(),
                             *effort,
                             *summary,
-                            *service_tier,
+                            service_tier.clone(),
                             collaboration_mode.clone(),
                             *personality,
                             final_output_json_schema.clone(),

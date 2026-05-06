@@ -252,7 +252,7 @@ async fn run_remote_compaction_request_v2(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier,
+            turn_context.config.service_tier.clone(),
             turn_metadata_header,
             &InferenceTraceContext::disabled(),
         )

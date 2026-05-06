@@ -1948,7 +1948,7 @@ async fn stream_until_complete_with_request_metadata(
             &harness.session_telemetry,
             harness.effort,
             harness.summary,
-            service_tier,
+            service_tier.map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )

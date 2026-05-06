@@ -22,7 +22,6 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
@@ -514,7 +513,7 @@ pub enum Op {
         /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
         /// preference, or `None` to leave the existing value unchanged.
         #[serde(skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.
@@ -575,7 +574,7 @@ pub enum Op {
         /// explicitly clear the tier for this turn, or `None` to keep the existing
         /// session preference.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
 
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
@@ -652,7 +651,7 @@ pub enum Op {
         /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
         /// preference, or `None` to leave the existing value unchanged.
         #[serde(skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.
@@ -3476,7 +3475,7 @@ pub struct SessionConfiguredEvent {
     pub model_provider_id: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
 
     /// When to escalate for approval for execution
     pub approval_policy: AskForApproval,
@@ -3542,7 +3541,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             thread_name: Option<String>,
             model: String,
             model_provider_id: String,
-            service_tier: Option<ServiceTier>,
+            service_tier: Option<String>,
             approval_policy: AskForApproval,
             #[serde(default)]
             approvals_reviewer: ApprovalsReviewer,

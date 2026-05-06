@@ -12,7 +12,6 @@ use super::TurnEnvironmentParams;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -103,7 +102,7 @@ pub struct ThreadStartParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
@@ -192,7 +191,7 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
@@ -260,7 +259,7 @@ pub struct ThreadResumeParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
@@ -307,7 +306,7 @@ pub struct ThreadResumeResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
@@ -366,7 +365,7 @@ pub struct ThreadForkParams {
         skip_serializing_if = "Option::is_none"
     )]
     #[ts(optional = nullable)]
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[experimental(nested)]
@@ -416,7 +415,7 @@ pub struct ThreadForkResponse {
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]

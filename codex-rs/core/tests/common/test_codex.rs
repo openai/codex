@@ -654,7 +654,7 @@ impl TestCodex {
             prompt,
             AskForApproval::Never,
             PermissionProfile::Disabled,
-            Some(service_tier),
+            Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
             /*environments*/ None,
         )
         .await
@@ -716,7 +716,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         self.submit_turn_with_context(
@@ -734,7 +734,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         let (sandbox_policy, permission_profile) =

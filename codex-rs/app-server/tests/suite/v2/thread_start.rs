@@ -28,7 +28,6 @@ use codex_core::config::set_project_trust_level;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -402,7 +401,7 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test]
-async fn thread_start_accepts_flex_service_tier() -> Result<()> {
+async fn thread_start_accepts_arbitrary_service_tier_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -411,9 +410,10 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let service_tier_id = "experimental-tier-id".to_string();
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            service_tier: Some(Some(ServiceTier::Flex)),
+            service_tier: Some(Some(service_tier_id.clone())),
             ..Default::default()
         })
         .await?;
@@ -425,7 +425,7 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
     .await??;
     let ThreadStartResponse { service_tier, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    assert_eq!(service_tier, Some(ServiceTier::Flex));
+    assert_eq!(service_tier, Some(service_tier_id));
     Ok(())
 }
 

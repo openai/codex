@@ -402,8 +402,8 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
-    /// Effective service tier preference for new turns (`fast` or `flex`).
-    pub service_tier: Option<ServiceTier>,
+    /// Effective service tier request id preference for new turns.
+    pub service_tier: Option<String>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1867,7 +1867,7 @@ pub struct ConfigOverrides {
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
     pub model_provider: Option<String>,
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     pub config_profile: Option<String>,
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
@@ -2735,16 +2735,20 @@ impl Config {
                 notices.fast_default_opt_out = Some(true);
                 None
             }
-            None => config_profile.service_tier.or(cfg.service_tier),
+            None => config_profile
+                .service_tier
+                .or(cfg.service_tier)
+                .map(|service_tier| service_tier.request_value().to_string()),
         };
-        let service_tier = match service_tier {
-            Some(ServiceTier::Fast) if features.enabled(Feature::FastMode) => {
-                Some(ServiceTier::Fast)
+        let service_tier = service_tier.and_then(|service_tier| {
+            match ServiceTier::from_request_value(&service_tier) {
+                Some(ServiceTier::Fast) => features
+                    .enabled(Feature::FastMode)
+                    .then(|| ServiceTier::Fast.request_value().to_string()),
+                Some(ServiceTier::Flex) => Some(ServiceTier::Flex.request_value().to_string()),
+                None => Some(service_tier),
             }
-            Some(ServiceTier::Fast) => None,
-            Some(ServiceTier::Flex) => Some(ServiceTier::Flex),
-            None => None,
-        };
+        });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();

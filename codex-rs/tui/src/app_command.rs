@@ -15,7 +15,6 @@ use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -46,7 +45,7 @@ pub(crate) enum AppCommand {
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
@@ -60,7 +59,7 @@ pub(crate) enum AppCommand {
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     },
@@ -154,7 +153,7 @@ impl AppCommand {
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
@@ -185,7 +184,7 @@ impl AppCommand {
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {

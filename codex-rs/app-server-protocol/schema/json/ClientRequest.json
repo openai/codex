@@ -3324,13 +3324,6 @@
       ],
       "type": "object"
     },
-    "ServiceTier": {
-      "enum": [
-        "fast",
-        "flex"
-      ],
-      "type": "string"
-    },
     "SessionMigration": {
       "properties": {
         "cwd": {
@@ -3608,20 +3601,9 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "threadId": {
@@ -4030,20 +4012,9 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "threadId": {
@@ -4227,20 +4198,9 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sessionStartSource": {
@@ -4407,22 +4367,11 @@
           "description": "Override the sandbox policy for this turn and subsequent turns."
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Override the service tier for this turn and subsequent turns."
+          "description": "Override the service tier for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "summary": {
           "anyOf": [

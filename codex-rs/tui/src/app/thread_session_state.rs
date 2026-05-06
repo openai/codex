@@ -63,7 +63,10 @@ impl App {
                 thread_name: None,
                 model: self.chat_widget.current_model().to_string(),
                 model_provider_id: self.config.model_provider_id.clone(),
-                service_tier: self.chat_widget.current_service_tier(),
+                service_tier: self
+                    .chat_widget
+                    .current_service_tier()
+                    .map(|service_tier| service_tier.request_value().to_string()),
                 approval_policy: AskForApproval::from(
                     self.config.permissions.approval_policy.value(),
                 ),

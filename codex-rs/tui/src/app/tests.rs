@@ -4496,7 +4496,11 @@ async fn fresh_session_config_uses_current_service_tier() {
 
     assert_eq!(
         config.service_tier,
-        Some(codex_protocol::config_types::ServiceTier::Fast)
+        Some(
+            codex_protocol::config_types::ServiceTier::Fast
+                .request_value()
+                .to_string()
+        )
     );
 }
 

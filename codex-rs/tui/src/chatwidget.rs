@@ -2066,7 +2066,10 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
-        self.effective_service_tier = session.service_tier;
+        self.effective_service_tier = session
+            .service_tier
+            .as_deref()
+            .and_then(ServiceTier::from_request_value);
         if let Err(err) = self
             .config
             .permissions
@@ -2115,7 +2118,7 @@ impl ChatWidget {
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status =
-                self.should_show_fast_status(&model_for_header, session.service_tier);
+                self.should_show_fast_status(&model_for_header, self.effective_service_tier);
             let session_info_cell = history_cell::new_session_info(
                 &self.config,
                 &model_for_header,
@@ -4880,7 +4883,10 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
-        let effective_service_tier = config.service_tier;
+        let effective_service_tier = config
+            .service_tier
+            .as_deref()
+            .and_then(ServiceTier::from_request_value);
         let current_terminal_info = terminal_info();
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();
@@ -5865,7 +5871,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = match self.config.service_tier {
+        let service_tier = match self.config.service_tier.clone() {
             Some(service_tier) => Some(Some(service_tier)),
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
@@ -9277,7 +9283,8 @@ impl ChatWidget {
 
     /// Set Fast mode in the widget's config copy.
     pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
-        self.config.service_tier = service_tier;
+        self.config.service_tier =
+            service_tier.map(|service_tier| service_tier.request_value().to_string());
         self.effective_service_tier = service_tier;
     }
 
@@ -9286,7 +9293,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn configured_service_tier(&self) -> Option<ServiceTier> {
-        self.config.service_tier
+        self.config
+            .service_tier
+            .as_deref()
+            .and_then(ServiceTier::from_request_value)
     }
 
     pub(crate) fn fast_default_opt_out(&self) -> Option<bool> {
@@ -9393,7 +9403,7 @@ impl ChatWidget {
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
-                Some(service_tier),
+                Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
                 /*collaboration_mode*/ None,
                 /*personality*/ None,
             )));

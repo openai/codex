@@ -2891,7 +2891,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::Fast)
+        Some(ServiceTier::Fast.request_value().to_string())
     );
     assert_eq!(
         get_service_tier(
@@ -2900,7 +2900,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::EnterpriseCbpUsageBased),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::Fast)
+        Some(ServiceTier::Fast.request_value().to_string())
     );
     assert_eq!(
         get_service_tier(
@@ -2909,7 +2909,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Business),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::Fast)
+        Some(ServiceTier::Fast.request_value().to_string())
     );
     assert_eq!(
         get_service_tier(
@@ -2918,7 +2918,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Team),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::Fast)
+        Some(ServiceTier::Fast.request_value().to_string())
     );
     assert_eq!(
         get_service_tier(
@@ -2927,7 +2927,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::SelfServeBusinessUsageBased),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::Fast)
+        Some(ServiceTier::Fast.request_value().to_string())
     );
 }
 
@@ -2978,6 +2978,23 @@ async fn session_settings_null_service_tier_update_clears_service_tier() {
         .expect("null service tier update should apply");
 
     assert_eq!(updated.service_tier, None);
+}
+
+#[tokio::test]
+async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_value() {
+    let session_configuration = make_session_configuration_for_tests().await;
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            service_tier: Some(Some("fast".to_string())),
+            ..Default::default()
+        })
+        .expect("legacy fast service tier update should apply");
+
+    assert_eq!(
+        updated.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
