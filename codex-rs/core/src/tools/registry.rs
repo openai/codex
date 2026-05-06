@@ -531,7 +531,7 @@ impl ToolRegistryBuilder {
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub(crate) fn push_configured_spec(
+    pub(crate) fn push_spec(
         &mut self,
         spec: ToolSpec,
         supports_parallel_tool_calls: bool,

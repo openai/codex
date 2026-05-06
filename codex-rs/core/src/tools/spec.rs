@@ -153,7 +153,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            builder.push_configured_spec(
+            builder.push_spec(
                 spec,
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,

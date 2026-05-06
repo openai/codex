@@ -141,7 +141,7 @@ pub fn build_tool_registry_builder(
         );
         enabled_tools
             .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.push_configured_spec(
+        builder.push_spec(
             create_code_mode_tool(
                 &enabled_tools,
                 &namespace_descriptions,
@@ -155,7 +155,7 @@ pub fn build_tool_registry_builder(
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(CodeModeExecuteHandler));
-        builder.push_configured_spec(
+        builder.push_spec(
             create_wait_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -168,7 +168,7 @@ pub fn build_tool_registry_builder(
             matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         match &config.shell_type {
             ConfigShellToolType::Default => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_shell_tool(ShellToolOptions {
                         exec_permission_approvals_enabled,
                     }),
@@ -177,14 +177,14 @@ pub fn build_tool_registry_builder(
                 );
             }
             ConfigShellToolType::Local => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_local_shell_tool(),
                     /*supports_parallel_tool_calls*/ true,
                     config.code_mode_enabled,
                 );
             }
             ConfigShellToolType::UnifiedExec => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_exec_command_tool_with_environment_id(
                         CommandToolOptions {
                             allow_login_shell: config.allow_login_shell,
@@ -195,7 +195,7 @@ pub fn build_tool_registry_builder(
                     /*supports_parallel_tool_calls*/ true,
                     config.code_mode_enabled,
                 );
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_write_stdin_tool(),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
@@ -205,7 +205,7 @@ pub fn build_tool_registry_builder(
             }
             ConfigShellToolType::Disabled => {}
             ConfigShellToolType::ShellCommand => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_shell_command_tool(CommandToolOptions {
                         allow_login_shell: config.allow_login_shell,
                         exec_permission_approvals_enabled,
@@ -229,17 +229,17 @@ pub fn build_tool_registry_builder(
     }
 
     if params.mcp_tools.is_some() {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_list_mcp_resources_tool(),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
-        builder.push_configured_spec(
+        builder.push_spec(
             create_list_mcp_resource_templates_tool(),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
-        builder.push_configured_spec(
+        builder.push_spec(
             create_read_mcp_resource_tool(),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
@@ -249,26 +249,26 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ReadMcpResourceHandler));
     }
 
-    builder.push_configured_spec(
+    builder.push_spec(
         create_update_plan_tool(),
         /*supports_parallel_tool_calls*/ false,
         config.code_mode_enabled,
     );
     builder.register_handler(Arc::new(PlanHandler));
     if config.goal_tools {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_get_goal_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(GetGoalHandler));
-        builder.push_configured_spec(
+        builder.push_spec(
             create_create_goal_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(CreateGoalHandler));
-        builder.push_configured_spec(
+        builder.push_spec(
             create_update_goal_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -276,7 +276,7 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(UpdateGoalHandler));
     }
 
-    builder.push_configured_spec(
+    builder.push_spec(
         create_request_user_input_tool(request_user_input_tool_description(
             &config.request_user_input_available_modes,
         )),
@@ -288,7 +288,7 @@ pub fn build_tool_registry_builder(
     }));
 
     if config.request_permissions_tool_enabled {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_request_permissions_tool(request_permissions_tool_description()),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -329,7 +329,7 @@ pub fn build_tool_registry_builder(
             });
         }
 
-        builder.push_configured_spec(
+        builder.push_spec(
             create_tool_search_tool(&search_source_infos, TOOL_SEARCH_DEFAULT_LIMIT),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
@@ -343,7 +343,7 @@ pub fn build_tool_registry_builder(
         && let Some(discoverable_tools) =
             params.discoverable_tools.filter(|tools| !tools.is_empty())
     {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_request_plugin_install_tool(&collect_request_plugin_install_entries(
                 discoverable_tools,
             )),
@@ -358,14 +358,14 @@ pub fn build_tool_registry_builder(
     {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_apply_patch_freeform_tool(),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
             }
             ApplyPatchToolType::Function => {
-                builder.push_configured_spec(
+                builder.push_spec(
                     create_apply_patch_json_tool(),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
@@ -380,7 +380,7 @@ pub fn build_tool_registry_builder(
         .iter()
         .any(|tool| tool == "test_sync_tool")
     {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_test_sync_tool(),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
@@ -393,7 +393,7 @@ pub fn build_tool_registry_builder(
         web_search_config: config.web_search_config.as_ref(),
         web_search_tool_type: config.web_search_tool_type,
     }) {
-        builder.push_configured_spec(
+        builder.push_spec(
             web_search_tool,
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -401,7 +401,7 @@ pub fn build_tool_registry_builder(
     }
 
     if config.image_gen_tool {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_image_generation_tool("png"),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -409,7 +409,7 @@ pub fn build_tool_registry_builder(
     }
 
     if config.environment_mode.has_environment() {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_view_image_tool(ViewImageToolOptions {
                 can_request_original_image_detail: config.can_request_original_image_detail,
             }),
@@ -423,7 +423,7 @@ pub fn build_tool_registry_builder(
         if config.multi_agent_v2 {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
@@ -435,27 +435,27 @@ pub fn build_tool_registry_builder(
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_send_message_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_followup_task_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_wait_agent_tool_v2(params.wait_agent_timeouts),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_close_agent_tool_v2(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_list_agents_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -469,7 +469,7 @@ pub fn build_tool_registry_builder(
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description,
@@ -481,23 +481,23 @@ pub fn build_tool_registry_builder(
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_send_input_tool_v1(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_resume_agent_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
             builder.register_handler(Arc::new(ResumeAgentHandler));
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_wait_agent_tool_v1(params.wait_agent_timeouts),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_close_agent_tool_v1(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -510,14 +510,14 @@ pub fn build_tool_registry_builder(
     }
 
     if config.agent_jobs_tools {
-        builder.push_configured_spec(
+        builder.push_spec(
             create_spawn_agents_on_csv_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(SpawnAgentsOnCsvHandler));
         if config.agent_jobs_worker_tools {
-            builder.push_configured_spec(
+            builder.push_spec(
                 create_report_agent_job_result_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
@@ -576,7 +576,7 @@ pub fn build_tool_registry_builder(
             }
 
             if config.namespace_tools && !tools.is_empty() {
-                builder.push_configured_spec(
+                builder.push_spec(
                     ToolSpec::Namespace(ResponsesApiNamespace {
                         name: namespace,
                         description,
@@ -608,7 +608,7 @@ pub fn build_tool_registry_builder(
     for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
         let spec = spec.into();
         if config.namespace_tools || !matches!(spec, ToolSpec::Namespace(_)) {
-            builder.push_configured_spec(
+            builder.push_spec(
                 spec,
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
