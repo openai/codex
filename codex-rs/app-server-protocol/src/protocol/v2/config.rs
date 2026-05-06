@@ -360,9 +360,39 @@ pub struct ConfigRequirements {
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
+    #[experimental("configRequirements/read.skills")]
+    pub skills: Option<SkillsRequirements>,
+    #[experimental("configRequirements/read.pluginMarketplaces")]
+    pub plugin_marketplaces: Option<PluginMarketplaceRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRequirements {
+    pub allowed_sources: Option<Vec<SkillSourceRequirement>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum SkillSourceRequirement {
+    User,
+    Repo,
+    System,
+    Admin,
+    Plugin,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginMarketplaceRequirements {
+    pub allowed_names: Option<Vec<String>>,
+    pub allow_user_additions: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

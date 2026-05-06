@@ -28,16 +28,22 @@ use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
+use codex_app_server_protocol::PluginMarketplaceRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SkillSourceRequirement;
+use codex_app_server_protocol::SkillsRequirements;
 use codex_chatgpt::connectors;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig as CoreHookHandlerConfig;
 use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup as CoreMatcherGroup;
+use codex_config::PluginMarketplaceRequirementsToml;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_config::SkillSourceRequirement as CoreSkillSourceRequirement;
+use codex_config::SkillsRequirementsToml;
 use codex_core::ThreadManager;
 use codex_features::Feature;
 use codex_features::canonical_feature_for_key;
@@ -445,10 +451,46 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .feature_requirements
             .map(|requirements| requirements.entries),
         hooks: requirements.hooks.map(map_hooks_requirements_to_api),
+        skills: requirements.skills.map(map_skills_requirements_to_api),
+        plugin_marketplaces: requirements
+            .plugin_marketplaces
+            .map(map_plugin_marketplace_requirements_to_api),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+    }
+}
+
+fn map_skills_requirements_to_api(requirements: SkillsRequirementsToml) -> SkillsRequirements {
+    SkillsRequirements {
+        allowed_sources: requirements.allowed_sources.map(|sources| {
+            sources
+                .into_iter()
+                .map(map_skill_source_requirement_to_api)
+                .collect()
+        }),
+    }
+}
+
+fn map_skill_source_requirement_to_api(
+    source: CoreSkillSourceRequirement,
+) -> SkillSourceRequirement {
+    match source {
+        CoreSkillSourceRequirement::User => SkillSourceRequirement::User,
+        CoreSkillSourceRequirement::Repo => SkillSourceRequirement::Repo,
+        CoreSkillSourceRequirement::System => SkillSourceRequirement::System,
+        CoreSkillSourceRequirement::Admin => SkillSourceRequirement::Admin,
+        CoreSkillSourceRequirement::Plugin => SkillSourceRequirement::Plugin,
+    }
+}
+
+fn map_plugin_marketplace_requirements_to_api(
+    requirements: PluginMarketplaceRequirementsToml,
+) -> PluginMarketplaceRequirements {
+    PluginMarketplaceRequirements {
+        allowed_names: requirements.allowed_names,
+        allow_user_additions: requirements.allow_user_additions,
     }
 }
 

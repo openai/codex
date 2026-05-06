@@ -1809,6 +1809,8 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allowed_web_search_modes: None,
             feature_requirements: None,
             hooks: None,
+            skills: None,
+            plugin_marketplaces: None,
             enforce_residency: None,
             network: None,
         });

@@ -388,6 +388,26 @@
       ],
       "type": "string"
     },
+    "PluginMarketplaceRequirements": {
+      "properties": {
+        "allowUserAdditions": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowedNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ResidencyRequirement": {
       "enum": [
         "us"
@@ -401,6 +421,30 @@
         "danger-full-access"
       ],
       "type": "string"
+    },
+    "SkillSourceRequirement": {
+      "enum": [
+        "user",
+        "repo",
+        "system",
+        "admin",
+        "plugin"
+      ],
+      "type": "string"
+    },
+    "SkillsRequirements": {
+      "properties": {
+        "allowedSources": {
+          "items": {
+            "$ref": "#/definitions/SkillSourceRequirement"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "WebSearchMode": {
       "enum": [

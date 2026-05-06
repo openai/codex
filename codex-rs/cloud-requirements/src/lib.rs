@@ -1445,6 +1445,41 @@ command = "sample-mcp"
         );
     }
 
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_artifact_policy_toml() {
+        let result = parse_for_fetch(Some(
+            r#"
+[skills]
+allowed_sources = ["system", "admin", "plugin"]
+
+[plugin_marketplaces]
+allowed_names = ["openai-curated", "arm-internal"]
+allow_user_additions = false
+"#,
+        ));
+
+        assert_eq!(
+            result,
+            Some(ConfigRequirementsToml {
+                skills: Some(codex_config::SkillsRequirementsToml {
+                    allowed_sources: Some(vec![
+                        codex_config::SkillSourceRequirement::System,
+                        codex_config::SkillSourceRequirement::Admin,
+                        codex_config::SkillSourceRequirement::Plugin,
+                    ]),
+                }),
+                plugin_marketplaces: Some(codex_config::PluginMarketplaceRequirementsToml {
+                    allowed_names: Some(vec![
+                        "openai-curated".to_string(),
+                        "arm-internal".to_string(),
+                    ]),
+                    allow_user_additions: Some(false),
+                }),
+                ..Default::default()
+            })
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn fetch_cloud_requirements_times_out() {
         let auth_manager = auth_manager_with_plan("enterprise").await;
