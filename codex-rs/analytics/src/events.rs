@@ -20,6 +20,7 @@ use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
 use crate::now_unix_seconds;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::CommandExecutionSource;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -33,6 +34,7 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 
@@ -61,19 +63,12 @@ pub(crate) enum TrackEventRequest {
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
-    #[allow(dead_code)]
     CommandExecution(CodexCommandExecutionEventRequest),
-    #[allow(dead_code)]
     FileChange(CodexFileChangeEventRequest),
-    #[allow(dead_code)]
     McpToolCall(CodexMcpToolCallEventRequest),
-    #[allow(dead_code)]
     DynamicToolCall(CodexDynamicToolCallEventRequest),
-    #[allow(dead_code)]
     CollabAgentToolCall(CodexCollabAgentToolCallEventRequest),
-    #[allow(dead_code)]
     WebSearch(CodexWebSearchEventRequest),
-    #[allow(dead_code)]
     ImageGeneration(CodexImageGenerationEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
@@ -126,7 +121,7 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) model: String,
     pub(crate) ephemeral: bool,
-    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
@@ -453,7 +448,10 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) tool_name: String,
     pub(crate) started_at_ms: u64,
     pub(crate) completed_at_ms: u64,
+    // Observed item lifecycle duration. This may undercount end-to-end execution
+    // for tools where app-server only sees part of the upstream flow.
     pub(crate) duration_ms: Option<u64>,
+    pub(crate) execution_duration_ms: Option<u64>,
     pub(crate) review_count: u64,
     pub(crate) guardian_review_count: u64,
     pub(crate) user_review_count: u64,
@@ -464,17 +462,6 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) requested_network_access: bool,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum CommandExecutionSource {
-    Agent,
-    UserShell,
-    UnifiedExecStartup,
-    UnifiedExecInteraction,
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WebSearchActionKind {
@@ -591,7 +578,6 @@ pub(crate) struct CodexWebSearchEventRequest {
 pub(crate) struct CodexImageGenerationEventParams {
     #[serde(flatten)]
     pub(crate) base: CodexToolItemEventBase,
-    pub(crate) image_generation_status: String,
     pub(crate) revised_prompt_present: bool,
     pub(crate) saved_path_present: bool,
 }
@@ -647,7 +633,7 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) turn_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) trigger: CompactionTrigger,
@@ -680,7 +666,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) ephemeral: bool,
-    pub(crate) thread_source: Option<String>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
@@ -733,7 +719,7 @@ pub(crate) struct CodexTurnSteerEventParams {
     pub(crate) accepted_turn_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) thread_source: Option<String>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) num_input_images: usize,
@@ -836,7 +822,7 @@ pub(crate) fn codex_compaction_event_params(
     input: CodexCompactionEvent,
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
-    thread_source: Option<&'static str>,
+    thread_source: Option<ThreadSource>,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
 ) -> CodexCompactionEventParams {
@@ -940,7 +926,7 @@ pub(crate) fn subagent_thread_started_event_request(
         runtime: current_runtime_metadata(),
         model: input.model,
         ephemeral: input.ephemeral,
-        thread_source: Some("subagent"),
+        thread_source: Some(ThreadSource::Subagent),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: input

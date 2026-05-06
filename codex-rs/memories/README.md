@@ -10,6 +10,8 @@ Runtime orchestration for Phase 1 and Phase 2 still lives in `codex-core` under
 - `codex-rs/memories/read` (`codex-memories-read`) owns the read path:
   memory developer-instruction injection, memory citation parsing, and
   read-usage telemetry classification.
+- `codex-rs/memories/mcp` (`codex-memories-mcp`) exposes the read-only memory
+  filesystem through the built-in MCP surface.
 - `codex-rs/memories/write` (`codex-memories-write`) owns the write path:
   Phase 1 and Phase 2 prompt rendering, filesystem artifact helpers,
   workspace diff helpers, and extension resource pruning.

@@ -889,6 +889,7 @@ mod tests {
     fn test_thread(thread_id: &str, source: codex_app_server_protocol::SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -902,6 +903,7 @@ mod tests {
             agent_nickname: None,
             agent_role: None,
             source,
+            thread_source: None,
             git_info: None,
             name: None,
             turns: Vec::new(),

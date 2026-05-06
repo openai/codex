@@ -596,6 +596,10 @@ install_release() {
   cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
   chmod 0755 "$stage_release/codex"
   chmod 0755 "$stage_release/codex-resources/rg"
+  if [ -f "$vendor_root/codex-resources/bwrap" ]; then
+    cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
+    chmod 0755 "$stage_release/codex-resources/bwrap"
+  fi
 
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
     rm -rf "$release_dir"
@@ -611,7 +615,11 @@ release_dir_is_complete() {
   [ -d "$release_dir" ] &&
     [ -x "$release_dir/codex" ] &&
     [ -x "$release_dir/codex-resources/rg" ] &&
-    [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ]
+    [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ] &&
+    case "$expected_target" in
+      *linux*) [ -x "$release_dir/codex-resources/bwrap" ] ;;
+      *) true ;;
+    esac
 }
 
 update_current_link() {

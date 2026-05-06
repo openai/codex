@@ -58,6 +58,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Retain temporary staging directories instead of deleting them.",
     )
+    parser.add_argument(
+        "--allow-missing-native-component",
+        dest="allow_missing_native_components",
+        action="append",
+        default=[],
+        help=(
+            "Native component that may be absent from reused workflow artifacts. "
+            "Intended for CI compatibility only; release staging should not use this."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -147,6 +157,8 @@ def main() -> int:
 
     packages = expand_packages(list(args.packages))
     native_components = collect_native_components(packages)
+    allow_missing_native_components = set(args.allow_missing_native_components)
+    native_components_to_install = native_components - allow_missing_native_components
 
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
@@ -155,12 +167,12 @@ def main() -> int:
     final_messages = []
 
     try:
-        if native_components:
+        if native_components_to_install:
             workflow_url, resolved_head_sha = resolve_workflow_url(
                 args.release_version, args.workflow_url
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components, vendor_temp_root)
+            install_native_components(workflow_url, native_components_to_install, vendor_temp_root)
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
@@ -184,6 +196,9 @@ def main() -> int:
 
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
+
+            for component in sorted(allow_missing_native_components):
+                cmd.extend(["--allow-missing-native-component", component])
 
             try:
                 run_command(cmd)
