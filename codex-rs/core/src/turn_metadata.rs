@@ -69,6 +69,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
@@ -115,6 +117,7 @@ fn merge_turn_metadata(
 
 fn build_turn_metadata_bag(
     session_id: Option<String>,
+    thread_id: Option<String>,
     thread_source: Option<ThreadSource>,
     turn_id: Option<String>,
     sandbox: Option<String>,
@@ -130,6 +133,7 @@ fn build_turn_metadata_bag(
 
     TurnMetadataBag {
         session_id,
+        thread_id,
         thread_source,
         turn_id,
         workspaces,
@@ -159,6 +163,7 @@ pub async fn build_turn_metadata_header(
 
     build_turn_metadata_bag(
         /*session_id*/ None,
+        /*thread_id*/ None,
         /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
@@ -185,8 +190,10 @@ pub(crate) struct TurnMetadataState {
 }
 
 impl TurnMetadataState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
+        thread_id: String,
         thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
@@ -205,6 +212,7 @@ impl TurnMetadataState {
         );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
+            Some(thread_id),
             thread_source,
             Some(turn_id),
             sandbox,
@@ -320,6 +328,7 @@ impl TurnMetadataState {
 
             let enriched_metadata = build_turn_metadata_bag(
                 state.base_metadata.session_id.clone(),
+                state.base_metadata.thread_id.clone(),
                 state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),

@@ -3778,6 +3778,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Session::make_turn_context(
         thread_id,
+        SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -4061,10 +4062,8 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
     .await
     .expect("resume should succeed");
 
-    assert_eq!(
-        session.services.agent_control.session_id(),
-        SessionId::from(thread_id)
-    );
+    assert_eq!(session.thread_id(), thread_id);
+    assert_eq!(session.session_id(), SessionId::from(thread_id));
 
     let event = rx_event.recv().await.expect("session configured event");
     let EventMsg::SessionConfigured(event) = event.msg else {
@@ -4098,10 +4097,8 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
     .await
     .expect("resume should succeed");
 
-    assert_eq!(
-        session.services.agent_control.session_id(),
-        parent_session_id
-    );
+    assert_eq!(session.thread_id(), thread_id);
+    assert_eq!(session.session_id(), parent_session_id);
 
     let event = rx_event.recv().await.expect("session configured event");
     let EventMsg::SessionConfigured(event) = event.msg else {
@@ -5467,6 +5464,7 @@ where
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
+        SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
