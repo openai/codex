@@ -47,7 +47,7 @@ pub async fn build_prompt_input(
         Arc::new(
             EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
                 .await
-            .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         /*analytics_events_client*/ None,
         thread_store,
