@@ -409,11 +409,6 @@ fn process_group_exists(pid: u32) -> bool {
 }
 
 #[cfg(not(unix))]
-fn process_exists(_pid: u32) -> bool {
-    false
-}
-
-#[cfg(not(unix))]
 fn process_group_exists(_pid: u32) -> bool {
     false
 }
@@ -517,6 +512,7 @@ async fn process_matches_record(_record: &PidRecord) -> Result<bool> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
 enum EmptyPidReservation {
     Active,
     Stale,
@@ -639,11 +635,6 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
         bail!("pid-managed app server {pid} has no recorded start time");
     }
     Ok(start_time.to_string())
-}
-
-#[cfg(not(unix))]
-async fn read_process_start_time(_pid: u32) -> Result<String> {
-    bail!("pid-managed app-server startup is unsupported on this platform")
 }
 
 #[cfg(all(test, unix))]
