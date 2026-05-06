@@ -1550,12 +1550,9 @@ fn thread_rollback_response_from_stored_thread(
     loaded_status: ThreadStatus,
 ) -> std::result::Result<ThreadRollbackResponse, String> {
     let thread_id = stored_thread.thread_id;
-    let (mut thread, history) = thread_from_stored_thread(
-        stored_thread,
-        session_id,
-        fallback_model_provider,
-        fallback_cwd,
-    );
+    let (mut thread, history) =
+        thread_from_stored_thread(stored_thread, fallback_model_provider, fallback_cwd);
+    thread.session_id = session_id;
     let Some(history) = history else {
         return Err(format!(
             "thread {thread_id} did not include persisted history after rollback"
