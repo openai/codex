@@ -1092,7 +1092,8 @@ impl Config {
         let builtin_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
             codex_self_exe: self.codex_self_exe.as_deref(),
             codex_home: self.codex_home.as_path(),
-            memories_enabled: self.features.enabled(Feature::MemoryTool)
+            memories_enabled: self.features.enabled(Feature::BuiltInMcp)
+                && self.features.enabled(Feature::MemoryTool)
                 && self.memories.use_memories,
         });
         let mut configured_mcp_servers = self.mcp_servers.get().clone();

@@ -3360,6 +3360,7 @@ async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow:
         .build()
         .await?;
     config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
+    let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
@@ -3398,6 +3399,7 @@ async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyh
         .build()
         .await?;
     config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
+    let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
@@ -4248,6 +4250,7 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
         codex_home.abs(),
     )
     .await?;
+    let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
@@ -4276,6 +4279,32 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
+            ..ConfigOverrides::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    let _ = config.features.enable(Feature::MemoryTool);
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert!(
+        !mcp_config
+            .configured_mcp_servers
+            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
@@ -4293,6 +4322,7 @@ async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<(
         codex_home.abs(),
     )
     .await?;
+    let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 

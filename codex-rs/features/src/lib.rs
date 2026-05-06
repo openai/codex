@@ -134,6 +134,8 @@ pub enum Feature {
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
+    /// Enable product-owned built-in MCP servers.
+    BuiltInMcp,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -791,6 +793,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
             announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::BuiltInMcp,
+        key: "builtin_mcp",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
