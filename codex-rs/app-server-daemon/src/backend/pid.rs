@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use anyhow::bail;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
+#[cfg(unix)]
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -18,6 +20,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(70);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) struct PidBackend {
     codex_bin: PathBuf,
     pid_file: PathBuf,
@@ -40,6 +43,7 @@ enum PidFileState {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(unix), allow(dead_code))]
 enum PidCommandKind {
     AppServer { remote_control_enabled: bool },
     UpdateLoop,
@@ -340,6 +344,7 @@ impl PidBackend {
         Ok(reservation_lock)
     }
 
+    #[cfg(unix)]
     fn command_args(&self) -> Vec<&'static str> {
         match self.command_kind {
             PidCommandKind::AppServer {
