@@ -339,9 +339,6 @@ impl Session {
             std::mem::replace(&mut *manager, refreshed_manager)
         };
         old_manager.shutdown().await;
-        self.services
-            .plugins_manager
-            .cleanup_inactive_plugin_versions_for_config(&config.plugins_config_input());
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(

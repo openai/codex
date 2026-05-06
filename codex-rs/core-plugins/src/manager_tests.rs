@@ -3198,6 +3198,51 @@ fn refresh_curated_plugin_cache_installs_short_sha_version_alongside_existing_lo
     );
 }
 
+#[tokio::test]
+async fn cleanup_inactive_plugin_versions_for_config_removes_configured_inactive_versions() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."slack@openai-curated"]
+enabled = true
+"#,
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
+        "slack/1.0.0",
+        "slack",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
+        "slack/2.0.0",
+        "slack",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/openai-curated/slack/.active-version"),
+        "2.0.0\n",
+    )
+    .unwrap();
+    let config = load_config(tmp.path(), tmp.path()).await;
+
+    PluginsManager::new(tmp.path().to_path_buf())
+        .cleanup_inactive_plugin_versions_for_config(&config);
+
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/openai-curated/slack/1.0.0")
+            .exists()
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/openai-curated/slack/2.0.0")
+            .is_dir()
+    );
+}
+
 #[test]
 fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_current_short_version() {
     let tmp = tempfile::tempdir().unwrap();
