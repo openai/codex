@@ -71,7 +71,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 .ok()?;
                 #[allow(deprecated)]
                 let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
-                Some((command, cwd))
+                Some((command.command, cwd))
             }),
         (Some(_), _) | (None, _) => None,
     }

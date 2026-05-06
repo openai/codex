@@ -7,6 +7,7 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
+use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
@@ -44,6 +45,7 @@ struct RunExecLikeArgs {
     tool_name: ToolName,
     exec_params: ExecParams,
     hook_command: String,
+    shell_type: Option<ShellType>,
     additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
@@ -59,6 +61,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         tool_name,
         exec_params,
         hook_command,
+        shell_type,
         additional_permissions,
         prefix_rule,
         session,
@@ -195,6 +198,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
 
     let req = ShellRequest {
         command: exec_params.command.clone(),
+        shell_type,
         hook_command,
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),
