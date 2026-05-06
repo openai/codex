@@ -133,7 +133,6 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub(crate) mod template_interpolation;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -2078,63 +2077,6 @@ impl Config {
     }
 
     pub(crate) async fn load_config_with_layer_stack(
-        fs: &dyn ExecutorFileSystem,
-        cfg: ConfigToml,
-        overrides: ConfigOverrides,
-        codex_home: AbsolutePathBuf,
-        config_layer_stack: ConfigLayerStack,
-    ) -> std::io::Result<Self> {
-        let config = Self::build_config_with_layer_stack(
-            fs,
-            cfg.clone(),
-            overrides.clone(),
-            codex_home.clone(),
-            config_layer_stack.clone(),
-        )
-        .await?;
-        let mut interpolation_source_cfg = cfg.clone();
-        template_interpolation::apply_resolved_config_fields(
-            &config,
-            &mut interpolation_source_cfg,
-        )
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to materialize config for interpolation: {err}"),
-            )
-        })?;
-        let interpolation_source =
-            toml::Value::try_from(interpolation_source_cfg).map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("failed to serialize config for interpolation: {err}"),
-                )
-            })?;
-        let mut interpolated_cfg = cfg;
-        let interpolated = template_interpolation::interpolate_config_string_fields(
-            &mut interpolated_cfg,
-            &interpolation_source,
-        )
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to interpolate config template fields: {err}"),
-            )
-        })?;
-        if interpolated {
-            return Self::build_config_with_layer_stack(
-                fs,
-                interpolated_cfg,
-                overrides,
-                codex_home,
-                config_layer_stack,
-            )
-            .await;
-        }
-        Ok(config)
-    }
-
-    async fn build_config_with_layer_stack(
         fs: &dyn ExecutorFileSystem,
         cfg: ConfigToml,
         overrides: ConfigOverrides,
