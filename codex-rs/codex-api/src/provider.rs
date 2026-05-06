@@ -43,6 +43,7 @@ impl RetryConfig {
 pub struct Provider {
     pub name: String,
     pub base_url: String,
+    pub uses_chatgpt_auth: bool,
     pub query_params: Option<HashMap<String, String>>,
     pub headers: HeaderMap,
     pub retry: RetryConfig,

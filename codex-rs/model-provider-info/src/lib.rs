@@ -256,6 +256,10 @@ impl ModelProviderInfo {
         Ok(ApiProvider {
             name: self.name.clone(),
             base_url,
+            uses_chatgpt_auth: matches!(
+                auth_mode,
+                Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
+            ),
             query_params: self.query_params.clone(),
             headers,
             retry,

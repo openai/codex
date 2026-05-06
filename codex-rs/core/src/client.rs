@@ -120,7 +120,6 @@ use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
-use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1724,11 +1723,7 @@ enum AttestationPurpose {
 }
 
 fn should_send_attestation(provider: &codex_api::Provider, purpose: AttestationPurpose) -> bool {
-    let provider_is_chatgpt_codex = provider
-        .base_url
-        .trim_end_matches('/')
-        .eq_ignore_ascii_case(CHATGPT_CODEX_BASE_URL);
-    provider_is_chatgpt_codex
+    provider.uses_chatgpt_auth
         && matches!(
             purpose,
             AttestationPurpose::Response

@@ -13,6 +13,7 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider::BearerAuthProvider;
+use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
@@ -76,6 +77,9 @@ fn api_provider(base_url: &str) -> codex_api::Provider {
     codex_api::Provider {
         name: "test".to_string(),
         base_url: base_url.to_string(),
+        uses_chatgpt_auth: base_url
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(CHATGPT_CODEX_BASE_URL),
         query_params: None,
         headers: http::HeaderMap::new(),
         retry: codex_api::RetryConfig {
