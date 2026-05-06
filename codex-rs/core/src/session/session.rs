@@ -325,6 +325,16 @@ pub(crate) struct AppServerClientMetadata {
 }
 
 impl Session {
+    /// Returns the concrete identity for this thread.
+    pub(crate) fn thread_id(&self) -> ThreadId {
+        self.conversation_id
+    }
+
+    /// Returns the identity shared by the root thread and all descendant threads.
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.services.agent_control.session_id()
+    }
+
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     #[expect(

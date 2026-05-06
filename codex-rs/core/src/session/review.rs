@@ -102,7 +102,8 @@ pub(super) async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
-        sess.conversation_id.to_string(),
+        sess.session_id().to_string(),
+        sess.thread_id().to_string(),
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
