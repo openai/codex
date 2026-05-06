@@ -1,11 +1,11 @@
-use crate::ConfiguredToolSpec;
-use crate::DiscoverableTool;
-use crate::ToolName;
-use crate::ToolSpec;
-use crate::ToolsConfig;
-use crate::WaitAgentTimeoutOptions;
-use crate::augment_tool_spec_for_code_mode;
+use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tools::ConfiguredToolSpec;
+use codex_tools::DiscoverableTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use codex_tools::ToolsConfig;
+use codex_tools::augment_tool_spec_for_code_mode;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

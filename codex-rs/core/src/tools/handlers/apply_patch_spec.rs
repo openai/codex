@@ -1,13 +1,13 @@
-use crate::FreeformTool;
-use crate::FreeformToolFormat;
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
+const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("apply_patch.lark");
 
 const APPLY_PATCH_JSON_TOOL_DESCRIPTION: &str = r#"Use the `apply_patch` tool to edit files.
 Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
@@ -122,5 +122,5 @@ pub fn create_apply_patch_json_tool() -> ToolSpec {
 }
 
 #[cfg(test)]
-#[path = "apply_patch_tool_tests.rs"]
+#[path = "apply_patch_spec_tests.rs"]
 mod tests;

@@ -3,14 +3,14 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::tools::handlers::request_user_input_spec::normalize_request_user_input_args;
+use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
-use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
 use codex_tools::ToolName;
-use codex_tools::normalize_request_user_input_args;
-use codex_tools::request_user_input_unavailable_message;
 
 pub struct RequestUserInputHandler {
     pub available_modes: Vec<ModeKind>,

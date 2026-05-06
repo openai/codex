@@ -10,6 +10,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
+use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
@@ -317,7 +318,7 @@ impl Session {
                 turn_context,
                 tool_name,
             } => Box::pin(async move {
-                if tool_name != codex_tools::UPDATE_GOAL_TOOL_NAME {
+                if tool_name != UPDATE_GOAL_TOOL_NAME {
                     self.account_thread_goal_progress(
                         turn_context,
                         BudgetLimitSteering::Allowed,

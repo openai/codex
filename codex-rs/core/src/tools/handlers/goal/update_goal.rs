@@ -4,12 +4,12 @@ use crate::goals::SetGoalRequest;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::ToolName;
-use codex_tools::UPDATE_GOAL_TOOL_NAME;
 
 use super::CompletionBudgetReport;
 use super::UpdateGoalArgs;

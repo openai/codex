@@ -1,6 +1,6 @@
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_test_sync_tool() -> ToolSpec {
@@ -59,5 +59,5 @@ pub fn create_test_sync_tool() -> ToolSpec {
 }
 
 #[cfg(test)]
-#[path = "utility_tool_tests.rs"]
+#[path = "test_sync_spec_tests.rs"]
 mod tests;

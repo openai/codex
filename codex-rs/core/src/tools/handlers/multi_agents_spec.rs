@@ -1,7 +1,7 @@
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
 use codex_protocol::openai_models::ModelPreset;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -759,5 +759,5 @@ fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema
 }
 
 #[cfg(test)]
-#[path = "agent_tool_tests.rs"]
+#[path = "multi_agents_spec_tests.rs"]
 mod tests;
