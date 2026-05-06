@@ -344,6 +344,7 @@ mod tests {
         );
         assert_eq!(provider.environments["ssh-dev"], ssh_transport);
         assert!(environments["ssh-dev"].is_remote());
+        assert_eq!(environments["ssh-dev"].exec_server_url(), None);
         assert_eq!(
             provider.default_environment_id(),
             Some("ssh-dev".to_string())

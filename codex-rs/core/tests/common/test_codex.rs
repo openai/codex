@@ -72,6 +72,7 @@ const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
+    exec_server_url: Option<String>,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
     remote_container_name: Option<String>,
@@ -85,6 +86,7 @@ impl TestEnv {
             codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
+            exec_server_url: None,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
             remote_container_name: None,
@@ -97,10 +99,6 @@ impl TestEnv {
 
     pub fn environment(&self) -> &codex_exec_server::Environment {
         &self.environment
-    }
-
-    pub fn exec_server_url(&self) -> Option<&str> {
-        self.environment.exec_server_url()
     }
 
     fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
@@ -122,7 +120,7 @@ pub async fn test_env() -> Result<TestEnv> {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
             let environment =
-                codex_exec_server::Environment::create_for_tests(Some(websocket_url))?;
+                codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -134,6 +132,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 .await?;
             Ok(TestEnv {
                 environment,
+                exec_server_url: Some(websocket_url),
                 cwd,
                 local_cwd_temp_dir: None,
                 remote_container_name: Some(remote_env.container_name),
@@ -384,7 +383,7 @@ impl TestCodexBuilder {
         let exec_server_url = self
             .exec_server_url
             .clone()
-            .or_else(|| test_env.exec_server_url().map(str::to_owned));
+            .or_else(|| test_env.exec_server_url.clone());
         let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
