@@ -2783,7 +2783,7 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
         panic!("expected app link request");
     };
 
-    assert_eq!(params.title, "MCP sign-in required");
+    assert_eq!(params.title, "Authentication required");
     assert_eq!(params.description, Some("Server: github_mcp".to_string()));
     assert_eq!(params.url, "https://github.example/login/device");
     assert_eq!(
