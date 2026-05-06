@@ -151,36 +151,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Git
-        Some("git") => {
-            // Global options that redirect config, repository, or helper
-            // lookup can make otherwise read-only git commands execute
-            // attacker-controlled code, so they must never be auto-approved.
-            if git_has_unsafe_global_option(command) {
-                return false;
-            }
-
-            let Some((subcommand_idx, subcommand)) =
-                find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
-            else {
-                return false;
-            };
-
-            let subcommand_args = &command[subcommand_idx + 1..];
-
-            match subcommand {
-                "status" | "log" | "diff" | "show" => {
-                    git_subcommand_args_are_read_only(subcommand_args)
-                }
-                "branch" => {
-                    git_subcommand_args_are_read_only(subcommand_args)
-                        && git_branch_is_read_only(subcommand_args)
-                }
-                other => {
-                    debug_assert!(false, "unexpected git subcommand from matcher: {other}");
-                    false
-                }
-            }
-        }
+        Some("git") => is_safe_git_command(command),
 
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
@@ -195,6 +166,35 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
+    }
+}
+
+pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
+    // Global options that redirect config, repository, or helper lookup can make
+    // otherwise read-only git commands execute attacker-controlled code, so they
+    // must never be auto-approved.
+    if git_has_unsafe_global_option(command) {
+        return false;
+    }
+
+    let Some((subcommand_idx, subcommand)) =
+        find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
+    else {
+        return false;
+    };
+
+    let subcommand_args = &command[subcommand_idx + 1..];
+
+    match subcommand {
+        "status" | "log" | "diff" | "show" => git_subcommand_args_are_read_only(subcommand_args),
+        "branch" => {
+            git_subcommand_args_are_read_only(subcommand_args)
+                && git_branch_is_read_only(subcommand_args)
+        }
+        other => {
+            debug_assert!(false, "unexpected git subcommand from matcher: {other}");
+            false
+        }
     }
 }
 
@@ -542,8 +542,15 @@ mod tests {
             return;
         }
 
+        let Some(powershell) = crate::powershell::try_find_pwsh_executable_blocking()
+            .or_else(crate::powershell::try_find_powershell_executable_blocking)
+        else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+
         assert!(is_known_safe_command(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            powershell,
             "-Command",
             "Get-Location",
         ])));

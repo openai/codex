@@ -33,6 +33,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use crate::turn_metadata::McpTurnMetadataContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -895,7 +896,13 @@ fn build_mcp_tool_call_request_meta(
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
-    if let Some(turn_metadata) = turn_context.turn_metadata_state.current_meta_value() {
+    if let Some(turn_metadata) = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+            model: turn_context.model_info.slug.as_str(),
+            reasoning_effort: turn_context.effective_reasoning_effort(),
+        })
+    {
         request_meta.insert(
             crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
             turn_metadata,

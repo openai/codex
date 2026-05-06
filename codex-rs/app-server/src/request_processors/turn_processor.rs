@@ -13,7 +13,6 @@ pub(crate) struct TurnRequestProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
-    state_db: Option<StateDbHandle>,
 }
 
 impl TurnRequestProcessor {
@@ -30,7 +29,6 @@ impl TurnRequestProcessor {
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
-        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
@@ -44,7 +42,6 @@ impl TurnRequestProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
-            state_db,
         }
     }
 
@@ -174,21 +171,14 @@ impl TurnRequestProcessor {
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
         // Resolve the core conversation handle from a v2 thread id string.
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -212,14 +202,6 @@ impl TurnRequestProcessor {
     fn review_request_from_target(
         target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
-        fn invalid_request(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
@@ -308,17 +290,15 @@ impl TurnRequestProcessor {
     }
 
     fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
-        JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!(
-                "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
-            ),
-            data: Some(serde_json::json!({
-                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
-                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
-                "actual_chars": actual_chars,
-            })),
-        }
+        let mut error = invalid_params(format!(
+            "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
+        ));
+        error.data = Some(serde_json::json!({
+            "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
+            "max_chars": MAX_USER_INPUT_TEXT_CHARS,
+            "actual_chars": actual_chars,
+        }));
+        error
     }
 
     fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
@@ -522,6 +502,7 @@ impl TurnRequestProcessor {
         let turn = Turn {
             id: turn_id,
             items: vec![],
+            items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,
@@ -564,14 +545,18 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
+        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
+            app_server_client_name.as_deref(),
+            app_server_client_version.as_deref(),
+        );
         thread
-            .set_app_server_client_info(app_server_client_name, app_server_client_version)
+            .set_app_server_client_info(
+                app_server_client_name,
+                app_server_client_version,
+                mcp_elicitations_auto_deny,
+            )
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client info: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
     async fn turn_steer_inner(
@@ -615,9 +600,8 @@ impl TurnRequestProcessor {
             )
             .await
             .map_err(|err| {
-                let (code, message, data, error_type) = match err {
+                let (message, data, error_type) = match err {
                     SteerInputError::NoActiveTurn(_) => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "no active turn to steer".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -625,7 +609,6 @@ impl TurnRequestProcessor {
                         )),
                     ),
                     SteerInputError::ExpectedTurnMismatch { expected, actual } => (
-                        INVALID_REQUEST_ERROR_CODE,
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -661,24 +644,19 @@ impl TurnRequestProcessor {
                             }
                         };
                         (
-                            INVALID_REQUEST_ERROR_CODE,
                             message,
                             data,
                             Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
                         )
                     }
                     SteerInputError::EmptyInput => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "input must not be empty".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
                     ),
                 };
-                let error = JSONRPCErrorError {
-                    code,
-                    message,
-                    data,
-                };
+                let mut error = invalid_request(message);
+                error.data = data;
                 self.track_error_response(request_id, &error, error_type);
                 error
             })?;
@@ -838,6 +816,7 @@ impl TurnRequestProcessor {
         Turn {
             id: turn_id,
             items,
+            items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,
@@ -891,24 +870,20 @@ impl TurnRequestProcessor {
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
-            path
-        } else {
-            find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &parent_thread_id.to_string(),
-                self.state_db.as_deref(),
-            )
+        parent_thread.ensure_rollout_materialized().await;
+        parent_thread.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to flush parent thread {parent_thread_id}: {err}"
+            ))
+        })?;
+        let parent_history = parent_thread
+            .load_history(/*include_archived*/ true)
             .await
             .map_err(|err| {
                 internal_error(format!(
-                    "failed to locate thread id {parent_thread_id}: {err}"
+                    "failed to load parent thread {parent_thread_id}: {err}"
                 ))
-            })?
-            .ok_or_else(|| {
-                invalid_request(format!("no rollout found for thread id {parent_thread_id}"))
-            })?
-        };
+            })?;
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -918,14 +893,17 @@ impl TurnRequestProcessor {
         let NewThread {
             thread_id,
             thread: review_thread,
-            session_configured,
             ..
         } = self
             .thread_manager
-            .fork_thread(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config.clone(),
-                rollout_path,
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: parent_thread_id,
+                    history: parent_history.items,
+                    rollout_path: parent_thread.rollout_path(),
+                }),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
@@ -947,37 +925,32 @@ impl TurnRequestProcessor {
         );
 
         let fallback_provider = self.config.model_provider_id.as_str();
-        if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
+        match review_thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+        {
+            Ok(stored_thread) => {
+                let (mut thread, _) =
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                self.thread_watch_manager
+                    .upsert_thread_silently(thread.clone())
+                    .await;
+                thread.status = resolve_thread_status(
                     self.thread_watch_manager
-                        .upsert_thread_silently(thread.clone())
-                        .await;
-                    thread.status = resolve_thread_status(
-                        self.thread_watch_manager
-                            .loaded_status_for_thread(&thread.id)
-                            .await,
-                        /*has_in_progress_turn*/ false,
-                    );
-                    let notif = thread_started_notification(thread);
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadStarted(notif))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load summary for review thread {}: {}",
-                        session_configured.session_id,
-                        err
-                    );
-                }
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    /*has_in_progress_turn*/ false,
+                );
+                let notif = thread_started_notification(thread);
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
             }
-        } else {
-            tracing::warn!(
-                "review thread {} has no rollout path",
-                session_configured.session_id
-            );
+            Err(err) => {
+                tracing::warn!("failed to load summary for review thread {thread_id}: {err}");
+            }
         }
 
         let turn_id = self
@@ -1018,7 +991,7 @@ impl TurnRequestProcessor {
                     request_id,
                     parent_thread,
                     review_request,
-                    display_text.as_str(),
+                    &display_text,
                     thread_id,
                 )
                 .await?;
@@ -1029,7 +1002,7 @@ impl TurnRequestProcessor {
                     parent_thread_id,
                     parent_thread,
                     review_request,
-                    display_text.as_str(),
+                    &display_text,
                 )
                 .await?;
             }
@@ -1130,4 +1103,15 @@ impl TurnRequestProcessor {
         )
         .await
     }
+}
+
+fn xcode_26_4_mcp_elicitations_auto_deny(
+    client_name: Option<&str>,
+    client_version: Option<&str>,
+) -> bool {
+    // Xcode 26.4 shipped before app-server MCP elicitation requests were
+    // client-visible. Keep elicitations auto-denied for that client line.
+    // TODO: Remove this compatibility hack once Xcode 26.4 ages out.
+    client_name == Some("Xcode")
+        && client_version.is_some_and(|version| version.starts_with("26.4"))
 }

@@ -2,6 +2,7 @@ use super::*;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::SessionPickerViewMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
@@ -46,6 +47,41 @@ fn builder_with_edits_applies_custom_paths() {
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     assert_eq!(contents, "enabled = true\n");
+}
+
+#[test]
+fn session_picker_view_edit_writes_root_tui_setting() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([session_picker_view_edit(SessionPickerViewMode::Dense)])
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[tui]
+session_picker_view = "dense"
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn session_picker_view_builder_respects_active_profile() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_profile(Some("work"))
+        .set_session_picker_view(SessionPickerViewMode::Dense)
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[profiles.work.tui]
+session_picker_view = "dense"
+"#;
+    assert_eq!(contents, expected);
 }
 
 #[test]

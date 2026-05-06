@@ -941,6 +941,10 @@ mod tests {
             self.lines.clone()
         }
 
+        fn raw_lines(&self) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+
         fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
         }

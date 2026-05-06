@@ -8,6 +8,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_tools::ToolEnvironmentMode;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -118,18 +119,19 @@ impl TurnContext {
         )
     }
 
-    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if self.model_info.supports_reasoning_summaries {
-            match self
-                .reasoning_effort
+            self.reasoning_effort
                 .or(self.model_info.default_reasoning_level)
-            {
-                Some(effort) => effort.to_string(),
-                None => "default".to_string(),
-            }
         } else {
-            "default".to_string()
+            None
         }
+    }
+
+    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+        self.effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "default".to_string())
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -699,7 +701,7 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&per_turn_config.plugins_config_input())
             .await;
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
             .map(|turn_environment| turn_environment.environment.get_filesystem());

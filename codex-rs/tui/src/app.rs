@@ -953,6 +953,7 @@ See the Codex keymap documentation for supported actions and examples."
 
         tui.frame_requester().schedule_frame();
         app.refresh_startup_skills(&app_server);
+        app.refresh_startup_hooks(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {

@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -74,18 +75,7 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
-pub(crate) async fn read_rollout_items_from_rollout(
-    path: &Path,
-) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
-        InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-        InitialHistory::Forked(items) => items,
-        InitialHistory::Resumed(resumed) => resumed.history,
-    };
-
-    Ok(items)
-}
-
+#[cfg(test)]
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -134,6 +124,7 @@ fn extract_conversation_summary(
     })
 }
 
+#[cfg(test)]
 fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
@@ -220,6 +211,7 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+#[cfg(test)]
 async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
     let updated_at = tokio::fs::metadata(path)
         .await

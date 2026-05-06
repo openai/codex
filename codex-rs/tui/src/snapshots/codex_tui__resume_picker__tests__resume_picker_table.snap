@@ -2,7 +2,11 @@
 source: tui/src/resume_picker.rs
 expression: snapshot
 ---
-  Created         Updated         Branch  CWD  Conversation
-  16 minutes ago  42 seconds ago  -       -    Fix resume picker timestamps
-> 1 hour ago      35 minutes ago  -       -    Investigate lazy pagination cap
-  2 hours ago     2 hours ago     -       -    Explain the codebase
+  Fix resume picker timestamps
+  42s ago       ⌁ no cwd                          no branch
+
+❯ Investigate lazy pagination cap
+  35m ago       ⌁ no cwd                          no branch
+
+  Explain the codebase
+  2h ago        ⌁ no cwd                          no branch

@@ -11,6 +11,8 @@
 //! scrollback from finalized cells.
 
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::raw_lines_from_source;
 use crate::history_cell::{self};
 use crate::markdown::append_markdown;
 use crate::render::line_utils::prefix_lines;
@@ -39,10 +41,11 @@ struct StreamCore {
     enqueued_len: usize,
     emitted_len: usize,
     cwd: PathBuf,
+    render_mode: HistoryRenderMode,
 }
 
 impl StreamCore {
-    fn new(width: Option<usize>, cwd: &Path) -> Self {
+    fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
             state: StreamState::new(width, cwd),
             width,
@@ -51,6 +54,7 @@ impl StreamCore {
             enqueued_len: 0,
             emitted_len: 0,
             cwd: cwd.to_path_buf(),
+            render_mode,
         }
     }
 
@@ -77,13 +81,7 @@ impl StreamCore {
             self.raw_source.push_str(&remainder_source);
         }
 
-        let mut rendered = Vec::new();
-        append_markdown(
-            &self.raw_source,
-            self.width,
-            Some(self.cwd.as_path()),
-            &mut rendered,
-        );
+        let rendered = self.render_source(&self.raw_source);
         if self.emitted_len >= rendered.len() {
             Vec::new()
         } else {
@@ -150,6 +148,27 @@ impl StreamCore {
         self.rebuild_queue_from_render();
     }
 
+    fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
+        if self.render_mode == render_mode {
+            return;
+        }
+
+        let had_pending_queue = self.state.queued_len() > 0;
+        self.render_mode = render_mode;
+        if self.raw_source.is_empty() {
+            return;
+        }
+
+        self.recompute_render();
+        self.emitted_len = self.emitted_len.min(self.rendered_lines.len());
+        self.state.clear_queue();
+        if self.emitted_len > 0 && !had_pending_queue {
+            self.enqueued_len = self.rendered_lines.len();
+            return;
+        }
+        self.rebuild_queue_from_render();
+    }
+
     fn clear_queue(&mut self) {
         self.state.clear_queue();
         self.enqueued_len = self.emitted_len;
@@ -164,13 +183,18 @@ impl StreamCore {
     }
 
     fn recompute_render(&mut self) {
-        self.rendered_lines.clear();
-        append_markdown(
-            &self.raw_source,
-            self.width,
-            Some(self.cwd.as_path()),
-            &mut self.rendered_lines,
-        );
+        self.rendered_lines = self.render_source(&self.raw_source);
+    }
+
+    fn render_source(&self, source: &str) -> Vec<Line<'static>> {
+        match self.render_mode {
+            HistoryRenderMode::Rich => {
+                let mut rendered = Vec::new();
+                append_markdown(source, self.width, Some(self.cwd.as_path()), &mut rendered);
+                rendered
+            }
+            HistoryRenderMode::Raw => raw_lines_from_source(source),
+        }
     }
 
     /// Append newly rendered lines to the live queue without replaying already queued rows.
@@ -227,9 +251,9 @@ impl StreamController {
     /// `width` is the content width available to markdown rendering, not necessarily the full
     /// terminal width. Passing a stale width after resize will keep queued live output wrapped for
     /// the old viewport until app-level reflow repairs the finalized transcript.
-    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
+    pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd),
+            core: StreamCore::new(width, cwd, render_mode),
             header_emitted: false,
         }
     }
@@ -289,6 +313,10 @@ impl StreamController {
         self.core.set_width(width);
     }
 
+    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
+        self.core.set_render_mode(render_mode);
+    }
+
     fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -317,9 +345,9 @@ impl PlanStreamController {
     ///
     /// The width has the same meaning as in `StreamController`: it is the markdown body width, and
     /// callers must update it when the terminal width changes.
-    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
+    pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd),
+            core: StreamCore::new(width, cwd, render_mode),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -385,6 +413,10 @@ impl PlanStreamController {
         self.core.set_width(width);
     }
 
+    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
+        self.core.set_render_mode(render_mode);
+    }
+
     fn emit(
         &mut self,
         lines: Vec<Line<'static>>,
@@ -436,11 +468,11 @@ mod tests {
     }
 
     fn stream_controller(width: Option<usize>) -> StreamController {
-        StreamController::new(width, &test_cwd())
+        StreamController::new(width, &test_cwd(), HistoryRenderMode::Rich)
     }
 
     fn plan_stream_controller(width: Option<usize>) -> PlanStreamController {
-        PlanStreamController::new(width, &test_cwd())
+        PlanStreamController::new(width, &test_cwd(), HistoryRenderMode::Rich)
     }
 
     fn lines_to_plain_strings(lines: &[Line<'_>]) -> Vec<String> {

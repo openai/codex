@@ -59,6 +59,17 @@
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
 //! pasted content and text elements are preserved when extracting args.
 //!
+//! # Large Paste Placeholders
+//!
+//! Large pastes insert an element placeholder in the buffer and store the full text in
+//! `pending_pastes`. The placeholder label is derived from the pasted character count:
+//!
+//! - First paste of a given size uses `[Pasted Content N chars]`.
+//! - Additional pending pastes of the same size add a numeric suffix (`#2`, `#3`, ...), where the
+//!   next suffix is computed from the placeholders that still exist in `pending_pastes`.
+//! - When all placeholders for a size are cleared or deleted, the next paste of that size reuses
+//!   the base label without a suffix.
+//!
 //! # Remote Image Rows (Up/Down/Delete)
 //!
 //! Remote image URLs are rendered as non-editable `[Image #N]` rows above the textarea (inside the
@@ -338,7 +349,6 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
-    large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
     frame_requester: Option<FrameRequester>,
     /// Invariant: attached images are labeled in vec order as
@@ -536,7 +546,6 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
-            large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
             frame_requester: None,
             attached_images: Vec::new(),
@@ -1120,12 +1129,13 @@ impl ChatComposer {
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
-        let mut text = self.current_text();
-        for (placeholder, actual) in &self.pending_pastes {
-            if text.contains(placeholder) {
-                text = text.replace(placeholder, actual);
-            }
+        let text = self.current_text();
+        if self.pending_pastes.is_empty() {
+            return text;
         }
+
+        let (text, _) =
+            Self::expand_pending_pastes(&text, self.current_text_elements(), &self.pending_pastes);
         text
     }
 
@@ -1625,14 +1635,27 @@ impl ChatComposer {
             .is_some_and(|expires_at| Instant::now() < expires_at)
     }
 
-    fn next_large_paste_placeholder(&mut self, char_count: usize) -> String {
+    fn next_large_paste_placeholder(&self, char_count: usize) -> String {
         let base = format!("[Pasted Content {char_count} chars]");
-        let next_suffix = self.large_paste_counters.entry(char_count).or_insert(0);
-        *next_suffix += 1;
-        if *next_suffix == 1 {
+        let prefix = format!("{base} #");
+        let mut max_suffix = 0usize;
+
+        for (placeholder, _) in &self.pending_pastes {
+            if placeholder == &base {
+                max_suffix = max_suffix.max(1);
+                continue;
+            }
+            if let Some(suffix) = placeholder.strip_prefix(&prefix)
+                && let Ok(value) = suffix.parse::<usize>()
+            {
+                max_suffix = max_suffix.max(value);
+            }
+        }
+
+        if max_suffix == 0 {
             base
         } else {
-            format!("{base} #{next_suffix}")
+            format!("{base} #{}", max_suffix + 1)
         }
     }
 
@@ -2810,24 +2833,27 @@ impl ChatComposer {
         if !self.slash_commands_enabled() || self.is_bash_mode {
             return None;
         }
-        let first_line = self.textarea.text().lines().next().unwrap_or("");
-        if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
-            && rest.is_empty()
-            && let Some(cmd) =
-                slash_commands::find_builtin_command(name, self.builtin_command_flags())
-        {
-            if self.reject_slash_command_if_unavailable(cmd) {
-                self.stage_slash_command_history();
-                self.record_pending_slash_command_history();
-                return Some(InputResult::None);
-            }
-            self.stage_slash_command_history();
-            self.textarea.set_text_clearing_elements("");
-            self.is_bash_mode = false;
-            Some(InputResult::Command(cmd))
-        } else {
-            None
+        let text = self.textarea.text();
+        let first_line = text.lines().next().unwrap_or("");
+        let (name, rest, _rest_offset) = parse_slash_name(first_line)?;
+        if !rest.is_empty() {
+            return None;
         }
+        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
+        if cmd.supports_inline_args()
+            && parse_slash_name(text).is_some_and(|(_, full_rest, _)| !full_rest.is_empty())
+        {
+            return None;
+        }
+        if self.reject_slash_command_if_unavailable(cmd) {
+            self.stage_slash_command_history();
+            self.record_pending_slash_command_history();
+            return Some(InputResult::None);
+        }
+        self.stage_slash_command_history();
+        self.textarea.set_text_clearing_elements("");
+        self.is_bash_mode = false;
+        Some(InputResult::Command(cmd))
     }
 
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
@@ -5719,6 +5745,35 @@ mod tests {
     }
 
     #[test]
+    fn large_paste_numbering_reuses_after_ctrl_c_clear() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+
+        assert_eq!(composer.clear_for_ctrl_c(), Some(base.clone()));
+        assert!(composer.textarea.text().is_empty());
+        assert!(composer.pending_pastes.is_empty());
+
+        composer.handle_paste(paste);
+        assert_eq!(composer.textarea.text(), base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, base);
+    }
+
+    #[test]
     fn vim_mode_resets_to_normal_after_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -6258,6 +6313,7 @@ mod tests {
             policy: None,
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
+            plugin_id: None,
         }]));
 
         let ActivePopup::Skill(popup) = &composer.active_popup else {
@@ -6300,6 +6356,7 @@ mod tests {
             policy: None,
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_repo(),
+            plugin_id: None,
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
@@ -6391,6 +6448,7 @@ mod tests {
                     policy: None,
                     path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: crate::test_support::skill_scope_repo(),
+                    plugin_id: None,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),
@@ -8533,10 +8591,10 @@ mod tests {
         assert_eq!(composer.pending_pastes[0].1, paste);
     }
 
-    /// Behavior: large-paste placeholder numbering does not get reused after deletion, so a new
-    /// paste of the same length gets a new unique placeholder label.
+    /// Behavior: large-paste placeholder numbering continues when another placeholder of the
+    /// same length still exists, so a new paste gets a new unique placeholder label.
     #[test]
-    fn large_paste_numbering_does_not_reuse_after_deletion() {
+    fn large_paste_numbering_continues_with_same_length_placeholder() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -8573,6 +8631,42 @@ mod tests {
         assert_eq!(composer.pending_pastes.len(), 2);
         assert_eq!(composer.pending_pastes[0].0, second);
         assert_eq!(composer.pending_pastes[1].0, third);
+    }
+
+    /// Behavior: if all placeholders of a given length are removed, numbering resets to the
+    /// base placeholder on the next paste.
+    #[test]
+    fn large_paste_numbering_reuses_after_all_deleted() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(composer.textarea.text().is_empty());
+        assert!(composer.pending_pastes.is_empty());
+
+        composer.handle_paste(paste);
+        assert_eq!(composer.textarea.text(), base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, base);
     }
 
     #[test]
@@ -10129,6 +10223,33 @@ mod tests {
             composer.current_text_with_pending(),
             "hello".to_string(),
             "placeholder should expand to actual text"
+        );
+    }
+
+    #[test]
+    fn current_text_with_pending_expands_overlapping_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let first_paste = "a".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let second_paste = "b".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", first_paste.chars().count());
+        let second = format!("{base} #2");
+
+        composer.handle_paste(first_paste.clone());
+        composer.handle_paste(second_paste.clone());
+
+        assert_eq!(composer.current_text(), format!("{base}{second}"));
+        assert_eq!(
+            composer.current_text_with_pending(),
+            format!("{first_paste}{second_paste}")
         );
     }
 

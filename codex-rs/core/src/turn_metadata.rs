@@ -16,10 +16,18 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+const MODEL_KEY: &str = "model";
+const REASONING_EFFORT_KEY: &str = "reasoning_effort";
 const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
+
+pub(crate) struct McpTurnMetadataContext<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+}
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -248,9 +256,28 @@ impl TurnMetadataState {
         .or(Some(header))
     }
 
-    pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
-        self.current_header_value()
-            .and_then(|header| serde_json::from_str(&header).ok())
+    pub(crate) fn current_meta_value_for_mcp_request(
+        &self,
+        context: McpTurnMetadataContext<'_>,
+    ) -> Option<serde_json::Value> {
+        let header = self.current_header_value()?;
+        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
+        metadata.insert(
+            MODEL_KEY.to_string(),
+            Value::String(context.model.to_string()),
+        );
+        match context.reasoning_effort {
+            Some(reasoning_effort) => {
+                metadata.insert(
+                    REASONING_EFFORT_KEY.to_string(),
+                    Value::String(reasoning_effort.to_string()),
+                );
+            }
+            None => {
+                metadata.remove(REASONING_EFFORT_KEY);
+            }
+        }
+        Some(Value::Object(metadata))
     }
 
     pub(crate) fn set_responsesapi_client_metadata(

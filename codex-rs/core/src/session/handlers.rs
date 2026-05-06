@@ -52,7 +52,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::SkillsListEntry;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
@@ -763,21 +762,6 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     .await;
 }
 
-async fn persist_thread_name_update(
-    sess: &Arc<Session>,
-    event: ThreadNameUpdatedEvent,
-) -> anyhow::Result<EventMsg> {
-    let msg = EventMsg::ThreadNameUpdated(event);
-    let item = RolloutItem::EventMsg(msg.clone());
-    let live_thread = sess.live_thread_for_persistence("rename thread")?;
-    live_thread.persist().await?;
-    live_thread
-        .append_items(std::slice::from_ref(&item))
-        .await?;
-    live_thread.flush().await?;
-    Ok(msg)
-}
-
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,
@@ -790,65 +774,6 @@ pub(super) async fn persist_thread_memory_mode_update(
         .await?;
     live_thread.flush().await?;
     Ok(())
-}
-
-/// Persists the thread name in the rollout and state database, updates in-memory state, and
-/// emits a `ThreadNameUpdated` event on success.
-pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-    let Some(name) = crate::util::normalize_thread_name(&name) else {
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: "Thread name cannot be empty.".to_string(),
-                codex_error_info: Some(CodexErrorInfo::BadRequest),
-            }),
-        };
-        sess.send_event_raw(event).await;
-        return;
-    };
-
-    let updated = ThreadNameUpdatedEvent {
-        thread_id: sess.conversation_id,
-        thread_name: Some(name.clone()),
-    };
-
-    let msg = match persist_thread_name_update(sess, updated).await {
-        Ok(msg) => msg,
-        Err(err) => {
-            warn!("Failed to persist thread name update to rollout: {err}");
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: err.to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        }
-    };
-
-    if let Some(state_db) = sess.services.state_db.as_deref()
-        && let Err(err) = state_db
-            .update_thread_title(sess.conversation_id, &name)
-            .await
-    {
-        warn!("Failed to update thread title in state db: {err}");
-    }
-
-    {
-        let mut state = sess.state.lock().await;
-        state.session_configuration.thread_name = Some(name.clone());
-    }
-
-    let codex_home = sess.codex_home().await;
-    if let Err(err) =
-        crate::rollout::append_thread_name(&codex_home, sess.conversation_id, &name).await
-    {
-        warn!("Failed to update legacy thread name index: {err}");
-    }
-
-    sess.deliver_event_raw(Event { id: sub_id, msg }).await;
 }
 
 /// Persists thread-level memory mode metadata for the active session.
@@ -1117,10 +1042,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::ThreadRollback { num_turns } => {
                     thread_rollback(&sess, sub.id.clone(), num_turns).await;
-                    false
-                }
-                Op::SetThreadName { name } => {
-                    set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

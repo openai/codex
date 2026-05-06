@@ -674,6 +674,15 @@
         "tools_view_image": {
           "type": "boolean"
         },
+        "tui": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProfileTui"
+            }
+          ],
+          "default": null,
+          "description": "TUI settings scoped to this profile."
+        },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
         },
@@ -999,6 +1008,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "trusted_hash": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1873,6 +1885,22 @@
       },
       "type": "object"
     },
+    "ProfileTui": {
+      "additionalProperties": false,
+      "description": "TUI settings supported inside a named profile.",
+      "properties": {
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
+        }
+      },
+      "type": "object"
+    },
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2157,6 +2185,14 @@
       "enum": [
         "fast",
         "flex"
+      ],
+      "type": "string"
+    },
+    "SessionPickerViewMode": {
+      "description": "Preferred layout for the resume/fork session picker.",
+      "enum": [
+        "comfortable",
+        "dense"
       ],
       "type": "string"
     },
@@ -2460,6 +2496,7 @@
               "queue": null,
               "submit": null,
               "toggle_fast_mode": null,
+              "toggle_raw_output": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2557,6 +2594,20 @@
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "raw_output_mode": {
+          "default": false,
+          "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         },
         "show_tooltips": {
           "default": true,
@@ -2956,6 +3007,14 @@
           ],
           "description": "Toggle Fast mode."
         },
+        "toggle_raw_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3062,6 +3121,7 @@
             "queue": null,
             "submit": null,
             "toggle_fast_mode": null,
+            "toggle_raw_output": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -4294,7 +4354,7 @@
     },
     "notify": {
       "default": null,
-      "description": "Deprecated optional external command to spawn for end-user notifications.",
+      "description": "Optional external command to spawn for end-user notifications.",
       "items": {
         "type": "string"
       },

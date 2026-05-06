@@ -154,6 +154,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
             item: review_mode_item.clone(),
         }),
         /*replay_kind*/ None,
@@ -166,6 +167,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: review_mode_item,
         }),
         /*replay_kind*/ None,
@@ -176,6 +178,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: "review-prompt".to_string(),
                 content: vec![AppServerUserInput::Text {
@@ -1160,6 +1163,7 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
                 thread_id: "thread-1".to_string(),
                 turn: codex_app_server_protocol::Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: Vec::new(),
                     status: codex_app_server_protocol::TurnStatus::InProgress,
                     error: None,
@@ -1196,6 +1200,7 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
                 thread_id: "thread-1".to_string(),
                 turn: codex_app_server_protocol::Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: Vec::new(),
                     status: codex_app_server_protocol::TurnStatus::Interrupted,
                     error: None,

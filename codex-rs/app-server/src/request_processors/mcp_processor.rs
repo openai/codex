@@ -79,11 +79,7 @@ impl McpRequestProcessor {
     ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
         crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to refresh MCP servers: {err}"),
-                data: None,
-            })?;
+            .map_err(|err| internal_error(format!("failed to refresh MCP servers: {err}")))?;
         Ok(McpServerRefreshResponse {})
     }
 
@@ -94,32 +90,21 @@ impl McpRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn load_thread(
         &self,
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }

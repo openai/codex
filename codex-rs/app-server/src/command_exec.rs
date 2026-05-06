@@ -477,7 +477,7 @@ async fn run_command(params: RunCommandParams) {
     });
     let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
-        process_id,
+        process_id: process_id.clone(),
         output_rx: stderr_rx,
         stdio_timeout_rx,
         outgoing: Arc::clone(&outgoing),

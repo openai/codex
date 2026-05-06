@@ -1,6 +1,7 @@
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::plain_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
 use crate::token_usage::TokenUsage;
@@ -787,6 +788,10 @@ impl HistoryCell for StatusHistoryCell {
             .collect();
 
         with_border_with_inner_width(truncated_lines, inner_width)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(u16::MAX))
     }
 }
 

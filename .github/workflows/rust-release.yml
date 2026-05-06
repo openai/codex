@@ -96,7 +96,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -108,7 +108,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -254,6 +254,24 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8-musl
         with:
           target: ${{ matrix.target }}
+
+      - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+        name: Build bwrap and export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          cargo build --target "$target" --release --timings --bin bwrap
+
+          bwrap_path="target/${target}/release/bwrap"
+          if [[ ! -f "$bwrap_path" ]]; then
+            echo "bwrap binary ${bwrap_path} not found"
+            exit 1
+          fi
+
+          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+          echo "Built bwrap ${bwrap_path} with sha256:${digest}"
 
       - name: Cargo build
         shell: bash

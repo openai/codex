@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -6,21 +6,21 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::HookStateToml;
 use codex_config::TomlValue;
 
-/// Build hook enablement rules from config layers that are allowed to override
+/// Build effective hook state from config layers that are allowed to override
 /// user preferences.
 ///
 /// This intentionally reads only user and session flag layers, including
 /// disabled layers, to match the skills config behavior. Project, managed, and
-/// plugin layers can discover hooks, but they do not get to write user
-/// enablement state.
-pub(crate) fn disabled_hook_keys_from_stack(
+/// plugin layers can discover hooks, but they do not get to write user hook
+/// state.
+pub(crate) fn hook_states_from_stack(
     config_layer_stack: Option<&ConfigLayerStack>,
-) -> HashSet<String> {
+) -> HashMap<String, HookStateToml> {
     let Some(config_layer_stack) = config_layer_stack else {
-        return HashSet::new();
+        return HashMap::new();
     };
 
-    let mut disabled_keys = HashSet::new();
+    let mut states: HashMap<String, HookStateToml> = HashMap::new();
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ true,
@@ -54,21 +54,19 @@ pub(crate) fn disabled_hook_keys_from_stack(
             if key.is_empty() {
                 continue;
             }
-            // Later layers win. Hooks without an explicit enabled override can
-            // still carry future per-hook state without changing enablement.
-            match state.enabled {
-                Some(false) => {
-                    disabled_keys.insert(key.to_string());
-                }
-                Some(true) => {
-                    disabled_keys.remove(key);
-                }
-                None => {}
+            // Later layers win field-by-field so a future per-hook state write
+            // does not accidentally erase an existing enablement override.
+            let effective_state = states.entry(key.to_string()).or_default();
+            if let Some(enabled) = state.enabled {
+                effective_state.enabled = Some(enabled);
+            }
+            if let Some(trusted_hash) = state.trusted_hash {
+                effective_state.trusted_hash = Some(trusted_hash);
             }
         }
     }
 
-    disabled_keys
+    states
 }
 
 #[cfg(test)]
@@ -82,7 +80,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_hook_keys_from_stack_respects_layer_precedence() {
+    fn hook_states_from_stack_respects_layer_precedence() {
         let key = "file:/tmp/hooks.json:pre_tool_use:0:0";
         let stack = ConfigLayerStack::new(
             vec![
@@ -102,11 +100,65 @@ mod tests {
         )
         .expect("config layer stack");
 
-        assert_eq!(disabled_hook_keys_from_stack(Some(&stack)), HashSet::new());
+        assert_eq!(
+            hook_states_from_stack(Some(&stack)),
+            HashMap::from([(
+                key.to_string(),
+                HookStateToml {
+                    enabled: Some(true),
+                    trusted_hash: None,
+                },
+            )])
+        );
     }
 
     #[test]
-    fn disabled_hook_keys_from_stack_ignores_malformed_hook_events() {
+    fn hook_states_from_stack_merges_fields_across_layers() {
+        let key = "file:/tmp/hooks.json:pre_tool_use:0:0";
+        let stack = ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: test_path_buf("/tmp/config.toml").abs(),
+                    },
+                    config_with_hook_state(
+                        key,
+                        HookStateToml {
+                            enabled: Some(/*enabled*/ false),
+                            trusted_hash: None,
+                        },
+                    ),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    config_with_hook_state(
+                        key,
+                        HookStateToml {
+                            enabled: None,
+                            trusted_hash: Some("sha256:trusted".to_string()),
+                        },
+                    ),
+                ),
+            ],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("config layer stack");
+
+        assert_eq!(
+            hook_states_from_stack(Some(&stack)),
+            HashMap::from([(
+                key.to_string(),
+                HookStateToml {
+                    enabled: Some(false),
+                    trusted_hash: Some("sha256:trusted".to_string()),
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn hook_states_from_stack_ignores_malformed_hook_events() {
         let key = "file:/tmp/hooks.json:pre_tool_use:0:0";
         let config: TomlValue = serde_json::from_value(serde_json::json!({
             "hooks": {
@@ -132,13 +184,19 @@ mod tests {
         .expect("config layer stack");
 
         assert_eq!(
-            disabled_hook_keys_from_stack(Some(&stack)),
-            HashSet::from([key.to_string()])
+            hook_states_from_stack(Some(&stack)),
+            HashMap::from([(
+                key.to_string(),
+                HookStateToml {
+                    enabled: Some(false),
+                    trusted_hash: None,
+                },
+            )])
         );
     }
 
     #[test]
-    fn disabled_hook_keys_from_stack_ignores_malformed_state_entries() {
+    fn hook_states_from_stack_ignores_malformed_state_entries() {
         let key = "file:/tmp/hooks.json:pre_tool_use:0:0";
         let config: TomlValue = serde_json::from_value(serde_json::json!({
             "hooks": {
@@ -166,16 +224,29 @@ mod tests {
         .expect("config layer stack");
 
         assert_eq!(
-            disabled_hook_keys_from_stack(Some(&stack)),
-            HashSet::from([key.to_string()])
+            hook_states_from_stack(Some(&stack)),
+            HashMap::from([(
+                key.to_string(),
+                HookStateToml {
+                    enabled: Some(false),
+                    trusted_hash: None,
+                },
+            )])
         );
     }
 
     fn config_with_hook_override(key: &str, enabled: Option<bool>) -> TomlValue {
-        let hook_state = match enabled {
-            Some(enabled) => serde_json::json!({ "enabled": enabled }),
-            None => serde_json::json!({}),
-        };
+        config_with_hook_state(
+            key,
+            HookStateToml {
+                enabled,
+                trusted_hash: None,
+            },
+        )
+    }
+
+    fn config_with_hook_state(key: &str, state: HookStateToml) -> TomlValue {
+        let hook_state = serde_json::to_value(state).expect("hook state should serialize");
         serde_json::from_value(serde_json::json!({
             "hooks": {
                 "state": {

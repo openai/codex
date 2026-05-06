@@ -108,7 +108,9 @@ mod tests {
     use codex_config::ThreadConfigLoadErrorCode;
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_core::agent_graph_store_from_state_db;
     use codex_core::config::ConfigOverrides;
+    use codex_core::init_state_db_from_config;
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_login::AuthManager;
@@ -173,14 +175,20 @@ mod tests {
             .await?;
 
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+        let state_db = init_state_db_from_config(&good_config)
+            .await
+            .expect("refresh tests require state db");
+        let thread_store = thread_store_from_config(&good_config, state_db.clone());
+        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             &good_config,
             auth_manager,
             SessionSource::Exec,
             Arc::new(EnvironmentManager::default_for_tests()),
             /*analytics_events_client*/ None,
-            thread_store_from_config(&good_config, /*state_db*/ None),
-            /*state_db*/ None,
+            state_db,
+            thread_store,
+            agent_graph_store,
         ));
         thread_manager.start_thread(good_config).await?;
         thread_manager.start_thread(bad_config).await?;
