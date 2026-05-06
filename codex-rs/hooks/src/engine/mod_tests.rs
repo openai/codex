@@ -62,6 +62,7 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
             matcher: Some("^Bash$".to_string()),
             hooks: vec![HookHandlerConfig::Command {
                 command: command.into(),
+                command_windows: None,
                 timeout_sec: Some(10),
                 r#async: false,
                 status_message: Some("checking".to_string()),
@@ -715,9 +716,15 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     );
 
     assert!(engine.warnings().is_empty());
-    assert_eq!(engine.handlers.len(), 1);
-    assert!(!engine.handlers[0].source.is_managed());
-    assert_eq!(engine.handlers[0].command, "python3 /tmp/user-hook.py");
+    assert!(engine.handlers.is_empty());
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    assert_eq!(discovered.hook_entries.len(), 1);
+    assert!(!discovered.hook_entries[0].is_managed);
+    assert_eq!(
+        discovered.hook_entries[0].command.as_deref(),
+        Some("python3 /tmp/user-hook.py")
+    );
 }
 
 #[test]
@@ -755,9 +762,15 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     );
 
     assert!(engine.warnings().is_empty());
-    assert_eq!(engine.handlers.len(), 1);
-    assert!(!engine.handlers[0].source.is_managed());
-    assert_eq!(engine.handlers[0].command, "python3 /tmp/user-hook.py");
+    assert!(engine.handlers.is_empty());
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    assert_eq!(discovered.hook_entries.len(), 1);
+    assert!(!discovered.hook_entries[0].is_managed);
+    assert_eq!(
+        discovered.hook_entries[0].command.as_deref(),
+        Some("python3 /tmp/user-hook.py")
+    );
 }
 
 #[test]
@@ -827,7 +840,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         plugin_id,
         plugin_root,
         plugin_data_root,
-        source_path: source_path,
+        source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: pre_tool_use_hook_events("python3 /tmp/plugin-hook.py"),
     }];
@@ -934,12 +947,9 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             "python3 /tmp/legacy-mdm-hook.py",
         ]
     );
-    assert!(
-        engine
-            .handlers
-            .iter()
-            .all(|handler| handler.source.is_managed())
-    );
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    assert!(discovered.hook_entries.iter().all(|entry| entry.is_managed));
 }
 
 #[test]
