@@ -190,6 +190,7 @@ pub(crate) struct TurnMetadataState {
 }
 
 impl TurnMetadataState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
         thread_id: String,
