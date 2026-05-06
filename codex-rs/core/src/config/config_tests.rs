@@ -2895,7 +2895,7 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
-async fn to_mcp_config_empty_mcp_requirements_disable_builtin_mcps() -> anyhow::Result<()> {
+async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let requirements = codex_config::ConfigRequirementsToml {
         mcp_servers: Some(BTreeMap::new()),
@@ -2919,12 +2919,45 @@ async fn to_mcp_config_empty_mcp_requirements_disable_builtin_mcps() -> anyhow::
             .configured_mcp_servers
             .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
             .map(|server| (server.enabled, server.disabled_reason.clone())),
-        Some((
-            false,
-            Some(McpServerDisabledReason::Requirements {
-                source: RequirementSource::CloudRequirements,
-            })
-        ))
+        Some((true, None))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = codex_config::ConfigRequirementsToml {
+        mcp_servers: Some(BTreeMap::from([(
+            "docs".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "docs-mcp".to_string(),
+                },
+            },
+        )])),
+        ..Default::default()
+    };
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
+    let _ = config.features.enable(Feature::MemoryTool);
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((true, None))
     );
 
     Ok(())
