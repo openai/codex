@@ -500,7 +500,7 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
 
     match read_process_start_time(record.pid).await {
         Ok(start_time) => Ok(start_time == record.process_start_time),
-        Err(err) if !process_exists(record.pid) => Ok(false),
+        Err(_err) if !process_exists(record.pid) => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -660,7 +660,11 @@ mod tests {
         tokio::fs::write(&pid_file, "")
             .await
             .expect("write pid file");
-        let backend = PidBackend::new(temp_dir.path().join("codex"), pid_file.clone(), false);
+        let backend = PidBackend::new(
+            temp_dir.path().join("codex"),
+            pid_file.clone(),
+            /*remote_control_enabled*/ false,
+        );
         let reservation = tokio::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -684,7 +688,11 @@ mod tests {
         tokio::fs::write(&pid_file, "")
             .await
             .expect("write pid file");
-        let backend = PidBackend::new(temp_dir.path().join("codex"), pid_file.clone(), false);
+        let backend = PidBackend::new(
+            temp_dir.path().join("codex"),
+            pid_file.clone(),
+            /*remote_control_enabled*/ false,
+        );
 
         assert_eq!(
             backend.read_pid_file_state().await.expect("read pid"),
@@ -700,7 +708,11 @@ mod tests {
         tokio::fs::write(&pid_file, "")
             .await
             .expect("write pid file");
-        let backend = PidBackend::new(temp_dir.path().join("codex"), pid_file.clone(), false);
+        let backend = PidBackend::new(
+            temp_dir.path().join("codex"),
+            pid_file.clone(),
+            /*remote_control_enabled*/ false,
+        );
         let reservation = tokio::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -728,7 +740,11 @@ mod tests {
         tokio::fs::write(&pid_file, "")
             .await
             .expect("write pid file");
-        let backend = PidBackend::new(temp_dir.path().join("missing-codex"), pid_file, false);
+        let backend = PidBackend::new(
+            temp_dir.path().join("missing-codex"),
+            pid_file,
+            /*remote_control_enabled*/ false,
+        );
 
         let err = backend.start().await.expect_err("start");
         assert!(
@@ -741,7 +757,11 @@ mod tests {
     async fn stale_record_cleanup_preserves_replacement_record() {
         let temp_dir = TempDir::new().expect("temp dir");
         let pid_file = temp_dir.path().join("app-server.pid");
-        let backend = PidBackend::new(temp_dir.path().join("codex"), pid_file.clone(), false);
+        let backend = PidBackend::new(
+            temp_dir.path().join("codex"),
+            pid_file.clone(),
+            /*remote_control_enabled*/ false,
+        );
         let stale = PidRecord {
             pid: 1,
             process_start_time: "old".to_string(),

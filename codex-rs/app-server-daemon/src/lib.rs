@@ -163,7 +163,7 @@ impl Daemon {
             return Ok(self.output(
                 LifecycleStatus::AlreadyRunning,
                 self.running_backend(&settings).await?,
-                None,
+                /*pid*/ None,
                 Some(info.app_server_version),
             ));
         }
@@ -173,7 +173,7 @@ impl Daemon {
             return Ok(self.output(
                 LifecycleStatus::AlreadyRunning,
                 Some(BackendKind::Pid),
-                None,
+                /*pid*/ None,
                 Some(info.app_server_version),
             ));
         }
@@ -237,7 +237,12 @@ impl Daemon {
         let settings = self.load_settings().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
-            return Ok(self.output(LifecycleStatus::Stopped, Some(BackendKind::Pid), None, None));
+            return Ok(self.output(
+                LifecycleStatus::Stopped,
+                Some(BackendKind::Pid),
+                /*pid*/ None,
+                /*app_server_version*/ None,
+            ));
         }
 
         if client::probe(&self.socket_path).await.is_ok() {
@@ -246,7 +251,12 @@ impl Daemon {
             ));
         }
 
-        Ok(self.output(LifecycleStatus::NotRunning, None, None, None))
+        Ok(self.output(
+            LifecycleStatus::NotRunning,
+            /*backend*/ None,
+            /*pid*/ None,
+            /*app_server_version*/ None,
+        ))
     }
 
     async fn version(&self) -> Result<LifecycleOutput> {
@@ -255,7 +265,7 @@ impl Daemon {
         Ok(self.output(
             LifecycleStatus::Running,
             self.running_backend(&settings).await?,
-            None,
+            /*pid*/ None,
             Some(info.app_server_version),
         ))
     }
