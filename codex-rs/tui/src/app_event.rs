@@ -157,6 +157,7 @@ pub(crate) enum AppEvent {
 
     /// Fetch a persistent cross-session message history entry by offset.
     LookupMessageHistoryEntry {
+        thread_id: ThreadId,
         offset: usize,
         log_id: u64,
     },

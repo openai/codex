@@ -437,18 +437,13 @@ impl App {
         });
     }
 
-    /// Fetch one local cross-session message history entry for the active thread.
+    /// Fetch one local cross-session message history entry for the requesting thread.
     pub(super) async fn lookup_message_history_entry(
         &mut self,
+        thread_id: ThreadId,
         offset: usize,
         log_id: u64,
     ) -> Result<()> {
-        let Some(thread_id) = self.active_thread_id else {
-            self.chat_widget
-                .add_error_message("No active thread is available.".to_string());
-            return Ok(());
-        };
-
         let history_config = codex_message_history::HistoryConfig::new(
             self.chat_widget.config_ref().codex_home.clone(),
             &self.chat_widget.config_ref().history,

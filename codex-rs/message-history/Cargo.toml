@@ -15,7 +15,7 @@ workspace = true
 codex-config = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["fs", "rt"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 tracing = { workspace = true, features = ["log"] }
 
 [dev-dependencies]

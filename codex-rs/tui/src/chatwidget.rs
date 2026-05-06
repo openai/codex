@@ -2044,8 +2044,11 @@ impl ChatWidget {
         self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = false;
         let history_metadata = session.message_history.unwrap_or_default();
-        self.bottom_pane
-            .set_history_metadata(history_metadata.log_id, history_metadata.entry_count);
+        self.bottom_pane.set_history_metadata(
+            session.thread_id,
+            history_metadata.log_id,
+            history_metadata.entry_count,
+        );
         self.set_skills(/*skills*/ None);
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
