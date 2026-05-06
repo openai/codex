@@ -13233,10 +13233,7 @@
         },
         "sessionId": {
           "description": "Session id shared by threads that belong to the same session tree.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "source": {
           "allOf": [
@@ -13286,6 +13283,7 @@
         "id",
         "modelProvider",
         "preview",
+        "sessionId",
         "source",
         "status",
         "turns",

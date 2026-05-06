@@ -3441,6 +3441,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     let response = json!({
         "thread": {
             "id": "thread-id",
+            "sessionId": "thread-id",
             "forkedFromId": null,
             "preview": "",
             "ephemeral": false,
@@ -3483,9 +3484,6 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
     assert_eq!(fork.active_permission_profile, None);
-    assert_eq!(start.thread.session_id, None);
-    assert_eq!(resume.thread.session_id, None);
-    assert_eq!(fork.thread.session_id, None);
 }
 
 #[test]

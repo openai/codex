@@ -933,8 +933,12 @@ impl TurnRequestProcessor {
             .await
         {
             Ok(stored_thread) => {
-                let (mut thread, _) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                let (mut thread, _) = thread_from_stored_thread(
+                    stored_thread,
+                    review_thread.session_configured().session_id.to_string(),
+                    fallback_provider,
+                    &self.config.cwd,
+                );
                 self.thread_watch_manager
                     .upsert_thread_silently(thread.clone())
                     .await;

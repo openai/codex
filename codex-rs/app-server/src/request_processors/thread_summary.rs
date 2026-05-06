@@ -231,6 +231,7 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
 
 pub(crate) fn summary_to_thread(
     summary: ConversationSummary,
+    session_id: String,
     fallback_cwd: &AbsolutePathBuf,
 ) -> Thread {
     let ConversationSummary {
@@ -265,7 +266,7 @@ pub(crate) fn summary_to_thread(
 
     Thread {
         id: conversation_id.to_string(),
-        session_id: None,
+        session_id,
         forked_from_id: None,
         preview,
         ephemeral: false,

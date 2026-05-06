@@ -12,7 +12,7 @@ export type Thread = { id: string,
 /**
  * Session id shared by threads that belong to the same session tree.
  */
-sessionId: string | null,
+sessionId: string,
 /**
  * Source thread id when this thread was created by forking another thread.
  */

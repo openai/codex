@@ -1190,6 +1190,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 let response = match thread_rollback_response_from_stored_thread(
                     stored_thread,
+                    conversation.session_configured().session_id.to_string(),
                     fallback_model_provider.as_str(),
                     &fallback_cwd,
                     loaded_status,
@@ -1543,13 +1544,18 @@ async fn handle_thread_rollback_failed(
 
 fn thread_rollback_response_from_stored_thread(
     stored_thread: codex_thread_store::StoredThread,
+    session_id: String,
     fallback_model_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
     loaded_status: ThreadStatus,
 ) -> std::result::Result<ThreadRollbackResponse, String> {
     let thread_id = stored_thread.thread_id;
-    let (mut thread, history) =
-        thread_from_stored_thread(stored_thread, fallback_model_provider, fallback_cwd);
+    let (mut thread, history) = thread_from_stored_thread(
+        stored_thread,
+        session_id,
+        fallback_model_provider,
+        fallback_cwd,
+    );
     let Some(history) = history else {
         return Err(format!(
             "thread {thread_id} did not include persisted history after rollback"
@@ -2200,6 +2206,7 @@ mod tests {
 
         let response = thread_rollback_response_from_stored_thread(
             stored_thread,
+            thread_id.to_string(),
             "fallback-provider",
             &fallback_cwd,
             ThreadStatus::NotLoaded,

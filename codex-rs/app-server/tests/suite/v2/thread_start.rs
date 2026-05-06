@@ -126,7 +126,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
     assert!(
-        thread.session_id.as_ref().is_some_and(|id| !id.is_empty()),
+        !thread.session_id.is_empty(),
         "session id should not be empty"
     );
     assert!(!thread.id.is_empty(), "thread id should not be empty");
@@ -159,7 +159,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         .expect("thread/start result.thread must be an object");
     assert_eq!(
         thread_json.get("sessionId").and_then(Value::as_str),
-        thread.session_id.as_deref(),
+        Some(thread.session_id.as_str()),
         "new threads should serialize `sessionId` on the thread object"
     );
     assert_eq!(

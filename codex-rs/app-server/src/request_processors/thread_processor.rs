@@ -1096,7 +1096,7 @@ impl ThreadRequestProcessor {
             .await;
         let mut thread = build_thread_from_snapshot(
             thread_id,
-            Some(session_configured.session_id.to_string()),
+            session_configured.session_id.to_string(),
             &config_snapshot,
             session_configured.rollout_path.clone(),
         );
@@ -1529,9 +1529,9 @@ impl ThreadRequestProcessor {
             ..Default::default()
         };
 
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let updated_thread = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-            let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
             if let Some(loaded_thread) = loaded_thread.as_ref() {
                 if loaded_thread.config_snapshot().await.ephemeral {
                     return Err(invalid_request(format!(
@@ -1552,9 +1552,15 @@ impl ThreadRequestProcessor {
             }
             .map_err(|err| thread_store_write_error("update thread metadata", err))?
         };
+        let session_id = if let Some(loaded_thread) = loaded_thread.as_ref() {
+            loaded_thread.session_configured().session_id.to_string()
+        } else {
+            self.stored_thread_session_id(&updated_thread).await
+        };
 
         let (mut thread, _) = thread_from_stored_thread(
             updated_thread,
+            session_id,
             self.config.model_provider_id.as_str(),
             &self.config.cwd,
         );
@@ -1603,18 +1609,17 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let fallback_provider = self.config.model_provider_id.clone();
-        let mut thread = self
+        let stored_thread = self
             .thread_store
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
-            .map_err(|err| thread_store_archive_error("unarchive", err))
-            .and_then(|stored_thread| {
-                summary_from_stored_thread(stored_thread, fallback_provider.as_str())
-                    .map(|summary| summary_to_thread(summary, &self.config.cwd))
-                    .ok_or_else(|| {
-                        internal_error(format!("failed to read unarchived thread {thread_id}"))
-                    })
+            .map_err(|err| thread_store_archive_error("unarchive", err))?;
+        let session_id = self.stored_thread_session_id(&stored_thread).await;
+        let summary = summary_from_stored_thread(stored_thread, fallback_provider.as_str())
+            .ok_or_else(|| {
+                internal_error(format!("failed to read unarchived thread {thread_id}"))
             })?;
+        let mut thread = summary_to_thread(summary, session_id, &self.config.cwd);
 
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -1810,8 +1815,10 @@ impl ThreadRequestProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
 
         for stored_thread in stored_threads {
+            let session_id = self.stored_thread_session_id(&stored_thread).await;
             let (thread, _) = thread_from_stored_thread(
                 stored_thread,
+                session_id,
                 fallback_provider.as_str(),
                 &self.config.cwd,
             );
@@ -1996,8 +2003,13 @@ impl ThreadRequestProcessor {
             .await
         {
             Ok(stored_thread) => {
-                let (mut thread, history) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                let session_id = self.stored_thread_session_id(&stored_thread).await;
+                let (mut thread, history) = thread_from_stored_thread(
+                    stored_thread,
+                    session_id,
+                    fallback_provider,
+                    &self.config.cwd,
+                );
                 if include_turns && let Some(history) = history {
                     thread.turns = build_api_turns_from_rollout_items(&history.items);
                 }
@@ -2040,7 +2052,7 @@ impl ThreadRequestProcessor {
             if thread.path.is_none() {
                 thread.path = fallback_thread.path.clone();
             }
-            thread.session_id = fallback_thread.session_id.clone();
+            thread.session_id.clone_from(&fallback_thread.session_id);
             thread.ephemeral = fallback_thread.ephemeral;
             thread
         } else {
@@ -2226,7 +2238,7 @@ impl ThreadRequestProcessor {
             let config_snapshot = thread.config_snapshot().await;
             let loaded_thread = build_thread_from_snapshot(
                 thread_id,
-                Some(thread.session_configured().session_id.to_string()),
+                thread.session_configured().session_id.to_string(),
                 &config_snapshot,
                 thread.rollout_path(),
             );
@@ -2657,6 +2669,7 @@ impl ThreadRequestProcessor {
             summary_source_thread.history = None;
             let thread_summary = self.stored_thread_to_api_thread(
                 summary_source_thread,
+                existing_thread.session_configured().session_id.to_string(),
                 config_snapshot.model_provider_id.as_str(),
                 /*include_turns*/ false,
             );
@@ -2788,11 +2801,16 @@ impl ThreadRequestProcessor {
     fn stored_thread_to_api_thread(
         &self,
         stored_thread: StoredThread,
+        session_id: String,
         fallback_provider: &str,
         include_turns: bool,
     ) -> Thread {
-        let (mut thread, history) =
-            thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+        let (mut thread, history) = thread_from_stored_thread(
+            stored_thread,
+            session_id,
+            fallback_provider,
+            &self.config.cwd,
+        );
         if include_turns && let Some(history) = history {
             populate_thread_turns_from_history(
                 &mut thread,
@@ -2816,6 +2834,44 @@ impl ThreadRequestProcessor {
             })
             .await
             .map_err(thread_store_resume_read_error)
+    }
+
+    async fn stored_thread_session_id(&self, stored_thread: &StoredThread) -> String {
+        let mut current_thread = stored_thread.clone();
+        let mut visited = HashSet::new();
+
+        loop {
+            let Some(parent_thread_id) = thread_spawn_parent_thread_id(&current_thread.source)
+            else {
+                return current_thread.thread_id.to_string();
+            };
+            if !visited.insert(parent_thread_id) {
+                warn!(
+                    "detected thread spawn ancestry cycle while resolving session id for thread {}",
+                    stored_thread.thread_id
+                );
+                return parent_thread_id.to_string();
+            }
+
+            match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: parent_thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(parent_thread) => current_thread = parent_thread,
+                Err(err) => {
+                    warn!(
+                        "failed to read parent thread {parent_thread_id} while resolving session id for thread {}: {err}",
+                        stored_thread.thread_id
+                    );
+                    return parent_thread_id.to_string();
+                }
+            }
+        }
     }
 
     async fn load_thread_from_resume_source_or_send_internal(
@@ -2861,6 +2917,7 @@ impl ThreadRequestProcessor {
                         };
                     Ok(thread_from_stored_thread(
                         stored_thread,
+                        session_id.clone(),
                         fallback_provider,
                         &self.config.cwd,
                     )
@@ -2877,6 +2934,7 @@ impl ThreadRequestProcessor {
                     {
                         Ok(stored_thread) => Ok(thread_from_stored_thread(
                             stored_thread,
+                            session_id.clone(),
                             fallback_provider,
                             &self.config.cwd,
                         )
@@ -2890,7 +2948,7 @@ impl ThreadRequestProcessor {
             InitialHistory::Forked(items) => {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
-                    Some(session_id.clone()),
+                    session_id.clone(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
@@ -2903,7 +2961,7 @@ impl ThreadRequestProcessor {
         };
         let mut thread = thread?;
         thread.id = thread_id.to_string();
-        thread.session_id = Some(session_id);
+        thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
             let history_items = thread_history.get_rollout_items();
@@ -3079,6 +3137,7 @@ impl ThreadRequestProcessor {
                 .await?;
             self.stored_thread_to_api_thread(
                 stored_thread,
+                session_configured.session_id.to_string(),
                 fallback_model_provider.as_str(),
                 include_turns,
             )
@@ -3087,7 +3146,7 @@ impl ThreadRequestProcessor {
             // forked thread names do not inherit the source thread name
             let mut thread = build_thread_from_snapshot(
                 thread_id,
-                Some(session_configured.session_id.to_string()),
+                session_configured.session_id.to_string(),
                 &config_snapshot,
                 /*path*/ None,
             );
@@ -3102,7 +3161,7 @@ impl ThreadRequestProcessor {
             }
             thread
         };
-        thread.session_id = Some(session_configured.session_id.to_string());
+        thread.session_id = session_configured.session_id.to_string();
         thread.thread_source = forked_thread
             .config_snapshot()
             .await
@@ -3669,6 +3728,7 @@ fn set_thread_name_from_title(thread: &mut Thread, title: String) {
 
 pub(crate) fn thread_from_stored_thread(
     thread: StoredThread,
+    session_id: String,
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
 ) -> (Thread, Option<codex_thread_store::StoredThreadHistory>) {
@@ -3693,7 +3753,7 @@ pub(crate) fn thread_from_stored_thread(
     let history = thread.history;
     let thread = Thread {
         id: thread.thread_id.to_string(),
-        session_id: None,
+        session_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
         preview: thread.first_user_message.unwrap_or(thread.preview),
         ephemeral: false,
@@ -3717,6 +3777,19 @@ pub(crate) fn thread_from_stored_thread(
         turns: Vec::new(),
     };
     (thread, history)
+}
+
+fn thread_spawn_parent_thread_id(
+    source: &codex_protocol::protocol::SessionSource,
+) -> Option<ThreadId> {
+    match source {
+        codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            },
+        ) => Some(*parent_thread_id),
+        _ => None,
+    }
 }
 
 fn summary_from_stored_thread(
@@ -3890,7 +3963,7 @@ fn permission_profile_trusts_project(
 
 fn build_thread_from_snapshot(
     thread_id: ThreadId,
-    session_id: Option<String>,
+    session_id: String,
     config_snapshot: &ThreadConfigSnapshot,
     path: Option<PathBuf>,
 ) -> Thread {
@@ -3925,7 +3998,7 @@ fn build_thread_from_loaded_snapshot(
 ) -> Thread {
     build_thread_from_snapshot(
         thread_id,
-        Some(loaded_thread.session_configured().session_id.to_string()),
+        loaded_thread.session_configured().session_id.to_string(),
         config_snapshot,
         loaded_thread.rollout_path(),
     )

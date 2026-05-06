@@ -110,7 +110,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         .expect("thread/fork result.thread must be an object");
     assert_eq!(
         thread_json.get("sessionId").and_then(Value::as_str),
-        thread.session_id.as_deref(),
+        Some(thread.session_id.as_str()),
         "forked threads should serialize `sessionId` on the thread object"
     );
     assert_eq!(
@@ -131,7 +131,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
 
     assert_ne!(thread.id, conversation_id);
-    assert_eq!(thread.session_id, Some(thread.id.clone()));
+    assert_eq!(thread.session_id, thread.id);
     assert_eq!(thread.forked_from_id, Some(conversation_id.clone()));
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
