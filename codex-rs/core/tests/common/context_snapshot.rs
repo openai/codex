@@ -1,5 +1,7 @@
 use regex_lite::Regex;
 use serde_json::Value;
+use similar::ChangeTag;
+use similar::TextDiff;
 use std::sync::OnceLock;
 
 use crate::responses::ResponsesRequest;
@@ -298,9 +300,7 @@ fn format_snapshot_json_string(text: &str, options: &ContextSnapshotOptions) -> 
         | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => normalize_snapshot_uuids(
             &normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)),
         ),
-        ContextSnapshotRenderMode::FullText => {
-            normalize_snapshot_uuids(&normalize_snapshot_line_endings(text))
-        }
+        ContextSnapshotRenderMode::FullText => normalize_snapshot_line_endings(text),
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     };
     match options.render_mode {
@@ -323,75 +323,21 @@ fn format_changed_lines_diff(
     after_title: &str,
     after: &str,
 ) -> String {
-    let before_lines = before.lines().collect::<Vec<&str>>();
-    let after_lines = after.lines().collect::<Vec<&str>>();
     let mut diff = format!("--- {before_title}\n+++ {after_title}\n");
-    for line in diff_lines(before_lines.as_slice(), after_lines.as_slice()) {
-        match line {
-            DiffLine::Equal => {}
-            DiffLine::Remove(text) => {
+    for change in TextDiff::from_lines(before, after).iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Equal => {}
+            ChangeTag::Delete => {
                 diff.push('-');
-                diff.push_str(text);
-                diff.push('\n');
+                diff.push_str(change.value());
             }
-            DiffLine::Add(text) => {
+            ChangeTag::Insert => {
                 diff.push('+');
-                diff.push_str(text);
-                diff.push('\n');
+                diff.push_str(change.value());
             }
         }
     }
     diff
-}
-
-enum DiffLine<'a> {
-    Equal,
-    Remove(&'a str),
-    Add(&'a str),
-}
-
-fn diff_lines<'a>(before: &[&'a str], after: &[&'a str]) -> Vec<DiffLine<'a>> {
-    let after_len = after.len();
-    let mut lengths = vec![0usize; (before.len() + 1) * (after_len + 1)];
-    for before_index in (0..before.len()).rev() {
-        for after_index in (0..after.len()).rev() {
-            let offset = before_index * (after_len + 1) + after_index;
-            lengths[offset] = if before[before_index] == after[after_index] {
-                lengths[(before_index + 1) * (after_len + 1) + after_index + 1] + 1
-            } else {
-                lengths[(before_index + 1) * (after_len + 1) + after_index]
-                    .max(lengths[before_index * (after_len + 1) + after_index + 1])
-            };
-        }
-    }
-
-    let mut lines = Vec::new();
-    let mut before_index = 0usize;
-    let mut after_index = 0usize;
-    while before_index < before.len() && after_index < after.len() {
-        if before[before_index] == after[after_index] {
-            lines.push(DiffLine::Equal);
-            before_index += 1;
-            after_index += 1;
-        } else if lengths[(before_index + 1) * (after_len + 1) + after_index]
-            >= lengths[before_index * (after_len + 1) + after_index + 1]
-        {
-            lines.push(DiffLine::Remove(before[before_index]));
-            before_index += 1;
-        } else {
-            lines.push(DiffLine::Add(after[after_index]));
-            after_index += 1;
-        }
-    }
-    while before_index < before.len() {
-        lines.push(DiffLine::Remove(before[before_index]));
-        before_index += 1;
-    }
-    while after_index < after.len() {
-        lines.push(DiffLine::Add(after[after_index]));
-        after_index += 1;
-    }
-    lines
 }
 
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
