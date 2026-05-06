@@ -105,15 +105,16 @@ codex app-server stop
 codex app-server version
 ```
 
-These commands print one JSON object to stdout. They launch app-server as a
-pidfile-backed detached process on the default Unix control socket and wait until
-the JSON-RPC initialize handshake succeeds before reporting success. `version`
-connects through that same control socket and reports both the local CLI version
-and the version reported by the running app-server. The daemon lifecycle
-commands are currently supported on Unix platforms only.
+On success, these commands print one JSON object to stdout. `start` and
+`restart` launch app-server as a pidfile-backed detached process on the default
+Unix control socket and wait until the JSON-RPC initialize handshake succeeds
+before reporting success. `stop` terminates a managed app-server, while
+`version` connects through that same control socket and reports both the local
+CLI version and the version reported by the running app-server. The daemon
+lifecycle commands are currently supported on Unix platforms only.
 
 For a fresh remote machine, first install the standalone CLI, then bootstrap the
-durable app-server service:
+managed app-server process:
 
 ```sh
 curl -fsSL https://chatgpt.com/codex/install.sh | sh

@@ -87,15 +87,30 @@ pub struct BootstrapOutput {
 }
 
 pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
+    ensure_supported_platform()?;
     Daemon::from_environment()?.run(command).await
 }
 
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
+    ensure_supported_platform()?;
     Daemon::from_environment()?.bootstrap(options).await
 }
 
 pub async fn run_pid_update_loop() -> Result<()> {
+    ensure_supported_platform()?;
     update_loop::run().await
+}
+
+#[cfg(unix)]
+fn ensure_supported_platform() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_supported_platform() -> Result<()> {
+    Err(anyhow!(
+        "codex app-server daemon lifecycle is only supported on Unix platforms"
+    ))
 }
 
 struct Daemon {

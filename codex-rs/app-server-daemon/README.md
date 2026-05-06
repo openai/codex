@@ -21,10 +21,10 @@ codex app-server version
 codex app-server bootstrap --remote-control
 ```
 
-Every command writes exactly one JSON object to stdout. Consumers should parse
-that JSON rather than relying on human-readable text. Lifecycle responses report
-the resolved backend, socket path, local CLI version, and running app-server
-version when applicable.
+On success, every command writes exactly one JSON object to stdout. Consumers
+should parse that JSON rather than relying on human-readable text. Lifecycle
+responses report the resolved backend, socket path, local CLI version, and
+running app-server version when applicable.
 
 ## Bootstrap flow
 
