@@ -628,6 +628,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginShareSaveResponse,
     },
+    PluginShareUpdateTargets => "plugin/share/updateTargets" {
+        params: v2::PluginShareUpdateTargetsParams,
+        serialization: global("config"),
+        response: v2::PluginShareUpdateTargetsResponse,
+    },
     PluginShareList => "plugin/share/list" {
         params: v2::PluginShareListParams,
         serialization: global("config"),

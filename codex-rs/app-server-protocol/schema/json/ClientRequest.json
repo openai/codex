@@ -2197,11 +2197,37 @@
       ],
       "type": "object"
     },
+    "PluginShareDiscoverability": {
+      "enum": [
+        "LISTED",
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
     "PluginShareListParams": {
       "type": "object"
     },
+    "PluginSharePrincipalType": {
+      "enum": [
+        "user",
+        "group",
+        "workspace"
+      ],
+      "type": "string"
+    },
     "PluginShareSaveParams": {
       "properties": {
+        "discoverability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginShareDiscoverability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pluginPath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -2210,10 +2236,52 @@
             "string",
             "null"
           ]
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
         "pluginPath"
+      ],
+      "type": "object"
+    },
+    "PluginShareTarget": {
+      "properties": {
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        }
+      },
+      "required": [
+        "principalId",
+        "principalType"
+      ],
+      "type": "object"
+    },
+    "PluginShareUpdateTargetsParams": {
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "remotePluginId",
+        "shareTargets"
       ],
       "type": "object"
     },
@@ -5145,6 +5213,30 @@
         "params"
       ],
       "title": "Plugin/share/saveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/updateTargets"
+          ],
+          "title": "Plugin/share/updateTargetsRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareUpdateTargetsParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/updateTargetsRequest",
       "type": "object"
     },
     {

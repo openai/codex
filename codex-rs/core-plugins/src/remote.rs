@@ -29,10 +29,17 @@ pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
 pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
 pub use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
 pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
+pub use share::RemotePluginShareAccessPolicy;
+pub use share::RemotePluginShareDiscoverability;
+pub use share::RemotePluginSharePrincipal;
+pub use share::RemotePluginSharePrincipalType;
 pub use share::RemotePluginShareSaveResult;
+pub use share::RemotePluginShareTarget;
+pub use share::RemotePluginShareUpdateTargetsResult;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;
 pub use share::save_remote_plugin_share;
+pub use share::update_remote_plugin_share_targets;
 
 pub const REMOTE_GLOBAL_MARKETPLACE_NAME: &str = "chatgpt-global";
 pub const REMOTE_WORKSPACE_MARKETPLACE_NAME: &str = "chatgpt-workspace";

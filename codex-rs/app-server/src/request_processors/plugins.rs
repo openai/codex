@@ -86,6 +86,66 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
     }
 }
 
+fn remote_plugin_share_discoverability(
+    discoverability: PluginShareDiscoverability,
+) -> codex_core_plugins::remote::RemotePluginShareDiscoverability {
+    match discoverability {
+        PluginShareDiscoverability::Listed => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Listed
+        }
+        PluginShareDiscoverability::Unlisted => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Unlisted
+        }
+        PluginShareDiscoverability::Private => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Private
+        }
+    }
+}
+
+fn remote_plugin_share_targets(
+    targets: Vec<PluginShareTarget>,
+) -> Vec<codex_core_plugins::remote::RemotePluginShareTarget> {
+    targets
+        .into_iter()
+        .map(
+            |target| codex_core_plugins::remote::RemotePluginShareTarget {
+                principal_type: match target.principal_type {
+                    PluginSharePrincipalType::User => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::User
+                    }
+                    PluginSharePrincipalType::Group => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::Group
+                    }
+                    PluginSharePrincipalType::Workspace => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::Workspace
+                    }
+                },
+                principal_id: target.principal_id,
+            },
+        )
+        .collect()
+}
+
+fn plugin_share_principal_from_remote(
+    principal: codex_core_plugins::remote::RemotePluginSharePrincipal,
+) -> PluginSharePrincipal {
+    PluginSharePrincipal {
+        principal_type: match principal.principal_type {
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::User => {
+                PluginSharePrincipalType::User
+            }
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::Group => {
+                PluginSharePrincipalType::Group
+            }
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::Workspace => {
+                PluginSharePrincipalType::Workspace
+            }
+        },
+        principal_id: principal.principal_id,
+        name: principal.name,
+    }
+}
+
 impl PluginRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
@@ -137,6 +197,15 @@ impl PluginRequestProcessor {
         params: PluginShareSaveParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.plugin_share_save_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn plugin_share_update_targets(
+        &self,
+        params: PluginShareUpdateTargetsParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.plugin_share_update_targets_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -568,15 +637,26 @@ impl PluginRequestProcessor {
         let PluginShareSaveParams {
             plugin_path,
             remote_plugin_id,
+            discoverability,
+            share_targets,
         } = params;
         if let Some(remote_plugin_id) = remote_plugin_id.as_ref()
             && (remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(remote_plugin_id))
         {
             return Err(invalid_request("invalid remote plugin id"));
         }
+        if remote_plugin_id.is_some() && (discoverability.is_some() || share_targets.is_some()) {
+            return Err(invalid_request(
+                "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share targets",
+            ));
+        }
 
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let access_policy = codex_core_plugins::remote::RemotePluginShareAccessPolicy {
+            discoverability: discoverability.map(remote_plugin_share_discoverability),
+            share_targets: share_targets.map(remote_plugin_share_targets),
         };
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
@@ -584,6 +664,7 @@ impl PluginRequestProcessor {
             config.codex_home.as_path(),
             &plugin_path,
             remote_plugin_id.as_deref(),
+            access_policy,
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
@@ -592,6 +673,42 @@ impl PluginRequestProcessor {
         Ok(PluginShareSaveResponse {
             remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
+        })
+    }
+
+    async fn plugin_share_update_targets_response(
+        &self,
+        params: PluginShareUpdateTargetsParams,
+    ) -> Result<PluginShareUpdateTargetsResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareUpdateTargetsParams {
+            remote_plugin_id,
+            share_targets,
+        } = params;
+        if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
+            return Err(invalid_request("invalid remote plugin id"));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let result = codex_core_plugins::remote::update_remote_plugin_share_targets(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_plugin_id,
+            remote_plugin_share_targets(share_targets),
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "update remote plugin share targets")
+        })?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareUpdateTargetsResponse {
+            principals: result
+                .principals
+                .into_iter()
+                .map(plugin_share_principal_from_remote)
+                .collect(),
         })
     }
 

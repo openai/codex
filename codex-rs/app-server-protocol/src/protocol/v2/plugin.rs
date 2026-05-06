@@ -194,6 +194,10 @@ pub struct PluginShareSaveParams {
     pub plugin_path: AbsolutePathBuf,
     #[ts(optional = nullable)]
     pub remote_plugin_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub discoverability: Option<PluginShareDiscoverability>,
+    #[ts(optional = nullable)]
+    pub share_targets: Option<Vec<PluginShareTarget>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -202,6 +206,21 @@ pub struct PluginShareSaveParams {
 pub struct PluginShareSaveResponse {
     pub remote_plugin_id: String,
     pub share_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareUpdateTargetsParams {
+    pub remote_plugin_id: String,
+    pub share_targets: Vec<PluginShareTarget>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareUpdateTargetsResponse {
+    pub principals: Vec<PluginSharePrincipal>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -235,6 +254,51 @@ pub struct PluginShareListItem {
     pub plugin: PluginSummary,
     pub share_url: String,
     pub local_plugin_path: Option<AbsolutePathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginShareDiscoverability {
+    #[serde(rename = "LISTED")]
+    #[ts(rename = "LISTED")]
+    Listed,
+    #[serde(rename = "UNLISTED")]
+    #[ts(rename = "UNLISTED")]
+    Unlisted,
+    #[serde(rename = "PRIVATE")]
+    #[ts(rename = "PRIVATE")]
+    Private,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginSharePrincipalType {
+    #[serde(rename = "user")]
+    #[ts(rename = "user")]
+    User,
+    #[serde(rename = "group")]
+    #[ts(rename = "group")]
+    Group,
+    #[serde(rename = "workspace")]
+    #[ts(rename = "workspace")]
+    Workspace,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareTarget {
+    pub principal_type: PluginSharePrincipalType,
+    pub principal_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginSharePrincipal {
+    pub principal_type: PluginSharePrincipalType,
+    pub principal_id: String,
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

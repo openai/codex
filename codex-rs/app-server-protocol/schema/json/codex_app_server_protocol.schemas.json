@@ -817,6 +817,30 @@
             },
             "method": {
               "enum": [
+                "plugin/share/updateTargets"
+              ],
+              "title": "Plugin/share/updateTargetsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginShareUpdateTargetsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/share/updateTargetsRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/list"
               ],
               "title": "Plugin/share/listRequestMethod",
@@ -12479,6 +12503,14 @@
         "title": "PluginShareDeleteResponse",
         "type": "object"
       },
+      "PluginShareDiscoverability": {
+        "enum": [
+          "LISTED",
+          "UNLISTED",
+          "PRIVATE"
+        ],
+        "type": "string"
+      },
       "PluginShareListItem": {
         "properties": {
           "localPluginPath": {
@@ -12525,15 +12557,61 @@
         "title": "PluginShareListResponse",
         "type": "object"
       },
+      "PluginSharePrincipal": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "principalType": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          }
+        },
+        "required": [
+          "name",
+          "principalId",
+          "principalType"
+        ],
+        "type": "object"
+      },
+      "PluginSharePrincipalType": {
+        "enum": [
+          "user",
+          "group",
+          "workspace"
+        ],
+        "type": "string"
+      },
       "PluginShareSaveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "discoverability": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginShareDiscoverability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pluginPath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "remotePluginId": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "shareTargets": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginShareTarget"
+            },
+            "type": [
+              "array",
               "null"
             ]
           }
@@ -12559,6 +12637,57 @@
           "shareUrl"
         ],
         "title": "PluginShareSaveResponse",
+        "type": "object"
+      },
+      "PluginShareTarget": {
+        "properties": {
+          "principalId": {
+            "type": "string"
+          },
+          "principalType": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          }
+        },
+        "required": [
+          "principalId",
+          "principalType"
+        ],
+        "type": "object"
+      },
+      "PluginShareUpdateTargetsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "remotePluginId": {
+            "type": "string"
+          },
+          "shareTargets": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginShareTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "remotePluginId",
+          "shareTargets"
+        ],
+        "title": "PluginShareUpdateTargetsParams",
+        "type": "object"
+      },
+      "PluginShareUpdateTargetsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "principals": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSharePrincipal"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "principals"
+        ],
+        "title": "PluginShareUpdateTargetsResponse",
         "type": "object"
       },
       "PluginSkillReadParams": {

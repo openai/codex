@@ -2981,11 +2981,15 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         serde_json::to_value(PluginShareSaveParams {
             plugin_path: plugin_path.clone(),
             remote_plugin_id: None,
+            discoverability: None,
+            share_targets: None,
         })
         .unwrap(),
         json!({
             "pluginPath": plugin_path_json,
             "remotePluginId": null,
+            "discoverability": null,
+            "shareTargets": null,
         }),
     );
 
@@ -2993,11 +2997,33 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         serde_json::to_value(PluginShareSaveParams {
             plugin_path,
             remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string(),),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_targets: Some(vec![
+                PluginShareTarget {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-1".to_string(),
+                },
+                PluginShareTarget {
+                    principal_type: PluginSharePrincipalType::Workspace,
+                    principal_id: "workspace-1".to_string(),
+                },
+            ]),
         })
         .unwrap(),
         json!({
             "pluginPath": plugin_path_json,
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "discoverability": "PRIVATE",
+            "shareTargets": [
+                {
+                    "principalType": "user",
+                    "principalId": "user-1",
+                },
+                {
+                    "principalType": "workspace",
+                    "principalId": "workspace-1",
+                },
+            ],
         }),
     );
 
@@ -3010,6 +3036,42 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         json!({
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "shareUrl": "",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareUpdateTargetsParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            share_targets: vec![PluginShareTarget {
+                principal_type: PluginSharePrincipalType::Group,
+                principal_id: "group-1".to_string(),
+            }],
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "shareTargets": [{
+                "principalType": "group",
+                "principalId": "group-1",
+            }],
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareUpdateTargetsResponse {
+            principals: vec![PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+                name: "Gavin".to_string(),
+            }],
+        })
+        .unwrap(),
+        json!({
+            "principals": [{
+                "principalType": "user",
+                "principalId": "user-1",
+                "name": "Gavin",
+            }],
         }),
     );
 
