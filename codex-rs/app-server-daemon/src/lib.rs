@@ -431,7 +431,7 @@ fn try_lock_file(_file: &tokio::fs::File) -> Result<bool> {
     Ok(true)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use pretty_assertions::assert_eq;
 

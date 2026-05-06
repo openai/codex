@@ -109,7 +109,8 @@ These commands print one JSON object to stdout. They launch app-server as a
 pidfile-backed detached process on the default Unix control socket and wait until
 the JSON-RPC initialize handshake succeeds before reporting success. `version`
 connects through that same control socket and reports both the local CLI version
-and the version reported by the running app-server.
+and the version reported by the running app-server. The daemon lifecycle
+commands are currently supported on Unix platforms only.
 
 For a fresh remote machine, first install the standalone CLI, then bootstrap the
 durable app-server service:

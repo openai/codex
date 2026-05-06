@@ -107,7 +107,7 @@ fn parse_version_from_user_agent(user_agent: &str) -> Result<String> {
     Ok(version.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use pretty_assertions::assert_eq;
 

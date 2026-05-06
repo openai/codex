@@ -5,6 +5,12 @@ lifecycle commands used by remote clients such as the desktop and mobile apps.
 It is intended for Codex instances launched over SSH, including fresh developer
 machines that should expose app-server with `remote_control` enabled.
 
+## Platform support
+
+The current daemon implementation is Unix-only. It uses pidfile-backed
+daemonization plus Unix process and file-locking primitives, and does not yet
+support Windows lifecycle management.
+
 ## Commands
 
 ```sh

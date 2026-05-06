@@ -44,7 +44,7 @@ impl DaemonSettings {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use pretty_assertions::assert_eq;
 

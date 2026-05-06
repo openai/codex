@@ -567,7 +567,7 @@ async fn read_process_start_time(_pid: u32) -> Result<String> {
     bail!("pid-managed app-server startup is unsupported on this platform")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::time::Duration;
 
