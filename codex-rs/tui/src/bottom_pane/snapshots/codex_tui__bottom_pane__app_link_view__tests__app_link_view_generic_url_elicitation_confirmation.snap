@@ -5,7 +5,8 @@ expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72))
 
   Finish in Browser
 
-  Complete the requested action in the browser window that just opened.
+  Complete the requested action in the browser window that just
+  opened.
   Then return here and select "I finished".
 
   Link:
