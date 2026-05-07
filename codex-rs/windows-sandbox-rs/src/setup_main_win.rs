@@ -69,6 +69,8 @@ const DENY_ACCESS: i32 = 3;
 
 mod read_acl_mutex;
 mod sandbox_users;
+#[path = "setup_runtime_bin.rs"]
+mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::provision_sandbox_users;
@@ -510,8 +512,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
 
 fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
     let refresh_only = payload.refresh_only;
-    if refresh_only {
-    } else {
+    if !refresh_only {
         let provision_result = provision_sandbox_users(
             &payload.codex_home,
             &payload.offline_username,
@@ -645,6 +646,14 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 })?;
             }
         }
+    }
+
+    if refresh_only {
+        setup_runtime_bin::ensure_codex_app_runtime_bin_readable(
+            sandbox_group_psid,
+            &mut refresh_errors,
+            log,
+        )?;
     }
 
     let cap_sid_str = caps.workspace;
