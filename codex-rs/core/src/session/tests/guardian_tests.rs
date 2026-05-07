@@ -323,7 +323,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         arg0: None,
     };
 
-    let handler = ShellHandler;
+    let handler = ShellHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -437,7 +437,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 
-    let handler = ShellHandler;
+    let handler = ShellHandler::default();
     let command = if cfg!(windows) {
         vec![
             "cmd.exe".to_string(),
@@ -498,7 +498,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = ExecCommandHandler;
+    let handler = ExecCommandHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -615,7 +615,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
 
-    let handler = ShellHandler;
+    let handler = ShellHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

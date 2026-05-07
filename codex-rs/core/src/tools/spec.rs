@@ -153,13 +153,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            builder.push_spec(
+            builder.register_handler(Arc::new(UnavailableToolHandler::new(
+                unavailable_tool,
                 spec,
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
+            )));
+        } else {
+            builder.register_handler(Arc::new(UnavailableToolHandler::without_spec(
+                unavailable_tool,
+            )));
         }
-        builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
     builder
 }

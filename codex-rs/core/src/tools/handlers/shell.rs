@@ -38,6 +38,7 @@ mod shell_handler;
 pub use container_exec::ContainerExecHandler;
 pub use local_shell::LocalShellHandler;
 pub use shell_command::ShellCommandHandler;
+pub(crate) use shell_command::ShellCommandHandlerOptions;
 pub use shell_handler::ShellHandler;
 
 fn shell_function_payload_command(payload: &ToolPayload) -> Option<String> {

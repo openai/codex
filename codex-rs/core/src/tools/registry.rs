@@ -47,6 +47,18 @@ pub trait ToolHandler: Send + Sync {
     /// The concrete tool name handled by this handler instance.
     fn tool_name(&self) -> ToolName;
 
+    fn spec(&self) -> Option<ToolSpec> {
+        None
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        false
+    }
+
+    fn augment_spec_for_code_mode(&self) -> bool {
+        true
+    }
+
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -92,6 +104,78 @@ pub trait ToolHandler: Send + Sync {
         &self,
         invocation: ToolInvocation,
     ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
+}
+
+pub(crate) struct ConfiguredToolHandler<H> {
+    handler: H,
+    spec: ToolSpec,
+}
+
+impl<H> ConfiguredToolHandler<H> {
+    pub(crate) fn new(handler: H, spec: ToolSpec) -> Self {
+        Self { handler, spec }
+    }
+}
+
+impl<H> ToolHandler for ConfiguredToolHandler<H>
+where
+    H: ToolHandler,
+{
+    type Output = H::Output;
+
+    fn tool_name(&self) -> ToolName {
+        self.handler.tool_name()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(self.spec.clone())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        false
+    }
+
+    fn augment_spec_for_code_mode(&self) -> bool {
+        true
+    }
+
+    fn kind(&self) -> ToolKind {
+        self.handler.kind()
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn is_mutating(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> impl std::future::Future<Output = bool> + Send {
+        self.handler.is_mutating(invocation)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        self.handler.pre_tool_use_payload(invocation)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        self.handler.post_tool_use_payload(invocation, result)
+    }
+
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
+
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
+        self.handler.handle(invocation)
+    }
 }
 
 /// Consumes streamed argument diffs for a tool call and emits protocol events
@@ -512,43 +596,44 @@ impl ToolRegistry {
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
+    code_mode_enabled: bool,
 }
 
 impl ToolRegistryBuilder {
-    pub fn new() -> Self {
+    pub fn new(code_mode_enabled: bool) -> Self {
         Self {
             handlers: HashMap::new(),
             specs: Vec::new(),
+            code_mode_enabled,
         }
     }
 
-    pub fn push_spec_with_parallel_support(
-        &mut self,
-        spec: ToolSpec,
-        supports_parallel_tool_calls: bool,
-    ) {
+    fn push_raw_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
         self.specs
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub(crate) fn push_spec(
-        &mut self,
-        spec: ToolSpec,
-        supports_parallel_tool_calls: bool,
-        code_mode_enabled: bool,
-    ) {
-        let spec = if code_mode_enabled {
+    pub(crate) fn push_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
+        let spec = if self.code_mode_enabled {
             codex_tools::augment_tool_spec_for_code_mode(spec)
         } else {
             spec
         };
-        self.push_spec_with_parallel_support(spec, supports_parallel_tool_calls);
+        self.push_raw_spec(spec, supports_parallel_tool_calls);
     }
 
     pub fn register_handler<H>(&mut self, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
+        if let Some(spec) = handler.spec() {
+            let supports_parallel_tool_calls = handler.supports_parallel_tool_calls();
+            if handler.augment_spec_for_code_mode() {
+                self.push_spec(spec, supports_parallel_tool_calls);
+            } else {
+                self.push_raw_spec(spec, supports_parallel_tool_calls);
+            }
+        }
         let name = handler.tool_name();
         let display_name = name.display();
         let handler: Arc<dyn AnyToolHandler> = handler;

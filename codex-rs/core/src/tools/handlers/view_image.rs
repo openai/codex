@@ -17,11 +17,32 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
+use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
-pub struct ViewImageHandler;
+pub struct ViewImageHandler {
+    options: ViewImageToolOptions,
+}
+
+impl Default for ViewImageHandler {
+    fn default() -> Self {
+        Self {
+            options: ViewImageToolOptions {
+                can_request_original_image_detail: false,
+            },
+        }
+    }
+}
+
+impl ViewImageHandler {
+    pub(crate) fn new(options: ViewImageToolOptions) -> Self {
+        Self { options }
+    }
+}
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -42,6 +63,14 @@ impl ToolHandler for ViewImageHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("view_image")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_view_image_tool(self.options))
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn kind(&self) -> ToolKind {
