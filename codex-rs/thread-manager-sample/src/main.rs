@@ -40,6 +40,7 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -56,6 +57,7 @@ use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
+use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 
@@ -114,6 +116,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let thread_store = thread_store_from_config(&config, state_db.clone());
     let environment_manager =
         Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
@@ -122,6 +125,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
         state_db,
+        installation_id,
     );
 
     let NewThread {
@@ -197,8 +201,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_raw_output_mode: false,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_vim_mode_default: false,
         cwd,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,

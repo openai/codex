@@ -370,10 +370,16 @@
             "apps_mcp_path_override": {
               "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
             },
+            "auth_elicitation": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
             "browser_use_external": {
+              "type": "boolean"
+            },
+            "builtin_mcp": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -515,6 +521,9 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "responses_websocket_response_processed": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -673,6 +682,15 @@
         },
         "tools_view_image": {
           "type": "boolean"
+        },
+        "tui": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProfileTui"
+            }
+          ],
+          "default": null,
+          "description": "TUI settings scoped to this profile."
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
@@ -999,6 +1017,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "trusted_hash": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1012,7 +1033,21 @@
           },
           "type": "array"
         },
+        "PostCompact": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreCompact": {
           "default": [],
           "items": {
             "$ref": "#/definitions/MatcherGroup"
@@ -1873,6 +1908,22 @@
       },
       "type": "object"
     },
+    "ProfileTui": {
+      "additionalProperties": false,
+      "description": "TUI settings supported inside a named profile.",
+      "properties": {
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
+        }
+      },
+      "type": "object"
+    },
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2157,6 +2208,14 @@
       "enum": [
         "fast",
         "flex"
+      ],
+      "type": "string"
+    },
+    "SessionPickerViewMode": {
+      "description": "Preferred layout for the resume/fork session picker.",
+      "enum": [
+        "comfortable",
+        "dense"
       ],
       "type": "string"
     },
@@ -2460,6 +2519,7 @@
               "queue": null,
               "submit": null,
               "toggle_fast_mode": null,
+              "toggle_raw_output": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2557,6 +2617,20 @@
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "raw_output_mode": {
+          "default": false,
+          "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         },
         "show_tooltips": {
           "default": true,
@@ -2956,6 +3030,14 @@
           ],
           "description": "Toggle Fast mode."
         },
+        "toggle_raw_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3062,6 +3144,7 @@
             "queue": null,
             "submit": null,
             "toggle_fast_mode": null,
+            "toggle_raw_output": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -3769,7 +3852,7 @@
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "commit_attribution": {
-      "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
+      "description": "Optional commit attribution text for commit message co-author trailers. This top-level setting only takes effect when `[features].codex_git_commit` is enabled.\n\nWhen enabled and unset, Codex uses `Codex <noreply@openai.com>`. Set to an empty string to disable automatic commit attribution.",
       "type": "string"
     },
     "compact_prompt": {
@@ -3859,10 +3942,16 @@
         "apps_mcp_path_override": {
           "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
         },
+        "auth_elicitation": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "builtin_mcp": {
           "type": "boolean"
         },
         "child_agents_md": {
@@ -4004,6 +4093,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "responses_websocket_response_processed": {
           "type": "boolean"
         },
         "responses_websockets": {
@@ -4294,7 +4386,7 @@
     },
     "notify": {
       "default": null,
-      "description": "Deprecated optional external command to spawn for end-user notifications.",
+      "description": "Optional external command to spawn for end-user notifications.",
       "items": {
         "type": "string"
       },

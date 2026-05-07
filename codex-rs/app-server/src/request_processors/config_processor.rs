@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::config_manager::ConfigManager;
 use crate::config_manager_service::ConfigManagerError;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
@@ -463,6 +462,8 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_tool_use,
         permission_request,
         post_tool_use,
+        pre_compact,
+        post_compact,
         session_start,
         user_prompt_submit,
         stop,
@@ -474,6 +475,8 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_tool_use: map_hook_matcher_groups_to_api(pre_tool_use),
         permission_request: map_hook_matcher_groups_to_api(permission_request),
         post_tool_use: map_hook_matcher_groups_to_api(post_tool_use),
+        pre_compact: map_hook_matcher_groups_to_api(pre_compact),
+        post_compact: map_hook_matcher_groups_to_api(post_compact),
         session_start: map_hook_matcher_groups_to_api(session_start),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
         stop: map_hook_matcher_groups_to_api(stop),
@@ -612,11 +615,9 @@ fn map_error(err: ConfigManagerError) -> JSONRPCErrorError {
 }
 
 fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: message.into(),
-        data: Some(json!({
-            "config_write_error_code": code,
-        })),
-    }
+    let mut error = invalid_request(message);
+    error.data = Some(json!({
+        "config_write_error_code": code,
+    }));
+    error
 }

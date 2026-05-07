@@ -13,6 +13,7 @@ use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::RequestPluginInstallArgs;
 use codex_tools::RequestPluginInstallResult;
+use codex_tools::ToolName;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
@@ -36,6 +37,10 @@ pub struct RequestPluginInstallHandler;
 
 impl ToolHandler for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

@@ -22,6 +22,11 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
+- `--remote URL --executor-id ID [--name NAME]`
+
+Remote mode registers the local exec-server with the executor registry,
+then reconnects to the service-provided rendezvous websocket as the executor.
+It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.
 
 Wire framing:
 
@@ -308,6 +313,8 @@ The crate exports:
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server
+- `RemoteExecutorConfig` and `run_remote_executor()` for embedding remote
+  registration mode
 
 Callers must pass `ExecServerRuntimePaths` to `run_main()`. The top-level
 `codex exec-server` command builds these paths from the `codex` arg0 dispatch

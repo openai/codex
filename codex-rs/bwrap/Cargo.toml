@@ -1,0 +1,19 @@
+[package]
+name = "codex-bwrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bwrap"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"

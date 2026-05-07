@@ -1,0 +1,53 @@
+mod shared;
+
+mod account;
+mod apps;
+mod collaboration_mode;
+mod command_exec;
+mod config;
+mod device_key;
+mod experimental_feature;
+mod feedback;
+mod fs;
+mod hook;
+mod item;
+mod mcp;
+mod model;
+mod notification;
+mod permissions;
+mod plugin;
+mod process;
+mod realtime;
+mod review;
+mod thread;
+mod thread_data;
+mod turn;
+mod windows_sandbox;
+
+pub use account::*;
+pub use apps::*;
+pub use collaboration_mode::*;
+pub use command_exec::*;
+pub use config::*;
+pub use device_key::*;
+pub use experimental_feature::*;
+pub use feedback::*;
+pub use fs::*;
+pub use hook::*;
+pub use item::*;
+pub use mcp::*;
+pub use model::*;
+pub use notification::*;
+pub use permissions::*;
+pub use plugin::*;
+pub use process::*;
+pub use realtime::*;
+pub use review::*;
+pub use shared::*;
+pub use thread::*;
+pub use thread_data::*;
+pub use turn::*;
+pub use windows_sandbox::*;
+
+#[cfg(test)]
+mod tests;

@@ -37,6 +37,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "macros",
     "schemars",
     "server",
+    "transport-async-rw",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
     "transport-streamable-http-server",

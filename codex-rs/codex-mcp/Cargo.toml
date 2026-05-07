@@ -16,6 +16,7 @@ anyhow = { workspace = true }
 async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-api = { workspace = true }
+codex-builtin-mcps = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }
@@ -32,7 +33,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }

@@ -3,7 +3,7 @@ use crate::state::NetworkProxyState;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
-use rama_core::error::ErrorContext as _;
+use rama_core::error::ErrorExt as _;
 use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
@@ -21,6 +21,8 @@ use rama_net::http::RequestContext;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
 use rama_tls_rustls::client::TlsConnectorLayer;
 use std::sync::Arc;
+use std::time::Instant;
+use tracing::info;
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
@@ -39,13 +41,6 @@ impl ProxyConfig {
         let https = read_proxy_env(&["HTTPS_PROXY", "https_proxy"]);
         let all = read_proxy_env(&["ALL_PROXY", "all_proxy"]);
         Self { http, https, all }
-    }
-
-    fn proxy_for_request(&self, req: &Request) -> Option<ProxyAddress> {
-        let is_secure = RequestContext::try_from(req)
-            .map(|ctx| ctx.protocol.is_secure())
-            .unwrap_or(false);
-        self.proxy_for_protocol(is_secure)
     }
 
     fn proxy_for_protocol(&self, is_secure: bool) -> Option<ProxyAddress> {
@@ -155,28 +150,71 @@ impl Service<Request<Body>> for UpstreamClient {
     type Error = OpaqueError;
 
     async fn serve(&self, mut req: Request<Body>) -> Result<Self::Output, Self::Error> {
-        if let Some(proxy) = self.proxy_config.proxy_for_request(&req) {
+        let request_context = RequestContext::try_from(&req).ok();
+        let authority = request_context
+            .as_ref()
+            .map(|ctx| ctx.host_with_port().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let proxy = self.proxy_config.proxy_for_protocol(
+            request_context
+                .as_ref()
+                .map(|ctx| ctx.protocol.is_secure())
+                .unwrap_or(false),
+        );
+        match proxy.as_ref() {
+            Some(proxy) => info!(
+                "HTTP upstream route selected (target={authority}, route=upstream_proxy, proxy={})",
+                proxy.address
+            ),
+            None => info!("HTTP upstream route selected (target={authority}, route=direct)"),
+        }
+        if let Some(proxy) = proxy {
             req.extensions_mut().insert(proxy);
         }
 
         let uri = req.uri().clone();
+        let connect_started_at = Instant::now();
         let EstablishedClientConnection {
             input: mut req,
             conn: http_connection,
-        } = self
-            .connector
-            .serve(req)
-            .await
-            .map_err(OpaqueError::from_boxed)?;
+        } = match self.connector.serve(req).await {
+            Ok(connection) => {
+                info!(
+                    "HTTP upstream connection established (target={authority}, elapsed_ms={})",
+                    connect_started_at.elapsed().as_millis()
+                );
+                connection
+            }
+            Err(err) => {
+                warn!(
+                    "HTTP upstream connection failed (target={authority}, elapsed_ms={})",
+                    connect_started_at.elapsed().as_millis()
+                );
+                return Err(OpaqueError::from_boxed(err));
+            }
+        };
 
         req.extensions_mut()
             .extend(http_connection.extensions().clone());
 
-        http_connection
-            .serve(req)
-            .await
-            .map_err(OpaqueError::from_boxed)
-            .with_context(|| format!("http request failure for uri: {uri}"))
+        let request_started_at = Instant::now();
+        match http_connection.serve(req).await {
+            Ok(resp) => {
+                info!(
+                    "HTTP upstream response headers received (target={authority}, elapsed_ms={})",
+                    request_started_at.elapsed().as_millis()
+                );
+                Ok(resp)
+            }
+            Err(err) => {
+                warn!(
+                    "HTTP upstream response headers failed (target={authority}, elapsed_ms={})",
+                    request_started_at.elapsed().as_millis()
+                );
+                Err(OpaqueError::from_boxed(err)
+                    .context(format!("http request failure for uri: {uri}")))
+            }
+        }
     }
 }
 

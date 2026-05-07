@@ -153,8 +153,14 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_uninstall_rejects_remote_plugin_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_uninstall_rejects_remote_plugin_when_plugins_are_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = false
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -285,7 +291,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 
     let workspace_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-workspace/linear");
+        .join("plugins/cache/workspace-directory/linear");
     std::fs::create_dir_all(workspace_cache_root.join("1.0.0/.codex-plugin"))?;
     std::fs::write(
         workspace_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
@@ -363,7 +369,7 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
 
     let remote_plugin_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-workspace/skill-improver");
+        .join("plugins/cache/workspace-directory/skill-improver");
     std::fs::create_dir_all(remote_plugin_cache_root.join("1.0.0/.codex-plugin"))?;
     std::fs::write(
         remote_plugin_cache_root.join("1.0.0/.codex-plugin/plugin.json"),

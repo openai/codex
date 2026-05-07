@@ -14,6 +14,7 @@ use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -27,6 +28,7 @@ use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
@@ -132,6 +134,9 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
+    /// ID shared by the whole agent control session. This means every sub-agents from a common
+    /// root share the same session ID.
+    session_id: SessionId,
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
@@ -146,6 +151,15 @@ impl AgentControl {
             manager,
             ..Default::default()
         }
+    }
+
+    pub(crate) fn with_session_id(mut self, session_id: SessionId) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
@@ -235,6 +249,7 @@ impl AgentControl {
                         config.clone(),
                         self.clone(),
                         session_source,
+                        /*thread_source*/ Some(ThreadSource::Subagent),
                         /*persist_extended_history*/ false,
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
@@ -356,14 +371,10 @@ impl AgentControl {
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await.ok();
         if let Some(parent_thread) = parent_thread.as_ref() {
-            // `record_conversation_items` only queues rollout writes asynchronously.
-            // Flush/materialize the live parent before snapshotting JSONL for a fork.
-            parent_thread
-                .codex
-                .session
-                .ensure_rollout_materialized()
-                .await;
-            parent_thread.codex.session.flush_rollout().await?;
+            // `record_conversation_items` only queues persistence writes asynchronously.
+            // Flush before snapshotting store history for a fork.
+            parent_thread.ensure_rollout_materialized().await;
+            parent_thread.flush_rollout().await?;
         }
 
         let parent_history = state
@@ -426,6 +437,7 @@ impl AgentControl {
                 InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
+                /*thread_source*/ Some(ThreadSource::Subagent),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,

@@ -313,7 +313,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
             .features
             .enable(Feature::ResponsesWebsocketsV2)
             .expect("test config should allow feature update");
-        config.service_tier = Some(ServiceTier::Fast);
+        config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
     });
     let test = builder.build_with_websocket_server(&server).await?;
 

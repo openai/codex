@@ -2,11 +2,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
@@ -50,10 +48,8 @@ pub(super) async fn update_thread_metadata(
     }
     let resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;
+    let name = params.patch.name;
     let git_info = params.patch.git_info;
-    if let Some(name) = params.patch.name {
-        apply_thread_name(store, resolved_rollout_path.path.as_path(), thread_id, name).await?;
-    }
     if let Some(memory_mode) = params.patch.memory_mode {
         apply_thread_memory_mode(resolved_rollout_path.path.as_path(), thread_id, memory_mode)
             .await?;
@@ -70,6 +66,10 @@ pub(super) async fn update_thread_metadata(
         /*new_thread_memory_mode*/ None,
     )
     .await;
+
+    if let Some(name) = name {
+        apply_thread_name(store, thread_id, name).await?;
+    }
 
     let resolved_git_info = match git_info {
         Some(git_info) => {
@@ -238,20 +238,23 @@ async fn apply_thread_git_info_to_rollout(
 
 async fn apply_thread_name(
     store: &LocalThreadStore,
-    rollout_path: &Path,
     thread_id: ThreadId,
     name: String,
 ) -> ThreadStoreResult<()> {
-    let item = RolloutItem::EventMsg(EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
-        thread_id,
-        thread_name: Some(name.clone()),
-    }));
+    if let Some(state_db) = store.state_db().await {
+        let updated = state_db
+            .update_thread_title(thread_id, &name)
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to set thread name: {err}"),
+            })?;
+        if !updated {
+            return Err(ThreadStoreError::Internal {
+                message: format!("thread metadata unavailable before name update: {thread_id}"),
+            });
+        }
+    }
 
-    append_rollout_item_to_path(rollout_path, &item)
-        .await
-        .map_err(|err| ThreadStoreError::Internal {
-            message: format!("failed to set thread name: {err}"),
-        })?;
     append_thread_name(store.config.codex_home.as_path(), thread_id, &name)
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -376,8 +379,7 @@ mod tests {
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(301);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let path =
-            write_session_file(home.path(), "2025-01-03T14-00-00", uuid).expect("session file");
+        write_session_file(home.path(), "2025-01-03T14-00-00", uuid).expect("session file");
 
         let thread = store
             .update_thread_metadata(UpdateThreadMetadataParams {
@@ -396,12 +398,6 @@ mod tests {
             .await
             .expect("find thread name");
         assert_eq!(latest_name.as_deref(), Some("A sharper name"));
-
-        let appended = last_rollout_item(path.as_path());
-        assert_eq!(appended["type"], "event_msg");
-        assert_eq!(appended["payload"]["type"], "thread_name_updated");
-        assert_eq!(appended["payload"]["thread_id"], thread_id.to_string());
-        assert_eq!(appended["payload"]["thread_name"], "A sharper name");
     }
 
     #[tokio::test]

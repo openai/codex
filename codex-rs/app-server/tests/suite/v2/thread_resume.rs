@@ -38,9 +38,11 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -239,14 +241,19 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let conversation_id = create_fake_rollout_with_text_elements(
+    let conversation_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         "Saved user message",
-        Vec::new(),
         Some("mock_provider"),
         /*git_info*/ None,
+    )?;
+    set_thread_source_on_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        &conversation_id,
+        "user",
     )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
@@ -264,10 +271,35 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     )
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert!(
+        !thread.session_id.is_empty(),
+        "session id should not be empty"
+    );
+    assert_eq!(thread.thread_source, Some(ThreadSource::User));
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed");
+    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed", "user");
+    assert_eq!(event["event_params"]["thread_source"], "user");
+    Ok(())
+}
+
+fn set_thread_source_on_fake_rollout(
+    codex_home: &std::path::Path,
+    filename_ts: &str,
+    thread_id: &str,
+    thread_source: &str,
+) -> Result<()> {
+    let path = rollout_path(codex_home, filename_ts, thread_id);
+    let contents = std::fs::read_to_string(&path)?;
+    let mut lines = contents.lines();
+    let session_meta = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("fake rollout missing session meta"))?;
+    let mut session_meta: serde_json::Value = serde_json::from_str(session_meta)?;
+    session_meta["payload"]["thread_source"] = serde_json::json!(thread_source);
+    let remaining = lines.collect::<Vec<_>>().join("\n");
+    std::fs::write(&path, format!("{session_meta}\n{remaining}\n"))?;
     Ok(())
 }
 
@@ -1178,6 +1210,7 @@ stream_max_retries = 0
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
+        thread_source: None,
         agent_path: None,
         agent_nickname: None,
         agent_role: None,
@@ -1629,6 +1662,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     .await??;
     let TurnStartResponse { turn: running_turn } =
         to_response::<TurnStartResponse>(running_turn_resp)?;
+    assert_eq!(running_turn.items_view, TurnItemsView::NotLoaded);
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),

@@ -1,0 +1,18 @@
+---
+source: tui/src/bottom_pane/app_link_view.rs
+expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))"
+---
+
+  Google Calendar
+
+  Reconnect Google Calendar on ChatGPT.
+
+  URL
+  https://chatgpt.com/apps/google-calendar/connector_google_calendar
+
+  Sign in to this app in your browser, then return here.
+
+
+  › 1. Open sign-in URL
+    2. Back
+  Use tab / ↑ ↓ to move, enter to select, esc to close

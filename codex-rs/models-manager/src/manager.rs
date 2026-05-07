@@ -421,15 +421,16 @@ fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option
 fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
     // Retry metadata lookup for a single namespaced slug like `namespace/model-name`.
     //
-    // This only strips one leading namespace segment and only when the namespace is ASCII
-    // alphanumeric/underscore (`\w+`) to avoid broadly matching arbitrary aliases.
+    // This only strips one leading namespace segment and only when the namespace looks
+    // like a simple provider id to avoid broadly matching arbitrary aliases.
     let (namespace, suffix) = model.split_once('/')?;
     if suffix.contains('/') {
         return None;
     }
-    if !namespace
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    if namespace.is_empty()
+        || !namespace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return None;
     }

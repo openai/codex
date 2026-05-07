@@ -355,6 +355,23 @@ pub enum ServiceTier {
     Flex,
 }
 
+impl ServiceTier {
+    pub const fn request_value(self) -> &'static str {
+        match self {
+            Self::Fast => "priority",
+            Self::Flex => "flex",
+        }
+    }
+
+    pub fn from_request_value(value: &str) -> Option<Self> {
+        match value {
+            "fast" | "priority" => Some(Self::Fast),
+            "flex" => Some(Self::Flex),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]

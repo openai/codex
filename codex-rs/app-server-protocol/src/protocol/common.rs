@@ -77,6 +77,7 @@ macro_rules! experimental_type_entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRequestSerializationScope {
     Global(&'static str),
+    GlobalSharedRead(&'static str),
     Thread { thread_id: String },
     ThreadPath { path: PathBuf },
     CommandExecProcess { process_id: String },
@@ -92,6 +93,9 @@ macro_rules! serialization_scope_expr {
     };
     ($actual_params:ident, global($key:literal)) => {
         Some(ClientRequestSerializationScope::Global($key))
+    };
+    ($actual_params:ident, global_shared_read($key:literal)) => {
+        Some(ClientRequestSerializationScope::GlobalSharedRead($key))
     };
     ($actual_params:ident, thread_id($params:ident . $field:ident)) => {
         Some(ClientRequestSerializationScope::Thread {
@@ -585,7 +589,7 @@ client_request_definitions! {
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
     HooksList => "hooks/list" {
@@ -610,7 +614,7 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
@@ -627,6 +631,11 @@ client_request_definitions! {
         params: v2::PluginShareSaveParams,
         serialization: global("config"),
         response: v2::PluginShareSaveResponse,
+    },
+    PluginShareUpdateTargets => "plugin/share/updateTargets" {
+        params: v2::PluginShareUpdateTargetsParams,
+        serialization: global("config"),
+        response: v2::PluginShareUpdateTargetsResponse,
     },
     PluginShareList => "plugin/share/list" {
         params: v2::PluginShareListParams,
@@ -843,6 +852,11 @@ client_request_definitions! {
         serialization: global("windows-sandbox-setup"),
         response: v2::WindowsSandboxSetupStartResponse,
     },
+    WindowsSandboxReadiness => "windowsSandbox/readiness" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("config"),
+        response: v2::WindowsSandboxReadinessResponse,
+    },
 
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
@@ -937,7 +951,7 @@ client_request_definitions! {
 
     ConfigRead => "config/read" {
         params: v2::ConfigReadParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::ConfigReadResponse,
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
@@ -1645,6 +1659,31 @@ mod tests {
             Some(ClientRequestSerializationScope::Global("config"))
         );
 
+        let skills_list = ClientRequest::SkillsList {
+            request_id: request_id(),
+            params: v2::SkillsListParams {
+                cwds: Vec::new(),
+                force_reload: false,
+                per_cwd_extra_user_roots: None,
+            },
+        };
+        assert_eq!(
+            skills_list.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+        );
+
+        let plugin_list = ClientRequest::PluginList {
+            request_id: request_id(),
+            params: v2::PluginListParams {
+                cwds: None,
+                marketplace_kinds: None,
+            },
+        };
+        assert_eq!(
+            plugin_list.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+        );
+
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),
             params: v2::PluginUninstallParams {
@@ -1695,7 +1734,7 @@ mod tests {
         };
         assert_eq!(
             config_read.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("config"))
+            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
         );
 
         let account_read = ClientRequest::GetAccount {
@@ -2168,6 +2207,7 @@ mod tests {
             response: v2::ThreadStartResponse {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
                     forked_from_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
@@ -2179,6 +2219,7 @@ mod tests {
                     cwd: cwd.clone(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
+                    thread_source: None,
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
@@ -2208,6 +2249,7 @@ mod tests {
                 "response": {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                         "forkedFromId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
@@ -2221,6 +2263,7 @@ mod tests {
                         "cwd": absolute_path_string("tmp"),
                         "cliVersion": "0.0.0",
                         "source": "exec",
+                        "threadSource": null,
                         "agentNickname": null,
                         "agentRole": null,
                         "gitInfo": null,

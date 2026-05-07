@@ -1,8 +1,8 @@
 use crate::can_request_original_image_detail;
-use crate::request_user_input_available_modes;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -31,6 +31,17 @@ pub enum ToolUserShellType {
     PowerShell,
     Sh,
     Cmd,
+}
+
+pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> {
+    TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| {
+            mode.allows_request_user_input()
+                || (features.enabled(Feature::DefaultModeRequestUserInput)
+                    && *mode == ModeKind::Default)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

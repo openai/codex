@@ -447,12 +447,20 @@ struct AppServerCommand {
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        default_value = "ws://127.0.0.1:0"
-    )]
-    listen: String,
+    #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
+    listen: Option<String>,
+
+    /// Register this exec-server as a remote executor using the given base URL.
+    #[arg(long = "remote", value_name = "URL", requires = "executor_id")]
+    remote: Option<String>,
+
+    /// Executor id to attach to when registering remotely.
+    #[arg(long = "executor-id", value_name = "ID")]
+    executor_id: Option<String>,
+
+    /// Human-readable executor name.
+    #[arg(long = "name", value_name = "NAME")]
+    name: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1264,7 +1272,23 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    codex_exec_server::run_main(&cmd.listen, runtime_paths)
+    if let Some(base_url) = cmd.remote {
+        let executor_id = cmd
+            .executor_id
+            .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let mut remote_config =
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+        if let Some(name) = cmd.name {
+            remote_config.name = name;
+        }
+        codex_exec_server::run_remote_executor(remote_config, runtime_paths).await?;
+        return Ok(());
+    }
+    let listen_url = cmd
+        .listen
+        .as_deref()
+        .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
+    codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }

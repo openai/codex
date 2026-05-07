@@ -146,7 +146,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
 
-    /// Deprecated optional external command to spawn for end-user notifications.
+    /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
@@ -176,7 +176,10 @@ pub struct ConfigToml {
     pub compact_prompt: Option<String>,
 
     /// Optional commit attribution text for commit message co-author trailers.
+    /// This top-level setting only takes effect when `[features].codex_git_commit`
+    /// is enabled.
     ///
+    /// When enabled and unset, Codex uses `Codex <noreply@openai.com>`.
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
 

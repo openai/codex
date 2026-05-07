@@ -2,6 +2,7 @@ use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
+use codex_app_server_protocol::HookTrustStatus;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -67,7 +68,12 @@ impl HooksBrowserView {
             app_event_tx,
         };
         if view.page_len() > 0 {
-            view.state.selected_idx = Some(0);
+            view.state.selected_idx = Some(
+                view.event_rows()
+                    .iter()
+                    .position(|row| row.needs_review > 0)
+                    .unwrap_or(0),
+            );
         }
         view
     }
@@ -84,14 +90,18 @@ impl HooksBrowserView {
                 let active = self
                     .hooks
                     .iter()
-                    .filter(|hook| {
-                        hook.event_name == event_name && (hook.enabled || hook.is_managed)
-                    })
+                    .filter(|hook| hook.event_name == event_name && hook_is_active(hook))
+                    .count();
+                let needs_review = self
+                    .hooks
+                    .iter()
+                    .filter(|hook| hook.event_name == event_name && hook_needs_review(hook))
                     .count();
                 EventRow {
                     event_name,
                     installed,
                     active,
+                    needs_review,
                 }
             })
             .collect()
@@ -169,11 +179,32 @@ impl HooksBrowserView {
         if hook.is_managed {
             return;
         }
+        if hook_needs_review(hook) {
+            return;
+        }
 
         hook.enabled = !hook.enabled;
         self.app_event_tx.send(AppEvent::SetHookEnabled {
             key: hook.key.clone(),
             enabled: hook.enabled,
+        });
+    }
+
+    fn trust_selected_hook(&mut self, event_name: HookEventName) {
+        let Some(idx) = self.selected_hook_index(event_name) else {
+            return;
+        };
+        let Some(hook) = self.hooks.get_mut(idx) else {
+            return;
+        };
+        if !hook_needs_review(hook) {
+            return;
+        }
+
+        hook.trust_status = HookTrustStatus::Trusted;
+        self.app_event_tx.send(AppEvent::TrustHook {
+            key: hook.key.clone(),
+            current_hash: hook.current_hash.clone(),
         });
     }
 
@@ -205,26 +236,50 @@ impl HooksBrowserView {
         ]
     }
 
-    fn handler_header_lines(event_name: HookEventName) -> Vec<Line<'static>> {
-        vec![
-            format!("{} hooks", event_label(event_name)).bold().into(),
-            "Turn hooks on or off. Your changes are saved automatically."
-                .dim()
-                .into(),
-        ]
+    fn handler_header_lines(
+        event_name: HookEventName,
+        review_needed_count: usize,
+    ) -> Vec<Line<'static>> {
+        let mut lines = vec![format!("{} hooks", event_label(event_name)).bold().into()];
+        match review_needed_count {
+            0 => lines.push(
+                "Turn hooks on or off. Your changes are saved automatically."
+                    .dim()
+                    .into(),
+            ),
+            1 => lines.push("1 hook needs review before it can run.".dim().into()),
+            count => lines.push(
+                format!("{count} hooks need review before they can run.")
+                    .dim()
+                    .into(),
+            ),
+        }
+        lines
+    }
+
+    fn review_needed_count(&self, event_name: HookEventName) -> usize {
+        self.handlers_for_event(event_name)
+            .filter(|hook| hook_needs_review(hook))
+            .count()
     }
 
     fn event_table_lines(&self) -> Vec<Line<'static>> {
+        let rows = self.event_rows();
+        let show_review = rows.iter().any(|row| row.needs_review > 0);
         let mut lines = Vec::new();
-        lines.push(Line::from(vec![
+        let mut header = vec![
             format!("{:<EVENT_COLUMN_WIDTH$}", "Event").into(),
             format!("{:<COUNT_COLUMN_WIDTH$}", "Installed").into(),
             format!("{:<COUNT_COLUMN_WIDTH$}", "Active").into(),
-            "Description".into(),
-        ]));
-        for (idx, row) in self.event_rows().into_iter().enumerate() {
+        ];
+        if show_review {
+            header.push(format!("{:<COUNT_COLUMN_WIDTH$}", "Review").into());
+        }
+        header.push("Description".into());
+        lines.push(Line::from(header));
+        for (idx, row) in rows.into_iter().enumerate() {
             if self.state.selected_idx == Some(idx) {
-                lines.push(Line::from(vec![
+                let mut row_line = vec![
                     Span::from(format!(
                         "{:<EVENT_COLUMN_WIDTH$}",
                         event_label(row.event_name)
@@ -237,18 +292,32 @@ impl HooksBrowserView {
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active))
                         .cyan()
                         .bold(),
-                    Span::from(event_description(row.event_name)).cyan().bold(),
-                ]));
+                ];
+                if show_review {
+                    row_line.push(
+                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review))
+                            .cyan()
+                            .bold(),
+                    );
+                }
+                row_line.push(Span::from(event_description(row.event_name)).cyan().bold());
+                lines.push(Line::from(row_line));
             } else {
-                lines.push(Line::from(vec![
+                let mut row_line = vec![
                     Span::from(format!(
                         "{:<EVENT_COLUMN_WIDTH$}",
                         event_label(row.event_name)
                     )),
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed)).dim(),
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active)).dim(),
-                    Span::from(event_description(row.event_name)).dim(),
-                ]));
+                ];
+                if show_review {
+                    row_line.push(
+                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review)).dim(),
+                    );
+                }
+                row_line.push(Span::from(event_description(row.event_name)).dim());
+                lines.push(Line::from(row_line));
             }
         }
         lines
@@ -292,12 +361,22 @@ impl HooksBrowserView {
         self.handlers_for_event(event_name)
             .enumerate()
             .map(|(idx, hook)| {
-                let marker = if hook.enabled || hook.is_managed {
+                let marker = if hook_needs_review(hook) {
+                    '!'
+                } else if hook_is_active(hook) {
                     'x'
                 } else {
                     ' '
                 };
-                let row = format!("[{marker}] {}", hook_title(idx));
+                let row = match hook.trust_status {
+                    HookTrustStatus::Modified => {
+                        format!("[{marker}] {} · modified", hook_title(idx))
+                    }
+                    HookTrustStatus::Untrusted => format!("[{marker}] {} · new", hook_title(idx)),
+                    HookTrustStatus::Managed | HookTrustStatus::Trusted => {
+                        format!("[{marker}] {}", hook_title(idx))
+                    }
+                };
                 let mut line = Line::from(row);
                 line = truncate_line_with_ellipsis_if_overflow(line, width);
                 if hook.is_managed {
@@ -335,6 +414,7 @@ impl HooksBrowserView {
             Some(MAX_COMMAND_DETAIL_LINES),
         ));
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
+        lines.push(detail_line("Trust", hook_trust_label(hook.trust_status)));
         lines
     }
 
@@ -364,6 +444,14 @@ impl HooksBrowserView {
                 } else if selected_hook.is_some_and(|hook| hook.is_managed) {
                     Line::from(vec![
                         "Managed hooks are always on; press ".into(),
+                        key_hint::plain(KeyCode::Esc).into(),
+                        " to go back".into(),
+                    ])
+                } else if selected_hook.is_some_and(hook_needs_review) {
+                    Line::from(vec![
+                        "Press ".into(),
+                        key_hint::plain(KeyCode::Char('t')).into(),
+                        " to trust; ".into(),
                         key_hint::plain(KeyCode::Esc).into(),
                         " to go back".into(),
                     ])
@@ -428,6 +516,15 @@ impl BottomPaneView for HooksBrowserView {
                 }
             }
             KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let HooksBrowserPage::Handlers(event_name) = self.page {
+                    self.trust_selected_hook(event_name);
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Esc, ..
             } => match self.page {
                 HooksBrowserPage::Events => self.close(),
@@ -458,11 +555,14 @@ impl Renderable for HooksBrowserView {
             HooksBrowserPage::Events => self.event_page_lines().len(),
             HooksBrowserPage::Handlers(event_name) => {
                 let row_count = self.handler_row_lines(event_name, content_width).len();
+                let header_line_count =
+                    Self::handler_header_lines(event_name, self.review_needed_count(event_name))
+                        .len();
                 if row_count == 0 {
-                    Self::handler_header_lines(event_name).len() + 2
+                    header_line_count + 2
                 } else {
                     let visible_row_count = row_count.min(MAX_POPUP_ROWS);
-                    Self::handler_header_lines(event_name).len()
+                    header_line_count
                         + 1
                         + visible_row_count
                         + 1
@@ -485,7 +585,8 @@ impl Renderable for HooksBrowserView {
         let lines = match self.page {
             HooksBrowserPage::Events => self.event_page_lines(),
             HooksBrowserPage::Handlers(event_name) => {
-                let mut lines = Self::handler_header_lines(event_name);
+                let mut lines =
+                    Self::handler_header_lines(event_name, self.review_needed_count(event_name));
                 let rows = self.handler_row_lines(event_name, width);
                 if rows.is_empty() {
                     lines.push(Line::default());
@@ -525,10 +626,35 @@ impl Renderable for HooksBrowserView {
     }
 }
 
+fn hook_is_active(hook: &HookMetadata) -> bool {
+    hook.enabled
+        && matches!(
+            hook.trust_status,
+            HookTrustStatus::Managed | HookTrustStatus::Trusted
+        )
+}
+
 struct EventRow {
     event_name: HookEventName,
     installed: usize,
     active: usize,
+    needs_review: usize,
+}
+
+fn hook_needs_review(hook: &HookMetadata) -> bool {
+    matches!(
+        hook.trust_status,
+        HookTrustStatus::Untrusted | HookTrustStatus::Modified
+    )
+}
+
+fn hook_trust_label(status: HookTrustStatus) -> &'static str {
+    match status {
+        HookTrustStatus::Managed => "Managed",
+        HookTrustStatus::Trusted => "Trusted",
+        HookTrustStatus::Untrusted => "New hook - review required",
+        HookTrustStatus::Modified => "Modified since last trusted - review required",
+    }
 }
 
 fn event_label(event_name: HookEventName) -> &'static str {
@@ -536,6 +662,8 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
@@ -547,6 +675,8 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "Before a tool executes",
         HookEventName::PermissionRequest => "When permission is requested",
         HookEventName::PostToolUse => "After a tool executes",
+        HookEventName::PreCompact => "Before context compaction",
+        HookEventName::PostCompact => "After context compaction",
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
         HookEventName::Stop => "Right before Codex ends its turn",
@@ -661,6 +791,7 @@ mod tests {
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
+    use codex_app_server_protocol::HookTrustStatus;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -706,6 +837,7 @@ mod tests {
         is_managed: bool,
         display_order: i64,
     ) -> HookMetadata {
+        let current_hash = "sha256:current".to_string();
         HookMetadata {
             key: key.to_string(),
             event_name,
@@ -720,6 +852,12 @@ mod tests {
             plugin_id: plugin_id.map(str::to_string),
             display_order,
             enabled,
+            current_hash,
+            trust_status: if is_managed {
+                HookTrustStatus::Managed
+            } else {
+                HookTrustStatus::Trusted
+            },
         }
     }
 
@@ -771,6 +909,33 @@ mod tests {
     }
 
     #[test]
+    fn renders_event_browser_with_review_column_when_needed() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_snapshot!(
+            "hooks_browser_events_with_review_column",
+            render_lines(&view, /*width*/ 112)
+        );
+    }
+
+    #[test]
     fn renders_event_browser_with_issues() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let view = HooksBrowserView::new(
@@ -794,6 +959,34 @@ mod tests {
         let mut view = view();
         view.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_snapshot!("hooks_browser_handlers", render_lines(&view, /*width*/ 112));
+    }
+
+    #[test]
+    fn renders_untrusted_enabled_handler_as_inactive() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "~/bin/untrusted.sh",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let mut view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_snapshot!(
+            "hooks_browser_untrusted_enabled_handler",
+            render_lines(&view, /*width*/ 112)
+        );
     }
 
     #[test]
@@ -928,7 +1121,7 @@ mod tests {
                 HookSource::System,
                 /*plugin_id*/ None,
                 "/enterprise/hooks/pre-tool-use-check.sh",
-                /*enabled*/ false,
+                /*enabled*/ true,
                 /*is_managed*/ true,
                 /*display_order*/ 0,
             )],
@@ -945,6 +1138,93 @@ mod tests {
 
         assert_eq!(pre_tool_use.installed, 1);
         assert_eq!(pre_tool_use.active, 1);
+    }
+
+    #[test]
+    fn review_needed_hooks_are_not_active() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        let rows = view.event_rows();
+        let pre_tool_use = rows
+            .into_iter()
+            .find(|row| row.event_name == HookEventName::PreToolUse)
+            .expect("pre tool use row");
+
+        assert_eq!(pre_tool_use.installed, 1);
+        assert_eq!(pre_tool_use.active, 0);
+        assert_eq!(pre_tool_use.needs_review, 1);
+    }
+
+    #[test]
+    fn review_needed_event_is_selected_by_default() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PermissionRequest,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/permission-request-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_eq!(
+            view.selected_event(),
+            Some(HookEventName::PermissionRequest)
+        );
+    }
+
+    #[test]
+    fn renders_review_needed_handler() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let mut view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_snapshot!(
+            "hooks_browser_review_needed_handler",
+            render_lines(&view, /*width*/ 112)
+        );
     }
 
     fn assert_unmanaged_toggle_key(key_code: KeyCode) {
@@ -1005,6 +1285,81 @@ mod tests {
         view.handle_key_event(KeyEvent::from(KeyCode::Char(' ')));
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn trust_key_trusts_review_needed_handler_without_changing_enablement() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let current_hash = untrusted_hook.current_hash.clone();
+        let mut view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        view.handle_key_event(KeyEvent::from(KeyCode::Char('t')));
+
+        match rx.try_recv().expect("trust event") {
+            AppEvent::TrustHook {
+                key,
+                current_hash: hash_to_trust,
+            } => {
+                assert_eq!(key, "path:untrusted");
+                assert_eq!(hash_to_trust, current_hash);
+            }
+            other => panic!("expected hook trust event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trust_key_preserves_disabled_modified_handler() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let mut modified_hook = hook(
+            "path:modified",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        modified_hook.trust_status = HookTrustStatus::Modified;
+        let current_hash = modified_hook.current_hash.clone();
+        let mut view = HooksBrowserView::new(
+            vec![modified_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        view.handle_key_event(KeyEvent::from(KeyCode::Char('t')));
+
+        let hook = view.hooks.first().expect("trusted hook");
+        assert!(!hook.enabled);
+        assert_eq!(hook.trust_status, HookTrustStatus::Trusted);
+        match rx.try_recv().expect("trust event") {
+            AppEvent::TrustHook {
+                key,
+                current_hash: hash_to_trust,
+            } => {
+                assert_eq!(key, "path:modified");
+                assert_eq!(hash_to_trust, current_hash);
+            }
+            other => panic!("expected hook trust event, got {other:?}"),
+        }
     }
 
     #[test]

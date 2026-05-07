@@ -44,6 +44,9 @@ pub enum ToolKind {
 pub trait ToolHandler: Send + Sync {
     type Output: ToolOutput + 'static;
 
+    /// The concrete tool name handled by this handler instance.
+    fn tool_name(&self) -> ToolName;
+
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -227,10 +230,11 @@ impl ToolRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_handler_for_test<T>(name: ToolName, handler: Arc<T>) -> Self
+    pub(crate) fn with_handler_for_test<T>(handler: Arc<T>) -> Self
     where
         T: ToolHandler + 'static,
     {
+        let name = handler.tool_name();
         Self::new(HashMap::from([(name, handler as Arc<dyn AnyToolHandler>)]))
     }
 
@@ -249,14 +253,6 @@ impl ToolRegistry {
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.handler(name)?.create_diff_consumer()
     }
-
-    // TODO(jif) for dynamic tools.
-    // pub fn register(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
-    //     let name = name.into();
-    //     if self.handlers.insert(name.clone(), handler).is_some() {
-    //         warn!("overwriting handler for tool {name}");
-    //     }
-    // }
 
     #[expect(
         clippy::await_holding_invalid_type,
@@ -458,7 +454,6 @@ impl ToolRegistry {
                 outcome.additional_contexts.clone(),
             )
             .await;
-
             let replacement_text = if outcome.should_stop {
                 Some(
                     outcome
@@ -527,10 +522,6 @@ impl ToolRegistryBuilder {
         }
     }
 
-    pub fn push_spec(&mut self, spec: ToolSpec) {
-        self.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ false);
-    }
-
     pub fn push_spec_with_parallel_support(
         &mut self,
         spec: ToolSpec,
@@ -540,11 +531,25 @@ impl ToolRegistryBuilder {
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub fn register_handler<H>(&mut self, name: impl Into<ToolName>, handler: Arc<H>)
+    pub(crate) fn push_spec(
+        &mut self,
+        spec: ToolSpec,
+        supports_parallel_tool_calls: bool,
+        code_mode_enabled: bool,
+    ) {
+        let spec = if code_mode_enabled {
+            codex_tools::augment_tool_spec_for_code_mode(spec)
+        } else {
+            spec
+        };
+        self.push_spec_with_parallel_support(spec, supports_parallel_tool_calls);
+    }
+
+    pub fn register_handler<H>(&mut self, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
-        let name = name.into();
+        let name = handler.tool_name();
         let display_name = name.display();
         let handler: Arc<dyn AnyToolHandler> = handler;
         if self.handlers.insert(name, handler).is_some() {
@@ -552,23 +557,9 @@ impl ToolRegistryBuilder {
         }
     }
 
-    // TODO(jif) for dynamic tools.
-    // pub fn register_many<I>(&mut self, names: I, handler: Arc<dyn ToolHandler>)
-    // where
-    //     I: IntoIterator,
-    //     I::Item: Into<String>,
-    // {
-    //     for name in names {
-    //         let name = name.into();
-    //         if self
-    //             .handlers
-    //             .insert(name.clone(), handler.clone())
-    //             .is_some()
-    //         {
-    //             warn!("overwriting handler for tool {name}");
-    //         }
-    //     }
-    // }
+    pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {
+        &self.specs
+    }
 
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);

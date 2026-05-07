@@ -7,6 +7,7 @@ use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
+use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -85,6 +86,7 @@ mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
+mod mcp_refresh;
 mod message_processor;
 mod models;
 mod outgoing_message;
@@ -618,6 +620,7 @@ pub async fn run_main_with_transport_options(
             None => error!("{}", warning.summary),
         }
     }
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     if let Some(err) = &state_db_init_error {
         error!("failed to initialize sqlite state db: {err}");
     }
@@ -773,6 +776,7 @@ pub async fn run_main_with_transport_options(
             config_warnings,
             session_source,
             auth_manager,
+            installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,

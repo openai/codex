@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
 use codex_hooks::PermissionRequestDecision;
@@ -161,8 +162,10 @@ pub(crate) async fn run_pre_tool_use_hooks(
         hook_events,
         should_block,
         block_reason,
+        additional_contexts,
     } = hooks.run_pre_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
+    record_additional_contexts(sess, turn_context, additional_contexts).await;
 
     if should_block {
         block_reason.map(|reason| {
@@ -251,6 +254,68 @@ pub(crate) async fn run_post_tool_use_hooks(
     let outcome = hooks.run_post_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
+}
+
+pub(crate) async fn run_pre_compact_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    trigger: CompactionTrigger,
+) -> PreCompactHookOutcome {
+    let request = codex_hooks::PreCompactRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        trigger: compaction_trigger_label(trigger).to_string(),
+    };
+    let preview_runs = sess.hooks().preview_pre_compact(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_pre_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+    if outcome.should_stop {
+        PreCompactHookOutcome::Stopped {
+            reason: outcome.stop_reason,
+        }
+    } else {
+        PreCompactHookOutcome::Continue
+    }
+}
+
+pub(crate) enum PreCompactHookOutcome {
+    Continue,
+    Stopped { reason: Option<String> },
+}
+
+pub(crate) enum PostCompactHookOutcome {
+    Continue,
+    Stopped,
+}
+
+pub(crate) async fn run_post_compact_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    trigger: CompactionTrigger,
+) -> PostCompactHookOutcome {
+    let request = codex_hooks::PostCompactRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        trigger: compaction_trigger_label(trigger).to_string(),
+    };
+    let preview_runs = sess.hooks().preview_post_compact(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_post_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+    if outcome.should_stop {
+        PostCompactHookOutcome::Stopped
+    } else {
+        PostCompactHookOutcome::Continue
+    }
 }
 
 pub(crate) async fn run_user_prompt_submit_hooks(
@@ -467,6 +532,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
@@ -507,6 +574,13 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
+}
+
+fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
+    match value {
+        CompactionTrigger::Manual => "manual",
+        CompactionTrigger::Auto => "auto",
+    }
 }
 
 #[cfg(test)]
