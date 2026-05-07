@@ -82,13 +82,12 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::init_state_db_from_config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
-use codex_rollout::state_db::StateDbHandle;
+pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -129,7 +128,7 @@ pub struct InProcessStartArgs {
     pub feedback: CodexFeedback,
     /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
     pub log_db: Option<LogDbLayer>,
-    /// Optional state DB handle to use for the in-process runtime.
+    /// Process-wide SQLite state handle shared with embedded app-server consumers.
     pub state_db: Option<StateDbHandle>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
@@ -368,10 +367,6 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
-    let state_db = match args.state_db.clone() {
-        Some(state_db) => Some(state_db),
-        None => init_state_db_from_config(args.config.as_ref()).await,
-    };
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
@@ -421,12 +416,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let Some(state_db) = state_db else {
-                warn!(
-                    "in-process app-server state db initialization failed; shutting down processor task"
-                );
-                return;
-            };
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 analytics_events_client,
@@ -436,7 +425,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 environment_manager: args.environment_manager,
                 feedback: args.feedback,
                 log_db: args.log_db,
-                state_db,
+                state_db: args.state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
@@ -775,7 +764,7 @@ mod tests {
     ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
-        let state_db = init_state_db_from_config(config.as_ref())
+        let state_db = codex_rollout::state_db::try_init(config.as_ref())
             .await
             .expect("state db should initialize for in-process test");
         let args = InProcessStartArgs {
@@ -833,7 +822,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_process_allows_device_key_requests_to_reach_device_key_api() {
+    async fn in_process_allows_device_key_requests_to_reach_device_key_processor() {
         let client = start_test_client(SessionSource::Cli).await;
         const MALFORMED_KEY_ID_MESSAGE: &str = concat!(
             "invalid device key payload: keyId must be dk_hse_, dk_tpm_, or dk_osn_ ",

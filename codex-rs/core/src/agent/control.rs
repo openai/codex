@@ -31,6 +31,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -310,6 +311,7 @@ impl AgentControl {
         state.notify_thread_created(new_thread.thread_id);
 
         self.persist_thread_spawn_edge_for_source(
+            new_thread.thread.as_ref(),
             new_thread.thread_id,
             notification_source.as_ref(),
         )
@@ -459,14 +461,19 @@ impl AgentControl {
         ))
         .await?;
         let state = self.upgrade()?;
-        let agent_graph_store = state.agent_graph_store();
+        let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
+            return Ok(resumed_thread_id);
+        };
+        let Some(state_db_ctx) = resumed_thread.state_db() else {
+            return Ok(resumed_thread_id);
+        };
 
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
         while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
-            let child_ids = match agent_graph_store
-                .list_thread_spawn_children(
+            let child_ids = match state_db_ctx
+                .list_thread_spawn_children_with_status(
                     parent_thread_id,
-                    Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+                    DirectionalThreadSpawnEdgeStatus::Open,
                 )
                 .await
             {
@@ -530,6 +537,7 @@ impl AgentControl {
             let _ = config.features.disable(Feature::Collab);
         }
         let state = self.upgrade()?;
+        let state_db_ctx = state.state_db();
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -539,11 +547,14 @@ impl AgentControl {
                 agent_role: _,
                 agent_nickname: _,
             }) => {
-                let state_db_ctx = state.state_db();
                 let (resumed_agent_nickname, resumed_agent_role) =
-                    match state_db_ctx.get_thread(thread_id).await {
-                        Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
-                        Ok(None) | Err(_) => (None, None),
+                    if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+                        match state_db_ctx.get_thread(thread_id).await {
+                            Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
+                            Ok(None) | Err(_) => (None, None),
+                        }
+                    } else {
+                        (None, None)
                     };
                 self.prepare_thread_spawn(
                     &mut reservation,
@@ -610,6 +621,7 @@ impl AgentControl {
             );
         }
         self.persist_thread_spawn_edge_for_source(
+            resumed_thread.thread.as_ref(),
             resumed_thread.thread_id,
             Some(&notification_source),
         )
@@ -722,13 +734,11 @@ impl AgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        if let Err(err) = state
-            .agent_graph_store()
-            .set_thread_spawn_edge_status(
-                agent_id,
-                codex_agent_graph_store::ThreadSpawnEdgeStatus::Closed,
-            )
-            .await
+        if let Ok(thread) = state.get_thread(agent_id).await
+            && let Some(state_db_ctx) = thread.state_db()
+            && let Err(err) = state_db_ctx
+                .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
+                .await
         {
             warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
         }
@@ -1144,21 +1154,21 @@ impl AgentControl {
 
     async fn persist_thread_spawn_edge_for_source(
         &self,
+        thread: &crate::CodexThread,
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
     ) {
         let Some(parent_thread_id) = session_source.and_then(thread_spawn_parent_thread_id) else {
             return;
         };
-        let Ok(state) = self.upgrade() else {
+        let Some(state_db_ctx) = thread.state_db() else {
             return;
         };
-        if let Err(err) = state
-            .agent_graph_store()
+        if let Err(err) = state_db_ctx
             .upsert_thread_spawn_edge(
                 parent_thread_id,
                 child_thread_id,
-                codex_agent_graph_store::ThreadSpawnEdgeStatus::Open,
+                DirectionalThreadSpawnEdgeStatus::Open,
             )
             .await
         {

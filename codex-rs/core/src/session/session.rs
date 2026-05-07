@@ -368,7 +368,6 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        state_db: Option<state_db::StateDbHandle>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
     ) -> anyhow::Result<Arc<Self>> {
@@ -468,7 +467,22 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_ctx = if config.ephemeral { None } else { state_db };
+        let state_db_fut = async {
+            if config.ephemeral {
+                None
+            } else if let Some(local_store) =
+                thread_store.as_any().downcast_ref::<LocalThreadStore>()
+            {
+                local_store.state_db().await
+            } else {
+                None
+            }
+        }
+        .instrument(info_span!(
+            "session_init.state_db",
+            otel.name = "session_init.state_db",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
@@ -492,8 +506,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (thread_persistence_result, (auth, mcp_servers, auth_statuses)) =
-            tokio::join!(thread_persistence_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {

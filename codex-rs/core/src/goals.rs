@@ -30,6 +30,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_thread_store::LocalThreadStore;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -1338,6 +1339,17 @@ impl Session {
             state_db
         } else if let Some(state_db) = self.goal_runtime.state_db.lock().await.clone() {
             state_db
+        } else if let Some(local_store) = self
+            .services
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.state_db().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "thread goals require a local persisted thread with a state database"
+                )
+            })?
         } else {
             anyhow::bail!("thread goals require a local persisted thread with a state database");
         };
