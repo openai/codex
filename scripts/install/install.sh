@@ -60,6 +60,9 @@ parse_args() {
       --help | -h)
         cat <<EOF
 Usage: install.sh [--release VERSION]
+
+Environment:
+  CODEX_INSTALL_SCRIPT_NONINTERACTIVE=true  Skip prompts and use default answers.
 EOF
         exit 0
         ;;
@@ -543,6 +546,10 @@ classify_existing_codex() {
 
 prompt_yes_no() {
   prompt="$1"
+
+  if [ "${CODEX_INSTALL_SCRIPT_NONINTERACTIVE:-}" = "true" ]; then
+    return 1
+  fi
 
   if ( : </dev/tty ) 2>/dev/null; then
     printf '%s [y/N] ' "$prompt" >/dev/tty

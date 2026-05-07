@@ -27,6 +27,10 @@ function Prompt-YesNo {
         [string]$Prompt
     )
 
+    if ($env:CODEX_INSTALL_SCRIPT_NONINTERACTIVE -eq "true") {
+        return $false
+    }
+
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
         return $false
     }
