@@ -282,6 +282,7 @@ pub fn thread_store_from_config(
 }
 
 impl ThreadManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: &Config,
         auth_manager: Arc<AuthManager>,

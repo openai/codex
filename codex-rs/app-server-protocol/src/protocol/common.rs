@@ -1674,7 +1674,10 @@ mod tests {
 
         let plugin_list = ClientRequest::PluginList {
             request_id: request_id(),
-            params: v2::PluginListParams { cwds: None },
+            params: v2::PluginListParams {
+                cwds: None,
+                marketplace_kinds: None,
+            },
         };
         assert_eq!(
             plugin_list.serialization_scope(),

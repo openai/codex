@@ -425,33 +425,18 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let state_db = codex_core::init_state_db(&config).await;
-        let thread_manager = if config.model_catalog.is_some() {
-            let thread_store = thread_store_from_config(&config, state_db.clone());
-            let installation_id = resolve_installation_id(&config.codex_home).await?;
-            ThreadManager::new(
-                &config,
-                codex_core::test_support::auth_manager_from_auth(auth.clone()),
-                SessionSource::Exec,
-                Arc::clone(&environment_manager),
-                /*analytics_events_client*/ None,
-                thread_store,
-                state_db.clone(),
-                installation_id,
-            )
-        } else {
-            let thread_store = thread_store_from_config(&config, state_db.clone());
-            let installation_id = resolve_installation_id(&config.codex_home).await?;
-            ThreadManager::new(
-                &config,
-                codex_core::test_support::auth_manager_from_auth(auth.clone()),
-                SessionSource::Exec,
-                Arc::clone(&environment_manager),
-                /*analytics_events_client*/ None,
-                thread_store,
-                state_db.clone(),
-                installation_id,
-            )
-        };
+        let thread_store = thread_store_from_config(&config, state_db.clone());
+        let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let thread_manager = ThreadManager::new(
+            &config,
+            codex_core::test_support::auth_manager_from_auth(auth.clone()),
+            SessionSource::Exec,
+            Arc::clone(&environment_manager),
+            /*analytics_events_client*/ None,
+            thread_store,
+            state_db.clone(),
+            installation_id,
+        );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 
