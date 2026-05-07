@@ -475,13 +475,13 @@ ignored = [
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable debug info
 # across local dev builds.
-debug = 1
+debug = "limited"
 
 [profile.dev-small]
 inherits = "dev"
 opt-level = 0
-debug = 0
-strip = true
+debug = "none"
+strip = "symbols"
 
 [profile.release]
 lto = "fat"
@@ -494,7 +494,8 @@ strip = "symbols"
 codegen-units = 1
 
 [profile.ci-test]
-debug = 1         # Reduce debug symbol size
+# Reduce binary size to reduce disk pressure.
+debug = "limited"
 inherits = "test"
 opt-level = 0
 
