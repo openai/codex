@@ -1,4 +1,3 @@
-use super::AttestationPurpose;
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
@@ -519,29 +518,6 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
     (model_client, attestation_calls)
 }
 
-#[test]
-fn should_send_attestation_for_allowed_chatgpt_codex_purposes() {
-    let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-
-    for purpose in [
-        AttestationPurpose::Response,
-        AttestationPurpose::Compaction,
-        AttestationPurpose::RealtimeWebrtcCallSetup,
-    ] {
-        assert!(super::should_send_attestation(&provider, purpose));
-    }
-}
-
-#[test]
-fn should_not_send_attestation_for_non_chatgpt_codex_provider() {
-    let provider = api_provider("https://api.openai.com/v1");
-
-    assert!(!super::should_send_attestation(
-        &provider,
-        AttestationPurpose::Response,
-    ));
-}
-
 #[tokio::test]
 async fn responses_generate_fresh_attestation_headers_for_chatgpt_codex() {
     let provider = api_provider("https://chatgpt.com/backend-api/codex/");
@@ -550,10 +526,10 @@ async fn responses_generate_fresh_attestation_headers_for_chatgpt_codex() {
     let mut second_headers = http::HeaderMap::new();
 
     model_client
-        .extend_attestation_header_for(&mut first_headers, &provider, AttestationPurpose::Response)
+        .extend_attestation_header_for(&mut first_headers, &provider)
         .await;
     model_client
-        .extend_attestation_header_for(&mut second_headers, &provider, AttestationPurpose::Response)
+        .extend_attestation_header_for(&mut second_headers, &provider)
         .await;
 
     assert_eq!(
@@ -599,18 +575,10 @@ async fn compact_generate_fresh_attestation_headers_for_chatgpt_codex() {
     let mut second_headers = http::HeaderMap::new();
 
     model_client
-        .extend_attestation_header_for(
-            &mut first_headers,
-            &provider,
-            AttestationPurpose::Compaction,
-        )
+        .extend_attestation_header_for(&mut first_headers, &provider)
         .await;
     model_client
-        .extend_attestation_header_for(
-            &mut second_headers,
-            &provider,
-            AttestationPurpose::Compaction,
-        )
+        .extend_attestation_header_for(&mut second_headers, &provider)
         .await;
 
     assert_eq!(
@@ -636,18 +604,10 @@ async fn realtime_setup_generate_fresh_attestation_headers_for_chatgpt_codex() {
     let mut second_headers = http::HeaderMap::new();
 
     model_client
-        .extend_attestation_header_for(
-            &mut first_headers,
-            &provider,
-            AttestationPurpose::RealtimeWebrtcCallSetup,
-        )
+        .extend_attestation_header_for(&mut first_headers, &provider)
         .await;
     model_client
-        .extend_attestation_header_for(
-            &mut second_headers,
-            &provider,
-            AttestationPurpose::RealtimeWebrtcCallSetup,
-        )
+        .extend_attestation_header_for(&mut second_headers, &provider)
         .await;
 
     assert_eq!(
@@ -672,27 +632,15 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
     let mut response_headers = http::HeaderMap::new();
 
     model_client
-        .extend_attestation_header_for(
-            &mut response_headers,
-            &provider,
-            AttestationPurpose::Response,
-        )
+        .extend_attestation_header_for(&mut response_headers, &provider)
         .await;
     let mut compaction_headers = http::HeaderMap::new();
     model_client
-        .extend_attestation_header_for(
-            &mut compaction_headers,
-            &provider,
-            AttestationPurpose::Compaction,
-        )
+        .extend_attestation_header_for(&mut compaction_headers, &provider)
         .await;
     let mut realtime_headers = http::HeaderMap::new();
     model_client
-        .extend_attestation_header_for(
-            &mut realtime_headers,
-            &provider,
-            AttestationPurpose::RealtimeWebrtcCallSetup,
-        )
+        .extend_attestation_header_for(&mut realtime_headers, &provider)
         .await;
 
     assert_eq!(

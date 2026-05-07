@@ -494,12 +494,8 @@ impl ModelClient {
             Some(self.state.session_id.to_string()),
             Some(self.state.thread_id.to_string()),
         ));
-        self.extend_attestation_header_for(
-            &mut extra_headers,
-            &client_setup.api_provider,
-            AttestationPurpose::Compaction,
-        )
-        .await;
+        self.extend_attestation_header_for(&mut extra_headers, &client_setup.api_provider)
+            .await;
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
@@ -521,12 +517,8 @@ impl ModelClient {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
         let client_setup = self.current_client_setup().await?;
-        self.extend_attestation_header_for(
-            &mut extra_headers,
-            &client_setup.api_provider,
-            AttestationPurpose::RealtimeWebrtcCallSetup,
-        )
-        .await;
+        self.extend_attestation_header_for(&mut extra_headers, &client_setup.api_provider)
+            .await;
         let mut sideband_headers = extra_headers.clone();
         sideband_headers.extend(sideband_websocket_auth_headers(
             client_setup.api_auth.as_ref(),
@@ -668,9 +660,8 @@ impl ModelClient {
     async fn generate_attestation_header_for(
         &self,
         provider: &codex_api::Provider,
-        purpose: AttestationPurpose,
     ) -> Option<HeaderValue> {
-        if !should_send_attestation(provider, purpose) {
+        if !provider.uses_chatgpt_auth {
             return None;
         }
         self.generate_attestation_header().await
@@ -911,7 +902,7 @@ impl ModelClient {
         }
         headers.extend(build_session_headers(Some(session_id), Some(thread_id)));
         headers.extend(self.build_responses_identity_headers());
-        self.extend_attestation_header_for(&mut headers, provider, AttestationPurpose::Response)
+        self.extend_attestation_header_for(&mut headers, provider)
             .await;
         headers.insert(
             OPENAI_BETA_HEADER,
@@ -982,11 +973,7 @@ impl ModelClientSession {
                 );
                 headers.extend(self.client.build_responses_identity_headers());
                 self.client
-                    .extend_attestation_header_for(
-                        &mut headers,
-                        provider,
-                        AttestationPurpose::Response,
-                    )
+                    .extend_attestation_header_for(&mut headers, provider)
                     .await;
                 headers
             },
@@ -1687,34 +1674,13 @@ fn build_responses_headers(
     headers
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AttestationPurpose {
-    Response,
-    Compaction,
-    RealtimeWebrtcCallSetup,
-}
-
-fn should_send_attestation(provider: &codex_api::Provider, purpose: AttestationPurpose) -> bool {
-    provider.uses_chatgpt_auth
-        && matches!(
-            purpose,
-            AttestationPurpose::Response
-                | AttestationPurpose::Compaction
-                | AttestationPurpose::RealtimeWebrtcCallSetup
-        )
-}
-
 impl ModelClient {
     async fn extend_attestation_header_for(
         &self,
         headers: &mut ApiHeaderMap,
         provider: &codex_api::Provider,
-        purpose: AttestationPurpose,
     ) {
-        if let Some(header_value) = self
-            .generate_attestation_header_for(provider, purpose)
-            .await
-        {
+        if let Some(header_value) = self.generate_attestation_header_for(provider).await {
             headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
     }
