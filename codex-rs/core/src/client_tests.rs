@@ -70,6 +70,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     )
 }
 
@@ -496,7 +497,7 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
     let attestation_calls = Arc::new(AtomicUsize::new(0));
     let calls = attestation_calls.clone();
-    let model_client = ModelClient::new_with_attestation_provider(
+    let model_client = ModelClient::new(
         /*auth_manager*/ None,
         SessionId::new(),
         ThreadId::new(),

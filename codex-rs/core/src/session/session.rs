@@ -854,7 +854,7 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
-                model_client: ModelClient::new_with_attestation_provider(
+                model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     session_id,
                     thread_id,

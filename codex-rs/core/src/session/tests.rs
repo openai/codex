@@ -407,6 +407,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     )
     .new_session()
 }
@@ -3894,6 +3895,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -5612,6 +5614,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),

@@ -436,6 +436,7 @@ impl TestCodexBuilder {
             thread_store,
             state_db.clone(),
             installation_id,
+            /*attestation_provider*/ None,
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();

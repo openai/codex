@@ -401,6 +401,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -517,6 +518,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         thread_store,
         state_db.clone(),
         installation_id.clone(),
+        /*attestation_provider*/ None,
     );
 
     let thread = manager
@@ -554,6 +556,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -609,6 +612,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -671,6 +675,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         thread_store,
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -860,6 +865,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -1074,6 +1080,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -1180,6 +1187,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -1275,6 +1283,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
@@ -1416,6 +1425,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager

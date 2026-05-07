@@ -317,34 +317,6 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
-    ) -> Self {
-        Self::new_with_attestation_provider(
-            auth_manager,
-            session_id,
-            thread_id,
-            installation_id,
-            provider_info,
-            session_source,
-            model_verbosity,
-            enable_request_compression,
-            include_timing_metrics,
-            beta_features_header,
-            /*attestation_provider*/ None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_attestation_provider(
-        auth_manager: Option<Arc<AuthManager>>,
-        session_id: SessionId,
-        thread_id: ThreadId,
-        installation_id: String,
-        provider_info: ModelProviderInfo,
-        session_source: SessionSource,
-        model_verbosity: Option<VerbosityConfig>,
-        enable_request_compression: bool,
-        include_timing_metrics: bool,
-        beta_features_header: Option<String>,
         attestation_provider: Option<AttestationProvider>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);

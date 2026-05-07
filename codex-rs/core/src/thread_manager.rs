@@ -295,30 +295,6 @@ impl ThreadManager {
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
         installation_id: String,
-    ) -> Self {
-        Self::new_with_attestation_provider(
-            config,
-            auth_manager,
-            session_source,
-            environment_manager,
-            analytics_events_client,
-            thread_store,
-            state_db,
-            installation_id,
-            /*attestation_provider*/ None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_attestation_provider(
-        config: &Config,
-        auth_manager: Arc<AuthManager>,
-        session_source: SessionSource,
-        environment_manager: Arc<EnvironmentManager>,
-        analytics_events_client: Option<AnalyticsEventsClient>,
-        thread_store: Arc<dyn ThreadStore>,
-        state_db: Option<StateDbHandle>,
-        installation_id: String,
         attestation_provider: Option<AttestationProvider>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
