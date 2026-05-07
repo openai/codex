@@ -607,6 +607,9 @@ mod tests {
     use crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_exec_server::LOCAL_FS;
+    use codex_protocol::error::CodexErr;
+    use codex_protocol::error::SandboxErr;
+    use codex_protocol::exec_output::ExecToolCallOutput;
     use codex_protocol::items::TurnItem;
     use codex_protocol::protocol::PatchApplyStatus;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -614,8 +617,10 @@ mod tests {
     use tempfile::tempdir;
     use tokio::sync::Mutex;
 
-    #[tokio::test]
-    async fn rejected_apply_patch_tracks_committed_delta() {
+    async fn assert_failed_apply_patch_tracks_committed_delta(
+        out: Result<ExecToolCallOutput, ToolError>,
+        expected_status: PatchApplyStatus,
+    ) {
         let (session, turn, rx_event) =
             make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
         let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
@@ -634,29 +639,25 @@ mod tests {
         .await
         .expect("apply patch");
 
-        let err = ToolEmitter::apply_patch(HashMap::new(), /*auto_approved*/ false)
+        ToolEmitter::apply_patch(HashMap::new(), /*auto_approved*/ false)
             .finish(
                 ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
-                Err(ToolError::Rejected("rejected by user".to_string())),
+                out,
                 Some(&delta),
             )
             .await
-            .expect_err("rejected patch");
-        assert!(matches!(
-            err,
-            FunctionCallError::RespondToModel(message) if message == "patch rejected by user"
-        ));
+            .expect_err("failed patch");
 
         let completed = rx_event.recv().await.expect("item completed event");
         assert!(matches!(
             completed.msg,
             EventMsg::ItemCompleted(event)
                 if matches!(
-                    event.item,
+                    &event.item,
                     TurnItem::FileChange(FileChangeItem {
-                        status: Some(PatchApplyStatus::Declined),
+                        status: Some(status),
                         ..
-                    })
+                    }) if status == &expected_status
                 )
         ));
 
@@ -671,5 +672,30 @@ mod tests {
         };
         assert!(unified_diff.contains("out/dest.txt"));
         assert!(unified_diff.contains("+after"));
+    }
+
+    #[tokio::test]
+    async fn denied_apply_patch_tracks_committed_delta() {
+        let output = ExecToolCallOutput {
+            exit_code: 1,
+            ..Default::default()
+        };
+        assert_failed_apply_patch_tracks_committed_delta(
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                output: Box::new(output),
+                network_policy_decision: None,
+            }))),
+            PatchApplyStatus::Failed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn rejected_apply_patch_tracks_committed_delta() {
+        assert_failed_apply_patch_tracks_committed_delta(
+            Err(ToolError::Rejected("rejected by user".to_string())),
+            PatchApplyStatus::Declined,
+        )
+        .await;
     }
 }
