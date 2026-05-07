@@ -190,21 +190,30 @@ mod tests {
     #[test]
     fn app_server_attestation_header_value_reports_app_server_failures() {
         assert_eq!(
-            app_server_attestation_header_value(AppServerAttestationStatus::Timeout, None),
+            app_server_attestation_header_value(
+                AppServerAttestationStatus::Timeout,
+                /*token*/ None,
+            ),
             Some(r#"{"v":1,"s":1}"#.to_string())
         );
         assert_eq!(
-            app_server_attestation_header_value(AppServerAttestationStatus::RequestFailed, None),
+            app_server_attestation_header_value(
+                AppServerAttestationStatus::RequestFailed,
+                /*token*/ None,
+            ),
             Some(r#"{"v":1,"s":2}"#.to_string())
         );
         assert_eq!(
-            app_server_attestation_header_value(AppServerAttestationStatus::RequestCanceled, None),
+            app_server_attestation_header_value(
+                AppServerAttestationStatus::RequestCanceled,
+                /*token*/ None,
+            ),
             Some(r#"{"v":1,"s":3}"#.to_string())
         );
         assert_eq!(
             app_server_attestation_header_value(
                 AppServerAttestationStatus::MalformedResponse,
-                None
+                /*token*/ None
             ),
             Some(r#"{"v":1,"s":4}"#.to_string())
         );
