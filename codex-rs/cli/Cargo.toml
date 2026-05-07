@@ -12,6 +12,7 @@ path = "src/main.rs"
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
