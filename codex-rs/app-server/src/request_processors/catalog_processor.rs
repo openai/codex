@@ -10,7 +10,7 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
 }
 
-const SKILLS_LIST_CWD_CONCURRENCY: usize = 8;
+const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
