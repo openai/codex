@@ -1690,6 +1690,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_app_server_protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_app_server_protocol::HookEventName::PreCompact => "PreCompact",
+        codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_app_server_protocol::HookEventName::Stop => "Stop",

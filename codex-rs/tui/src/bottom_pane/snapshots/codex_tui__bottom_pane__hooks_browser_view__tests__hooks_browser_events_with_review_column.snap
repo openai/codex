@@ -10,6 +10,8 @@ expression: "render_lines(&view, 112)"
   PreToolUse            1           0           1           Before a tool executes                              
   PermissionRequest     0           0           0           When permission is requested                        
   PostToolUse           0           0           0           After a tool executes                               
+  PreCompact            0           0           0           Before context compaction                           
+  PostCompact           0           0           0           After context compaction                            
   SessionStart          0           0           0           When a new session starts                           
   UserPromptSubmit      0           0           0           When the user submits a prompt                      
   Stop                  0           0           0           Right before Codex ends its turn                    
