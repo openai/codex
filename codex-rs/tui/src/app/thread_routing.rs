@@ -682,10 +682,6 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommand::AddToHistory { text } => {
-                self.append_message_history_entry(thread_id, text.to_string());
-                Ok(true)
-            }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
                 self.refresh_in_memory_config_from_disk().await?;
