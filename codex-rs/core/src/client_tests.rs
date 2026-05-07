@@ -502,10 +502,7 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
     }
 
     impl AttestationProvider for CountingAttestationProvider {
-        fn generate_header_value(
-            &self,
-            context: AttestationContext,
-        ) -> GenerateAttestationFuture<'_> {
+        fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
             let calls = self.calls.clone();
             Box::pin(async move {
                 if !context.uses_chatgpt_auth {
@@ -513,7 +510,7 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
                 }
 
                 let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
-                Some(format!("v1.header-{call}"))
+                Some(http::HeaderValue::from_bytes(format!("v1.header-{call}").as_bytes()).unwrap())
             })
         }
     }

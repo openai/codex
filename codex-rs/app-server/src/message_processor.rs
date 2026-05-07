@@ -38,6 +38,7 @@ use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
+use axum::http::HeaderValue;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AttestationGenerateParams;
@@ -181,7 +182,7 @@ impl std::fmt::Debug for AppServerAttestationProvider {
 }
 
 impl AttestationProvider for AppServerAttestationProvider {
-    fn generate_header_value(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
+    fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
         let outgoing = self.outgoing.clone();
         let attestation_connection_ids = self.attestation_connection_ids.clone();
         Box::pin(async move {
@@ -195,6 +196,7 @@ impl AttestationProvider for AppServerAttestationProvider {
                 ATTESTATION_GENERATE_TIMEOUT,
             )
             .await
+            .and_then(|value| HeaderValue::from_bytes(value.as_bytes()).ok())
         })
     }
 }

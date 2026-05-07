@@ -657,11 +657,10 @@ impl ModelClient {
         self.state
             .attestation_provider
             .as_ref()?
-            .generate_header_value(AttestationContext {
+            .header_for_request(AttestationContext {
                 uses_chatgpt_auth: provider.uses_chatgpt_auth,
             })
             .await
-            .and_then(|value| HeaderValue::from_str(&value).ok())
     }
 
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
