@@ -906,7 +906,7 @@ mod thread_processor_behavior_tests {
             conversation_id,
             timestamp: Some(timestamp.clone()),
             updated_at: Some(timestamp),
-            path: Some(path.clone()),
+            path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
             cwd: PathBuf::new(),

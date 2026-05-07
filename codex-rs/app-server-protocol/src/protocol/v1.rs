@@ -89,7 +89,7 @@ pub struct GetConversationSummaryResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
     pub conversation_id: ThreadId,
-    pub path: Option<PathBuf>,
+    pub path: PathBuf,
     pub preview: String,
     pub timestamp: Option<String>,
     pub updated_at: Option<String>,

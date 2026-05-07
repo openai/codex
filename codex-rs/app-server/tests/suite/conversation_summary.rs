@@ -51,7 +51,7 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSummary {
     ConversationSummary {
         conversation_id,
-        path: Some(path),
+        path,
         preview: PREVIEW.to_string(),
         timestamp: Some(CREATED_AT_RFC3339.to_string()),
         updated_at: Some(UPDATED_AT_RFC3339.to_string()),
@@ -68,7 +68,9 @@ fn normalized_canonical_path(path: impl AsRef<Path>) -> Result<PathBuf> {
 }
 
 fn normalized_summary_path(mut summary: ConversationSummary) -> Result<ConversationSummary> {
-    summary.path = summary.path.map(normalized_canonical_path).transpose()?;
+    if !summary.path.as_os_str().is_empty() {
+        summary.path = normalized_canonical_path(summary.path)?;
+    }
     Ok(summary)
 }
 
@@ -216,7 +218,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
     let GetConversationSummaryResponse { summary } = serde_json::from_value(result)?;
 
     assert_eq!(summary.conversation_id, thread_id);
-    assert_eq!(summary.path, None);
+    assert_eq!(summary.path, PathBuf::new());
     assert_eq!(summary.cwd, PathBuf::new());
     assert_eq!(summary.model_provider, "test");
 

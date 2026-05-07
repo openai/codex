@@ -3712,7 +3712,7 @@ fn summary_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
 ) -> ConversationSummary {
-    let path = thread.rollout_path;
+    let path = thread.rollout_path.unwrap_or_default();
     let source = with_thread_spawn_agent_metadata(
         thread.source,
         thread.agent_nickname.clone(),
@@ -3786,7 +3786,7 @@ fn summary_from_state_db_metadata(
     };
     ConversationSummary {
         conversation_id,
-        path: Some(path),
+        path,
         preview,
         timestamp: Some(timestamp),
         updated_at: Some(updated_at),
