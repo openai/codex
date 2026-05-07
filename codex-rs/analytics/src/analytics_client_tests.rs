@@ -1012,7 +1012,7 @@ fn command_execution_event_serializes_expected_shape() {
                     runtime_os_version: "15.3.1".to_string(),
                     runtime_arch: "aarch64".to_string(),
                 },
-                thread_source: Some("user"),
+                thread_source: Some(ThreadSource::User),
                 subagent_source: None,
                 parent_thread_id: None,
                 tool_name: "shell".to_string(),

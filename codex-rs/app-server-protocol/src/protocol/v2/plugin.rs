@@ -132,6 +132,24 @@ pub struct PluginListParams {
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
+    /// Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
+    /// the default remote catalog when enabled by feature flag.
+    #[ts(optional = nullable)]
+    pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginListMarketplaceKind {
+    #[serde(rename = "local")]
+    #[ts(rename = "local")]
+    Local,
+    #[serde(rename = "workspace-directory")]
+    #[ts(rename = "workspace-directory")]
+    WorkspaceDirectory,
+    #[serde(rename = "shared-with-me")]
+    #[ts(rename = "shared-with-me")]
+    SharedWithMe,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -501,6 +519,8 @@ pub enum PluginAvailability {
 pub struct PluginSummary {
     pub id: String,
     pub name: String,
+    /// Remote sharing context associated with this plugin when available.
+    pub share_context: Option<PluginShareContext>,
     pub source: PluginSource,
     pub installed: bool,
     pub enabled: bool,
@@ -514,6 +534,17 @@ pub struct PluginSummary {
     pub keywords: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareContext {
+    pub remote_plugin_id: String,
+    pub share_url: Option<String>,
+    pub creator_account_user_id: Option<String>,
+    pub creator_name: Option<String>,
+    pub share_targets: Option<Vec<PluginSharePrincipal>>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -523,8 +554,17 @@ pub struct PluginDetail {
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
     pub mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

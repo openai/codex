@@ -1866,7 +1866,6 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
- "codex-device-key",
  "codex-exec-server",
  "codex-external-agent-migration",
  "codex-external-agent-sessions",
@@ -2131,10 +2130,10 @@ name = "codex-builtin-mcps"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-config",
  "codex-memories-mcp",
  "codex-utils-absolute-path",
  "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
@@ -2182,7 +2181,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
- "codex-builtin-mcps",
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",
@@ -2433,7 +2431,6 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
- "codex-agent-graph-store",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2570,6 +2567,7 @@ dependencies = [
  "codex-core-skills",
  "codex-exec-server",
  "codex-git-utils",
+ "codex-hooks",
  "codex-login",
  "codex-model-provider",
  "codex-otel",
@@ -2636,22 +2634,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "codex-device-key"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "p256",
- "pretty_assertions",
- "rand 0.9.3",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "url",
 ]
 
 [[package]]

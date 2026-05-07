@@ -17,7 +17,6 @@ use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
-use crate::request_processors::DeviceKeyRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
@@ -37,7 +36,6 @@ use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
-use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
@@ -61,7 +59,6 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
-use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
@@ -161,7 +158,6 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
-    device_key_processor: DeviceKeyRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
@@ -180,7 +176,6 @@ pub(crate) struct MessageProcessor {
 
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
-    origin: ConnectionOrigin,
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
@@ -195,14 +190,13 @@ pub(crate) struct InitializedConnectionSessionState {
 
 impl Default for ConnectionSessionState {
     fn default() -> Self {
-        Self::new(ConnectionOrigin::WebSocket)
+        Self::new()
     }
 }
 
 impl ConnectionSessionState {
-    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            origin,
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
@@ -210,10 +204,6 @@ impl ConnectionSessionState {
 
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
-    }
-
-    fn allows_device_key_requests(&self) -> bool {
-        self.origin.allows_device_key_requests()
     }
 
     pub(crate) fn experimental_api_enabled(&self) -> bool {
@@ -255,7 +245,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) state_db: StateDbHandle,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -294,16 +284,14 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
-        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
             environment_manager,
             Some(analytics_events_client.clone()),
-            state_db.clone(),
             Arc::clone(&thread_store),
-            agent_graph_store.clone(),
+            state_db.clone(),
             installation_id,
         ));
         thread_manager
@@ -350,7 +338,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             feedback,
             log_db,
-            Some(state_db.clone()),
+            state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -400,7 +388,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            Some(state_db.clone()),
+            state_db,
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
@@ -444,7 +432,6 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
-        let device_key_processor = DeviceKeyRequestProcessor::new(outgoing.clone(), state_db);
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
@@ -466,7 +453,6 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
-            device_key_processor,
             external_agent_config_processor,
             feedback_processor,
             fs_processor,
@@ -773,7 +759,6 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let device_key_requests_allowed = session.allows_device_key_requests();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -789,7 +774,6 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        device_key_requests_allowed,
                     )
                     .await;
                 if let Err(error) = result {
@@ -800,9 +784,9 @@ impl MessageProcessor {
         );
 
         if let Some(scope) = serialization_scope {
-            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            let (key, access) = RequestSerializationQueueKey::from_scope(connection_id, scope);
             self.request_serialization_queues
-                .enqueue(key, request)
+                .enqueue(key, access, request)
                 .await;
         } else {
             tokio::spawn(async move {
@@ -819,7 +803,6 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        device_key_requests_allowed: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -867,30 +850,6 @@ impl MessageProcessor {
                 .config_requirements_read()
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::DeviceKeyCreate { params, .. } => {
-                self.device_key_processor.create(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeyPublic { params, .. } => {
-                self.device_key_processor.public(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeySign { params, .. } => {
-                self.device_key_processor.sign(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
                 .read_file(params)

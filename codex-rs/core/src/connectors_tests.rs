@@ -172,39 +172,30 @@ fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
 
 #[test]
 fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
-    let tools = HashMap::from([
-        (
-            "mcp__codex_apps__calendar_list_events".to_string(),
-            codex_app_tool(
-                "calendar_list_events",
-                "calendar",
-                /*connector_name*/ None,
-                &["sample", "sample"],
-            ),
+    let tools = vec![
+        codex_app_tool(
+            "calendar_list_events",
+            "calendar",
+            /*connector_name*/ None,
+            &["sample", "sample"],
         ),
-        (
-            "mcp__codex_apps__calendar_create_event".to_string(),
-            codex_app_tool(
-                "calendar_create_event",
-                "calendar",
-                Some("Google Calendar"),
-                &["beta", "sample"],
-            ),
+        codex_app_tool(
+            "calendar_create_event",
+            "calendar",
+            Some("Google Calendar"),
+            &["beta", "sample"],
         ),
-        (
-            "mcp__sample__echo".to_string(),
-            ToolInfo {
-                server_name: "sample".to_string(),
-                callable_name: "echo".to_string(),
-                callable_namespace: "sample".to_string(),
-                namespace_description: None,
-                tool: test_tool_definition("echo"),
-                connector_id: None,
-                connector_name: None,
-                plugin_display_names: plugin_names(&["ignored"]),
-            },
-        ),
-    ]);
+        ToolInfo {
+            server_name: "sample".to_string(),
+            callable_name: "echo".to_string(),
+            callable_namespace: "sample".to_string(),
+            namespace_description: None,
+            tool: test_tool_definition("echo"),
+            connector_id: None,
+            connector_name: None,
+            plugin_display_names: plugin_names(&["ignored"]),
+        },
+    ];
 
     let connectors = accessible_connectors_from_mcp_tools(&tools);
 
@@ -238,26 +229,20 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         .expect("config should load");
     let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
     let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
-    let tools = HashMap::from([
-        (
-            "mcp__codex_apps__calendar_list_events".to_string(),
-            codex_app_tool(
-                "calendar_list_events",
-                "calendar",
-                Some("Google Calendar"),
-                &["calendar-plugin"],
-            ),
+    let tools = vec![
+        codex_app_tool(
+            "calendar_list_events",
+            "calendar",
+            Some("Google Calendar"),
+            &["calendar-plugin"],
         ),
-        (
-            "mcp__codex_apps__openai_hidden".to_string(),
-            codex_app_tool(
-                "openai_hidden",
-                "connector_openai_hidden",
-                Some("Hidden"),
-                &[],
-            ),
+        codex_app_tool(
+            "openai_hidden",
+            "connector_openai_hidden",
+            Some("Hidden"),
+            &[],
         ),
-    ]);
+    ];
 
     let cached = with_accessible_connectors_cache_cleared(|| {
         refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
@@ -315,29 +300,26 @@ fn merge_connectors_unions_and_dedupes_plugin_display_names() {
 
 #[test]
 fn accessible_connectors_from_mcp_tools_preserves_description() {
-    let mcp_tools = HashMap::from([(
-        "mcp__codex_apps__calendar_create_event".to_string(),
-        ToolInfo {
-            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            callable_name: "calendar_create_event".to_string(),
-            callable_namespace: "mcp__codex_apps__calendar".to_string(),
-            namespace_description: Some("Plan events".to_string()),
-            tool: Tool {
-                name: "calendar_create_event".to_string().into(),
-                title: None,
-                description: Some("Create a calendar event".into()),
-                input_schema: Arc::new(JsonObject::default()),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
-            connector_id: Some("calendar".to_string()),
-            connector_name: Some("Calendar".to_string()),
-            plugin_display_names: Vec::new(),
+    let mcp_tools = vec![ToolInfo {
+        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        callable_name: "calendar_create_event".to_string(),
+        callable_namespace: "mcp__codex_apps__calendar".to_string(),
+        namespace_description: Some("Plan events".to_string()),
+        tool: Tool {
+            name: "calendar_create_event".to_string().into(),
+            title: None,
+            description: Some("Create a calendar event".into()),
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
         },
-    )]);
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        plugin_display_names: Vec::new(),
+    }];
 
     assert_eq!(
         accessible_connectors_from_mcp_tools(&mcp_tools),

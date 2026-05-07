@@ -18,6 +18,7 @@ codex-utils-output-truncation = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "schemars",
     "server",
+    "transport-async-rw",
 ] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

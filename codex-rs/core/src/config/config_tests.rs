@@ -3360,7 +3360,6 @@ async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow:
         }))
         .build()
         .await?;
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
     let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -3368,11 +3367,8 @@ async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow:
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| (server.enabled, server.disabled_reason.clone())),
-        Some((true, None))
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
     );
 
     Ok(())
@@ -3399,7 +3395,6 @@ async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyh
         }))
         .build()
         .await?;
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
     let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -3407,11 +3402,8 @@ async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyh
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| (server.enabled, server.disabled_reason.clone())),
-        Some((true, None))
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
     );
 
     Ok(())
@@ -4244,10 +4236,7 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4258,22 +4247,13 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
+    );
+    assert!(
+        !mcp_config
             .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| &server.transport),
-        Some(&McpServerTransportConfig::Stdio {
-            command: "/tmp/codex".to_string(),
-            args: vec![
-                "builtin-mcp".to_string(),
-                "memories".to_string(),
-                "--codex-home".to_string(),
-                codex_home.path().display().to_string(),
-            ],
-            env: None,
-            env_vars: Vec::new(),
-            cwd: None,
-        })
+            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
     );
 
     Ok(())
@@ -4284,10 +4264,7 @@ async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io:
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4296,11 +4273,7 @@ async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io:
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-    );
+    assert!(mcp_config.builtin_mcp_servers.is_empty());
 
     Ok(())
 }
@@ -4316,10 +4289,7 @@ async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<(
             )]),
             ..ConfigToml::default()
         },
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4329,13 +4299,15 @@ async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<(
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
-    assert!(matches!(
-        mcp_config
+    assert_eq!(
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
+    );
+    assert!(
+        !mcp_config
             .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| &server.transport),
-        Some(McpServerTransportConfig::Stdio { .. })
-    ));
+            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+    );
 
     Ok(())
 }

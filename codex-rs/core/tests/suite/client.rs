@@ -5,8 +5,6 @@ use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
-use codex_core::agent_graph_store_from_state_db;
-use codex_core::init_state_db_from_config;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_features::Feature;
@@ -1116,11 +1114,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Ok(None) => panic!("No CodexAuth found in codex_home"),
         Err(e) => panic!("Failed to load CodexAuth: {e}"),
     };
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .expect("client test requires state db");
-    let thread_store = thread_store_from_config(&config, state_db.clone());
-    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home)
         .await
         .expect("resolve installation id");
@@ -1130,9 +1123,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        state_db,
-        thread_store,
-        agent_graph_store,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
         installation_id,
     );
     let NewThread { thread: codex, .. } = thread_manager

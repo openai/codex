@@ -294,7 +294,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         .ok()
         .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
         .map(JsonValue::String);
-    let content = emitter.finish(event_ctx, out).await?;
+    let content = emitter
+        .finish(event_ctx, out, /*applied_patch_delta*/ None)
+        .await?;
     Ok(FunctionToolOutput {
         body: vec![
             codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },

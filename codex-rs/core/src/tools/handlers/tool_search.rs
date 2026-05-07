@@ -204,19 +204,11 @@ mod tests {
             }),
             defer_loading: true,
         }];
-        let handler = handler_from_tools(
-            Some(&std::collections::HashMap::from([
-                (
-                    "mcp__calendar__create_event".to_string(),
-                    tool_info("calendar", "create_event", "Create events"),
-                ),
-                (
-                    "mcp__calendar__list_events".to_string(),
-                    tool_info("calendar", "list_events", "List events"),
-                ),
-            ])),
-            &dynamic_tools,
-        );
+        let mcp_tools = vec![
+            tool_info("calendar", "create_event", "Create events"),
+            tool_info("calendar", "list_events", "List events"),
+        ];
+        let handler = handler_from_tools(Some(&mcp_tools), &dynamic_tools);
         let results = [
             &handler.entries[0],
             &handler.entries[2],
@@ -376,18 +368,11 @@ mod tests {
         assert!(count_results_for_server(&results, "other-server") <= TOOL_SEARCH_DEFAULT_LIMIT);
     }
 
-    fn numbered_tools(
-        server_name: &str,
-        description_prefix: &str,
-        count: usize,
-    ) -> std::collections::HashMap<String, ToolInfo> {
+    fn numbered_tools(server_name: &str, description_prefix: &str, count: usize) -> Vec<ToolInfo> {
         (0..count)
             .map(|index| {
                 let tool_name = format!("tool_{index:03}");
-                (
-                    format!("mcp__{server_name}__{tool_name}"),
-                    tool_info(server_name, &tool_name, description_prefix),
-                )
+                tool_info(server_name, &tool_name, description_prefix)
             })
             .collect()
     }
@@ -427,7 +412,7 @@ mod tests {
     }
 
     fn handler_from_tools(
-        mcp_tools: Option<&std::collections::HashMap<String, ToolInfo>>,
+        mcp_tools: Option<&[ToolInfo]>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> ToolSearchHandler {
         ToolSearchHandler::new(build_tool_search_entries(mcp_tools, dynamic_tools))

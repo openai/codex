@@ -72,7 +72,7 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::BuiltinMcpServerOptions;
 use codex_mcp::McpConfig;
-use codex_mcp::configured_builtin_mcp_servers;
+use codex_mcp::enabled_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1091,9 +1091,7 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
-        let builtin_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
-            codex_self_exe: self.codex_self_exe.as_deref(),
-            codex_home: self.codex_home.as_path(),
+        let builtin_mcp_servers = enabled_builtin_mcp_servers(BuiltinMcpServerOptions {
             memories_enabled: self.features.enabled(Feature::BuiltInMcp)
                 && self.features.enabled(Feature::MemoryTool)
                 && self.memories.use_memories,
@@ -1122,7 +1120,9 @@ impl Config {
             // allowlists.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
-        configured_mcp_servers.extend(builtin_mcp_servers);
+        for builtin_server in &builtin_mcp_servers {
+            configured_mcp_servers.remove(builtin_server.name());
+        }
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1139,6 +1139,7 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             configured_mcp_servers,
+            builtin_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }

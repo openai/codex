@@ -73,7 +73,7 @@ pub fn run_main() -> i32 {
         codex_exec_server::LOCAL_FS.as_ref(),
         /*sandbox*/ None,
     )) {
-        Ok(()) => {
+        Ok(_) => {
             // Flush to ensure output ordering when used in pipelines.
             let _ = stdout.flush();
             0

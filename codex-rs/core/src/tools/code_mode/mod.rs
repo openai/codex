@@ -1,8 +1,9 @@
 mod execute_handler;
+pub(crate) mod execute_spec;
 mod response_adapter;
 mod wait_handler;
+pub(crate) mod wait_spec;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -272,26 +273,9 @@ pub(super) async fn build_enabled_tools(
 )]
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let listed_mcp_tools = exec
-        .session
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
-    let parallel_mcp_server_names = exec
-        .turn
-        .config
-        .mcp_servers
-        .get()
-        .iter()
-        .filter_map(|(server_name, server_config)| {
-            server_config
-                .supports_parallel_tool_calls
-                .then_some(server_name.clone())
-        })
-        .collect::<HashSet<_>>();
+    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
+    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
+    let parallel_mcp_server_names = mcp_connection_manager.parallel_tool_call_server_names();
 
     ToolRouter::from_config(
         &nested_tools_config,
