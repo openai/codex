@@ -1,4 +1,7 @@
 use super::*;
+use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
+use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use pretty_assertions::assert_eq;
 
 struct TestHandler {
@@ -61,4 +64,19 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
+}
+
+#[test]
+fn register_handler_adds_handler_and_augments_specs_for_code_mode() {
+    let mut builder = ToolRegistryBuilder::new(/*code_mode_enabled*/ true);
+    builder.register_handler(Arc::new(GetGoalHandler));
+
+    let (specs, registry) = builder.build();
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(
+        specs[0].spec,
+        codex_tools::augment_tool_spec_for_code_mode(create_get_goal_tool())
+    );
+    assert!(registry.has_handler(&codex_tools::ToolName::plain(GET_GOAL_TOOL_NAME)));
 }

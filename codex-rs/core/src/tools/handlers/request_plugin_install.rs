@@ -65,10 +65,6 @@ impl ToolHandler for RequestPluginInstallHandler {
         true
     }
 
-    fn augment_spec_for_code_mode(&self) -> bool {
-        false
-    }
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }

@@ -18,6 +18,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
+use crate::util::error_or_panic;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -53,10 +54,6 @@ pub trait ToolHandler: Send + Sync {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         false
-    }
-
-    fn augment_spec_for_code_mode(&self) -> bool {
-        true
     }
 
     fn kind(&self) -> ToolKind;
@@ -536,38 +533,33 @@ impl ToolRegistryBuilder {
         }
     }
 
-    fn push_raw_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
-    }
-
     pub(crate) fn push_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
         let spec = if self.code_mode_enabled {
             codex_tools::augment_tool_spec_for_code_mode(spec)
         } else {
             spec
         };
-        self.push_raw_spec(spec, supports_parallel_tool_calls);
+        self.specs
+            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
     pub fn register_handler<H>(&mut self, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
+        let name = handler.tool_name();
+        if self.handlers.contains_key(&name) {
+            error_or_panic(format!("handler for tool {name} already registered"));
+            return;
+        }
+
         if let Some(spec) = handler.spec() {
             let supports_parallel_tool_calls = handler.supports_parallel_tool_calls();
-            if handler.augment_spec_for_code_mode() {
-                self.push_spec(spec, supports_parallel_tool_calls);
-            } else {
-                self.push_raw_spec(spec, supports_parallel_tool_calls);
-            }
+            self.push_spec(spec, supports_parallel_tool_calls);
         }
-        let name = handler.tool_name();
-        let display_name = name.display();
+
         let handler: Arc<dyn AnyToolHandler> = handler;
-        if self.handlers.insert(name, handler).is_some() {
-            warn!("overwriting handler for tool {display_name}");
-        }
+        self.handlers.insert(name, handler);
     }
 
     pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {
