@@ -1866,7 +1866,6 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
- "codex-device-key",
  "codex-exec-server",
  "codex-external-agent-migration",
  "codex-external-agent-sessions",
@@ -2635,22 +2634,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "codex-device-key"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "p256",
- "pretty_assertions",
- "rand 0.9.3",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "url",
 ]
 
 [[package]]

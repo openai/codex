@@ -17,7 +17,6 @@ use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
-use crate::request_processors::DeviceKeyRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
@@ -160,7 +159,6 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
-    device_key_processor: DeviceKeyRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
@@ -209,10 +207,6 @@ impl ConnectionSessionState {
 
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
-    }
-
-    fn allows_device_key_requests(&self) -> bool {
-        self.origin.allows_device_key_requests()
     }
 
     pub(crate) fn experimental_api_enabled(&self) -> bool {
@@ -441,7 +435,6 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
-        let device_key_processor = DeviceKeyRequestProcessor::new(outgoing.clone(), state_db);
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
@@ -463,7 +456,6 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
-            device_key_processor,
             external_agent_config_processor,
             feedback_processor,
             fs_processor,
@@ -770,7 +762,6 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let device_key_requests_allowed = session.allows_device_key_requests();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -786,7 +777,6 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        device_key_requests_allowed,
                     )
                     .await;
                 if let Err(error) = result {
@@ -816,7 +806,6 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        device_key_requests_allowed: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -864,30 +853,6 @@ impl MessageProcessor {
                 .config_requirements_read()
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::DeviceKeyCreate { params, .. } => {
-                self.device_key_processor.create(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeyPublic { params, .. } => {
-                self.device_key_processor.public(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeySign { params, .. } => {
-                self.device_key_processor.sign(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
                 .read_file(params)

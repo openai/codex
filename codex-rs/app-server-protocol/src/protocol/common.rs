@@ -652,21 +652,6 @@ client_request_definitions! {
         serialization: None,
         response: v2::AppsListResponse,
     },
-    DeviceKeyCreate => "device/key/create" {
-        params: v2::DeviceKeyCreateParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeyCreateResponse,
-    },
-    DeviceKeyPublic => "device/key/public" {
-        params: v2::DeviceKeyPublicParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeyPublicResponse,
-    },
-    DeviceKeySign => "device/key/sign" {
-        params: v2::DeviceKeySignParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeySignResponse,
-    },
     // File system requests are intentionally concurrent. Desktop already treats local
     // file system operations as concurrent, and app-server remote fs mirrors that model.
     FsReadFile => "fs/readFile" {
@@ -1787,19 +1772,6 @@ mod tests {
         assert_eq!(
             marketplace_remove.serialization_scope(),
             Some(ClientRequestSerializationScope::Global("config"))
-        );
-
-        let device_key_create = ClientRequest::DeviceKeyCreate {
-            request_id: request_id(),
-            params: v2::DeviceKeyCreateParams {
-                protection_policy: None,
-                account_user_id: "user".to_string(),
-                client_id: "client".to_string(),
-            },
-        };
-        assert_eq!(
-            device_key_create.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("device-key"))
         );
 
         let add_credits_nudge = ClientRequest::SendAddCreditsNudgeEmail {
