@@ -471,6 +471,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;

@@ -34,6 +34,7 @@ use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
+use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
@@ -160,17 +161,17 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 fn app_server_attestation_provider(
     outgoing: Arc<OutgoingMessageSender>,
-    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    thread_state_manager: ThreadStateManager,
 ) -> Arc<dyn AttestationProvider> {
     Arc::new(AppServerAttestationProvider {
         outgoing,
-        attestation_connection_ids,
+        thread_state_manager,
     })
 }
 
 struct AppServerAttestationProvider {
     outgoing: Arc<OutgoingMessageSender>,
-    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    thread_state_manager: ThreadStateManager,
 }
 
 impl std::fmt::Debug for AppServerAttestationProvider {
@@ -184,7 +185,7 @@ impl std::fmt::Debug for AppServerAttestationProvider {
 impl AttestationProvider for AppServerAttestationProvider {
     fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
         let outgoing = self.outgoing.clone();
-        let attestation_connection_ids = self.attestation_connection_ids.clone();
+        let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
             if !context.uses_chatgpt_auth {
                 return None;
@@ -192,7 +193,7 @@ impl AttestationProvider for AppServerAttestationProvider {
 
             request_attestation_header_value_with_timeout(
                 outgoing,
-                attestation_connection_ids,
+                thread_state_manager,
                 ATTESTATION_GENERATE_TIMEOUT,
             )
             .await
@@ -203,15 +204,12 @@ impl AttestationProvider for AppServerAttestationProvider {
 
 async fn request_attestation_header_value_with_timeout(
     outgoing: Arc<OutgoingMessageSender>,
-    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    thread_state_manager: ThreadStateManager,
     timeout_duration: Duration,
 ) -> Option<String> {
-    let connection_id = attestation_connection_ids
-        .lock()
-        .await
-        .iter()
-        .min_by_key(|connection_id| connection_id.0)
-        .copied()?;
+    let connection_id = thread_state_manager
+        .first_attestation_capable_connection()
+        .await?;
 
     let connection_ids = [connection_id];
     let (request_id, rx) = outgoing
@@ -277,7 +275,6 @@ pub(crate) struct MessageProcessor {
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
-    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
 }
 
 #[derive(Debug)]
@@ -393,7 +390,7 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let attestation_connection_ids = Arc::new(Mutex::new(HashSet::new()));
+        let thread_state_manager = ThreadStateManager::new();
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
@@ -409,7 +406,7 @@ impl MessageProcessor {
             installation_id,
             Some(app_server_attestation_provider(
                 outgoing.clone(),
-                attestation_connection_ids.clone(),
+                thread_state_manager.clone(),
             )),
         ));
         thread_manager
@@ -417,7 +414,6 @@ impl MessageProcessor {
             .set_analytics_events_client(analytics_events_client.clone());
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
-        let thread_state_manager = ThreadStateManager::new();
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
@@ -585,7 +581,6 @@ impl MessageProcessor {
             turn_processor,
             windows_sandbox_processor,
             request_serialization_queues: RequestSerializationQueues::default(),
-            attestation_connection_ids,
         }
     }
 
@@ -739,9 +734,18 @@ impl MessageProcessor {
             .await;
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        request_attestation: bool,
+    ) {
         self.thread_processor
-            .connection_initialized(connection_id)
+            .connection_initialized(
+                connection_id,
+                ConnectionCapabilities {
+                    request_attestation,
+                },
+            )
             .await;
     }
 
@@ -783,10 +787,6 @@ impl MessageProcessor {
         session_state: &ConnectionSessionState,
     ) {
         session_state.rpc_gate.shutdown().await;
-        self.attestation_connection_ids
-            .lock()
-            .await
-            .remove(&connection_id);
         self.outgoing.connection_closed(connection_id).await;
         self.fs_processor.connection_closed(connection_id).await;
         self.command_exec_processor
@@ -841,14 +841,13 @@ impl MessageProcessor {
                 .await?;
             if connection_initialized {
                 self.thread_processor
-                    .connection_initialized(connection_id)
+                    .connection_initialized(
+                        connection_id,
+                        ConnectionCapabilities {
+                            request_attestation: session.request_attestation(),
+                        },
+                    )
                     .await;
-            }
-            if session.request_attestation() {
-                self.attestation_connection_ids
-                    .lock()
-                    .await
-                    .insert(connection_id);
             }
             return Ok(());
         }
