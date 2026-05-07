@@ -1,5 +1,7 @@
 use crate::client::AnalyticsEventsQueue;
 use crate::events::AppServerRpcTransport;
+use crate::events::CodexAcceptedLineFingerprintsEventParams;
+use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
 use crate::events::CodexAppUsedEventRequest;
@@ -28,6 +30,7 @@ use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::subagent_thread_started_event_request;
+use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
@@ -89,6 +92,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -824,6 +828,206 @@ fn app_used_event_serializes_expected_shape() {
                 "model_slug": "gpt-5"
             }
         })
+    );
+}
+
+#[test]
+fn accepted_line_fingerprints_event_serializes_expected_shape() {
+    let event = TrackEventRequest::AcceptedLineFingerprints(Box::new(
+        CodexAcceptedLineFingerprintsEventRequest {
+            event_type: "codex_accepted_line_fingerprints",
+            event_params: CodexAcceptedLineFingerprintsEventParams {
+                event_type: "codex.accepted_line_fingerprints",
+                turn_id: "turn-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                product_surface: Some("codex".to_string()),
+                model_slug: Some("gpt-5.1-codex".to_string()),
+                completed_at: 1710000000,
+                repo_hash: Some("repo-hash-1".to_string()),
+                accepted_added_lines: 42,
+                accepted_deleted_lines: 40,
+                line_fingerprints: vec![AcceptedLineFingerprint {
+                    path_hash: "path-hash-1".to_string(),
+                    line_hash: "line-hash-1".to_string(),
+                }],
+            },
+        },
+    ));
+
+    let payload = serde_json::to_value(&event).expect("serialize accepted line fingerprints event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_accepted_line_fingerprints",
+            "event_params": {
+                "event_type": "codex.accepted_line_fingerprints",
+                "turn_id": "turn-1",
+                "thread_id": "thread-1",
+                "product_surface": "codex",
+                "model_slug": "gpt-5.1-codex",
+                "completed_at": 1710000000,
+                "repo_hash": "repo-hash-1",
+                "accepted_added_lines": 42,
+                "accepted_deleted_lines": 40,
+                "line_fingerprints": [
+                    {
+                        "path_hash": "path-hash-1",
+                        "line_hash": "line-hash-1"
+                    }
+                ]
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn reducer_chunks_large_accepted_line_fingerprint_events_without_repeating_counts() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ true,
+    )
+    .await;
+    events.clear();
+
+    let mut diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -0,0 +1,20000 @@
+"
+    .to_string();
+    for index in 0..20_000 {
+        diff.push_str(&format!("+let value_{index} = {index};\n"));
+    }
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::TurnDiffUpdated(
+                TurnDiffUpdatedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    diff,
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let accepted_line_events = events
+        .iter()
+        .filter_map(|event| match event {
+            TrackEventRequest::AcceptedLineFingerprints(event) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(accepted_line_events.len() > 1);
+    let mut total_fingerprints = 0;
+    for (index, event) in accepted_line_events.iter().enumerate() {
+        assert_eq!(event.event_params.turn_id, "turn-2");
+        assert_eq!(event.event_params.thread_id, "thread-2");
+        total_fingerprints += event.event_params.line_fingerprints.len();
+        if index == 0 {
+            assert_eq!(event.event_params.accepted_added_lines, 20_000);
+            assert_eq!(event.event_params.accepted_deleted_lines, 0);
+        } else {
+            assert_eq!(event.event_params.accepted_added_lines, 0);
+            assert_eq!(event.event_params.accepted_deleted_lines, 0);
+        }
+        assert!(serde_json::to_vec(event).expect("serialize chunk").len() < 2_100_000);
+    }
+    assert_eq!(total_fingerprints, 20_000);
+}
+
+#[tokio::test]
+async fn reducer_emits_accepted_line_fingerprints_once_from_latest_turn_diff_on_completion() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ true,
+    )
+    .await;
+    events.clear();
+
+    for line in ["let old_value = 1;", "let latest_value = 2;"] {
+        let diff = format!(
+            "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -0,0 +1 @@
++{line}
+"
+        );
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::TurnDiffUpdated(
+                    TurnDiffUpdatedNotification {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        diff,
+                    },
+                ))),
+                &mut events,
+            )
+            .await;
+    }
+    assert!(events.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let accepted_line_events = events
+        .iter()
+        .filter_map(|event| match event {
+            TrackEventRequest::AcceptedLineFingerprints(event) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accepted_line_events.len(), 1);
+    let event = accepted_line_events[0];
+    assert_eq!(event.event_params.accepted_added_lines, 1);
+    assert_eq!(event.event_params.line_fingerprints.len(), 1);
+    assert_eq!(
+        event.event_params.line_fingerprints[0].line_hash,
+        crate::fingerprint_hash("line", "let latest_value = 2;")
     );
 }
 
