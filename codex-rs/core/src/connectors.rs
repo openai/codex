@@ -321,7 +321,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
             true
         } else if tools.is_empty() {
             let timeout = cfg
-                .startup_timeout_sec
+                .configured_config()
+                .and_then(|config| config.startup_timeout_sec)
                 .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
             let ready = mcp_connection_manager
                 .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)

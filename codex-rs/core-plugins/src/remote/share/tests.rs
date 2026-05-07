@@ -107,15 +107,17 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
     })
 }
 
-fn remote_plugin_json_with_share_url(
+fn remote_plugin_json_with_share_url_and_principals(
     plugin_id: &str,
     share_url: Option<&str>,
+    share_principals: serde_json::Value,
 ) -> serde_json::Value {
     let mut plugin = remote_plugin_json(plugin_id);
     let serde_json::Value::Object(fields) = &mut plugin else {
         unreachable!("plugin json should be an object");
     };
     fields.insert("share_url".to_string(), json!(share_url));
+    fields.insert("share_principals".to_string(), share_principals);
     plugin
 }
 
@@ -489,9 +491,23 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param_is_missing("pageToken"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json_with_share_url(
+            "plugins": [remote_plugin_json_with_share_url_and_principals(
                 "plugins_123",
                 Some("https://chatgpt.example/plugins/share/share-key-1"),
+                json!([
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-owner",
+                        "role": "owner",
+                        "name": "Owner",
+                    },
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-reader",
+                        "role": "reader",
+                        "name": "Reader",
+                    },
+                ]),
             )],
             "pagination": {
                 "next_page_token": "page-2"
@@ -510,7 +526,29 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param("pageToken", "page-2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json_with_share_url("plugins_456", /*share_url*/ None)],
+            "plugins": [remote_plugin_json_with_share_url_and_principals(
+                "plugins_456",
+                /*share_url*/ None,
+                json!([
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-owner",
+                        "role": "owner",
+                        "name": "Owner",
+                    },
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-editor",
+                        "role": "editor",
+                        "name": "Editor",
+                    },
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-missing-role",
+                        "name": "Missing Role",
+                    },
+                ]),
+            )],
             "pagination": empty_pagination_json(),
         })))
         .expect(1)
@@ -540,8 +578,16 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_123".to_string(),
+                        share_url: Some(
+                            "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                        ),
                         creator_account_user_id: None,
                         creator_name: None,
+                        share_targets: Some(vec![RemotePluginSharePrincipal {
+                            principal_type: RemotePluginSharePrincipalType::User,
+                            principal_id: "user-reader".to_string(),
+                            name: "Reader".to_string(),
+                        }]),
                     }),
                     installed: false,
                     enabled: false,
@@ -560,8 +606,10 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_456".to_string(),
+                        share_url: None,
                         creator_account_user_id: None,
                         creator_name: None,
+                        share_targets: Some(Vec::new()),
                     }),
                     installed: true,
                     enabled: true,

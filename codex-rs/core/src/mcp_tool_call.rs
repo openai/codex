@@ -324,9 +324,8 @@ async fn handle_approved_mcp_tool_call(
     request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
 ) -> HandledMcpToolCall {
-    maybe_mark_thread_memory_mode_polluted(sess, turn_context).await;
-
     let server = invocation.server.clone();
+    maybe_mark_thread_memory_mode_polluted(sess, turn_context, &server).await;
     let tool_name = invocation.tool.clone();
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
@@ -465,6 +464,7 @@ fn mcp_tool_call_span(
 ) -> Span {
     let transport = match fields.server_origin {
         Some("stdio") => "stdio",
+        Some("in_process") => "in_process",
         Some(_) => "streamable_http",
         None => "",
     };
@@ -752,8 +752,21 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     Ok(meta)
 }
 
-async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
+async fn maybe_mark_thread_memory_mode_polluted(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+) {
     if !turn_context.config.memories.disable_on_external_context {
+        return;
+    }
+    let pollutes_memory = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_pollutes_memory(server);
+    if !pollutes_memory {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(

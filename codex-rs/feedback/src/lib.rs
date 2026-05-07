@@ -757,6 +757,7 @@ mod tests {
         tags.insert("cli_version".to_string(), "wrong-version".to_string());
         tags.insert("session_source".to_string(), "wrong-source".to_string());
         tags.insert("reason".to_string(), "wrong-reason".to_string());
+        tags.insert("account_id".to_string(), "actual-account".to_string());
         tags.insert("model".to_string(), "gpt-5".to_string());
         let snapshot = FeedbackSnapshot {
             bytes: Vec::new(),
@@ -808,6 +809,10 @@ mod tests {
         assert_eq!(
             upload_tags.get("reason").map(String::as_str),
             Some("actual reason")
+        );
+        assert_eq!(
+            upload_tags.get("account_id").map(String::as_str),
+            Some("actual-account")
         );
         assert_eq!(
             upload_tags.get("client_tag").map(String::as_str),

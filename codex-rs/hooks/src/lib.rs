@@ -1,4 +1,5 @@
 mod config_rules;
+mod declarations;
 mod engine;
 pub(crate) mod events;
 mod legacy_notify;
@@ -7,6 +8,11 @@ mod registry;
 mod schema;
 mod types;
 
+use codex_protocol::protocol::HookEventName;
+
+pub use config_rules::hook_states_from_stack;
+pub use declarations::PluginHookDeclaration;
+pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
 /// Hook event names as they appear in hooks JSON and config files.
 pub const HOOK_EVENT_NAMES: [&str; 8] = [
@@ -70,3 +76,30 @@ pub use types::HookResult;
 pub use types::HookToolInput;
 pub use types::HookToolInputLocalShell;
 pub use types::HookToolKind;
+
+/// Returns the hook event label used in persisted hook-state keys.
+pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
+    match event_name {
+        HookEventName::PreToolUse => "pre_tool_use",
+        HookEventName::PermissionRequest => "permission_request",
+        HookEventName::PostToolUse => "post_tool_use",
+        HookEventName::PreCompact => "pre_compact",
+        HookEventName::PostCompact => "post_compact",
+        HookEventName::SessionStart => "session_start",
+        HookEventName::UserPromptSubmit => "user_prompt_submit",
+        HookEventName::Stop => "stop",
+    }
+}
+
+/// Builds the persisted config-state key for one discovered hook handler.
+pub fn hook_key(
+    key_source: &str,
+    event_name: HookEventName,
+    group_index: usize,
+    handler_index: usize,
+) -> String {
+    format!(
+        "{key_source}:{}:{group_index}:{handler_index}",
+        hook_event_key_label(event_name)
+    )
+}

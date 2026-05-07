@@ -662,8 +662,10 @@ fn expected_plugin_interface() -> PluginInterface {
 fn expected_share_context(plugin_id: &str) -> PluginShareContext {
     PluginShareContext {
         remote_plugin_id: plugin_id.to_string(),
+        share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
         creator_account_user_id: None,
         creator_name: None,
+        share_targets: None,
     }
 }
 

@@ -13,9 +13,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-config = { workspace = true }
 codex-memories-mcp = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

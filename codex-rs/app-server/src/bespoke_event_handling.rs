@@ -49,6 +49,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -192,6 +193,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+        }
+        EventMsg::SkillsUpdateAvailable => {
+            outgoing
+                .send_server_notification(ServerNotification::SkillsChanged(
+                    SkillsChangedNotification {},
+                ))
+                .await;
         }
         EventMsg::McpStartupUpdate(update) => {
             let (status, error) = match update.status {
@@ -2586,8 +2594,7 @@ mod tests {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-            )
-            .await,
+            ),
         );
         let codex_core::NewThread {
             thread_id: conversation_id,
@@ -3165,8 +3172,7 @@ mod tests {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-            )
-            .await,
+            ),
         );
         let codex_core::NewThread {
             thread_id: conversation_id,

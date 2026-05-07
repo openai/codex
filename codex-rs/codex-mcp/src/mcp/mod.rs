@@ -38,6 +38,7 @@ use serde_json::Value;
 use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
 use crate::runtime::McpRuntimeEnvironment;
+use crate::server::EffectiveMcpServer;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
@@ -99,8 +100,8 @@ pub struct McpPermissionPromptAutoApproveContext {
 /// approval/sandbox policy, locate OAuth state, and merge plugin-provided MCP
 /// servers. Request-scoped or auth-scoped state should not be stored here;
 /// thread those values explicitly into runtime entry points such as
-/// [`with_codex_apps_mcp`] and snapshot collection helpers so config objects do
-/// not go stale when auth changes.
+/// [`effective_mcp_servers`] and snapshot collection helpers so config objects
+/// do not go stale when auth changes.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
@@ -128,12 +129,13 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately at runtime before the built-in apps
     /// MCP server is added.
     pub apps_enabled: bool,
-    /// Configured MCP servers keyed by server name.
+    /// Config-backed MCP servers keyed by server name.
     ///
-    /// This includes product-owned built-ins, user-configured servers, and
-    /// plugin-provided servers. Runtime-only additions belong in
+    /// Product-owned built-ins and runtime-only additions are merged later by
     /// [`effective_mcp_servers`].
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
+    /// Product-owned built-ins enabled for this runtime config.
+    pub builtin_mcp_servers: Vec<codex_builtin_mcps::BuiltinMcpServer>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
@@ -197,14 +199,14 @@ impl ToolPluginProvenance {
 }
 
 pub fn with_codex_apps_mcp(
-    mut servers: HashMap<String, McpServerConfig>,
+    mut servers: HashMap<String, EffectiveMcpServer>,
     auth: Option<&CodexAuth>,
     config: &McpConfig,
-) -> HashMap<String, McpServerConfig> {
+) -> HashMap<String, EffectiveMcpServer> {
     if host_owned_codex_apps_enabled(config, auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            codex_apps_mcp_server_config(config),
+            EffectiveMcpServer::configured(codex_apps_mcp_server_config(config)),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -223,8 +225,25 @@ pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerCo
 pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
-) -> HashMap<String, McpServerConfig> {
-    let servers = configured_mcp_servers(config);
+) -> HashMap<String, EffectiveMcpServer> {
+    effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
+}
+
+pub fn effective_mcp_servers_from_configured(
+    configured_servers: HashMap<String, McpServerConfig>,
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+) -> HashMap<String, EffectiveMcpServer> {
+    let mut servers = configured_servers
+        .into_iter()
+        .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
+        .collect::<HashMap<_, _>>();
+    for builtin_server in &config.builtin_mcp_servers {
+        servers.insert(
+            builtin_server.name().to_string(),
+            EffectiveMcpServer::builtin(*builtin_server),
+        );
+    }
     with_codex_apps_mcp(servers, auth, config)
 }
 

@@ -5,8 +5,8 @@ use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
+use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
-use crate::resolve_installation_id;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -14,10 +14,10 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skills_watcher::SkillsWatcher;
+use crate::skills_watcher::SkillsWatcherEvent;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
-use codex_agent_graph_store::AgentGraphStore;
-use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -50,8 +50,8 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
-use codex_rollout::state_db;
 use codex_rollout::state_db::StateDbHandle;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
@@ -70,6 +70,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -101,6 +103,47 @@ impl Drop for TempCodexHomeGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
+}
+
+fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
+    if should_use_test_thread_manager_behavior()
+        && let Ok(handle) = Handle::try_current()
+        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
+    {
+        // The real watcher spins background tasks that can starve the
+        // current-thread test runtime and cause event waits to time out.
+        warn!("using noop skills watcher under current-thread test runtime");
+        return Arc::new(SkillsWatcher::noop());
+    }
+
+    let file_watcher = match FileWatcher::new() {
+        Ok(file_watcher) => Arc::new(file_watcher),
+        Err(err) => {
+            warn!("failed to initialize file watcher: {err}");
+            Arc::new(FileWatcher::noop())
+        }
+    };
+    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
+
+    let mut rx = skills_watcher.subscribe();
+    let skills_manager = Arc::clone(&skills_manager);
+    if let Ok(handle) = Handle::try_current() {
+        handle.spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
+                        skills_manager.clear_cache();
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    } else {
+        warn!("skills watcher listener skipped: no Tokio runtime available");
+    }
+
+    skills_watcher
 }
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
@@ -203,12 +246,12 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
+    skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
-    state_db: StateDbHandle,
-    agent_graph_store: Arc<dyn AgentGraphStore>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
+    state_db: Option<StateDbHandle>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -224,11 +267,10 @@ pub fn build_models_manager(
     )
 }
 
-pub async fn init_state_db_from_config(config: &Config) -> Option<StateDbHandle> {
-    state_db::init(config).await
-}
-
-pub fn thread_store_from_config(config: &Config, state_db: StateDbHandle) -> Arc<dyn ThreadStore> {
+pub fn thread_store_from_config(
+    config: &Config,
+    state_db: Option<StateDbHandle>,
+) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig::from_config(config),
@@ -239,27 +281,6 @@ pub fn thread_store_from_config(config: &Config, state_db: StateDbHandle) -> Arc
     }
 }
 
-pub fn agent_graph_store_from_state_db(state_db: StateDbHandle) -> Arc<dyn AgentGraphStore> {
-    Arc::new(LocalAgentGraphStore::new(state_db))
-}
-
-async fn state_db_from_roots_for_tests(
-    codex_home: PathBuf,
-    sqlite_home: PathBuf,
-    default_model_provider_id: String,
-) -> StateDbHandle {
-    let config = codex_rollout::RolloutConfig {
-        codex_home: codex_home.clone(),
-        sqlite_home,
-        cwd: codex_home,
-        model_provider_id: default_model_provider_id,
-        generate_memories: false,
-    };
-    state_db::try_init(&config)
-        .await
-        .unwrap_or_else(|err| panic!("test state db should initialize: {err}"))
-}
-
 impl ThreadManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -268,9 +289,8 @@ impl ThreadManager {
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        state_db: StateDbHandle,
         thread_store: Arc<dyn ThreadStore>,
-        agent_graph_store: Arc<dyn AgentGraphStore>,
+        state_db: Option<StateDbHandle>,
         installation_id: String,
     ) -> Self {
         let codex_home = config.codex_home.clone();
@@ -286,6 +306,7 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -295,13 +316,13 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                skills_watcher,
                 thread_store,
-                state_db,
-                agent_graph_store,
                 auth_manager,
                 session_source,
                 installation_id,
                 analytics_events_client,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -311,7 +332,7 @@ impl ThreadManager {
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
-    pub(crate) async fn with_models_provider_for_tests(
+    pub(crate) fn with_models_provider_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
     ) -> Self {
@@ -322,27 +343,11 @@ impl ThreadManager {
         ));
         std::fs::create_dir_all(&codex_home)
             .unwrap_or_else(|err| panic!("temp codex home dir create failed: {err}"));
-        let state_db = state_db_from_roots_for_tests(
-            codex_home.clone(),
-            codex_home.clone(),
-            OPENAI_PROVIDER_ID.to_string(),
-        )
-        .await;
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
-        let installation_id = resolve_installation_id(&skills_codex_home)
-            .await
-            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
-        let mut manager = Self::with_models_provider_and_home_and_state_db_for_tests(
+        let mut manager = Self::with_models_provider_and_home_for_tests(
             auth,
             provider,
             codex_home.clone(),
             Arc::new(EnvironmentManager::default_for_tests()),
-            state_db,
-            skills_codex_home,
-            installation_id,
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
         manager
@@ -350,47 +355,35 @@ impl ThreadManager {
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth and codex home.
     /// Used for integration tests: should not be used by ordinary business logic.
-    pub(crate) async fn with_models_provider_and_home_for_tests(
+    pub(crate) fn with_models_provider_and_home_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
-        let state_db = state_db_from_roots_for_tests(
-            codex_home.clone(),
-            codex_home.clone(),
-            OPENAI_PROVIDER_ID.to_string(),
-        )
-        .await;
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
-        let installation_id = resolve_installation_id(&skills_codex_home)
-            .await
-            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
-        Self::with_models_provider_and_home_and_state_db_for_tests(
+        Self::with_models_provider_home_and_state_for_tests(
             auth,
             provider,
             codex_home,
             environment_manager,
-            state_db,
-            skills_codex_home,
-            installation_id,
+            /*state_db*/ None,
         )
     }
 
-    fn with_models_provider_and_home_and_state_db_for_tests(
+    pub(crate) fn with_models_provider_home_and_state_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
-        state_db: StateDbHandle,
-        skills_codex_home: AbsolutePathBuf,
-        installation_id: String,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
@@ -403,16 +396,17 @@ impl ThreadManager {
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig {
                 codex_home: codex_home.clone(),
+                sqlite_home: codex_home.clone(),
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
             },
             state_db.clone(),
         ));
-        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -423,13 +417,13 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                skills_watcher,
                 thread_store,
-                state_db,
-                agent_graph_store,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
                 analytics_events_client: None,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -515,17 +509,22 @@ impl ThreadManager {
         subtree_thread_ids.push(thread_id);
         seen_thread_ids.insert(thread_id);
 
-        for descendant_id in self
-            .state
-            .agent_graph_store
-            .list_thread_spawn_descendants(thread_id, /*status_filter*/ None)
-            .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to load thread-spawn descendants: {err}"))
-            })?
-        {
-            if seen_thread_ids.insert(descendant_id) {
-                subtree_thread_ids.push(descendant_id);
+        if let Some(state_db_ctx) = thread.state_db() {
+            for status in [
+                DirectionalThreadSpawnEdgeStatus::Open,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            ] {
+                for descendant_id in state_db_ctx
+                    .list_thread_spawn_descendants_with_status(thread_id, status)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to load thread-spawn descendants: {err}"))
+                    })?
+                {
+                    if seen_thread_ids.insert(descendant_id) {
+                        subtree_thread_ids.push(descendant_id);
+                    }
+                }
             }
         }
 
@@ -867,12 +866,8 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
-    pub(crate) fn state_db(&self) -> StateDbHandle {
+    pub(crate) fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db.clone()
-    }
-
-    pub(crate) fn agent_graph_store(&self) -> Arc<dyn AgentGraphStore> {
-        self.agent_graph_store.clone()
     }
 
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -1148,6 +1143,19 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
+        let watch_registration = match environment_selections.primary() {
+            Some(turn_environment) if !turn_environment.environment.is_remote() => {
+                self.skills_watcher
+                    .register_config(
+                        &config,
+                        self.skills_manager.as_ref(),
+                        self.plugins_manager.as_ref(),
+                        Some(turn_environment.environment.get_filesystem()),
+                    )
+                    .await
+            }
+            Some(_) | None => crate::file_watcher::WatchRegistration::default(),
+        };
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -1163,6 +1171,7 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
+            skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,
             session_source,
             thread_source,
@@ -1177,12 +1186,11 @@ impl ThreadManagerState {
             parent_trace,
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
-            state_db: Some(self.state_db.clone()),
             thread_store: Arc::clone(&self.thread_store),
         })
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
             .await?;
         if is_resumed_thread
             && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
@@ -1197,6 +1205,7 @@ impl ThreadManagerState {
         codex: Codex,
         thread_id: ThreadId,
         session_source: SessionSource,
+        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -1217,6 +1226,7 @@ impl ThreadManagerState {
                     session_configured.clone(),
                     session_configured.rollout_path.clone(),
                     session_source,
+                    watch_registration,
                 ));
                 e.insert(thread.clone());
                 return Ok(NewThread {
