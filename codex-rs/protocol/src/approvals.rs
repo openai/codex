@@ -187,6 +187,7 @@ pub struct GuardianAssessmentEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+    #[serde(default)]
     #[ts(type = "number")]
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

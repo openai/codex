@@ -2335,6 +2335,7 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
+                assert_eq!(payload.started_at_ms, 1_000);
                 assert_eq!(payload.review_id, "review-1");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
@@ -2382,6 +2383,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.started_at_ms, 1_000);
+                assert_eq!(payload.completed_at_ms, 1_042);
                 assert_eq!(payload.review_id, "review-2");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
                 assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);

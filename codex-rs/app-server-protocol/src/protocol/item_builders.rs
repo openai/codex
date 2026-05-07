@@ -260,7 +260,9 @@ pub fn guardian_auto_approval_review_notification(
                     turn_id,
                     review_id: assessment.id.clone(),
                     started_at_ms: assessment.started_at_ms,
-                    completed_at_ms: assessment.completed_at_ms.unwrap_or(assessment.started_at_ms),
+                    completed_at_ms: assessment
+                        .completed_at_ms
+                        .unwrap_or(assessment.started_at_ms),
                     target_item_id: assessment.target_item_id.clone(),
                     decision_source: assessment
                         .decision_source

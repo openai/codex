@@ -6376,9 +6376,8 @@ impl ChatWidget {
                     notification.review_id,
                     notification.turn_id,
                     notification.started_at_ms,
-                    /*completed_at_ms*/ None,
                     notification.review,
-                    /*decision_source*/ None,
+                    /*completion*/ None,
                     notification.action,
                 );
             }
@@ -6387,9 +6386,8 @@ impl ChatWidget {
                     notification.review_id,
                     notification.turn_id,
                     notification.started_at_ms,
-                    Some(notification.completed_at_ms),
                     notification.review,
-                    Some(notification.decision_source),
+                    Some((notification.completed_at_ms, notification.decision_source)),
                     notification.action,
                 );
             }
@@ -6573,11 +6571,17 @@ impl ChatWidget {
         id: String,
         turn_id: String,
         started_at_ms: i64,
-        completed_at_ms: Option<i64>,
         review: codex_app_server_protocol::GuardianApprovalReview,
-        decision_source: Option<codex_app_server_protocol::AutoReviewDecisionSource>,
+        completion: Option<(i64, codex_app_server_protocol::AutoReviewDecisionSource)>,
         action: GuardianApprovalReviewAction,
     ) {
+        let (completed_at_ms, decision_source) = match completion {
+            Some((completed_at_ms, decision_source)) => {
+                (Some(completed_at_ms), Some(decision_source))
+            }
+            None => (None, None),
+        };
+
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
             target_item_id: None,

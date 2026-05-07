@@ -2146,6 +2146,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2155,6 +2160,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -2411,6 +2417,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2420,6 +2431,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -3591,6 +3603,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -3602,6 +3619,7 @@
         "cwd",
         "itemId",
         "permissions",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -9878,6 +9896,11 @@
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
+          "completedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review completed.",
+            "format": "int64",
+            "type": "integer"
+          },
           "decisionSource": {
             "$ref": "#/definitions/v2/AutoReviewDecisionSource"
           },
@@ -9887,6 +9910,11 @@
           "reviewId": {
             "description": "Stable identifier for this review.",
             "type": "string"
+          },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
           },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
@@ -9904,9 +9932,11 @@
         },
         "required": [
           "action",
+          "completedAtMs",
           "decisionSource",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -9927,6 +9957,11 @@
             "description": "Stable identifier for this review.",
             "type": "string"
           },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
+          },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
             "type": [
@@ -9945,6 +9980,7 @@
           "action",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],

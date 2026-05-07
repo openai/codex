@@ -243,7 +243,6 @@ async fn run_guardian_review(
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
-    let started_at_ms = now_unix_timestamp_ms();
     let review_tracking = GuardianReviewTrackContext::new(
         session.conversation_id.to_string(),
         assessment_turn_id.clone(),
@@ -253,6 +252,7 @@ async fn run_guardian_review(
         guardian_reviewed_action(&request),
         GUARDIAN_REVIEW_TIMEOUT.as_millis() as u64,
     );
+    let started_at_ms = review_tracking.started_at_ms.try_into().unwrap_or_default();
     session
         .send_event(
             turn.as_ref(),
