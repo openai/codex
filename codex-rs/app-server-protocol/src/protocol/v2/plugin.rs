@@ -552,8 +552,22 @@ pub struct PluginDetail {
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
     pub mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
+    pub matcher: Option<String>,
+    pub enabled: bool,
+    pub status_message: Option<String>,
+    pub definition: serde_json::Value,
+    pub display_order: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

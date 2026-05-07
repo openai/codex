@@ -25,6 +25,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
@@ -1934,12 +1935,47 @@ async fn read_plugin_for_config_installed_git_source_reads_from_cache_without_cl
         r#"{"mcpServers":{"toolkit":{"command":"toolkit-mcp"}}}"#,
     );
     write_file(
+        &cached_plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo first"
+          },
+          {
+            "type": "command",
+            "command": "echo second"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
+plugin_hooks = true
 
 [plugins."toolkit@debug"]
 enabled = true
+
+[hooks.state."toolkit@debug:hooks/hooks.json:pre_tool_use:0:0"]
+enabled = false
 "#,
     );
 
@@ -1977,6 +2013,56 @@ enabled = true
     assert_eq!(
         outcome.plugin.apps,
         vec![AppConnectorId("connector_calendar".to_string())]
+    );
+    assert_eq!(
+        outcome.plugin.hooks,
+        vec![
+            PluginHookSummary {
+                key: "toolkit@debug:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                event_name: HookEventName::PreToolUse,
+                matcher: None,
+                enabled: false,
+                status_message: None,
+                definition: serde_json::json!({
+                    "type": "command",
+                    "command": "echo first",
+                    "timeout": null,
+                    "async": false,
+                    "statusMessage": null,
+                }),
+                display_order: 0,
+            },
+            PluginHookSummary {
+                key: "toolkit@debug:hooks/hooks.json:pre_tool_use:0:1".to_string(),
+                event_name: HookEventName::PreToolUse,
+                matcher: None,
+                enabled: true,
+                status_message: None,
+                definition: serde_json::json!({
+                    "type": "command",
+                    "command": "echo second",
+                    "timeout": null,
+                    "async": false,
+                    "statusMessage": null,
+                }),
+                display_order: 1,
+            },
+            PluginHookSummary {
+                key: "toolkit@debug:hooks/hooks.json:session_start:0:0".to_string(),
+                event_name: HookEventName::SessionStart,
+                matcher: None,
+                enabled: true,
+                status_message: None,
+                definition: serde_json::json!({
+                    "type": "command",
+                    "command": "echo startup",
+                    "timeout": null,
+                    "async": false,
+                    "statusMessage": null,
+                }),
+                display_order: 2,
+            },
+        ]
     );
     assert_eq!(outcome.plugin.mcp_server_names, vec!["toolkit".to_string()]);
     assert!(

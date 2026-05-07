@@ -8739,6 +8739,12 @@
             "null"
           ]
         },
+        "hooks": {
+          "items": {
+            "$ref": "#/definitions/PluginHookSummary"
+          },
+          "type": "array"
+        },
         "marketplaceName": {
           "type": "string"
         },
@@ -8770,10 +8776,49 @@
       },
       "required": [
         "apps",
+        "hooks",
         "marketplaceName",
         "mcpServers",
         "skills",
         "summary"
+      ],
+      "type": "object"
+    },
+    "PluginHookSummary": {
+      "properties": {
+        "definition": true,
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "key": {
+          "type": "string"
+        },
+        "matcher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "definition",
+        "displayOrder",
+        "enabled",
+        "eventName",
+        "key"
       ],
       "type": "object"
     },
