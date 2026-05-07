@@ -116,20 +116,23 @@ mod tests {
         let width = 12;
         let height = 4;
         let backend = VT100Backend::new(width, height);
-        let mut terminal = CustomTerminal::with_options_and_cursor_position(
-            backend,
-            Position {
-                x: 0,
-                y: 1,
-            },
+        let mut terminal =
+            CustomTerminal::with_options_and_cursor_position(backend, Position { x: 0, y: 1 })
+                .expect("terminal");
+        write!(
+            terminal.backend_mut(),
+            "shell line\r\nstale cells\r\nmore stale"
         )
-        .expect("terminal");
-        write!(terminal.backend_mut(), "shell line\r\nstale cells\r\nmore stale")
-            .expect("prefill terminal");
+        .expect("prefill terminal");
 
         clear_for_viewport_change(
             &mut terminal,
-            Rect::new(/*x*/ 0, /*y*/ 1, /*width*/ width, /*height*/ height - 1),
+            Rect::new(
+                /*x*/ 0,
+                /*y*/ 1,
+                /*width*/ width,
+                /*height*/ height - 1,
+            ),
         )
         .expect("clear transition");
 
@@ -437,10 +440,7 @@ struct PendingHistoryLines {
     wrap_policy: HistoryLineWrapPolicy,
 }
 
-fn clear_for_viewport_change<B>(
-    terminal: &mut CustomTerminal<B>,
-    new_area: Rect,
-) -> Result<()>
+fn clear_for_viewport_change<B>(terminal: &mut CustomTerminal<B>, new_area: Rect) -> Result<()>
 where
     B: Backend + Write,
 {
