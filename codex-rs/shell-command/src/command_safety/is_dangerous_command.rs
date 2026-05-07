@@ -1,5 +1,4 @@
 use crate::bash::parse_shell_lc_plain_commands;
-use crate::command_safety::ripgrep::RipgrepArgCase;
 use crate::command_safety::ripgrep::ripgrep_command_can_execute_arbitrary_command;
 use std::path::Path;
 #[cfg(windows)]
@@ -185,9 +184,7 @@ fn direct_command_can_execute_arbitrary_command(command: &[String]) -> bool {
 
     match cmd0.as_deref() {
         Some("sudo") => direct_command_can_execute_arbitrary_command(&command[1..]),
-        Some("rg") => {
-            ripgrep_command_can_execute_arbitrary_command(command, RipgrepArgCase::Sensitive)
-        }
+        Some("rg") => ripgrep_command_can_execute_arbitrary_command(command),
         _ => false,
     }
 }

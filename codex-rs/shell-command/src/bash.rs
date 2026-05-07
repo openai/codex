@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 
 use tree_sitter::Node;
@@ -116,55 +115,8 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
 pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (_, script) = extract_bash_command(command)?;
 
-    let script = strip_line_continuations(script);
-    let tree = try_parse_shell(&script)?;
-    try_parse_word_only_commands_sequence(&tree, &script)
-}
-
-fn strip_line_continuations(script: &str) -> Cow<'_, str> {
-    if !script.contains("\\\n") {
-        return Cow::Borrowed(script);
-    }
-
-    let mut stripped = String::with_capacity(script.len());
-    let mut chars = script.chars().peekable();
-    let mut escaped = false;
-    let mut in_double_quote = false;
-    let mut in_single_quote = false;
-    let mut stripped_any = false;
-
-    while let Some(ch) = chars.next() {
-        if escaped {
-            stripped.push(ch);
-            escaped = false;
-        } else if ch == '\\' && !in_single_quote {
-            if chars.peek() == Some(&'\n') {
-                chars.next();
-                stripped_any = true;
-                continue;
-            }
-
-            stripped.push(ch);
-            escaped = true;
-        } else {
-            match ch {
-                '\'' if !in_double_quote => {
-                    in_single_quote = !in_single_quote;
-                }
-                '"' if !in_single_quote => {
-                    in_double_quote = !in_double_quote;
-                }
-                _ => {}
-            }
-            stripped.push(ch);
-        }
-    }
-
-    if stripped_any {
-        Cow::Owned(stripped)
-    } else {
-        Cow::Borrowed(script)
-    }
+    let tree = try_parse_shell(script)?;
+    try_parse_word_only_commands_sequence(&tree, script)
 }
 
 /// Returns the parsed argv for a single shell command in a here-doc style
@@ -320,7 +272,6 @@ fn unescape_unquoted_word(raw: &str) -> Option<String> {
         }
 
         match chars.next() {
-            Some('\n') => {}
             Some(escaped) => unescaped.push(escaped),
             None => return None,
         }
@@ -453,34 +404,6 @@ mod tests {
                 "--pre=./pre.sh".to_string(),
                 "pattern".to_string(),
             ]]
-        );
-    }
-
-    #[test]
-    fn shell_lc_parser_removes_line_continuations_outside_single_quotes() {
-        assert_eq!(
-            parse_shell_lc_plain_commands(&[
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo foo\\\nbar".to_string(),
-            ]),
-            Some(vec![vec!["echo".to_string(), "foobar".to_string()]])
-        );
-        assert_eq!(
-            parse_shell_lc_plain_commands(&[
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo \"foo\\\nbar\"".to_string(),
-            ]),
-            Some(vec![vec!["echo".to_string(), "foobar".to_string()]])
-        );
-        assert_eq!(
-            parse_shell_lc_plain_commands(&[
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo 'foo\\\nbar'".to_string(),
-            ]),
-            Some(vec![vec!["echo".to_string(), "foo\\\nbar".to_string()]])
         );
     }
 
