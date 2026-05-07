@@ -662,7 +662,10 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![]],
         response_headers: Vec::new(),
-        accept_delay: Some(Duration::from_millis(500)),
+        // Keep the sideband handshake pending beyond the stale-event observation window below.
+        // Slow CI runners can otherwise complete the mock accept before the close path gets to
+        // abort the sideband task, which makes the negative handshake assertion scheduler-racy.
+        accept_delay: Some(Duration::from_secs(5)),
         close_after_requests: false,
     }])
     .await;
