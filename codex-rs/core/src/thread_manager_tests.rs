@@ -347,7 +347,7 @@ async fn start_thread_uses_all_default_environments_from_codex_home() {
     std::fs::write(
         config.codex_home.join("environments.toml"),
         r#"
-default = "local"
+default = "dev"
 
 [[environments]]
 id = "dev"
@@ -372,7 +372,7 @@ args = ["dev", "cd /tmp && true"]
     );
     assert_eq!(
         environment_manager.default_environment_ids(),
-        vec!["local".to_string(), "dev".to_string()]
+        vec!["dev".to_string(), "local".to_string()]
     );
 
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
@@ -393,11 +393,11 @@ args = ["dev", "cd /tmp && true"]
         selections,
         vec![
             TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
+                environment_id: "dev".to_string(),
                 cwd: thread.session_configured.cwd.abs(),
             },
             TurnEnvironmentSelection {
-                environment_id: "dev".to_string(),
+                environment_id: "local".to_string(),
                 cwd: thread.session_configured.cwd.abs(),
             },
         ]
