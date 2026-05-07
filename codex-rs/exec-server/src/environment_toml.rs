@@ -44,7 +44,7 @@ struct EnvironmentToml {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TomlEnvironmentProvider {
     default: EnvironmentDefault,
-    environments: HashMap<String, ExecServerTransportParams>,
+    environments: Vec<(String, ExecServerTransportParams)>,
 }
 
 impl TomlEnvironmentProvider {
@@ -58,7 +58,7 @@ impl TomlEnvironmentProvider {
         config_dir: Option<&Path>,
     ) -> Result<Self, ExecServerError> {
         let mut ids = HashSet::from([LOCAL_ENVIRONMENT_ID.to_string()]);
-        let mut environments = HashMap::with_capacity(config.environments.len());
+        let mut environments = Vec::with_capacity(config.environments.len());
         for item in config.environments {
             let (id, transport) = parse_environment_toml(item, config_dir)?;
             if !ids.insert(id.clone()) {
@@ -66,7 +66,7 @@ impl TomlEnvironmentProvider {
                     "environment id `{id}` is duplicated"
                 )));
             }
-            environments.insert(id, transport);
+            environments.push((id, transport));
         }
         let default = normalize_default_environment_id(config.default.as_deref(), &ids)?;
         Ok(Self {
@@ -82,19 +82,19 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
-        let mut environments = HashMap::from([(
+        let mut environments = Vec::with_capacity(self.environments.len() + 1);
+        environments.push((
             LOCAL_ENVIRONMENT_ID.to_string(),
             Environment::local(local_runtime_paths.clone()),
-        )]);
-
+        ));
         for (id, transport_params) in &self.environments {
-            environments.insert(
+            environments.push((
                 id.clone(),
                 Environment::remote_with_transport(
                     transport_params.clone(),
                     Some(local_runtime_paths.clone()),
                 ),
-            );
+            ));
         }
 
         Ok(EnvironmentProviderSnapshot {
@@ -345,13 +345,15 @@ mod tests {
             environments,
             default,
         } = snapshot;
+        let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert_eq!(
             environments["devbox"].exec_server_url(),
             Some("ws://127.0.0.1:8765")
         );
-        assert_eq!(provider.environments["ssh-dev"], ssh_transport);
+        assert_eq!(provider.environments[1].0, "ssh-dev");
+        assert_eq!(provider.environments[1].1, ssh_transport);
         assert!(environments["ssh-dev"].is_remote());
         assert_eq!(environments["ssh-dev"].exec_server_url(), None);
         assert_eq!(
@@ -483,7 +485,7 @@ mod tests {
         .expect("provider");
 
         assert_eq!(
-            provider.environments["ssh-dev"],
+            provider.environments[0].1,
             ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
                 program: "ssh".to_string(),
                 args: Vec::new(),
@@ -686,8 +688,13 @@ default = "none"
             .snapshot(&test_runtime_paths())
             .await
             .expect("environments");
+        let environment_ids: Vec<_> = snapshot
+            .environments
+            .into_iter()
+            .map(|(id, _environment)| id)
+            .collect();
 
-        assert!(snapshot.environments.contains_key(LOCAL_ENVIRONMENT_ID));
+        assert!(environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
@@ -702,7 +709,12 @@ default = "none"
             .snapshot(&test_runtime_paths())
             .await
             .expect("environments");
+        let environment_ids: Vec<_> = snapshot
+            .environments
+            .into_iter()
+            .map(|(id, _environment)| id)
+            .collect();
 
-        assert!(snapshot.environments.contains_key(LOCAL_ENVIRONMENT_ID));
+        assert!(environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
     }
 }
