@@ -305,10 +305,13 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
         /*codex_linux_sandbox_exe*/ None,
     )
     .expect("runtime paths");
-    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::create_for_tests(
-        Some("none".to_string()),
-        runtime_paths,
-    ));
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("none".to_string()),
+            runtime_paths,
+        )
+        .await,
+    );
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),

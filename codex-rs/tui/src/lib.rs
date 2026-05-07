@@ -2150,7 +2150,8 @@ mod tests {
                 std::env::current_exe().expect("current exe"),
                 /*codex_linux_sandbox_exe*/ None,
             )?,
-        );
+        )
+        .await;
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;

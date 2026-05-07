@@ -72,7 +72,7 @@ pub async fn run_main(
         .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-    })?;
+        })?;
     set_default_client_residency_requirement(config.enforce_residency.value());
     let state_db = codex_core::init_state_db(&config).await;
     let environment_manager = Arc::new(
