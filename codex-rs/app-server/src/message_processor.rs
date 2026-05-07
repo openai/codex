@@ -36,7 +36,6 @@ use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
-use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
@@ -177,7 +176,6 @@ pub(crate) struct MessageProcessor {
 
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
-    origin: ConnectionOrigin,
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
@@ -192,14 +190,13 @@ pub(crate) struct InitializedConnectionSessionState {
 
 impl Default for ConnectionSessionState {
     fn default() -> Self {
-        Self::new(ConnectionOrigin::WebSocket)
+        Self::new()
     }
 }
 
 impl ConnectionSessionState {
-    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            origin,
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }

@@ -6,7 +6,6 @@ use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::AppServerTransport;
-use crate::transport::ConnectionOrigin;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
@@ -117,10 +116,6 @@ struct TracingHarness {
 
 impl TracingHarness {
     async fn new() -> Result<Self> {
-        Self::new_with_origin(ConnectionOrigin::WebSocket).await
-    }
-
-    async fn new_with_origin(origin: ConnectionOrigin) -> Result<Self> {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
@@ -133,7 +128,7 @@ impl TracingHarness {
             _codex_home: codex_home,
             processor,
             outgoing_rx,
-            session: Arc::new(ConnectionSessionState::new(origin)),
+            session: Arc::new(ConnectionSessionState::new()),
             tracing,
         };
 

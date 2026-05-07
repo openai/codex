@@ -64,7 +64,6 @@ use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
-use crate::transport::ConnectionOrigin;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
 use codex_analytics::AppServerRpcTransport;
@@ -435,7 +434,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
-            let session = Arc::new(ConnectionSessionState::new(ConnectionOrigin::InProcess));
+            let session = Arc::new(ConnectionSessionState::new());
             let mut listen_for_threads = true;
 
             loop {
@@ -722,7 +721,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
