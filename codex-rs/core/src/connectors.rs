@@ -457,7 +457,7 @@ async fn cached_directory_connectors_for_tool_suggest_with_auth(
     let is_workspace_account = auth.is_workspace_account();
     let cache_key = AllConnectorsCacheKey::new(
         config.chatgpt_base_url.clone(),
-        Some(account_id.clone()),
+        Some(account_id),
         auth.get_chatgpt_user_id(),
         is_workspace_account,
     );
