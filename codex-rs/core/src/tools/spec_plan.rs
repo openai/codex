@@ -44,7 +44,6 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
-use crate::tools::registry::ConfiguredToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
@@ -104,8 +103,7 @@ pub fn build_tool_registry_builder(
         );
         enabled_tools
             .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.register_handler(Arc::new(ConfiguredToolHandler::new(
-            CodeModeExecuteHandler,
+        builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
             create_code_mode_tool(
                 &enabled_tools,
                 &namespace_descriptions,
