@@ -89,6 +89,7 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
 
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
     /// Optional override of model selection.

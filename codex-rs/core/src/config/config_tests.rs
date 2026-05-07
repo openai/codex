@@ -2276,6 +2276,17 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
 }
 
 #[test]
+fn legacy_remote_thread_store_endpoint_is_rejected() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"experimental_thread_store_endpoint = "https://example.com""#,
+    )
+    .expect_err("legacy remote thread-store endpoint should be rejected");
+
+    assert!(err.to_string().contains("unknown field"));
+    assert!(err.to_string().contains("experimental_thread_store_endpoint"));
+}
+
+#[test]
 fn profile_tui_rejects_unsupported_settings() {
     let err = toml::from_str::<ConfigToml>(
         r#"profile = "work"
