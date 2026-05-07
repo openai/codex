@@ -797,9 +797,9 @@ impl MessageProcessor {
         );
 
         if let Some(scope) = serialization_scope {
-            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            let (key, access) = RequestSerializationQueueKey::from_scope(connection_id, scope);
             self.request_serialization_queues
-                .enqueue(key, request)
+                .enqueue(key, access, request)
                 .await;
         } else {
             tokio::spawn(async move {
