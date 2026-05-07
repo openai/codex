@@ -636,6 +636,7 @@ fn sample_initialize_fact(connection_id: u64) -> AnalyticsFact {
             },
             capabilities: Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         },

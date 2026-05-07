@@ -127,6 +127,7 @@ fn provider(name: &str) -> Provider {
     Provider {
         name: name.to_string(),
         base_url: "https://example.com/v1".to_string(),
+        uses_chatgpt_auth: false,
         query_params: None,
         headers: HeaderMap::new(),
         retry: codex_api::RetryConfig {
