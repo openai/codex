@@ -920,7 +920,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 codex_config::LoaderOverrides::default(),
                 /*default_analytics_enabled*/ false,
                 codex_app_server::AppServerTransport::Off,
-                codex_protocol::protocol::SessionSource::VSCode,
+                codex_protocol::protocol::SessionSource::Cli,
                 codex_app_server::AppServerWebsocketAuthSettings::default(),
             )
             .await?;
