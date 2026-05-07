@@ -538,6 +538,11 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 summary: RemotePluginSummary {
                     id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(RemotePluginShareContext {
+                        remote_plugin_id: "plugins_123".to_string(),
+                        creator_account_user_id: None,
+                        creator_name: None,
+                    }),
                     installed: false,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
@@ -553,6 +558,11 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 summary: RemotePluginSummary {
                     id: "plugins_456".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(RemotePluginShareContext {
+                        remote_plugin_id: "plugins_456".to_string(),
+                        creator_account_user_id: None,
+                        creator_name: None,
+                    }),
                     installed: true,
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,

@@ -380,6 +380,12 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "PostToolUse")]
     #[ts(rename = "PostToolUse")]
     pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PreCompact")]
+    #[ts(rename = "PreCompact")]
+    pub pre_compact: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostCompact")]
+    #[ts(rename = "PostCompact")]
+    pub post_compact: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,

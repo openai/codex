@@ -46,7 +46,9 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             HookEventName::PreToolUse
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
-            | HookEventName::SessionStart => {
+            | HookEventName::SessionStart
+            | HookEventName::PreCompact
+            | HookEventName::PostCompact => {
                 if matcher_inputs.is_empty() {
                     matches_matcher(handler.matcher.as_deref(), /*input*/ None)
                 } else {
@@ -132,6 +134,8 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
     }
@@ -213,6 +217,29 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
         assert_eq!(selected[1].display_order, 1);
+    }
+
+    #[test]
+    fn compact_hooks_match_trigger() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PreCompact,
+                Some("manual"),
+                "echo manual",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreCompact,
+                Some("auto"),
+                "echo auto",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PreCompact, Some("manual"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
     }
 
     #[test]

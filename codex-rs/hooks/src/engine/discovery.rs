@@ -511,6 +511,8 @@ fn hook_event_key_label(event_name: codex_protocol::protocol::HookEventName) -> 
         codex_protocol::protocol::HookEventName::PreToolUse => "pre_tool_use",
         codex_protocol::protocol::HookEventName::PermissionRequest => "permission_request",
         codex_protocol::protocol::HookEventName::PostToolUse => "post_tool_use",
+        codex_protocol::protocol::HookEventName::PreCompact => "pre_compact",
+        codex_protocol::protocol::HookEventName::PostCompact => "post_compact",
         codex_protocol::protocol::HookEventName::SessionStart => "session_start",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "user_prompt_submit",
         codex_protocol::protocol::HookEventName::Stop => "stop",

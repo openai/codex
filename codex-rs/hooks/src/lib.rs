@@ -9,10 +9,12 @@ mod types;
 
 pub use engine::HookListEntry;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 6] = [
+pub const HOOK_EVENT_NAMES: [&str; 8] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
+    "PreCompact",
+    "PostCompact",
     "SessionStart",
     "UserPromptSubmit",
     "Stop",
@@ -21,14 +23,21 @@ pub const HOOK_EVENT_NAMES: [&str; 6] = [
 /// Hook event names whose matcher fields are meaningful during dispatch.
 ///
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
-/// fields because those events do not dispatch against a tool or session-start
-/// source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 4] = [
+/// fields because those events do not dispatch against a tool, compaction
+/// trigger, or session-start source.
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 6] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
+    "PreCompact",
+    "PostCompact",
     "SessionStart",
 ];
+
+pub use events::compact::PostCompactRequest;
+pub use events::compact::PreCompactOutcome;
+pub use events::compact::PreCompactRequest;
+pub use events::compact::StatelessHookOutcome;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
