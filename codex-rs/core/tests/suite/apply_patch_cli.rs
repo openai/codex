@@ -73,6 +73,7 @@ async fn submit_without_wait(harness: &TestCodexHarness, prompt: &str) -> Result
     .await
 }
 
+#[cfg(unix)]
 async fn submit_without_wait_with_permission_profile(
     harness: &TestCodexHarness,
     prompt: &str,
@@ -1548,7 +1549,7 @@ async fn apply_patch_failed_move_preserves_committed_destination_diff() -> Resul
     submit_without_wait_with_permission_profile(
         &harness,
         "attempt failing move",
-        restrictive_workspace_write_profile(),
+        PermissionProfile::workspace_write(),
     )
     .await?;
 
