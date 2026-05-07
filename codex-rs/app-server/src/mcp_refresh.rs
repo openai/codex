@@ -177,7 +177,7 @@ mod tests {
         let state_db = init_state_db(&good_config)
             .await
             .expect("refresh tests require state db");
-        let thread_store = thread_store_from_config(&good_config, state_db.clone());
+        let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
         let thread_manager = Arc::new(ThreadManager::new(
             &good_config,
             auth_manager,
@@ -185,7 +185,7 @@ mod tests {
             Arc::new(EnvironmentManager::default_for_tests()),
             /*analytics_events_client*/ None,
             thread_store,
-            state_db.clone(),
+            Some(state_db.clone()),
             "11111111-1111-4111-8111-111111111111".to_string(),
         ));
         thread_manager.start_thread(good_config).await?;
