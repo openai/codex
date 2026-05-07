@@ -764,6 +764,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         thread_store.clone(),
         state_db,
         TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
     );
 
     let source = manager
