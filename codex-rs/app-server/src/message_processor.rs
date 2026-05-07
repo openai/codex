@@ -85,7 +85,7 @@ use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::warn;
 
-const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_secs(5);
+const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_millis(100);
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -210,11 +210,11 @@ async fn request_attestation_header_value_with_timeout(
                 message = %err.message,
                 "attestation generation request failed"
             );
-            return None;
+            return Some(String::new());
         }
         Ok(Err(err)) => {
             warn!("attestation generation request canceled: {err}");
-            return None;
+            return Some(String::new());
         }
         Err(_) => {
             let _canceled = outgoing.cancel_request(&request_id).await;
@@ -222,7 +222,7 @@ async fn request_attestation_header_value_with_timeout(
                 timeout_seconds = timeout_duration.as_secs(),
                 "attestation generation request timed out"
             );
-            return None;
+            return Some(String::new());
         }
     };
 
@@ -230,7 +230,7 @@ async fn request_attestation_header_value_with_timeout(
         Ok(response) => Some(response.header_value),
         Err(err) => {
             warn!("failed to deserialize attestation generation response: {err}");
-            None
+            Some(String::new())
         }
     }
 }

@@ -258,7 +258,7 @@ impl ModelProviderInfo {
             base_url,
             uses_chatgpt_auth: matches!(
                 auth_mode,
-                Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
+                Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
             ),
             query_params: self.query_params.clone(),
             headers,
