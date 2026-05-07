@@ -74,7 +74,7 @@ rustPlatform.buildRustPackage (_: {
   # parallel exhausts RAM.  Serialise cargo jobs to one at a time.
   # (lto="thin" or disabling LTO entirely would also work but changes binary
   # characteristics; limiting parallelism is the minimal-impact fix.)
-  env.CARGO_BUILD_JOBS = "1";
+  # env.CARGO_BUILD_JOBS = "1";
   pname = "codex-rs";
   inherit version;
   cargoLock.lockFile = ./Cargo.lock;
