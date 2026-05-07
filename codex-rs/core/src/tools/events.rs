@@ -217,14 +217,12 @@ impl ToolEmitter {
                 } else {
                     PatchApplyStatus::Failed
                 };
-                let tracker_update = if output.exit_code == 0 {
-                    if let Some(delta) = applied_patch_delta {
-                        TurnDiffTrackerUpdate::Track(delta)
-                    } else {
-                        TurnDiffTrackerUpdate::Invalidate
+                let tracker_update = match applied_patch_delta {
+                    Some(delta) if delta.is_exact() && delta.is_empty() => {
+                        TurnDiffTrackerUpdate::None
                     }
-                } else {
-                    TurnDiffTrackerUpdate::Invalidate
+                    Some(delta) => TurnDiffTrackerUpdate::Track(delta),
+                    None => TurnDiffTrackerUpdate::Invalidate,
                 };
                 emit_patch_end(
                     ctx,
@@ -347,10 +345,24 @@ impl ToolEmitter {
                 };
                 (event, result)
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
-            | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => {
                 let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
+                let result = Err(FunctionCallError::RespondToModel(response));
+                (event, result)
+            }
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
+                let response = self.format_exec_output_for_model(&output, ctx);
+                // apply_patch can be denied after it has already committed a
+                // known prefix. Reuse the output-bearing path so the visible
+                // item still fails while the turn diff consumes that prefix.
+                let event = match (self, applied_patch_delta) {
+                    (Self::ApplyPatch { .. }, Some(delta)) => ToolEventStage::Success {
+                        output: *output,
+                        applied_patch_delta: Some(delta),
+                    },
+                    _ => ToolEventStage::Failure(ToolEventFailure::Output(*output)),
+                };
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
             }
@@ -550,8 +562,8 @@ async fn emit_patch_end(
             let mut guard = tracker.lock().await;
             let previous_diff = guard.get_unified_diff();
             let tracker_changed = match tracker_update {
-                TurnDiffTrackerUpdate::Track(action) => {
-                    guard.track_successful_patch(action);
+                TurnDiffTrackerUpdate::Track(delta) => {
+                    guard.track_delta(delta);
                     true
                 }
                 TurnDiffTrackerUpdate::Invalidate => {

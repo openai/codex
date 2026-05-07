@@ -37,6 +37,7 @@ use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
@@ -63,6 +64,32 @@ async fn apply_patch_harness_with(
 }
 
 async fn submit_without_wait(harness: &TestCodexHarness, prompt: &str) -> Result<()> {
+    submit_without_wait_with_turn_permissions(
+        harness,
+        prompt,
+        SandboxPolicy::DangerFullAccess,
+        /*permission_profile*/ None,
+    )
+    .await
+}
+
+async fn submit_without_wait_with_permission_profile(
+    harness: &TestCodexHarness,
+    prompt: &str,
+    permission_profile: PermissionProfile,
+) -> Result<()> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, harness.cwd());
+    submit_without_wait_with_turn_permissions(harness, prompt, sandbox_policy, permission_profile)
+        .await
+}
+
+async fn submit_without_wait_with_turn_permissions(
+    harness: &TestCodexHarness,
+    prompt: &str,
+    sandbox_policy: SandboxPolicy,
+    permission_profile: Option<PermissionProfile>,
+) -> Result<()> {
     let test = harness.test();
     let session_model = test.session_configured.model.clone();
     test.codex
@@ -76,8 +103,8 @@ async fn submit_without_wait(harness: &TestCodexHarness, prompt: &str) -> Result
             cwd: harness.cwd().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,
@@ -1484,6 +1511,78 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     );
 
     assert_eq!(harness.read_file_text("partial/success.txt").await?, "ok\n");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_failed_move_preserves_committed_destination_diff() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "failed-move permission setup uses the local test-runner filesystem",
+    );
+
+    let harness = apply_patch_harness().await?;
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let source_dir = test.config.cwd.join("locked");
+    std::fs::create_dir(&source_dir)?;
+    std::fs::create_dir(test.config.cwd.join("out"))?;
+    harness.write_file("locked/source.txt", "before\n").await?;
+    std::fs::set_permissions(&source_dir, std::fs::Permissions::from_mode(0o555))?;
+
+    let call_id = "failed-move-partial-diff";
+    let patch = "*** Begin Patch\n*** Update File: locked/source.txt\n*** Move to: out/dest.txt\n@@\n-before\n+after\n*** End Patch";
+    mount_apply_patch(
+        &harness,
+        call_id,
+        patch,
+        "failed move",
+        ApplyPatchModelOutput::Function,
+    )
+    .await;
+
+    submit_without_wait_with_permission_profile(
+        &harness,
+        "attempt failing move",
+        restrictive_workspace_write_profile(),
+    )
+    .await?;
+
+    let mut last_diff: Option<String> = None;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::TurnDiff(ev) => {
+                last_diff = Some(ev.unified_diff.clone());
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
+    .await;
+
+    std::fs::set_permissions(&source_dir, std::fs::Permissions::from_mode(0o755))?;
+
+    let diff = last_diff.expect("expected TurnDiff after partial failed move");
+    assert!(
+        diff.contains("diff --git a/out/dest.txt b/out/dest.txt"),
+        "diff should include the committed destination write: {diff}"
+    );
+    assert!(
+        diff.contains("+after"),
+        "diff should include destination contents: {diff}"
+    );
+    assert_eq!(
+        harness.read_file_text("locked/source.txt").await?,
+        "before\n"
+    );
+    assert_eq!(harness.read_file_text("out/dest.txt").await?, "after\n");
     Ok(())
 }
 

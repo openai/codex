@@ -438,8 +438,8 @@ impl ToolHandler for ApplyPatchHandler {
                             .await
                             .map(|result| result.output);
                         let (out, delta) = match out {
-                            Ok(output) => (Ok(output.exec_output), output.delta),
-                            Err(error) => (Err(error), None),
+                            Ok(output) => (Ok(output.exec_output), Some(output.delta)),
+                            Err(error) => (Err(error), Some(runtime.committed_delta().clone())),
                         };
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
@@ -550,8 +550,8 @@ pub(crate) async fn intercept_apply_patch(
                         .await
                         .map(|result| result.output);
                     let (out, delta) = match out {
-                        Ok(output) => (Ok(output.exec_output), output.delta),
-                        Err(error) => (Err(error), None),
+                        Ok(output) => (Ok(output.exec_output), Some(output.delta)),
+                        Err(error) => (Err(error), Some(runtime.committed_delta().clone())),
                     };
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),

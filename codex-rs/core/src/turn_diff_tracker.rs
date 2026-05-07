@@ -13,8 +13,8 @@ const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const DEV_NULL: &str = "/dev/null";
 const REGULAR_FILE_MODE: &str = "100644";
 
-/// Tracks the net text diff for the current turn from successful apply_patch
-/// operations, without rereading the workspace filesystem.
+/// Tracks the net text diff for the current turn from committed apply_patch
+/// mutations, without rereading the workspace filesystem.
 pub struct TurnDiffTracker {
     valid: bool,
     display_root: Option<PathBuf>,
@@ -46,7 +46,7 @@ impl TurnDiffTracker {
         tracker
     }
 
-    pub fn track_successful_patch(&mut self, delta: &AppliedPatchDelta) {
+    pub fn track_delta(&mut self, delta: &AppliedPatchDelta) {
         if !delta.is_exact() {
             self.invalidate();
             return;

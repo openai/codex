@@ -51,14 +51,14 @@ async fn accumulates_add_then_update_as_single_add() {
         "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&add);
+    tracker.track_delta(&add);
 
     let update = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: a.txt\n@@\n foo\n+bar\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&update);
+    tracker.track_delta(&update);
 
     let right_oid = git_blob_sha1_hex("foo\nbar\n");
     let expected = format!(
@@ -85,7 +85,7 @@ async fn invalidated_tracker_suppresses_existing_diff() {
         "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&add);
+    tracker.track_delta(&add);
 
     tracker.invalidate();
 
@@ -103,7 +103,7 @@ async fn accumulates_delete() {
         "*** Begin Patch\n*** Delete File: b.txt\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&delete);
+    tracker.track_delta(&delete);
 
     let left_oid = git_blob_sha1_hex("x\n");
     let expected = format!(
@@ -130,7 +130,7 @@ async fn accumulates_move_and_update() {
         "*** Begin Patch\n*** Update File: src.txt\n*** Move to: dst.txt\n@@\n-line\n+line2\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&update);
+    tracker.track_delta(&update);
 
     let left_oid = git_blob_sha1_hex("line\n");
     let right_oid = git_blob_sha1_hex("line2\n");
@@ -158,7 +158,7 @@ async fn pure_rename_yields_no_diff() {
         "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n same\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&rename);
+    tracker.track_delta(&rename);
 
     assert_eq!(tracker.get_unified_diff(), None);
 }
@@ -174,7 +174,7 @@ async fn add_over_existing_file_becomes_update() {
         "*** Begin Patch\n*** Add File: dup.txt\n+after\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&add);
+    tracker.track_delta(&add);
 
     let left_oid = git_blob_sha1_hex("before\n");
     let right_oid = git_blob_sha1_hex("after\n");
@@ -202,14 +202,14 @@ async fn delete_then_readd_same_path_becomes_update() {
         "*** Begin Patch\n*** Delete File: cycle.txt\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&delete);
+    tracker.track_delta(&delete);
 
     let add = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Add File: cycle.txt\n+after\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&add);
+    tracker.track_delta(&add);
 
     let left_oid = git_blob_sha1_hex("before\n");
     let right_oid = git_blob_sha1_hex("after\n");
@@ -238,7 +238,7 @@ async fn move_over_existing_destination_without_content_change_deletes_source_on
         "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n same\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&move_overwrite);
+    tracker.track_delta(&move_overwrite);
 
     let left_oid = git_blob_sha1_hex("same\n");
     let expected = format!(
@@ -267,7 +267,7 @@ async fn move_over_existing_destination_with_content_change_deletes_source_and_u
         "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&move_overwrite);
+    tracker.track_delta(&move_overwrite);
 
     let left_oid_a = git_blob_sha1_hex("from\n");
     let left_oid_b = git_blob_sha1_hex("existing\n");
@@ -304,7 +304,7 @@ async fn preserves_committed_change_order_with_delete_then_move_overwrite() {
         "*** Begin Patch\n*** Delete File: b.txt\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
     )
     .await;
-    tracker.track_successful_patch(&ordered_patch);
+    tracker.track_delta(&ordered_patch);
 
     let left_oid_a = git_blob_sha1_hex("from\n");
     let left_oid_b = git_blob_sha1_hex("existing\n");
