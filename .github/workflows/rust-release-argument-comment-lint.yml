@@ -75,7 +75,7 @@ jobs:
       - name: Cargo build
         working-directory: tools/argument-comment-lint
         shell: bash
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --locked
 
       - name: Stage artifact
         shell: bash
