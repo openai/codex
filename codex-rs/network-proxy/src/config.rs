@@ -278,8 +278,8 @@ pub enum NetworkMode {
     /// blocked unless MITM is enabled so the proxy can enforce method policy on inner requests.
     /// SOCKS5 remains blocked in limited mode.
     Limited,
-    /// Full network access: all HTTP methods are allowed. HTTPS CONNECTs are tunneled directly
-    /// unless MITM is needed for host-specific inner-request hooks.
+    /// Full network access: all HTTP methods are allowed. HTTPS CONNECTs are tunneled directly.
+    /// MITM hooks do not currently make full mode enter MITM.
     #[default]
     Full,
 }
