@@ -90,14 +90,14 @@ async fn request_attestation_header_value_with_timeout(
             );
             return app_server_attestation_header_value(
                 AppServerAttestationStatus::RequestFailed,
-                None,
+                /*token*/ None,
             );
         }
         Ok(Err(err)) => {
             warn!("attestation generation request canceled: {err}");
             return app_server_attestation_header_value(
                 AppServerAttestationStatus::RequestCanceled,
-                None,
+                /*token*/ None,
             );
         }
         Err(_) => {
@@ -106,7 +106,10 @@ async fn request_attestation_header_value_with_timeout(
                 timeout_seconds = timeout_duration.as_secs(),
                 "attestation generation request timed out"
             );
-            return app_server_attestation_header_value(AppServerAttestationStatus::Timeout, None);
+            return app_server_attestation_header_value(
+                AppServerAttestationStatus::Timeout,
+                /*token*/ None,
+            );
         }
     };
 
@@ -117,7 +120,10 @@ async fn request_attestation_header_value_with_timeout(
         ),
         Err(err) => {
             warn!("failed to deserialize attestation generation response: {err}");
-            app_server_attestation_header_value(AppServerAttestationStatus::MalformedResponse, None)
+            app_server_attestation_header_value(
+                AppServerAttestationStatus::MalformedResponse,
+                /*token*/ None,
+            )
         }
     }
 }
