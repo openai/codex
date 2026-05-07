@@ -621,7 +621,6 @@ impl App {
                         .skills_list(codex_app_server_protocol::SkillsListParams {
                             cwds: cwds.clone(),
                             force_reload: *force_reload,
-                            ..Default::default()
                         })
                         .await,
                     "failed to refresh skills",
