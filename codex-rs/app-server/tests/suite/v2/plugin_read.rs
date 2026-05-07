@@ -1023,47 +1023,14 @@ enabled = false
             codex_app_server_protocol::PluginHookSummary {
                 key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:0".to_string(),
                 event_name: HookEventName::PreToolUse,
-                matcher: None,
-                enabled: false,
-                status_message: None,
-                definition: json!({
-                    "type": "command",
-                    "command": "echo first",
-                    "timeout": null,
-                    "async": false,
-                    "statusMessage": null,
-                }),
-                display_order: 0,
             },
             codex_app_server_protocol::PluginHookSummary {
                 key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:1".to_string(),
                 event_name: HookEventName::PreToolUse,
-                matcher: None,
-                enabled: true,
-                status_message: None,
-                definition: json!({
-                    "type": "command",
-                    "command": "echo second",
-                    "timeout": null,
-                    "async": false,
-                    "statusMessage": null,
-                }),
-                display_order: 1,
             },
             codex_app_server_protocol::PluginHookSummary {
                 key: "demo-plugin@codex-curated:hooks/hooks.json:session_start:0:0".to_string(),
                 event_name: HookEventName::SessionStart,
-                matcher: None,
-                enabled: true,
-                status_message: None,
-                definition: json!({
-                    "type": "command",
-                    "command": "echo startup",
-                    "timeout": null,
-                    "async": false,
-                    "statusMessage": null,
-                }),
-                display_order: 2,
             },
         ]
     );

@@ -1535,15 +1535,6 @@ pub(super) fn plugins_test_detail(
                     codex_app_server_protocol::PluginHookSummary {
                         key: format!("plugin:{event_index}:{handler_index}"),
                         event_name: *event_name,
-                        matcher: None,
-                        enabled: true,
-                        status_message: None,
-                        definition: serde_json::json!({
-                            "type": "command",
-                            "command": "echo plugin hook",
-                        }),
-                        display_order: i64::try_from(event_index + handler_index)
-                            .expect("test hook display order should fit in i64"),
                     }
                 })
             })

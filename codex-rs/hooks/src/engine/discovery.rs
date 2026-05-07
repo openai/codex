@@ -192,7 +192,10 @@ fn append_plugin_hook_sources(
             display_order,
             HookHandlerSource {
                 path: &source_path,
-                key_source: format!("{plugin_id}:{source_relative_path}"),
+                key_source: crate::declarations::plugin_hook_key_source(
+                    plugin_id.as_str(),
+                    source_relative_path.as_str(),
+                ),
                 source: HookSource::Plugin,
                 is_managed: false,
                 hook_states,

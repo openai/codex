@@ -563,11 +563,6 @@ pub struct PluginDetail {
 pub struct PluginHookSummary {
     pub key: String,
     pub event_name: HookEventName,
-    pub matcher: Option<String>,
-    pub enabled: bool,
-    pub status_message: Option<String>,
-    pub definition: serde_json::Value,
-    pub display_order: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -55,13 +55,11 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
-use codex_hooks::hook_key;
-use codex_hooks::hook_states_from_stack;
+use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
-use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
@@ -69,7 +67,6 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -244,11 +241,6 @@ pub struct PluginDetail {
 pub struct PluginHookSummary {
     pub key: String,
     pub event_name: HookEventName,
-    pub matcher: Option<String>,
-    pub enabled: bool,
-    pub status_message: Option<String>,
-    pub definition: JsonValue,
-    pub display_order: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1380,10 +1372,13 @@ impl PluginsManager {
             let plugin_data_root = self.store.plugin_data_root(&plugin_id);
             let (hook_sources, _hook_load_warnings) =
                 load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
-            summarize_plugin_hooks(
-                &hook_sources,
-                &hook_states_from_stack(Some(&config.config_layer_stack)),
-            )
+            plugin_hook_declarations(&hook_sources)
+                .into_iter()
+                .map(|hook| PluginHookSummary {
+                    key: hook.key,
+                    event_name: hook.event_name,
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -1882,51 +1877,6 @@ impl PluginsManager {
         roots.sort_unstable();
         roots.dedup();
         roots
-    }
-}
-
-fn summarize_plugin_hooks(
-    hook_sources: &[PluginHookSource],
-    hook_states: &HashMap<String, codex_config::HookStateToml>,
-) -> Vec<PluginHookSummary> {
-    let mut hooks = Vec::new();
-    let mut display_order = 0_i64;
-
-    for source in hook_sources {
-        let key_source = format!(
-            "{}:{}",
-            source.plugin_id.as_key(),
-            source.source_relative_path
-        );
-        for (event_name, groups) in source.hooks.clone().into_matcher_groups() {
-            for (group_index, group) in groups.iter().enumerate() {
-                for (handler_index, handler) in group.hooks.iter().enumerate() {
-                    let key = hook_key(&key_source, event_name, group_index, handler_index);
-                    hooks.push(PluginHookSummary {
-                        enabled: hook_states.get(&key).and_then(|state| state.enabled)
-                            != Some(false),
-                        key,
-                        event_name,
-                        matcher: group.matcher.clone(),
-                        status_message: plugin_hook_status_message(handler),
-                        definition: serde_json::to_value(handler).unwrap_or(JsonValue::Null),
-                        display_order,
-                    });
-                    display_order += 1;
-                }
-            }
-        }
-    }
-
-    hooks
-}
-
-fn plugin_hook_status_message(handler: &codex_config::HookHandlerConfig) -> Option<String> {
-    match handler {
-        codex_config::HookHandlerConfig::Command { status_message, .. } => status_message.clone(),
-        codex_config::HookHandlerConfig::Prompt {} | codex_config::HookHandlerConfig::Agent {} => {
-            None
-        }
     }
 }
 

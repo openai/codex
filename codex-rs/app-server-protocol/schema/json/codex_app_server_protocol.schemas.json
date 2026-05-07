@@ -12175,37 +12175,14 @@
       },
       "PluginHookSummary": {
         "properties": {
-          "definition": true,
-          "displayOrder": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
           "eventName": {
             "$ref": "#/definitions/v2/HookEventName"
           },
           "key": {
             "type": "string"
-          },
-          "matcher": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "statusMessage": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         },
         "required": [
-          "definition",
-          "displayOrder",
-          "enabled",
           "eventName",
           "key"
         ],

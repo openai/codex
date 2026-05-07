@@ -622,11 +622,6 @@ impl PluginRequestProcessor {
                         .map(|hook| codex_app_server_protocol::PluginHookSummary {
                             key: hook.key,
                             event_name: hook.event_name.into(),
-                            matcher: hook.matcher,
-                            enabled: hook.enabled,
-                            status_message: hook.status_message,
-                            definition: hook.definition,
-                            display_order: hook.display_order,
                         })
                         .collect(),
                     apps: app_summaries,
