@@ -539,8 +539,10 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
+    pub share_targets: Option<Vec<PluginSharePrincipal>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

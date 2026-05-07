@@ -108,8 +108,10 @@ fn share_context_for_source(
             .cloned()
             .map(|remote_plugin_id| PluginShareContext {
                 remote_plugin_id,
+                share_url: None,
                 creator_account_user_id: None,
                 creator_name: None,
+                share_targets: None,
             }),
         MarketplacePluginSource::Git { .. } => None,
     }
@@ -1464,8 +1466,15 @@ fn remote_plugin_share_context_to_info(
 ) -> PluginShareContext {
     PluginShareContext {
         remote_plugin_id: context.remote_plugin_id,
+        share_url: context.share_url,
         creator_account_user_id: context.creator_account_user_id,
         creator_name: context.creator_name,
+        share_targets: context.share_targets.map(|targets| {
+            targets
+                .into_iter()
+                .map(plugin_share_principal_from_remote)
+                .collect()
+        }),
     }
 }
 

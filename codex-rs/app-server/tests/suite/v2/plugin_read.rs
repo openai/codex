@@ -22,6 +22,8 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginSkillReadResponse;
 use codex_app_server_protocol::PluginSource;
@@ -236,6 +238,21 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
   "scope": "WORKSPACE",
   "creator_account_user_id": "user-gavin__account-123",
   "creator_name": "Gavin",
+  "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+  "share_principals": [
+    {
+      "principal_type": "user",
+      "principal_id": "user-gavin__account-123",
+      "role": "owner",
+      "name": "Gavin"
+    },
+    {
+      "principal_type": "user",
+      "principal_id": "user-ada__account-123",
+      "role": "reader",
+      "name": "Ada"
+    }
+  ],
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
@@ -306,6 +323,18 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         Some("user-gavin__account-123")
     );
     assert_eq!(share_context.creator_name.as_deref(), Some("Gavin"));
+    assert_eq!(
+        share_context.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/share-key-1")
+    );
+    assert_eq!(
+        share_context.share_targets,
+        Some(vec![PluginSharePrincipal {
+            principal_type: PluginSharePrincipalType::User,
+            principal_id: "user-ada__account-123".to_string(),
+            name: "Ada".to_string(),
+        }])
+    );
     Ok(())
 }
 
@@ -765,8 +794,10 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         .as_ref()
         .expect("expected share context");
     assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.share_url, None);
     assert_eq!(share_context.creator_account_user_id, None);
     assert_eq!(share_context.creator_name, None);
+    assert_eq!(share_context.share_targets, None);
     Ok(())
 }
 

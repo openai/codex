@@ -12515,6 +12515,21 @@
           },
           "remotePluginId": {
             "type": "string"
+          },
+          "shareTargets": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSharePrincipal"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
