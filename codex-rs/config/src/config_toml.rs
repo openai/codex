@@ -351,6 +351,7 @@ pub struct ConfigToml {
 
     /// Removed. Former remote thread-store endpoint setting kept only so we can
     /// fail fast instead of silently falling back to local persistence.
+    #[schemars(skip)]
     pub experimental_thread_store_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread store implementation.
