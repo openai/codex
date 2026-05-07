@@ -522,10 +522,6 @@ impl ToolRegistryBuilder {
         }
     }
 
-    pub fn push_spec(&mut self, spec: ToolSpec) {
-        self.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ false);
-    }
-
     pub fn push_spec_with_parallel_support(
         &mut self,
         spec: ToolSpec,
@@ -533,6 +529,20 @@ impl ToolRegistryBuilder {
     ) {
         self.specs
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+    }
+
+    pub(crate) fn push_spec(
+        &mut self,
+        spec: ToolSpec,
+        supports_parallel_tool_calls: bool,
+        code_mode_enabled: bool,
+    ) {
+        let spec = if code_mode_enabled {
+            codex_tools::augment_tool_spec_for_code_mode(spec)
+        } else {
+            spec
+        };
+        self.push_spec_with_parallel_support(spec, supports_parallel_tool_calls);
     }
 
     pub fn register_handler<H>(&mut self, handler: Arc<H>)
@@ -545,6 +555,10 @@ impl ToolRegistryBuilder {
         if self.handlers.insert(name, handler).is_some() {
             warn!("overwriting handler for tool {display_name}");
         }
+    }
+
+    pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {
+        &self.specs
     }
 
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {

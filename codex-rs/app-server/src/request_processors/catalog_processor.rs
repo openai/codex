@@ -1,4 +1,5 @@
 use super::*;
+use futures::StreamExt;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
@@ -8,6 +9,8 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) config_manager: ConfigManager,
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
 }
+
+const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
@@ -430,56 +433,76 @@ impl CatalogRequestProcessor {
             .environment_manager()
             .default_environment()
             .map(|environment| environment.get_filesystem());
-        let mut data = Vec::new();
-        for cwd in cwds {
-            let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
-                Ok(resolved) => resolved,
-                Err(message) => {
-                    let error_path = cwd.clone();
-                    data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd,
-                        skills: Vec::new(),
-                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                            path: error_path,
-                            message,
-                        }],
-                    });
-                    continue;
+        let mut data = futures::stream::iter(cwds.into_iter().enumerate())
+            .map(|(index, cwd)| {
+                let config = &config;
+                let extra_roots_by_cwd = &extra_roots_by_cwd;
+                let fs = fs.clone();
+                let plugins_manager = &plugins_manager;
+                let skills_manager = &skills_manager;
+                async move {
+                    let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
+                        Ok(resolved) => resolved,
+                        Err(message) => {
+                            let error_path = cwd.clone();
+                            return (
+                                index,
+                                codex_app_server_protocol::SkillsListEntry {
+                                    cwd,
+                                    skills: Vec::new(),
+                                    errors: vec![codex_app_server_protocol::SkillErrorInfo {
+                                        path: error_path,
+                                        message,
+                                    }],
+                                },
+                            );
+                        }
+                    };
+                    let extra_roots = extra_roots_by_cwd
+                        .get(&cwd)
+                        .map_or(&[][..], std::vec::Vec::as_slice);
+                    let effective_skill_roots = if workspace_codex_plugins_enabled {
+                        let plugins_input = config.plugins_config_input();
+                        plugins_manager
+                            .effective_skill_roots_for_layer_stack(
+                                &config_layer_stack,
+                                &plugins_input,
+                            )
+                            .await
+                    } else {
+                        Vec::new()
+                    };
+                    let skills_input = codex_core::skills::SkillsLoadInput::new(
+                        cwd_abs.clone(),
+                        effective_skill_roots,
+                        config_layer_stack,
+                        config.bundled_skills_enabled(),
+                    );
+                    let outcome = skills_manager
+                        .skills_for_cwd_with_extra_user_roots(
+                            &skills_input,
+                            force_reload,
+                            extra_roots,
+                            fs,
+                        )
+                        .await;
+                    let errors = errors_to_info(&outcome.errors);
+                    let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
+                    (
+                        index,
+                        codex_app_server_protocol::SkillsListEntry {
+                            cwd,
+                            skills,
+                            errors,
+                        },
+                    )
                 }
-            };
-            let extra_roots = extra_roots_by_cwd
-                .get(&cwd)
-                .map_or(&[][..], std::vec::Vec::as_slice);
-            let effective_skill_roots = if workspace_codex_plugins_enabled {
-                let plugins_input = config.plugins_config_input();
-                plugins_manager
-                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
-                    .await
-            } else {
-                Vec::new()
-            };
-            let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd_abs.clone(),
-                effective_skill_roots,
-                config_layer_stack,
-                config.bundled_skills_enabled(),
-            );
-            let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(
-                    &skills_input,
-                    force_reload,
-                    extra_roots,
-                    fs.clone(),
-                )
-                .await;
-            let errors = errors_to_info(&outcome.errors);
-            let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
-            data.push(codex_app_server_protocol::SkillsListEntry {
-                cwd,
-                skills,
-                errors,
-            });
-        }
+            })
+            .buffer_unordered(SKILLS_LIST_CWD_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        data.sort_unstable_by_key(|(index, _)| *index);
+        let data = data.into_iter().map(|(_, entry)| entry).collect();
         Ok(SkillsListResponse { data })
     }
 

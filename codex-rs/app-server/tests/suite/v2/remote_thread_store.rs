@@ -42,7 +42,6 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
-use codex_state::StateRuntime;
 use codex_thread_store::InMemoryThreadStore;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -68,13 +67,6 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
-    let sqlite_home = TempDir::new()?;
-    let state_db = StateRuntime::init(
-        sqlite_home.path().to_path_buf(),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .expect("remote thread store regression test should initialize state db");
 
     let thread_store = InMemoryThreadStore::for_id(store_id.clone());
     let _in_memory_store = InMemoryThreadStoreId { store_id };
@@ -88,7 +80,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
-        state_db: Some(state_db),
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
