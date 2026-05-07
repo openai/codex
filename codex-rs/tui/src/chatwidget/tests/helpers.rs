@@ -1439,6 +1439,7 @@ pub(super) fn plugins_test_summary(
     PluginSummary {
         id: id.to_string(),
         name: name.to_string(),
+        share_context: None,
         source: PluginSource::Local {
             path: plugins_test_absolute_path(&format!("plugins/{name}")),
         },
@@ -1676,6 +1677,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_app_server_protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_app_server_protocol::HookEventName::PreCompact => "PreCompact",
+        codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_app_server_protocol::HookEventName::Stop => "Stop",

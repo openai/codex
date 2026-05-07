@@ -2144,12 +2144,30 @@
       ],
       "type": "object"
     },
+    "PluginListMarketplaceKind": {
+      "enum": [
+        "local",
+        "workspace-directory",
+        "shared-with-me"
+      ],
+      "type": "string"
+    },
     "PluginListParams": {
       "properties": {
         "cwds": {
           "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "marketplaceKinds": {
+          "description": "Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus the default remote catalog when enabled by feature flag.",
+          "items": {
+            "$ref": "#/definitions/PluginListMarketplaceKind"
           },
           "type": [
             "array",

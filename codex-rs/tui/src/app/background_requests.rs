@@ -666,6 +666,7 @@ pub(super) async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
+                marketplace_kinds: None,
             },
         })
         .await
