@@ -2117,6 +2117,8 @@ impl Config {
             network: network_requirements,
             filesystem: filesystem_requirements,
             guardian_policy_config_source: _,
+            skills: _,
+            plugin_marketplaces: _,
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
