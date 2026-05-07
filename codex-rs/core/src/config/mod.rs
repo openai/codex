@@ -37,7 +37,6 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -46,9 +45,6 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_config::types::OtelConfig;
-use codex_config::types::OtelConfigToml;
-use codex_config::types::OtelExporterKind;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -132,6 +128,7 @@ pub(crate) mod agent_roles;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
+mod otel;
 mod permissions;
 #[cfg(test)]
 mod schema;
@@ -2978,6 +2975,7 @@ impl Config {
             .value
             .set(effective_permission_profile)
             .map_err(std::io::Error::from)?;
+        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
             service_tier,
@@ -3205,30 +3203,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
-            otel: {
-                let t: OtelConfigToml = cfg.otel.unwrap_or_default();
-                let log_user_prompt = t.log_user_prompt.unwrap_or(false);
-                let environment = t
-                    .environment
-                    .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
-                let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
-                // OTLP HTTP endpoints are signal-specific in our config, so
-                // enabling log export must not implicitly send spans to a
-                // /v1/logs endpoint.
-                let trace_exporter = t.trace_exporter.unwrap_or(OtelExporterKind::None);
-                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
-                let span_attributes = t.span_attributes.unwrap_or_default();
-                let tracestate = t.tracestate.unwrap_or_default();
-                OtelConfig {
-                    log_user_prompt,
-                    environment,
-                    exporter,
-                    trace_exporter,
-                    metrics_exporter,
-                    span_attributes,
-                    tracestate,
-                }
-            },
+            otel,
         };
         Ok(config)
         })

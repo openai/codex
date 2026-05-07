@@ -163,7 +163,8 @@ fn merge_tracestate_entries(
     (!tracestate.is_empty()).then_some(tracestate)
 }
 
-pub(crate) fn validate_tracestate_entries(
+/// Validates configured tracestate members before they are propagated in W3C trace context.
+pub fn validate_tracestate_entries(
     entries: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Reject malformed entries before installing them so propagated trace
@@ -180,6 +181,21 @@ pub(crate) fn validate_tracestate_entries(
             .map(|(key, value)| (key.as_str(), value.as_str())),
     )
     .map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid configured tracestate: {err}"),
+        )
+    })?;
+    Ok(())
+}
+
+/// Validates one configured tracestate member and its encoded field value.
+pub fn validate_tracestate_member(
+    member_key: &str,
+    fields: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (key, value) = encode_tracestate_member_fields(member_key, fields)?;
+    TraceState::from_key_value([(key.as_str(), value.as_str())]).map_err(|err| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("invalid configured tracestate: {err}"),

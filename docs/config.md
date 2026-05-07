@@ -45,4 +45,5 @@ Nested `otel.tracestate` tables are encoded as semicolon-separated `key:value`
 fields inside the named tracestate member. If propagated trace context already
 has the named member, Codex upserts configured fields and preserves other fields
 in that member. This config shape does not support setting opaque tracestate
-member values.
+member values. Invalid trace metadata entries are ignored during config load and
+reported as startup warnings.
