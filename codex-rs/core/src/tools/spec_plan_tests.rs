@@ -1,8 +1,29 @@
 use super::*;
+use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
+use crate::tools::handlers::goal_spec::create_create_goal_tool;
+use crate::tools::handlers::goal_spec::create_get_goal_tool;
+use crate::tools::handlers::goal_spec::create_update_goal_tool;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
+use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
+use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
+use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
+use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
+use crate::tools::handlers::multi_agents_spec::create_send_message_tool;
+use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
+use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
+use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
+use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
+use crate::tools::handlers::plan_spec::create_update_plan_tool;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
+use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::shell_spec::CommandToolOptions;
 use crate::tools::handlers::shell_spec::create_exec_command_tool;
+use crate::tools::handlers::shell_spec::create_request_permissions_tool;
+use crate::tools::handlers::shell_spec::create_write_stdin_tool;
+use crate::tools::handlers::shell_spec::request_permissions_tool_description;
+use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
+use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan_types::ToolNamespace;
 use crate::tools::spec_plan_types::ToolRegistryBuildDeferredTool;
@@ -2423,9 +2444,9 @@ fn request_user_input_tool_spec(available_modes: &[ModeKind]) -> ToolSpec {
     create_request_user_input_tool(request_user_input_tool_description(available_modes))
 }
 
-fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
+fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions {
     SpawnAgentToolOptions {
-        available_models: &config.available_models,
+        available_models: config.available_models.clone(),
         agent_type_description: agent_type_description(config, DEFAULT_AGENT_TYPE_DESCRIPTION),
         hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
         include_usage_hint: config.spawn_agent_usage_hint,

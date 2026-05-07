@@ -12,19 +12,38 @@ use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
+use codex_tools::ToolSpec;
 
+use super::super::shell_spec::create_local_shell_tool;
 use super::RunExecLikeArgs;
 use super::local_shell_payload_command;
 use super::run_exec_like;
 use super::shell_handler::ShellHandler;
 
-pub struct LocalShellHandler;
+#[derive(Default)]
+pub struct LocalShellHandler {
+    include_spec: bool,
+}
+
+impl LocalShellHandler {
+    pub(crate) fn new() -> Self {
+        Self { include_spec: true }
+    }
+}
 
 impl ToolHandler for LocalShellHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("local_shell")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        self.include_spec.then(create_local_shell_tool)
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.include_spec
     }
 
     fn kind(&self) -> ToolKind {

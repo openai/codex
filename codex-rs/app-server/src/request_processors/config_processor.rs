@@ -46,7 +46,6 @@ use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::protocol::Op;
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -378,14 +377,22 @@ impl ConfigRequestProcessor {
     }
 
     async fn reload_user_config(&self) {
+        let next_config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to rebuild user config for runtime refresh: {}",
+                    err.message
+                );
+                return;
+            }
+        };
         let thread_ids = self.thread_manager.list_thread_ids().await;
         for thread_id in thread_ids {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 continue;
             };
-            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
-                tracing::warn!("failed to request user config reload: {err}");
-            }
+            thread.refresh_runtime_config(next_config.clone()).await;
         }
     }
 

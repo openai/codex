@@ -1399,10 +1399,49 @@ impl Session {
         state.session_configuration.provider.clone()
     }
 
+    pub(crate) async fn refresh_runtime_config(&self, next_config: Config) {
+        // Refresh only the user layer from the incoming snapshot. Preserve thread-local
+        // layers such as request/session overrides that were present when this session
+        // was created.
+        let config = {
+            let mut state = self.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_layer_from(&next_config.config_layer_stack);
+            config.tool_suggest =
+                resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
+            let config = Arc::new(config);
+            state.session_configuration.original_config_do_not_use = Arc::clone(&config);
+            config
+        };
+        self.services.skills_manager.clear_cache();
+        self.services.plugins_manager.clear_cache();
+        let hooks = build_hooks_for_config(
+            config.as_ref(),
+            self.services.plugins_manager.as_ref(),
+            self.services.user_shell.as_ref(),
+        )
+        .await;
+
+        let state = self.state.lock().await;
+        // A newer refresh may have updated the config while this hook build was in flight.
+        // Only publish hooks derived from the current config snapshot.
+        if Arc::ptr_eq(
+            &state.session_configuration.original_config_do_not_use,
+            &config,
+        ) {
+            self.services.hooks.store(Arc::new(hooks));
+        }
+    }
+
     pub(crate) async fn reload_user_config_layer(&self) {
         // Refresh layer-backed runtime state for an existing session, including enabled plugin,
         // skill, and hook state. Derived config fields such as feature gates and legacy notify
         // settings remain session-static.
+        //
+        // Prefer `refresh_runtime_config()` when the host can already provide a materialized
+        // config snapshot. This file-based path exists for legacy local reload flows.
         let config_toml_path = {
             let state = self.state.lock().await;
             state
@@ -1428,36 +1467,17 @@ impl Session {
             }
         };
 
-        let config = {
-            let mut state = self.state.lock().await;
+        let next_config = {
+            let state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.config_layer_stack = config
                 .config_layer_stack
                 .with_user_config(&config_toml_path, user_config);
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
-            let config = Arc::new(config);
-            state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             config
         };
-        self.services.skills_manager.clear_cache();
-        self.services.plugins_manager.clear_cache();
-        let hooks = build_hooks_for_config(
-            config.as_ref(),
-            self.services.plugins_manager.as_ref(),
-            self.services.user_shell.as_ref(),
-        )
-        .await;
-
-        let state = self.state.lock().await;
-        // A newer reload may have updated the config while this hook build was in flight.
-        // Only publish hooks derived from the current config snapshot.
-        if Arc::ptr_eq(
-            &state.session_configuration.original_config_do_not_use,
-            &config,
-        ) {
-            self.services.hooks.store(Arc::new(hooks));
-        }
+        self.refresh_runtime_config(next_config).await;
     }
 
     async fn build_settings_update_items(

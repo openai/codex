@@ -12,10 +12,13 @@ use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::RequestPluginInstallArgs;
+use codex_tools::RequestPluginInstallEntry;
 use codex_tools::RequestPluginInstallResult;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
+use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
@@ -30,16 +33,36 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct RequestPluginInstallHandler;
+#[derive(Default)]
+pub struct RequestPluginInstallHandler {
+    discoverable_tools: Vec<RequestPluginInstallEntry>,
+}
+
+impl RequestPluginInstallHandler {
+    pub(crate) fn new(discoverable_tools: &[DiscoverableTool]) -> Self {
+        Self {
+            discoverable_tools: collect_request_plugin_install_entries(discoverable_tools),
+        }
+    }
+}
 
 impl ToolHandler for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_request_plugin_install_tool(&self.discoverable_tools))
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn kind(&self) -> ToolKind {

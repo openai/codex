@@ -10,8 +10,10 @@ use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use serde::Deserialize;
 
+use super::super::shell_spec::create_write_stdin_tool;
 use super::effective_max_output_tokens;
 use super::post_unified_exec_tool_use_payload;
 
@@ -34,6 +36,10 @@ impl ToolHandler for WriteStdinHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_write_stdin_tool())
     }
 
     fn kind(&self) -> ToolKind {
