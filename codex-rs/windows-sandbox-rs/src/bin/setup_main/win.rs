@@ -125,7 +125,9 @@ fn workspace_write_cap_sids_for_path(
 ) -> Result<Vec<String>> {
     let mut sid_strs = Vec::new();
     for root in write_roots {
-        if workspace_write_root_contains_path(root, path) {
+        if workspace_write_root_contains_path(root, path)
+            || workspace_write_root_contains_path(path, root)
+        {
             sid_strs.push(workspace_write_cap_sid_for_root(
                 codex_home,
                 command_cwd,
@@ -1054,5 +1056,32 @@ mod tests {
         assert!(deny_sids.contains(&active_sid));
         assert!(!deny_sids.contains(&stale_sid));
         assert!(!deny_sids.contains(&caps.workspace));
+    }
+
+    #[test]
+    fn deny_path_includes_nested_active_root_sid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        let protected_dir = workspace.join(".codex");
+        let nested_root = protected_dir.join("nested-root");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        fs::create_dir_all(&nested_root).expect("create nested root");
+
+        let workspace_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
+        let nested_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &nested_root)
+            .expect("nested sid");
+
+        let deny_sids = workspace_write_cap_sids_for_path(
+            &codex_home,
+            &workspace,
+            &[workspace.clone(), nested_root],
+            &protected_dir,
+        )
+        .expect("deny sids");
+
+        assert_eq!(deny_sids, vec![workspace_sid, nested_sid]);
     }
 }

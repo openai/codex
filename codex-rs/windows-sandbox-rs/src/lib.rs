@@ -253,14 +253,15 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::acl::revoke_ace;
-    use super::allow::compute_allow_paths;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
+    use super::spawn_prep::LegacyAclSids;
     use super::spawn_prep::allow_null_device_for_workspace_write;
     use super::spawn_prep::apply_legacy_session_acl_rules;
+    use super::spawn_prep::legacy_session_capability_roots;
     use super::spawn_prep::prepare_legacy_session_security;
     use super::spawn_prep::prepare_legacy_spawn_context;
     use super::spawn_prep::root_capability_sids;
@@ -372,9 +373,14 @@ mod windows_impl {
                 "Restricted read-only access requires the elevated Windows sandbox backend"
             );
         }
-        let allow_paths =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map).allow;
-        let security = prepare_legacy_session_security(&policy, codex_home, cwd, allow_paths)?;
+        let capability_roots = legacy_session_capability_roots(
+            &policy,
+            sandbox_policy_cwd,
+            &current_dir,
+            &env_map,
+            codex_home,
+        );
+        let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
         allow_null_device_for_workspace_write(is_workspace_write);
         let persist_aces = is_workspace_write;
         let guards = apply_legacy_session_acl_rules(
@@ -383,8 +389,11 @@ mod windows_impl {
             &current_dir,
             &env_map,
             additional_deny_write_paths,
-            security.readonly_sid.as_ref(),
-            &security.write_root_sids,
+            LegacyAclSids {
+                readonly_sid: security.readonly_sid.as_ref(),
+                readonly_sid_str: security.readonly_sid_str.as_deref(),
+                write_root_sids: &security.write_root_sids,
+            },
             persist_aces,
         );
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
@@ -548,17 +557,25 @@ mod windows_impl {
 
         ensure_codex_home_exists(codex_home)?;
         let current_dir = cwd.to_path_buf();
-        let allow_paths =
-            compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
-        let write_root_sids = root_capability_sids(codex_home, cwd, allow_paths.allow)?;
+        let capability_roots = legacy_session_capability_roots(
+            sandbox_policy,
+            sandbox_policy_cwd,
+            &current_dir,
+            env_map,
+            codex_home,
+        );
+        let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
         let _guards = apply_legacy_session_acl_rules(
             sandbox_policy,
             sandbox_policy_cwd,
             &current_dir,
             env_map,
             &[],
-            None,
-            &write_root_sids,
+            LegacyAclSids {
+                readonly_sid: None,
+                readonly_sid_str: None,
+                write_root_sids: &write_root_sids,
+            },
             /*persist_aces*/ true,
         );
 

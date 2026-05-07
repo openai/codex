@@ -136,9 +136,9 @@ pub fn workspace_write_root_specificity(root: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::load_or_create_cap_sids;
-    use super::writable_root_cap_sid_for_path;
     use super::workspace_cap_sid_for_cwd;
     use super::workspace_write_cap_sid_for_root;
+    use super::writable_root_cap_sid_for_path;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -181,9 +181,8 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("create workspace");
         std::fs::create_dir_all(&extra_root).expect("create extra root");
 
-        let workspace_sid =
-            workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
-                .expect("workspace sid");
+        let workspace_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
         let extra_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &extra_root)
             .expect("extra root sid");
 

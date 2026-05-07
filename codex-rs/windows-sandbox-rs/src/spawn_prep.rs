@@ -53,6 +53,7 @@ pub(crate) struct ElevatedSpawnContext {
 pub(crate) struct LegacySessionSecurity {
     pub(crate) h_token: HANDLE,
     pub(crate) readonly_sid: Option<LocalSid>,
+    pub(crate) readonly_sid_str: Option<String>,
     pub(crate) write_root_sids: Vec<RootCapabilitySid>,
 }
 
@@ -60,6 +61,12 @@ pub(crate) struct RootCapabilitySid {
     pub(crate) root: PathBuf,
     pub(crate) sid: LocalSid,
     pub(crate) sid_str: String,
+}
+
+pub(crate) struct LegacyAclSids<'a> {
+    pub(crate) readonly_sid: Option<&'a LocalSid>,
+    pub(crate) readonly_sid_str: Option<&'a str>,
+    pub(crate) write_root_sids: &'a [RootCapabilitySid],
 }
 
 pub(crate) fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
@@ -137,18 +144,18 @@ pub(crate) fn prepare_legacy_session_security(
     policy: &SandboxPolicy,
     codex_home: &Path,
     cwd: &Path,
-    allow_paths: impl IntoIterator<Item = PathBuf>,
+    capability_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, readonly_sid, write_root_sids) = unsafe {
+    let (h_token, readonly_sid, readonly_sid_str, write_root_sids) = unsafe {
         match policy {
             SandboxPolicy::ReadOnly { .. } => {
                 let psid = LocalSid::from_string(&caps.readonly)?;
                 let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-                (h_token, Some(psid), Vec::new())
+                (h_token, Some(psid), Some(caps.readonly), Vec::new())
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                let write_root_sids = root_capability_sids(codex_home, cwd, allow_paths)?;
+                let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
                 if write_root_sids.is_empty() {
                     anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
                 }
@@ -161,7 +168,7 @@ pub(crate) fn prepare_legacy_session_security(
                     create_workspace_write_token_with_caps_from(base, cap_ptrs.as_slice());
                 CloseHandle(base);
                 let h_token = h_token?;
-                (h_token, None, write_root_sids)
+                (h_token, None, None, write_root_sids)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("dangerous policies rejected before legacy session prep")
@@ -172,8 +179,34 @@ pub(crate) fn prepare_legacy_session_security(
     Ok(LegacySessionSecurity {
         h_token,
         readonly_sid,
+        readonly_sid_str,
         write_root_sids,
     })
+}
+
+pub(crate) fn legacy_session_capability_roots(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    current_dir: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
+    let allow_paths = compute_allow_paths(policy, policy_cwd, current_dir, env_map)
+        .allow
+        .into_iter()
+        .collect::<Vec<_>>();
+    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
+        effective_write_roots_for_setup(
+            policy,
+            policy_cwd,
+            current_dir,
+            env_map,
+            codex_home,
+            Some(allow_paths.as_slice()),
+        )
+    } else {
+        allow_paths
+    }
 }
 
 pub(crate) fn root_capability_sids(
@@ -227,8 +260,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
     current_dir: &Path,
     env_map: &HashMap<String, String>,
     additional_deny_write_paths: &[PathBuf],
-    readonly_sid: Option<&LocalSid>,
-    write_root_sids: &[RootCapabilitySid],
+    acl_sids: LegacyAclSids<'_>,
     persist_aces: bool,
 ) -> Vec<(PathBuf, String)> {
     let AllowDenyPaths { allow, mut deny } =
@@ -240,17 +272,28 @@ pub(crate) fn apply_legacy_session_acl_rules(
     }
     let mut guards: Vec<(PathBuf, String)> = Vec::new();
     unsafe {
-        for p in &allow {
-            let Some(root_sid) = matching_root_capability(p, write_root_sids) else {
-                continue;
-            };
-            if matches!(add_allow_ace(p, root_sid.sid.as_ptr()), Ok(true)) && !persist_aces {
-                guards.push((p.clone(), root_sid.sid_str.clone()));
+        if let Some(readonly_sid) = acl_sids.readonly_sid {
+            for p in &allow {
+                if matches!(add_allow_ace(p, readonly_sid.as_ptr()), Ok(true))
+                    && !persist_aces
+                    && let Some(readonly_sid_str) = acl_sids.readonly_sid_str
+                {
+                    guards.push((p.clone(), readonly_sid_str.to_string()));
+                }
+            }
+        } else {
+            for p in &allow {
+                let Some(root_sid) = matching_root_capability(p, acl_sids.write_root_sids) else {
+                    continue;
+                };
+                if matches!(add_allow_ace(p, root_sid.sid.as_ptr()), Ok(true)) && !persist_aces {
+                    guards.push((p.clone(), root_sid.sid_str.clone()));
+                }
             }
         }
         for p in &deny {
             let mut matched_any_root = false;
-            for root_sid in write_root_sids {
+            for root_sid in acl_sids.write_root_sids {
                 if !workspace_write_root_contains_path(&root_sid.root, p) {
                     continue;
                 }
@@ -263,7 +306,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 }
             }
             if !matched_any_root {
-                for root_sid in write_root_sids {
+                for root_sid in acl_sids.write_root_sids {
                     if let Ok(added) = add_deny_write_ace(p, root_sid.sid.as_ptr())
                         && added
                         && !persist_aces
@@ -273,15 +316,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 }
             }
         }
-        for root_sid in write_root_sids {
+        for root_sid in acl_sids.write_root_sids {
             allow_null_device(root_sid.sid.as_ptr());
         }
-        if let Some(readonly_sid) = readonly_sid {
+        if let Some(readonly_sid) = acl_sids.readonly_sid {
             allow_null_device(readonly_sid.as_ptr());
         }
         if persist_aces
             && matches!(policy, SandboxPolicy::WorkspaceWrite { .. })
-            && let Some(workspace_sid) = matching_root_capability(current_dir, write_root_sids)
+            && let Some(workspace_sid) =
+                matching_root_capability(current_dir, acl_sids.write_root_sids)
         {
             let canonical_cwd = canonicalize_path(current_dir);
             if is_command_cwd_root(&workspace_sid.root, &canonical_cwd) {
@@ -383,12 +427,14 @@ pub(crate) fn prepare_elevated_spawn_context(
 #[cfg(test)]
 mod tests {
     use super::SandboxPolicy;
+    use super::legacy_session_capability_roots;
     use super::prepare_legacy_spawn_context;
     use super::prepare_spawn_context_common;
     use super::root_capability_sids;
     use super::should_apply_network_block;
     use crate::cap::load_or_create_cap_sids;
     use crate::cap::workspace_write_cap_sid_for_root;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -487,7 +533,7 @@ mod tests {
         let sid_strs = root_capability_sids(
             &codex_home,
             &workspace,
-            vec![workspace.clone(), active_root.clone()],
+            vec![workspace.clone(), active_root],
         )
         .expect("root capabilities")
         .into_iter()
@@ -499,5 +545,42 @@ mod tests {
         assert!(sid_strs.contains(&active_sid));
         assert!(!sid_strs.contains(&stale_sid));
         assert!(!sid_strs.contains(&caps.workspace));
+    }
+
+    #[test]
+    fn legacy_capability_roots_use_effective_write_roots() {
+        let temp = TempDir::new().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        let active_root = temp.path().join("active-root");
+        let sandbox_root = codex_home.join(".sandbox");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::fs::create_dir_all(&active_root).expect("create active root");
+        std::fs::create_dir_all(&sandbox_root).expect("create sandbox root");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::try_from(active_root.as_path()).expect("active root"),
+                AbsolutePathBuf::try_from(codex_home.as_path()).expect("codex home"),
+                AbsolutePathBuf::try_from(sandbox_root.as_path()).expect("sandbox root"),
+            ],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let roots = legacy_session_capability_roots(
+            &policy,
+            &workspace,
+            &workspace,
+            &HashMap::new(),
+            &codex_home,
+        );
+
+        assert!(roots.contains(&dunce::canonicalize(&workspace).expect("workspace")));
+        assert!(roots.contains(&dunce::canonicalize(&active_root).expect("active root")));
+        assert!(!roots.contains(&dunce::canonicalize(&codex_home).expect("codex home")));
+        assert!(!roots.contains(&dunce::canonicalize(&sandbox_root).expect("sandbox root")));
     }
 }

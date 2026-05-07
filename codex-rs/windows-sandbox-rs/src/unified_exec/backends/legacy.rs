@@ -1,7 +1,6 @@
 use super::windows_common::finish_driver_spawn;
 use super::windows_common::normalize_windows_tty_input;
 use crate::acl::revoke_ace;
-use crate::allow::compute_allow_paths;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
@@ -11,8 +10,10 @@ use crate::process::StderrMode;
 use crate::process::StdinMode;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
+use crate::spawn_prep::LegacyAclSids;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
+use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
 use crate::token::LocalSid;
@@ -301,14 +302,15 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
-    let allow_paths = compute_allow_paths(
+    let capability_roots = legacy_session_capability_roots(
         &common.policy,
         sandbox_policy_cwd,
         &common.current_dir,
         &env_map,
-    )
-    .allow;
-    let security = prepare_legacy_session_security(&common.policy, codex_home, cwd, allow_paths)?;
+        codex_home,
+    );
+    let security =
+        prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
     allow_null_device_for_workspace_write(common.is_workspace_write);
 
     let persist_aces = common.is_workspace_write;
@@ -318,8 +320,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         &common.current_dir,
         &env_map,
         &[],
-        security.readonly_sid.as_ref(),
-        &security.write_root_sids,
+        LegacyAclSids {
+            readonly_sid: security.readonly_sid.as_ref(),
+            readonly_sid_str: security.readonly_sid_str.as_deref(),
+            write_root_sids: &security.write_root_sids,
+        },
         persist_aces,
     );
 

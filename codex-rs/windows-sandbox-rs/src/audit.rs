@@ -278,10 +278,9 @@ pub fn apply_capability_denies_for_world_writable(
                 .collect::<Result<Vec<_>>>()?;
             (active_sids, roots)
         }
-        SandboxPolicy::ReadOnly { .. } => (
-            vec![LocalSid::from_string(&caps.readonly)?],
-            Vec::new(),
-        ),
+        SandboxPolicy::ReadOnly { .. } => {
+            (vec![LocalSid::from_string(&caps.readonly)?], Vec::new())
+        }
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return Ok(());
         }
