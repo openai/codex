@@ -23,7 +23,7 @@ from rusty_v8_module_bazel import (
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_BAZEL = ROOT / "MODULE.bazel"
 RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
-MUSL_RUNTIME_ARCHIVE_LABELS = [
+STATIC_RUNTIME_ARCHIVE_LABELS = [
     "@llvm//runtimes/libcxx:libcxx.static",
     "@llvm//runtimes/libcxx:libcxxabi.static",
 ]
@@ -197,8 +197,10 @@ def staged_checksums_name(target: str, artifact_profile: str) -> str:
     return f"rusty_v8_{artifact_profile}_{target}.sha256"
 
 
-def is_musl_archive_target(target: str, source_path: Path) -> bool:
-    return target.endswith("-unknown-linux-musl") and source_path.suffix == ".a"
+def needs_merged_runtime_archive(target: str, source_path: Path) -> bool:
+    return source_path.suffix == ".a" and target.endswith(
+        ("-apple-darwin", "-unknown-linux-gnu", "-unknown-linux-musl")
+    )
 
 
 def single_bazel_output_file(
@@ -245,7 +247,7 @@ def host_runnable_bazel_output_file(
     return runnable_outputs[0]
 
 
-def merged_musl_archive(
+def merged_runtime_archive(
     platform: str,
     lib_path: Path,
     compilation_mode: str = "fastbuild",
@@ -265,10 +267,10 @@ def merged_musl_archive(
     )
     runtime_archives = [
         single_bazel_output_file(platform, label, compilation_mode, bazel_configs)
-        for label in MUSL_RUNTIME_ARCHIVE_LABELS
+        for label in STATIC_RUNTIME_ARCHIVE_LABELS
     ]
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="rusty-v8-musl-stage-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="rusty-v8-runtime-stage-"))
     merged_archive = temp_dir / lib_path.name
     merge_commands = "\n".join(
         [
@@ -320,8 +322,8 @@ def stage_release_pair(
     staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
     staged_binding = output_dir / staged_binding_name(target, artifact_profile)
     source_archive = (
-        merged_musl_archive(platform, lib_path, compilation_mode, bazel_configs)
-        if is_musl_archive_target(target, lib_path)
+        merged_runtime_archive(platform, lib_path, compilation_mode, bazel_configs)
+        if needs_merged_runtime_archive(target, lib_path)
         else lib_path
     )
 
