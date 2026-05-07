@@ -1,4 +1,6 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::command_safety::ripgrep::RipgrepArgCase;
+use crate::command_safety::ripgrep::ripgrep_command_can_execute_arbitrary_command;
 use std::path::Path;
 #[cfg(windows)]
 #[path = "windows_dangerous_commands.rs"]
@@ -143,13 +145,19 @@ pub(crate) fn find_git_subcommand<'a>(
 }
 
 fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
-    let cmd0 = command.first().map(String::as_str);
+    let cmd0 = command
+        .first()
+        .and_then(|command| executable_name_lookup_key(command));
 
-    match cmd0 {
+    match cmd0.as_deref() {
         Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf")),
 
         // for sudo <cmd> simply do the check for <cmd>
         Some("sudo") => is_dangerous_to_call_with_exec(&command[1..]),
+
+        Some("rg") => {
+            ripgrep_command_can_execute_arbitrary_command(command, RipgrepArgCase::Sensitive)
+        }
 
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
@@ -172,6 +180,34 @@ mod tests {
     #[test]
     fn rm_f_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
+    }
+
+    #[test]
+    fn ripgrep_pre_processor_is_dangerous() {
+        for command in [
+            vec_str(&["rg", "--pre", "./pre.sh", "needle", "input.txt"]),
+            vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]),
+            vec_str(&["/usr/bin/rg", "--hostname-bin=./hostname.sh", "needle"]),
+            vec_str(&["zsh", "-lc", r"rg --pre\=./pre.sh needle input.txt"]),
+            vec_str(&["/bin/zsh", "-lc", "rg --pre=./pre.sh needle input.txt"]),
+        ] {
+            assert!(
+                command_might_be_dangerous(&command),
+                "expected {command:?} to be dangerous",
+            );
+        }
+    }
+
+    #[test]
+    fn ripgrep_search_zip_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
+            "rg",
+            "--search-zip",
+            "needle",
+        ])));
+        assert!(!command_might_be_dangerous(&vec_str(&[
+            "rg", "-z", "needle",
+        ])));
     }
 
     #[test]

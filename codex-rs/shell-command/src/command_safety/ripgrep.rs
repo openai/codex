@@ -14,23 +14,42 @@ pub(crate) fn is_safe_ripgrep_command(command: &[String], arg_case: RipgrepArgCa
         .any(|arg| is_unsafe_ripgrep_arg(arg, arg_case))
 }
 
+pub(crate) fn ripgrep_command_can_execute_arbitrary_command(
+    command: &[String],
+    arg_case: RipgrepArgCase,
+) -> bool {
+    command.iter().skip(1).map(String::as_str).any(|arg| {
+        let normalized = normalized_long_arg(arg, arg_case);
+        ripgrep_arg_can_execute_arbitrary_command(normalized.as_ref())
+    })
+}
+
 fn is_unsafe_ripgrep_arg(arg: &str, arg_case: RipgrepArgCase) -> bool {
     let normalized = normalized_long_arg(arg, arg_case);
+    if ripgrep_arg_can_execute_arbitrary_command(normalized.as_ref()) {
+        return true;
+    }
+
     match normalized.as_ref() {
+        // Calls out to other decompression tools, so do not auto-approve
+        // out of an abundance of caution.
+        "--search-zip" => true,
+        _ => {
+            normalized.starts_with("--search-zip=")
+                || ripgrep_short_options_contain_search_zip(arg, arg_case)
+        }
+    }
+}
+
+fn ripgrep_arg_can_execute_arbitrary_command(normalized_arg: &str) -> bool {
+    matches!(
+        normalized_arg,
         // Takes an arbitrary command that is executed for each match.
         "--pre"
         // Takes a command that can be used to obtain the local hostname.
         | "--hostname-bin"
-        // Calls out to other decompression tools, so do not auto-approve
-        // out of an abundance of caution.
-        | "--search-zip" => true,
-        _ => {
-            normalized.starts_with("--pre=")
-                || normalized.starts_with("--hostname-bin=")
-                || normalized.starts_with("--search-zip=")
-                || ripgrep_short_options_contain_search_zip(arg, arg_case)
-        }
-    }
+    ) || normalized_arg.starts_with("--pre=")
+        || normalized_arg.starts_with("--hostname-bin=")
 }
 
 fn normalized_long_arg(arg: &str, arg_case: RipgrepArgCase) -> Cow<'_, str> {

@@ -2051,6 +2051,57 @@ fn vec_str(items: &[&str]) -> Vec<String> {
     items.iter().map(std::string::ToString::to_string).collect()
 }
 
+#[tokio::test]
+async fn ripgrep_pre_processor_requires_approval_in_sandboxed_exec() {
+    for command in [
+        vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]),
+        vec_str(&["/bin/zsh", "-lc", r"rg --pre\=./pre.sh needle input.txt"]),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
+                    "rg",
+                    "--pre=./pre.sh",
+                    "needle",
+                    "input.txt",
+                ]))),
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn ripgrep_pre_processor_is_forbidden_when_exec_cannot_ask() {
+    let command = vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]);
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: "`rg '--pre=./pre.sh' needle input.txt` rejected: blocked by policy"
+                .to_string(),
+        },
+    )
+    .await;
+}
+
 /// Note this test behaves differently on Windows because it exercises an
 /// `if cfg!(windows)` code path in render_decision_for_unmatched_command().
 #[tokio::test]
