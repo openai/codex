@@ -7,7 +7,6 @@ use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
-use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -41,6 +40,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -55,6 +55,7 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::StoredThread;
@@ -615,7 +616,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -687,7 +688,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -784,7 +785,7 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = self.initial_history_from_rollout_path(path).await?;
         self.fork_thread_from_history(
             snapshot,
             config,
@@ -794,6 +795,24 @@ impl ThreadManager {
             parent_trace,
         )
         .await
+    }
+
+    async fn initial_history_from_rollout_path(
+        &self,
+        rollout_path: PathBuf,
+    ) -> CodexResult<InitialHistory> {
+        let requested_rollout_path = rollout_path.clone();
+        let stored_thread = self
+            .state
+            .thread_store
+            .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                rollout_path,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .map_err(thread_store_rollout_read_error)?;
+        stored_thread_to_initial_history(stored_thread, Some(requested_rollout_path))
     }
 
     /// Fork an existing thread from already-loaded store history.
@@ -1277,6 +1296,31 @@ impl ThreadManagerState {
             .ok()
             .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
+    }
+}
+
+fn stored_thread_to_initial_history(
+    stored_thread: StoredThread,
+    rollout_path: Option<PathBuf>,
+) -> CodexResult<InitialHistory> {
+    let thread_id = stored_thread.thread_id;
+    let history = stored_thread.history.ok_or_else(|| {
+        CodexErr::Fatal(format!(
+            "thread {thread_id} did not include persisted history"
+        ))
+    })?;
+    Ok(InitialHistory::Resumed(ResumedHistory {
+        conversation_id: thread_id,
+        history: history.items,
+        rollout_path: rollout_path.or(stored_thread.rollout_path),
+    }))
+}
+
+fn thread_store_rollout_read_error(err: ThreadStoreError) -> CodexErr {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
+        ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        err => CodexErr::Fatal(format!("failed to read thread by rollout path: {err}")),
     }
 }
 

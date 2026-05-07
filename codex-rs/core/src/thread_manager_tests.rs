@@ -16,6 +16,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -728,6 +729,111 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         .shutdown_and_wait()
         .await
         .expect("shutdown resumed thread");
+}
+
+#[tokio::test]
+async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config.experimental_thread_store = ThreadStoreConfig::InMemory {
+        id: format!("thread-manager-{}", uuid::Uuid::new_v4()),
+    };
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let in_memory_store = thread_store
+        .as_any()
+        .downcast_ref::<InMemoryThreadStore>()
+        .expect("configured in-memory store");
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store.clone(),
+        state_db,
+        TEST_INSTALLATION_ID.to_string(),
+    );
+
+    let source = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start source thread");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
+    let _ = manager.remove_thread(&source.thread_id).await;
+
+    let rollout_path = config
+        .codex_home
+        .join("rollouts/source.jsonl")
+        .to_path_buf();
+    let resumed = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: source.thread_id,
+                history: vec![RolloutItem::ResponseItem(user_msg("hello"))],
+                rollout_path: Some(rollout_path.clone()),
+            }),
+            auth_manager.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("seed rollout path in store");
+    resumed
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown seeded resumed thread");
+    let _ = manager.remove_thread(&resumed.thread_id).await;
+
+    let resumed_from_path = manager
+        .resume_thread_from_rollout(
+            config.clone(),
+            rollout_path.clone(),
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume from rollout path");
+    assert_eq!(resumed_from_path.thread_id, resumed.thread_id);
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            rollout_path,
+            /*thread_source*/ None,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork from rollout path");
+    assert_ne!(forked.thread_id, resumed.thread_id);
+
+    let calls = in_memory_store.calls().await;
+    assert_eq!(calls.read_thread_by_rollout_path, 2);
+
+    resumed_from_path
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown path-resumed thread");
+    forked
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown forked thread");
 }
 
 #[tokio::test]

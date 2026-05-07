@@ -1605,11 +1605,8 @@ impl ThreadRequestProcessor {
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
             .map_err(|err| thread_store_archive_error("unarchive", err))?;
-        let summary = summary_from_stored_thread(stored_thread, fallback_provider.as_str())
-            .ok_or_else(|| {
-                internal_error(format!("failed to read unarchived thread {thread_id}"))
-            })?;
-        let mut thread = summary_to_thread(summary, &self.config.cwd);
+        let (mut thread, _) =
+            thread_from_stored_thread(stored_thread, fallback_provider.as_str(), &self.config.cwd);
 
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -2914,10 +2911,19 @@ impl ThreadRequestProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) =
-            title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await
+        if let Ok(stored_thread) = self
+            .thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            && let Some(title) = stored_thread.name.as_deref().map(str::trim)
+            && !title.is_empty()
+            && stored_thread.preview.trim() != title
         {
-            set_thread_name_from_title(thread, title);
+            set_thread_name_from_title(thread, title.to_string());
         }
     }
 
@@ -3206,12 +3212,7 @@ impl ThreadRequestProcessor {
         };
 
         let stored_thread = read_result?;
-        let summary =
-            summary_from_stored_thread(stored_thread, fallback_provider).ok_or_else(|| {
-                internal_error(
-                    "failed to load conversation summary: thread is missing rollout path",
-                )
-            })?;
+        let summary = summary_from_stored_thread(stored_thread, fallback_provider);
         Ok(GetConversationSummaryResponse { summary })
     }
 
@@ -3625,37 +3626,6 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
     }
 }
 
-async fn title_from_state_db(
-    config: &Config,
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: ThreadId,
-) -> Option<String> {
-    if let Some(state_db_ctx) = state_db_ctx
-        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
-        && let Some(title) = distinct_title(&metadata)
-    {
-        return Some(title);
-    }
-    find_thread_name_by_id(&config.codex_home, &thread_id)
-        .await
-        .ok()
-        .flatten()
-}
-
-fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    (!title.is_empty()).then(|| title.to_string())
-}
-
-fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = non_empty_title(metadata)?;
-    if metadata.first_user_message.as_deref().map(str::trim) == Some(title.as_str()) {
-        None
-    } else {
-        Some(title)
-    }
-}
-
 fn set_thread_name_from_title(thread: &mut Thread, title: String) {
     if title.trim().is_empty() || thread.preview.trim() == title.trim() {
         return;
@@ -3719,8 +3689,8 @@ pub(crate) fn thread_from_stored_thread(
 fn summary_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
-) -> Option<ConversationSummary> {
-    let path = thread.rollout_path?;
+) -> ConversationSummary {
+    let path = thread.rollout_path.unwrap_or_default();
     let source = with_thread_spawn_agent_metadata(
         thread.source,
         thread.agent_nickname.clone(),
@@ -3731,7 +3701,7 @@ fn summary_from_stored_thread(
         branch: git.branch,
         origin_url: git.repository_url,
     });
-    Some(ConversationSummary {
+    ConversationSummary {
         conversation_id: thread.thread_id,
         path,
         preview: thread.first_user_message.unwrap_or(thread.preview),
@@ -3756,7 +3726,7 @@ fn summary_from_stored_thread(
         cli_version: thread.cli_version,
         source,
         git_info,
-    })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
