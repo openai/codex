@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -44,6 +45,8 @@ pub struct OtelSettings {
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
     pub runtime_metrics: bool,
+    pub span_attributes: BTreeMap<String, String>,
+    pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// Resolved Statsig metrics settings that another process can use to recreate

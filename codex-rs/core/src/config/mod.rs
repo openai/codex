@@ -3217,12 +3217,16 @@ impl Config {
                 // /v1/logs endpoint.
                 let trace_exporter = t.trace_exporter.unwrap_or(OtelExporterKind::None);
                 let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
+                let span_attributes = t.span_attributes.unwrap_or_default();
+                let tracestate = t.tracestate.unwrap_or_default();
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
                     trace_exporter,
                     metrics_exporter,
+                    span_attributes,
+                    tracestate,
                 }
             },
         };

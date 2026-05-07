@@ -7119,6 +7119,48 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
 }
 
 #[tokio::test]
+async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg = toml::from_str(
+        r#"
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
+    );
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([
+                ("alpha".to_string(), "one".to_string()),
+                ("beta".to_string(), "two".to_string()),
+            ]),
+        )])
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 

@@ -1695,6 +1695,13 @@
           ],
           "description": "Optional metrics exporter"
         },
+        "span_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Attributes to add to every exported trace span.",
+          "type": "object"
+        },
         "trace_exporter": {
           "allOf": [
             {
@@ -1702,6 +1709,16 @@
             }
           ],
           "description": "Optional trace exporter"
+        },
+        "tracestate": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Semicolon-separated `key:value` fields to upsert into W3C tracestate members.",
+          "type": "object"
         }
       },
       "type": "object"
