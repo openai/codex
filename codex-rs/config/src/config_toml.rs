@@ -89,7 +89,6 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
 
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
     /// Optional override of model selection.
@@ -349,6 +348,10 @@ pub struct ConfigToml {
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Removed. Former remote thread-store endpoint setting kept only so we can
+    /// fail fast instead of silently falling back to local persistence.
+    pub experimental_thread_store_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread store implementation.
     pub experimental_thread_store: Option<ThreadStoreToml>,
