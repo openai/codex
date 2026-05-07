@@ -26,19 +26,6 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
-
-    /// Optional per-cwd extra roots to scan as user-scoped skills.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsListExtraRootsForCwd {
-    pub cwd: PathBuf,
-    pub extra_user_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

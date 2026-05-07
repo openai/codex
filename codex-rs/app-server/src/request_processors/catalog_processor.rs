@@ -382,44 +382,12 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams {
-            cwds,
-            force_reload,
-            per_cwd_extra_user_roots,
-        } = params;
+        let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
             cwds
         };
-        let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
-
-        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<AbsolutePathBuf>> = HashMap::new();
-        for entry in per_cwd_extra_user_roots.unwrap_or_default() {
-            if !cwd_set.contains(&entry.cwd) {
-                warn!(
-                    cwd = %entry.cwd.display(),
-                    "ignoring per-cwd extra roots for cwd not present in skills/list cwds"
-                );
-                continue;
-            }
-
-            let mut valid_extra_roots = Vec::new();
-            for root in entry.extra_user_roots {
-                let root =
-                    AbsolutePathBuf::from_absolute_path_checked(root.as_path()).map_err(|_| {
-                        invalid_request(format!(
-                            "skills/list perCwdExtraUserRoots extraUserRoots paths must be absolute: {}",
-                            root.display()
-                        ))
-                    })?;
-                valid_extra_roots.push(root);
-            }
-            extra_roots_by_cwd
-                .entry(entry.cwd)
-                .or_default()
-                .extend(valid_extra_roots);
-        }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
@@ -436,7 +404,6 @@ impl CatalogRequestProcessor {
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
-                let extra_roots_by_cwd = &extra_roots_by_cwd;
                 let fs = fs.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
@@ -458,9 +425,6 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let extra_roots = extra_roots_by_cwd
-                        .get(&cwd)
-                        .map_or(&[][..], std::vec::Vec::as_slice);
                     let effective_skill_roots = if workspace_codex_plugins_enabled {
                         let plugins_input = config.plugins_config_input();
                         plugins_manager
@@ -479,12 +443,7 @@ impl CatalogRequestProcessor {
                         config.bundled_skills_enabled(),
                     );
                     let outcome = skills_manager
-                        .skills_for_cwd_with_extra_user_roots(
-                            &skills_input,
-                            force_reload,
-                            extra_roots,
-                            fs,
-                        )
+                        .skills_for_cwd(&skills_input, force_reload, fs)
                         .await;
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

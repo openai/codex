@@ -2627,33 +2627,20 @@ fn skills_list_params_serialization_uses_force_reload() {
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
             force_reload: false,
-            per_cwd_extra_user_roots: None,
         })
         .unwrap(),
-        json!({
-            "perCwdExtraUserRoots": null,
-        }),
+        json!({}),
     );
 
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
             force_reload: true,
-            per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
-                cwd: PathBuf::from("/repo"),
-                extra_user_roots: vec![PathBuf::from("/shared/skills"), PathBuf::from("/tmp/x")],
-            }]),
         })
         .unwrap(),
         json!({
             "cwds": ["/repo"],
             "forceReload": true,
-            "perCwdExtraUserRoots": [
-                {
-                    "cwd": "/repo",
-                    "extraUserRoots": ["/shared/skills", "/tmp/x"],
-                }
-            ],
         }),
     );
 }
