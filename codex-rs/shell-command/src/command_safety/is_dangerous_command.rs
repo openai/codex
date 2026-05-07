@@ -30,6 +30,22 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
+pub fn command_can_execute_arbitrary_command(command: &[String]) -> bool {
+    if direct_command_can_execute_arbitrary_command(command) {
+        return true;
+    }
+
+    if let Some(all_commands) = parse_shell_lc_plain_commands(command)
+        && all_commands
+            .iter()
+            .any(|cmd| direct_command_can_execute_arbitrary_command(cmd))
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Returns whether already-tokenized PowerShell words should be treated as
 /// dangerous by the Windows unmatched-command heuristics.
 pub fn is_dangerous_powershell_words(command: &[String]) -> bool {
@@ -155,11 +171,23 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
         // for sudo <cmd> simply do the check for <cmd>
         Some("sudo") => is_dangerous_to_call_with_exec(&command[1..]),
 
+        Some("rg") => direct_command_can_execute_arbitrary_command(command),
+
+        // ── anything else ─────────────────────────────────────────────────
+        _ => false,
+    }
+}
+
+fn direct_command_can_execute_arbitrary_command(command: &[String]) -> bool {
+    let cmd0 = command
+        .first()
+        .and_then(|command| executable_name_lookup_key(command));
+
+    match cmd0.as_deref() {
+        Some("sudo") => direct_command_can_execute_arbitrary_command(&command[1..]),
         Some("rg") => {
             ripgrep_command_can_execute_arbitrary_command(command, RipgrepArgCase::Sensitive)
         }
-
-        // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
 }
@@ -188,6 +216,7 @@ mod tests {
             vec_str(&["rg", "--pre", "./pre.sh", "needle", "input.txt"]),
             vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]),
             vec_str(&["/usr/bin/rg", "--hostname-bin=./hostname.sh", "needle"]),
+            vec_str(&["zsh", "-c", r"rg --pre\=./pre.sh needle input.txt"]),
             vec_str(&["zsh", "-lc", r"rg --pre\=./pre.sh needle input.txt"]),
             vec_str(&["/bin/zsh", "-lc", "rg --pre=./pre.sh needle input.txt"]),
         ] {

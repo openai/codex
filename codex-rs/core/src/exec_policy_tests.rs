@@ -2083,20 +2083,79 @@ async fn ripgrep_pre_processor_requires_approval_in_sandboxed_exec() {
 
 #[tokio::test]
 async fn ripgrep_pre_processor_is_forbidden_when_exec_cannot_ask() {
-    let command = vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]);
+    for (command, reason) in [
+        (
+            vec_str(&["rg", "--pre=./pre.sh", "needle", "input.txt"]),
+            "`rg '--pre=./pre.sh' needle input.txt` rejected: blocked by policy",
+        ),
+        (
+            vec_str(&["/bin/zsh", "-c", r"rg --pre\=./pre.sh needle input.txt"]),
+            "`/bin/zsh -c \"rg --pre\\\\=./pre.sh needle input.txt\"` rejected: blocked by policy",
+        ),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::Forbidden {
+                reason: reason.to_string(),
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn ripgrep_pre_processor_requires_approval_despite_broad_allow_rule() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
-            policy_src: None,
-            command,
-            approval_policy: AskForApproval::Never,
+            policy_src: Some(
+                r#"prefix_rule(pattern=["rg"], decision="allow", justification="read-only search")"#
+                    .to_string(),
+            ),
+            command: vec_str(&["/bin/zsh", "-c", r"rg --pre\=./pre.sh needle input.txt"]),
+            approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Forbidden {
-            reason: "`rg '--pre=./pre.sh' needle input.txt` rejected: blocked by policy"
-                .to_string(),
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
+                "rg",
+                "--pre=./pre.sh",
+                "needle",
+                "input.txt",
+            ]))),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ripgrep_pre_processor_honors_exact_allow_rule() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(
+                r#"prefix_rule(pattern=["rg", "--pre=./pre.sh"], decision="allow")"#.to_string(),
+            ),
+            command: vec_str(&["/bin/zsh", "-c", r"rg --pre\=./pre.sh needle input.txt"]),
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
