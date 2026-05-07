@@ -157,7 +157,7 @@ jobs:
             "${pair_target}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
-          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
+          if [[ "${TARGET}" != *-pc-windows-msvc ]]; then
             bazel_args+=(
               "@llvm//runtimes/libcxx:libcxx.static"
               "@llvm//runtimes/libcxx:libcxxabi.static"

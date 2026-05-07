@@ -35,10 +35,10 @@ class RustyV8BazelTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz",
+            "librusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.a.gz",
             rusty_v8_bazel.staged_archive_name(
                 "x86_64-pc-windows-msvc",
-                Path("v8.lib"),
+                Path("v8.a"),
                 rusty_v8_bazel.SANDBOX_ARTIFACT_PROFILE,
             ),
         )
@@ -55,6 +55,21 @@ class RustyV8BazelTest(unittest.TestCase):
                 "x86_64-unknown-linux-musl",
                 rusty_v8_bazel.SANDBOX_ARTIFACT_PROFILE,
             ),
+        )
+
+    def test_needs_merged_runtime_archive(self) -> None:
+        for target in [
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+        ]:
+            self.assertTrue(rusty_v8_bazel.needs_merged_runtime_archive(target, Path("v8.a")))
+
+        self.assertFalse(
+            rusty_v8_bazel.needs_merged_runtime_archive(
+                "x86_64-pc-windows-msvc",
+                Path("v8.a"),
+            )
         )
 
     @patch("rusty_v8_bazel.ensure_bazel_output_files")

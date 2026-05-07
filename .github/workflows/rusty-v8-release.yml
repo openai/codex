@@ -164,7 +164,7 @@ jobs:
             "${pair_target}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
-          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
+          if [[ "${TARGET}" != *-pc-windows-msvc ]]; then
             bazel_args+=(
               "@llvm//runtimes/libcxx:libcxx.static"
               "@llvm//runtimes/libcxx:libcxxabi.static"
@@ -256,7 +256,6 @@ jobs:
           name: ${{ needs.metadata.outputs.release_tag }}
           files: |
             dist/**/librusty_v8_ptrcomp_sandbox_release_*.a.gz
-            dist/**/rusty_v8_ptrcomp_sandbox_release_*.lib.gz
             dist/**/src_binding_ptrcomp_sandbox_release_*.rs
             dist/**/rusty_v8_ptrcomp_sandbox_release_*.sha256
           overwrite_files: true

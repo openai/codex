@@ -54,7 +54,6 @@ current assets on the same tag, with the Rust crate's sandbox feature suffix in
 their raw names:
 
 - `librusty_v8_ptrcomp_sandbox_release_<target>.a.gz`
-- `rusty_v8_ptrcomp_sandbox_release_<target>.lib.gz`
 - `src_binding_ptrcomp_sandbox_release_<target>.rs`
 
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
@@ -77,6 +76,9 @@ The same run also builds the matching sandbox pair targets:
 
 If a tagged run targets an existing GitHub release, publication amends only the
 sandbox-profile files and leaves the current release-profile assets unchanged.
+Unix sandbox archives are staged with the matching static libc++ and libc++abi
+runtime libraries merged in so Cargo consumers can link them with the `v8`
+crate's default `use_custom_libcxx` feature.
 
 Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
 `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
