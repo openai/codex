@@ -324,9 +324,8 @@ async fn handle_approved_mcp_tool_call(
     request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
 ) -> HandledMcpToolCall {
-    maybe_mark_thread_memory_mode_polluted(sess, turn_context).await;
-
     let server = invocation.server.clone();
+    maybe_mark_thread_memory_mode_polluted(sess, turn_context, &server).await;
     let tool_name = invocation.tool.clone();
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
@@ -465,6 +464,7 @@ fn mcp_tool_call_span(
 ) -> Span {
     let transport = match fields.server_origin {
         Some("stdio") => "stdio",
+        Some("in_process") => "in_process",
         Some(_) => "streamable_http",
         None => "",
     };
@@ -752,8 +752,21 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     Ok(meta)
 }
 
-async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
+async fn maybe_mark_thread_memory_mode_polluted(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+) {
     if !turn_context.config.memories.disable_on_external_context {
+        return;
+    }
+    let pollutes_memory = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_pollutes_memory(server);
+    if !pollutes_memory {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(
@@ -1477,7 +1490,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .list_all_tools()
         .await;
     let tool_info = tools
-        .into_values()
+        .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
@@ -1572,7 +1585,7 @@ async fn lookup_mcp_app_usage_metadata(
         .list_all_tools()
         .await;
 
-    tools.into_values().find_map(|tool_info| {
+    tools.into_iter().find_map(|tool_info| {
         if tool_info.server_name == server && tool_info.tool.name == tool_name {
             Some(McpAppUsageMetadata {
                 connector_id: tool_info.connector_id,

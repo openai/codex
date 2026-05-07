@@ -38,17 +38,17 @@ struct McpToolPlanInputs<'a> {
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
-fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
+fn map_mcp_tools_for_plan(mcp_tools: &[ToolInfo]) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
-            .values()
+            .iter()
             .map(|tool| ToolRegistryBuildMcpTool {
                 name: tool.canonical_tool_name(),
                 tool: &tool.tool,
             })
             .collect(),
         tool_namespaces: mcp_tools
-            .values()
+            .iter()
             .map(|tool| {
                 (
                     tool.callable_namespace.clone(),
@@ -64,8 +64,8 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<Vec<ToolInfo>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -74,10 +74,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
-    let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
+    let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
-            .values()
+            .iter()
             .map(|tool| ToolRegistryBuildDeferredTool {
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
@@ -105,7 +105,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .collect::<Vec<_>>();
     let tool_search_entries = build_tool_search_entries_for_config(
         config,
-        deferred_mcp_tools.as_ref(),
+        deferred_mcp_tools.as_deref(),
         &deferred_dynamic_tools,
     );
     let mut builder = build_tool_registry_builder(

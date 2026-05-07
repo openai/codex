@@ -171,14 +171,6 @@ pub enum ConnectionOrigin {
     RemoteControl,
 }
 
-impl ConnectionOrigin {
-    pub fn allows_device_key_requests(self) -> bool {
-        // Device-key endpoints are only for local connections that own the app-server instance.
-        // Do not include remote transports such as SSH or remote-control websocket connections.
-        matches!(self, Self::Stdio | Self::InProcess)
-    }
-}
-
 static CONNECTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn next_connection_id() -> ConnectionId {

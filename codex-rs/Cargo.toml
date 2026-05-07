@@ -30,7 +30,6 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
-    "device-key",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -154,7 +153,6 @@ codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
-codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
@@ -319,7 +317,6 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
-p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"

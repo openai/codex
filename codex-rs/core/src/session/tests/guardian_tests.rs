@@ -731,12 +731,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let thread_store = Arc::new(codex_thread_store::LocalThreadStore::new(
         codex_thread_store::LocalThreadStoreConfig::from_config(&config),
-        codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize"),
+        /*state_db*/ None,
     ));
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
@@ -767,7 +762,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             turn_environments: Vec::new(),
         },
         analytics_events_client: None,
-        state_db: None,
         thread_store,
     })
     .await

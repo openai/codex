@@ -17,11 +17,14 @@ use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginSkillReadResponse;
 use codex_app_server_protocol::PluginSource;
@@ -236,6 +239,21 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
   "scope": "WORKSPACE",
   "creator_account_user_id": "user-gavin__account-123",
   "creator_name": "Gavin",
+  "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+  "share_principals": [
+    {
+      "principal_type": "user",
+      "principal_id": "user-gavin__account-123",
+      "role": "owner",
+      "name": "Gavin"
+    },
+    {
+      "principal_type": "user",
+      "principal_id": "user-ada__account-123",
+      "role": "reader",
+      "name": "Ada"
+    }
+  ],
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
@@ -306,6 +324,18 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         Some("user-gavin__account-123")
     );
     assert_eq!(share_context.creator_name.as_deref(), Some("Gavin"));
+    assert_eq!(
+        share_context.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/share-key-1")
+    );
+    assert_eq!(
+        share_context.share_targets,
+        Some(vec![PluginSharePrincipal {
+            principal_type: PluginSharePrincipalType::User,
+            principal_id: "user-ada__account-123".to_string(),
+            name: "Ada".to_string(),
+        }])
+    );
     Ok(())
 }
 
@@ -765,8 +795,10 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         .as_ref()
         .expect("expected share context");
     assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.share_url, None);
     assert_eq!(share_context.creator_account_user_id, None);
     assert_eq!(share_context.creator_name, None);
+    assert_eq!(share_context.share_targets, None);
     Ok(())
 }
 
@@ -778,6 +810,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("hooks"))?;
     std::fs::create_dir_all(plugin_root.join("skills/thread-summarizer"))?;
     std::fs::create_dir_all(plugin_root.join("skills/chatgpt-only"))?;
     std::fs::write(
@@ -884,9 +917,41 @@ description: Visible only for ChatGPT
 }"#,
     )?;
     std::fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo first"
+          },
+          {
+            "type": "command",
+            "command": "echo second"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )?;
+    std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
+plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"
@@ -894,6 +959,9 @@ enabled = false
 
 [plugins."demo-plugin@codex-curated"]
 enabled = true
+
+[hooks.state."demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:0"]
+enabled = false
 "#,
     )?;
     write_installed_plugin(&codex_home, "codex-curated", "demo-plugin")?;
@@ -980,6 +1048,23 @@ enabled = true
         "Summarize email threads"
     );
     assert!(!response.plugin.skills[0].enabled);
+    assert_eq!(
+        response.plugin.hooks,
+        vec![
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                event_name: HookEventName::PreToolUse,
+            },
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:1".to_string(),
+                event_name: HookEventName::PreToolUse,
+            },
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:session_start:0:0".to_string(),
+                event_name: HookEventName::SessionStart,
+            },
+        ]
+    );
     assert_eq!(response.plugin.apps.len(), 1);
     assert_eq!(response.plugin.apps[0].id, "gmail");
     assert_eq!(response.plugin.apps[0].name, "gmail");

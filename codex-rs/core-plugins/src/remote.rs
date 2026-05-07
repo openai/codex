@@ -98,8 +98,10 @@ pub struct RemotePluginSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareContext {
     pub remote_plugin_id: String,
+    pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
+    pub share_targets: Option<Vec<RemotePluginSharePrincipal>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -363,11 +365,22 @@ struct RemotePluginDirectoryItem {
     creator_name: Option<String>,
     #[serde(default)]
     share_url: Option<String>,
+    #[serde(default)]
+    share_principals: Option<Vec<RemotePluginDirectorySharePrincipal>>,
     installation_policy: PluginInstallPolicy,
     authentication_policy: PluginAuthPolicy,
     #[serde(rename = "status", default)]
     availability: PluginAvailability,
     release: RemotePluginReleaseResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RemotePluginDirectorySharePrincipal {
+    principal_type: RemotePluginSharePrincipalType,
+    principal_id: String,
+    #[serde(default)]
+    role: Option<String>,
+    name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -831,8 +844,20 @@ fn remote_plugin_share_context(
         RemotePluginScope::Global => None,
         RemotePluginScope::Workspace => Some(RemotePluginShareContext {
             remote_plugin_id: plugin.id.clone(),
+            share_url: plugin.share_url.clone(),
             creator_account_user_id: plugin.creator_account_user_id.clone(),
             creator_name: plugin.creator_name.clone(),
+            share_targets: plugin.share_principals.as_ref().map(|principals| {
+                principals
+                    .iter()
+                    .filter(|principal| principal.role.as_deref() == Some("reader"))
+                    .map(|principal| RemotePluginSharePrincipal {
+                        principal_type: principal.principal_type,
+                        principal_id: principal.principal_id.clone(),
+                        name: principal.name.clone(),
+                    })
+                    .collect()
+            }),
         }),
     }
 }

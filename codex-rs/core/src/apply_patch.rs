@@ -76,11 +76,10 @@ pub(crate) async fn apply_patch(
 pub(crate) fn convert_apply_patch_to_protocol(
     action: &ApplyPatchAction,
 ) -> HashMap<PathBuf, FileChange> {
-    let changes = action.changes();
-    let mut result = HashMap::with_capacity(changes.len());
-    for (path, change) in changes {
+    let mut result = HashMap::with_capacity(action.changes().len());
+    for (path, change) in action.changes() {
         let protocol_change = match change {
-            ApplyPatchFileChange::Add { content } => FileChange::Add {
+            ApplyPatchFileChange::Add { content, .. } => FileChange::Add {
                 content: content.clone(),
             },
             ApplyPatchFileChange::Delete { content } => FileChange::Delete {
@@ -95,7 +94,7 @@ pub(crate) fn convert_apply_patch_to_protocol(
                 move_path: move_path.clone(),
             },
         };
-        result.insert(path.clone(), protocol_change);
+        result.insert(path.to_path_buf(), protocol_change);
     }
     result
 }

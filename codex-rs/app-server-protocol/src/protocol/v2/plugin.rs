@@ -539,8 +539,10 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
+    pub share_targets: Option<Vec<PluginSharePrincipal>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -552,8 +554,17 @@ pub struct PluginDetail {
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
     pub mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

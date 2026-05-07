@@ -14,9 +14,10 @@ use crate::rmcp_client::elicitation_capability_for_server;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::qualify_tools;
+use crate::tools::normalize_tools_for_model;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::Constrained;
+use codex_config::McpServerConfig;
 use codex_protocol::ToolName;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -83,6 +84,13 @@ fn create_codex_apps_tools_cache_context(
             is_workspace_account: false,
         },
     }
+}
+
+fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
+    tools
+        .iter()
+        .map(ToolInfo::canonical_tool_name)
+        .collect::<HashSet<_>>()
 }
 
 #[test]
@@ -272,35 +280,41 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
 }
 
 #[test]
-fn test_qualify_tools_short_non_duplicated_names() {
+fn test_normalize_tools_short_non_duplicated_names() {
     let tools = vec![
         create_test_tool("server1", "tool1"),
         create_test_tool("server1", "tool2"),
     ];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 2);
-    assert!(qualified_tools.contains_key("mcp__server1__tool1"));
-    assert!(qualified_tools.contains_key("mcp__server1__tool2"));
+    assert_eq!(
+        model_tool_names(&model_tools),
+        HashSet::from([
+            ToolName::namespaced("mcp__server1__", "tool1"),
+            ToolName::namespaced("mcp__server1__", "tool2")
+        ])
+    );
 }
 
 #[test]
-fn test_qualify_tools_duplicated_names_skipped() {
+fn test_normalize_tools_duplicated_names_skipped() {
     let tools = vec![
         create_test_tool("server1", "duplicate_tool"),
         create_test_tool("server1", "duplicate_tool"),
     ];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
     // Only the first tool should remain, the second is skipped
-    assert_eq!(qualified_tools.len(), 1);
-    assert!(qualified_tools.contains_key("mcp__server1__duplicate_tool"));
+    assert_eq!(
+        model_tool_names(&model_tools),
+        HashSet::from([ToolName::namespaced("mcp__server1__", "duplicate_tool")])
+    );
 }
 
 #[test]
-fn test_qualify_tools_long_names_same_server() {
+fn test_normalize_tools_long_names_same_server() {
     let server_name = "my_server";
 
     let tools = vec![
@@ -314,116 +328,131 @@ fn test_qualify_tools_long_names_same_server() {
         ),
     ];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 2);
+    assert_eq!(model_tools.len(), 2);
 
-    let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
-    keys.sort();
+    let names = model_tool_names(&model_tools);
 
-    assert!(keys.iter().all(|key| key.len() == 64));
-    assert!(keys.iter().all(|key| key.starts_with("mcp__my_server__")));
+    assert!(names.iter().all(|name| name.display().len() == 64));
     assert!(
-        keys.iter()
-            .all(|key| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
-        "qualified names must be code-mode compatible: {keys:?}"
+        names
+            .iter()
+            .all(|name| name.namespace.as_deref() == Some("mcp__my_server__"))
+    );
+    assert!(
+        names.iter().all(|name| name
+            .display()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        "model-visible names must be code-mode compatible: {names:?}"
     );
 }
 
 #[test]
-fn test_qualify_tools_sanitizes_invalid_characters() {
+fn test_normalize_tools_sanitizes_invalid_characters() {
     let tools = vec![create_test_tool("server.one", "tool.two-three")];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 1);
-    let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-    assert_eq!(qualified_name, "mcp__server_one__tool_two_three");
+    assert_eq!(model_tools.len(), 1);
+    let tool = model_tools.into_iter().next().expect("one tool");
+    let model_name = tool.canonical_tool_name();
+    assert_eq!(
+        model_name,
+        ToolName::namespaced("mcp__server_one__", "tool_two_three")
+    );
     assert_eq!(
         format!("{}{}", tool.callable_namespace, tool.callable_name),
-        qualified_name
+        model_name.display()
     );
 
-    // The key and callable parts are sanitized for model-visible tool calls, but
-    // the raw MCP name is preserved for the actual MCP call.
+    // The callable parts are sanitized for model-visible tool calls, but the raw
+    // MCP name is preserved for the actual MCP call.
     assert_eq!(tool.server_name, "server.one");
     assert_eq!(tool.callable_namespace, "mcp__server_one__");
     assert_eq!(tool.callable_name, "tool_two_three");
     assert_eq!(tool.tool.name, "tool.two-three");
 
     assert!(
-        qualified_name
+        model_name
+            .display()
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_'),
-        "qualified name must be code-mode compatible: {qualified_name:?}"
+        "model-visible name must be code-mode compatible: {model_name:?}"
     );
 }
 
 #[test]
-fn test_qualify_tools_keeps_hyphenated_mcp_tools_callable() {
+fn test_normalize_tools_keeps_hyphenated_mcp_tools_callable() {
     let tools = vec![create_test_tool("music-studio", "get-strudel-guide")];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 1);
-    let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-    assert_eq!(qualified_name, "mcp__music_studio__get_strudel_guide");
+    assert_eq!(model_tools.len(), 1);
+    let tool = model_tools.into_iter().next().expect("one tool");
+    assert_eq!(
+        tool.canonical_tool_name(),
+        ToolName::namespaced("mcp__music_studio__", "get_strudel_guide")
+    );
     assert_eq!(tool.callable_namespace, "mcp__music_studio__");
     assert_eq!(tool.callable_name, "get_strudel_guide");
     assert_eq!(tool.tool.name, "get-strudel-guide");
 }
 
 #[test]
-fn test_qualify_tools_disambiguates_sanitized_namespace_collisions() {
+fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
     let tools = vec![
         create_test_tool("basic-server", "lookup"),
         create_test_tool("basic_server", "query"),
     ];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 2);
-    let mut namespaces = qualified_tools
-        .values()
+    assert_eq!(model_tools.len(), 2);
+    let mut namespaces = model_tools
+        .iter()
         .map(|tool| tool.callable_namespace.as_str())
         .collect::<Vec<_>>();
     namespaces.sort();
     namespaces.dedup();
     assert_eq!(namespaces.len(), 2);
 
-    let raw_servers = qualified_tools
-        .values()
+    let raw_servers = model_tools
+        .iter()
         .map(|tool| tool.server_name.as_str())
         .collect::<HashSet<_>>();
     assert_eq!(raw_servers, HashSet::from(["basic-server", "basic_server"]));
+    let model_names = model_tool_names(&model_tools);
     assert!(
-        qualified_tools
-            .keys()
-            .all(|key| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')),
-        "qualified names must be code-mode compatible: {qualified_tools:?}"
+        model_names.iter().all(|name| name
+            .display()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        "model-visible names must be code-mode compatible: {model_names:?}"
     );
 }
 
 #[test]
-fn test_qualify_tools_disambiguates_sanitized_tool_name_collisions() {
+fn test_normalize_tools_disambiguates_sanitized_tool_name_collisions() {
     let tools = vec![
         create_test_tool("server", "tool-name"),
         create_test_tool("server", "tool_name"),
     ];
 
-    let qualified_tools = qualify_tools(tools);
+    let model_tools = normalize_tools_for_model(tools);
 
-    assert_eq!(qualified_tools.len(), 2);
-    let raw_tool_names = qualified_tools
-        .values()
+    assert_eq!(model_tools.len(), 2);
+    let raw_tool_names = model_tools
+        .iter()
         .map(|tool| tool.tool.name.to_string())
         .collect::<HashSet<_>>();
     assert_eq!(
         raw_tool_names,
         HashSet::from(["tool-name".to_string(), "tool_name".to_string()])
     );
-    let callable_tool_names = qualified_tools
-        .values()
+    let callable_tool_names = model_tools
+        .iter()
         .map(|tool| tool.callable_name.as_str())
         .collect::<HashSet<_>>();
     assert_eq!(callable_tool_names.len(), 2);
@@ -672,7 +701,11 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 
     let tools = manager.list_all_tools().await;
     let tool = tools
-        .get("mcp__codex_apps__calendar_create_event")
+        .iter()
+        .find(|tool| {
+            tool.canonical_tool_name()
+                == ToolName::namespaced("mcp__codex_apps__", "calendar_create_event")
+        })
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
@@ -798,7 +831,11 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 
     let tools = manager.list_all_tools().await;
     let tool = tools
-        .get("mcp__codex_apps__calendar_create_event")
+        .iter()
+        .find(|tool| {
+            tool.canonical_tool_name()
+                == ToolName::namespaced("mcp__codex_apps__", "calendar_create_event")
+        })
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
@@ -820,7 +857,7 @@ fn elicitation_capability_uses_2025_06_18_shape_for_all_servers() {
 fn mcp_init_error_display_prompts_for_github_pat() {
     let server_name = "github";
     let entry = McpAuthStatusEntry {
-        config: McpServerConfig {
+        config: Some(McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://api.githubcopilot.com/mcp/".to_string(),
                 bearer_token_env_var: None,
@@ -840,7 +877,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
-        },
+        }),
         auth_status: McpAuthStatus::Unsupported,
     };
     let err: StartupOutcomeError = anyhow::anyhow!("OAuth is unsupported").into();
@@ -872,7 +909,7 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
 fn mcp_init_error_display_reports_generic_errors() {
     let server_name = "custom";
     let entry = McpAuthStatusEntry {
-        config: McpServerConfig {
+        config: Some(McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com".to_string(),
                 bearer_token_env_var: Some("TOKEN".to_string()),
@@ -892,7 +929,7 @@ fn mcp_init_error_display_reports_generic_errors() {
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
-        },
+        }),
         auth_status: McpAuthStatus::Unsupported,
     };
     let err: StartupOutcomeError = anyhow::anyhow!("boom").into();
@@ -915,32 +952,4 @@ fn mcp_init_error_display_includes_startup_timeout_hint() {
         "MCP client for `slow` timed out after 30 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
         display
     );
-}
-
-#[test]
-fn transport_origin_extracts_http_origin() {
-    let transport = McpServerTransportConfig::StreamableHttp {
-        url: "https://example.com:8443/path?query=1".to_string(),
-        bearer_token_env_var: None,
-        http_headers: None,
-        env_http_headers: None,
-    };
-
-    assert_eq!(
-        transport_origin(&transport),
-        Some("https://example.com:8443".to_string())
-    );
-}
-
-#[test]
-fn transport_origin_is_stdio_for_stdio_transport() {
-    let transport = McpServerTransportConfig::Stdio {
-        command: "server".to_string(),
-        args: Vec::new(),
-        env: None,
-        env_vars: Vec::new(),
-        cwd: None,
-    };
-
-    assert_eq!(transport_origin(&transport), Some("stdio".to_string()));
 }

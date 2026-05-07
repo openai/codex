@@ -534,6 +534,44 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
 }
 
 #[tokio::test]
+async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let first_cwd = TempDir::new()?;
+    let second_cwd = TempDir::new()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![
+                first_cwd.path().to_path_buf(),
+                second_cwd.path().to_path_buf(),
+            ],
+            force_reload: true,
+            per_cwd_extra_user_roots: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(
+        data.iter()
+            .map(|entry| entry.cwd.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            first_cwd.path().to_path_buf(),
+            second_cwd.path().to_path_buf(),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()> {
     let codex_home = TempDir::new()?;
     let requested_cwd = TempDir::new()?;

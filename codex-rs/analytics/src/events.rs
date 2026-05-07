@@ -70,6 +70,8 @@ pub(crate) enum TrackEventRequest {
     CollabAgentToolCall(CodexCollabAgentToolCallEventRequest),
     WebSearch(CodexWebSearchEventRequest),
     ImageGeneration(CodexImageGenerationEventRequest),
+    #[allow(dead_code)]
+    ReviewEvent(CodexReviewEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -442,7 +444,7 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) item_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) tool_name: String,
@@ -462,6 +464,83 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) requested_network_access: bool,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReviewSubjectKind {
+    CommandExecution,
+    FileChange,
+    McpToolCall,
+    Permissions,
+    NetworkAccess,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Reviewer {
+    Guardian,
+    User,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReviewTrigger {
+    Initial,
+    SandboxDenial,
+    NetworkPolicyDenial,
+    ExecveIntercept,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReviewStatus {
+    Approved,
+    Denied,
+    Aborted,
+    TimedOut,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReviewResolution {
+    None,
+    SessionApproval,
+    ExecPolicyAmendment,
+    NetworkPolicyAmendment,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexReviewEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) item_id: Option<String>,
+    pub(crate) review_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) tool_kind: ReviewSubjectKind,
+    pub(crate) tool_name: String,
+    pub(crate) reviewer: Reviewer,
+    pub(crate) trigger: ReviewTrigger,
+    pub(crate) status: ReviewStatus,
+    pub(crate) resolution: ReviewResolution,
+    pub(crate) started_at_ms: u64,
+    pub(crate) completed_at_ms: u64,
+    pub(crate) duration_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexReviewEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexReviewEventParams,
+}
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WebSearchActionKind {

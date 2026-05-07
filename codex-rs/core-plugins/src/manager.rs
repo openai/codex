@@ -6,6 +6,7 @@ use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
 use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
@@ -54,6 +55,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
+use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -61,6 +63,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
@@ -228,9 +231,16 @@ pub struct PluginDetail {
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1300,6 +1310,7 @@ impl PluginsManager {
                 enabled: plugin.enabled,
                 skills: Vec::new(),
                 disabled_skill_paths: HashSet::new(),
+                hooks: Vec::new(),
                 apps: Vec::new(),
                 mcp_server_names: Vec::new(),
                 details_unavailable_reason: Some(
@@ -1357,6 +1368,20 @@ impl PluginsManager {
             ),
         )
         .await;
+        let hooks = if config.plugin_hooks_enabled {
+            let plugin_data_root = self.store.plugin_data_root(&plugin_id);
+            let (hook_sources, _hook_load_warnings) =
+                load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
+            plugin_hook_declarations(&hook_sources)
+                .into_iter()
+                .map(|hook| PluginHookSummary {
+                    key: hook.key,
+                    event_name: hook.event_name,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let apps = load_plugin_apps(source_path.as_path()).await;
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
@@ -1377,6 +1402,7 @@ impl PluginsManager {
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            hooks,
             apps,
             mcp_server_names,
             details_unavailable_reason: None,

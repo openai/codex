@@ -63,6 +63,7 @@ use codex_tools::default_namespace_description;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub fn build_tool_registry_builder(
@@ -423,11 +424,14 @@ pub fn build_tool_registry_builder(
     }
 
     if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
+        let directly_registered_mcp_tools = params
+            .mcp_tools
+            .into_iter()
+            .flatten()
+            .map(|direct| direct.name.clone())
+            .collect::<HashSet<_>>();
         for tool in deferred_mcp_tools {
-            let registered_directly = params
-                .mcp_tools
-                .is_some_and(|mcp_tools| mcp_tools.iter().any(|direct| direct.name == tool.name));
-            if !registered_directly {
+            if !directly_registered_mcp_tools.contains(&tool.name) {
                 builder.register_handler(Arc::new(McpHandler::new(tool.name.clone())));
             }
         }

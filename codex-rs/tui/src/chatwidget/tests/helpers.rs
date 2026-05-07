@@ -1505,6 +1505,7 @@ pub(super) fn plugins_test_detail(
     summary: PluginSummary,
     description: Option<&str>,
     skills: &[&str],
+    hooks: &[(codex_app_server_protocol::HookEventName, usize)],
     apps: &[(&str, bool)],
     mcp_servers: &[&str],
 ) -> PluginDetail {
@@ -1524,6 +1525,18 @@ pub(super) fn plugins_test_detail(
                     "skills/{name}/SKILL.md"
                 ))),
                 enabled: true,
+            })
+            .collect(),
+        hooks: hooks
+            .iter()
+            .enumerate()
+            .flat_map(|(event_index, (event_name, handler_count))| {
+                (0..*handler_count).map(move |handler_index| {
+                    codex_app_server_protocol::PluginHookSummary {
+                        key: format!("plugin:{event_index}:{handler_index}"),
+                        event_name: *event_name,
+                    }
+                })
             })
             .collect(),
         apps: apps
