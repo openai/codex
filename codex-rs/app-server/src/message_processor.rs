@@ -60,7 +60,9 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
+use codex_core::AttestationContext;
 use codex_core::AttestationProvider;
+use codex_core::GenerateAttestationFuture;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::thread_store_from_config;
@@ -158,16 +160,43 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 fn app_server_attestation_provider(
     outgoing: Arc<OutgoingMessageSender>,
     attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
-) -> AttestationProvider {
-    AttestationProvider::new(move || {
-        let outgoing = outgoing.clone();
-        let attestation_connection_ids = attestation_connection_ids.clone();
-        Box::pin(request_attestation_header_value_with_timeout(
-            outgoing,
-            attestation_connection_ids,
-            ATTESTATION_GENERATE_TIMEOUT,
-        ))
+) -> Arc<dyn AttestationProvider> {
+    Arc::new(AppServerAttestationProvider {
+        outgoing,
+        attestation_connection_ids,
     })
+}
+
+struct AppServerAttestationProvider {
+    outgoing: Arc<OutgoingMessageSender>,
+    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+}
+
+impl std::fmt::Debug for AppServerAttestationProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppServerAttestationProvider")
+            .finish()
+    }
+}
+
+impl AttestationProvider for AppServerAttestationProvider {
+    fn generate_header_value(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
+        let outgoing = self.outgoing.clone();
+        let attestation_connection_ids = self.attestation_connection_ids.clone();
+        Box::pin(async move {
+            if !context.uses_chatgpt_auth {
+                return None;
+            }
+
+            request_attestation_header_value_with_timeout(
+                outgoing,
+                attestation_connection_ids,
+                ATTESTATION_GENERATE_TIMEOUT,
+            )
+            .await
+        })
+    }
 }
 
 async fn request_attestation_header_value_with_timeout(

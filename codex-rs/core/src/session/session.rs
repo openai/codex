@@ -370,7 +370,7 @@ impl Session {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
-        attestation_provider: Option<AttestationProvider>,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",

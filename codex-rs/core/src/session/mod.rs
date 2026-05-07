@@ -413,7 +413,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
-    pub(crate) attestation_provider: Option<AttestationProvider>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";

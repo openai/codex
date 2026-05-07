@@ -178,7 +178,9 @@ mod tasks;
 mod user_shell_command;
 pub mod util;
 
+pub use attestation::AttestationContext;
 pub use attestation::AttestationProvider;
+pub use attestation::GenerateAttestationFuture;
 pub use client::ModelClient;
 pub use client::ModelClientSession;
 pub use client::X_CODEX_INSTALLATION_ID_HEADER;

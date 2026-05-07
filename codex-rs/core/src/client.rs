@@ -105,6 +105,7 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 
+use crate::attestation::AttestationContext;
 use crate::attestation::AttestationProvider;
 use crate::attestation::X_OAI_ATTESTATION_HEADER;
 use crate::client_common::Prompt;
@@ -172,7 +173,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
-    attestation_provider: Option<AttestationProvider>,
+    attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -317,7 +318,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
-        attestation_provider: Option<AttestationProvider>,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
@@ -649,22 +650,18 @@ impl ModelClient {
         client_metadata
     }
 
-    async fn generate_attestation_header(&self) -> Option<HeaderValue> {
-        self.state
-            .attestation_provider
-            .as_ref()?
-            .generate_header()
-            .await
-    }
-
     async fn generate_attestation_header_for(
         &self,
         provider: &codex_api::Provider,
     ) -> Option<HeaderValue> {
-        if !provider.uses_chatgpt_auth {
-            return None;
-        }
-        self.generate_attestation_header().await
+        self.state
+            .attestation_provider
+            .as_ref()?
+            .generate_header_value(AttestationContext {
+                uses_chatgpt_auth: provider.uses_chatgpt_auth,
+            })
+            .await
+            .and_then(|value| HeaderValue::from_str(&value).ok())
     }
 
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).

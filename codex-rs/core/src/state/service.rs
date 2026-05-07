@@ -67,7 +67,7 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
-    pub(crate) attestation_provider: Option<AttestationProvider>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,

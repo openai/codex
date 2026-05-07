@@ -250,7 +250,7 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
-    attestation_provider: Option<AttestationProvider>,
+    attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
@@ -295,7 +295,7 @@ impl ThreadManager {
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
         installation_id: String,
-        attestation_provider: Option<AttestationProvider>,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();

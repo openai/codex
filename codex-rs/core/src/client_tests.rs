@@ -7,7 +7,9 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use crate::AttestationContext;
 use crate::AttestationProvider;
+use crate::GenerateAttestationFuture;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
@@ -494,8 +496,29 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 }
 
 fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
+    #[derive(Debug)]
+    struct CountingAttestationProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl AttestationProvider for CountingAttestationProvider {
+        fn generate_header_value(
+            &self,
+            context: AttestationContext,
+        ) -> GenerateAttestationFuture<'_> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                if !context.uses_chatgpt_auth {
+                    return None;
+                }
+
+                let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
+                Some(format!("v1.header-{call}"))
+            })
+        }
+    }
+
     let attestation_calls = Arc::new(AtomicUsize::new(0));
-    let calls = attestation_calls.clone();
     let model_client = ModelClient::new(
         /*auth_manager*/ None,
         SessionId::new(),
@@ -507,12 +530,8 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
-        Some(AttestationProvider::new(move || {
-            let calls = calls.clone();
-            Box::pin(async move {
-                let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
-                Some(format!("v1.header-{call}"))
-            })
+        Some(Arc::new(CountingAttestationProvider {
+            calls: attestation_calls.clone(),
         })),
     );
     (model_client, attestation_calls)
