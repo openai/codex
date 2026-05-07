@@ -868,10 +868,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec",
             )?;
-            exec_cli
-                .shared
-                .inherit_exec_root_options(&interactive.shared);
-            exec_cli.strict_config |= root_strict_config;
+            apply_exec_root_options(&mut exec_cli, &interactive)?;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1741,6 +1738,22 @@ fn prepend_config_flags(
     subcommand_config_overrides.prepend_root_overrides(cli_config_overrides);
 }
 
+fn apply_exec_root_options(exec_cli: &mut ExecCli, interactive: &TuiCli) -> anyhow::Result<()> {
+    exec_cli
+        .shared
+        .inherit_exec_root_options(&interactive.shared);
+    exec_cli.strict_config |= interactive.strict_config;
+    if exec_cli.approval_policy.is_none() {
+        exec_cli.approval_policy = interactive.approval_policy;
+    }
+    if exec_cli.dangerously_bypass_approvals_and_sandbox && exec_cli.approval_policy.is_some() {
+        anyhow::bail!(
+            "--dangerously-bypass-approvals-and-sandbox cannot be used with --ask-for-approval"
+        );
+    }
+    Ok(())
+}
+
 fn reject_remote_mode_for_subcommand(
     remote: Option<&str>,
     remote_auth_token_env: Option<&str>,
@@ -2291,6 +2304,61 @@ mod tests {
             "--dangerously-bypass-approvals-and-sandbox",
             "--ask-for-approval",
             "on-request",
+        ])
+        .expect_err("conflicting permission flags should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn exec_accepts_approval_policy_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from(["codex", "exec", "-a", "untrusted", "hi"])
+            .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert_matches!(
+            exec.approval_policy,
+            Some(codex_utils_cli::ApprovalModeCliArg::Untrusted)
+        );
+    }
+
+    #[test]
+    fn exec_accepts_root_approval_policy() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-a", "untrusted", "exec", "hi"])
+            .expect("parse should succeed");
+        let MultitoolCli {
+            interactive,
+            subcommand,
+            ..
+        } = cli;
+        let Some(Subcommand::Exec(mut exec)) = subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert_matches!(
+            exec.approval_policy,
+            Some(codex_utils_cli::ApprovalModeCliArg::Untrusted)
+        );
+        apply_exec_root_options(&mut exec, &interactive).expect("root options apply");
+
+        assert_matches!(
+            exec.approval_policy,
+            Some(codex_utils_cli::ApprovalModeCliArg::Untrusted)
+        );
+    }
+
+    #[test]
+    fn exec_rejects_subcommand_approval_policy_with_bypass() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-a",
+            "untrusted",
+            "hi",
         ])
         .expect_err("conflicting permission flags should be rejected");
 

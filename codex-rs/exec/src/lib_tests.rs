@@ -84,6 +84,50 @@ fn exec_default_stderr_filter_suppresses_otel_self_diagnostics() {
 }
 
 #[test]
+fn exec_approval_policy_override_defaults_to_never() {
+    let cli_kv_overrides: Vec<(String, ())> = Vec::new();
+
+    assert_eq!(
+        exec_approval_policy_override(false, None, &cli_kv_overrides),
+        Some(AskForApproval::Never)
+    );
+}
+
+#[test]
+fn exec_approval_policy_override_uses_cli_approval_policy() {
+    let cli_kv_overrides: Vec<(String, ())> = Vec::new();
+
+    assert_eq!(
+        exec_approval_policy_override(
+            false,
+            Some(ApprovalModeCliArg::Untrusted),
+            &cli_kv_overrides
+        ),
+        Some(AskForApproval::UnlessTrusted)
+    );
+}
+
+#[test]
+fn exec_approval_policy_override_allows_config_approval_policy() {
+    let cli_kv_overrides = vec![("approval_policy".to_string(), ())];
+
+    assert_eq!(
+        exec_approval_policy_override(false, None, &cli_kv_overrides),
+        None
+    );
+}
+
+#[test]
+fn exec_approval_policy_override_yolo_forces_never() {
+    let cli_kv_overrides = vec![("approval_policy".to_string(), ())];
+
+    assert_eq!(
+        exec_approval_policy_override(true, Some(ApprovalModeCliArg::Untrusted), &cli_kv_overrides),
+        Some(AskForApproval::Never)
+    );
+}
+
+#[test]
 fn exec_root_span_can_be_parented_from_trace_context() {
     let subscriber = test_tracing_subscriber();
     let _guard = tracing::subscriber::set_default(subscriber);
