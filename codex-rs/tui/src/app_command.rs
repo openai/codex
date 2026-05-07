@@ -92,6 +92,9 @@ pub(crate) enum AppCommand {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     },
+    AddToHistory {
+        text: String,
+    },
     Compact,
     SetThreadName {
         name: String,
@@ -245,6 +248,10 @@ impl AppCommand {
 
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self::ListSkills { cwds, force_reload }
+    }
+
+    pub(crate) fn add_to_history(text: String) -> Self {
+        Self::AddToHistory { text }
     }
 
     pub(crate) fn compact() -> Self {
