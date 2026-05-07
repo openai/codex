@@ -388,7 +388,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db.clone(),
+            state_db,
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
