@@ -29,6 +29,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const ATTESTATION_HEADER: &str = "v1.integration-test";
+const APP_SERVER_ATTESTATION_HEADER: &str = r#"{"v":1,"s":0,"t":"v1.integration-test"}"#;
 
 #[tokio::test]
 async fn attestation_generate_round_trip_adds_header_to_responses_websocket_handshake() -> Result<()>
@@ -161,7 +162,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
     let handshake = websocket_server.single_handshake();
     assert_eq!(
         handshake.header("x-oai-attestation").as_deref(),
-        Some(ATTESTATION_HEADER)
+        Some(APP_SERVER_ATTESTATION_HEADER)
     );
 
     websocket_server.shutdown().await;

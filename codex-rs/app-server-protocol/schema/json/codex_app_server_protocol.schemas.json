@@ -92,7 +92,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "headerValue": {
-          "description": "Opaque upstream `x-oai-attestation` header value.",
+          "description": "Opaque client attestation payload to embed in the upstream header envelope.",
           "type": "string"
         }
       },

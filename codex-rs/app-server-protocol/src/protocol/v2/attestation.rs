@@ -12,6 +12,6 @@ pub struct AttestationGenerateParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AttestationGenerateResponse {
-    /// Opaque upstream `x-oai-attestation` header value.
+    /// Opaque client attestation payload to embed in the upstream header envelope.
     pub header_value: String,
 }

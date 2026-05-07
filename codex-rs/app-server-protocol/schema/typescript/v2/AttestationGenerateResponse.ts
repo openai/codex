@@ -4,6 +4,6 @@
 
 export type AttestationGenerateResponse = {
 /**
- * Opaque upstream `x-oai-attestation` header value.
+ * Opaque client attestation payload to embed in the upstream header envelope.
  */
 headerValue: string, };

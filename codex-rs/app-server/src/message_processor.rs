@@ -80,6 +80,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
+use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
@@ -91,6 +92,48 @@ use tracing::warn;
 
 const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_millis(100);
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy)]
+enum AppServerAttestationStatus {
+    Ok,
+    Timeout,
+    RequestFailed,
+    RequestCanceled,
+    MalformedResponse,
+}
+
+impl AppServerAttestationStatus {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Ok => 0,
+            Self::Timeout => 1,
+            Self::RequestFailed => 2,
+            Self::RequestCanceled => 3,
+            Self::MalformedResponse => 4,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AppServerAttestationEnvelope<'a> {
+    v: u8,
+    s: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    t: Option<&'a str>,
+}
+
+fn app_server_attestation_header_value(
+    status: AppServerAttestationStatus,
+    token: Option<&str>,
+) -> String {
+    serde_json::to_string(&AppServerAttestationEnvelope {
+        v: 1,
+        s: status.code(),
+        t: token,
+    })
+    .expect("app-server attestation envelope should serialize")
+}
+
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
@@ -228,11 +271,17 @@ async fn request_attestation_header_value_with_timeout(
                 message = %err.message,
                 "attestation generation request failed"
             );
-            return Some(String::new());
+            return Some(app_server_attestation_header_value(
+                AppServerAttestationStatus::RequestFailed,
+                None,
+            ));
         }
         Ok(Err(err)) => {
             warn!("attestation generation request canceled: {err}");
-            return Some(String::new());
+            return Some(app_server_attestation_header_value(
+                AppServerAttestationStatus::RequestCanceled,
+                None,
+            ));
         }
         Err(_) => {
             let _canceled = outgoing.cancel_request(&request_id).await;
@@ -240,15 +289,24 @@ async fn request_attestation_header_value_with_timeout(
                 timeout_seconds = timeout_duration.as_secs(),
                 "attestation generation request timed out"
             );
-            return Some(String::new());
+            return Some(app_server_attestation_header_value(
+                AppServerAttestationStatus::Timeout,
+                None,
+            ));
         }
     };
 
     match serde_json::from_value::<AttestationGenerateResponse>(result) {
-        Ok(response) => Some(response.header_value),
+        Ok(response) => Some(app_server_attestation_header_value(
+            AppServerAttestationStatus::Ok,
+            Some(&response.header_value),
+        )),
         Err(err) => {
             warn!("failed to deserialize attestation generation response: {err}");
-            Some(String::new())
+            Some(app_server_attestation_header_value(
+                AppServerAttestationStatus::MalformedResponse,
+                None,
+            ))
         }
     }
 }
@@ -1397,6 +1455,10 @@ impl MessageProcessor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "message_processor_attestation_tests.rs"]
+mod message_processor_attestation_tests;
 
 #[cfg(test)]
 #[path = "message_processor_tracing_tests.rs"]
