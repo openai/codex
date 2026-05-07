@@ -6,14 +6,11 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use async_channel::unbounded;
-use codex_api::SharedAuthProvider;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
-use codex_connectors::DirectoryListResponse;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -21,7 +18,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::config::Config;
@@ -36,7 +32,6 @@ use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::create_client;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
@@ -49,7 +44,6 @@ use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::with_codex_apps_mcp;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
-const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -121,7 +115,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     accessible_connectors: &[AppInfo],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let directory_connectors =
-        list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
+        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await;
     let connector_ids = tool_suggest_connector_ids(config).await;
     let discoverable_connectors =
         codex_connectors::filter::filter_tool_suggest_discoverable_connectors(
@@ -435,12 +429,12 @@ async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
     connector_ids
 }
 
-async fn list_directory_connectors_for_tool_suggest_with_auth(
+async fn cached_directory_connectors_for_tool_suggest_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
-) -> anyhow::Result<Vec<AppInfo>> {
+) -> Vec<AppInfo> {
     if !config.features.enabled(Feature::Apps) {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let loaded_auth;
@@ -453,14 +447,13 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         loaded_auth.as_ref()
     };
     let Some(auth) = auth.filter(|auth| auth.uses_codex_backend()) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
 
     let account_id = match auth.get_account_id() {
         Some(account_id) if !account_id.is_empty() => account_id,
-        _ => return Ok(Vec::new()),
+        _ => return Vec::new(),
     };
-    let auth_provider = codex_model_provider::auth_provider_from_auth(auth);
     let is_workspace_account = auth.is_workspace_account();
     let cache_key = AllConnectorsCacheKey::new(
         config.chatgpt_base_url.clone(),
@@ -469,51 +462,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         is_workspace_account,
     );
 
-    codex_connectors::list_all_connectors_with_options(
-        cache_key,
-        is_workspace_account,
-        /*force_refetch*/ false,
-        |path| {
-            let auth_provider = auth_provider.clone();
-            async move {
-                chatgpt_get_request_with_auth_provider::<DirectoryListResponse>(
-                    config,
-                    path,
-                    auth_provider,
-                )
-                .await
-            }
-        },
-    )
-    .await
-}
-
-async fn chatgpt_get_request_with_auth_provider<T: DeserializeOwned>(
-    config: &Config,
-    path: String,
-    auth_provider: SharedAuthProvider,
-) -> anyhow::Result<T> {
-    let client = create_client();
-    let url = format!("{}{}", config.chatgpt_base_url, path);
-    let response = client
-        .get(&url)
-        .headers(auth_provider.to_auth_headers())
-        .header("Content-Type", "application/json")
-        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
-        .send()
-        .await
-        .context("failed to send request")?;
-
-    if response.status().is_success() {
-        response
-            .json()
-            .await
-            .context("failed to parse JSON response")
-    } else {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("request failed with status {status}: {body}");
-    }
+    codex_connectors::cached_all_connectors(&cache_key).unwrap_or_default()
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
