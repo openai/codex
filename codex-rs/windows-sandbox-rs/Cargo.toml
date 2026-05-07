@@ -98,4 +98,33 @@ pretty_assertions = { workspace = true }
 winres = "0.1"
 
 [package.metadata.cargo-shear]
-ignored = ["codex-utils-pty", "tokio"]
+# cargo-shear runs on non-Windows CI hosts, so it cannot see these Windows-only
+# modules and path-based bin modules from the active target's module graph.
+ignored-paths = [
+    "src/acl.rs",
+    "src/allow.rs",
+    "src/audit.rs",
+    "src/cap.rs",
+    "src/desktop.rs",
+    "src/dpapi.rs",
+    "src/elevated/command_runner_win.rs",
+    "src/env.rs",
+    "src/firewall.rs",
+    "src/helper_materialization.rs",
+    "src/hide_users.rs",
+    "src/identity.rs",
+    "src/logging.rs",
+    "src/path_normalization.rs",
+    "src/policy.rs",
+    "src/process.rs",
+    "src/read_acl_mutex.rs",
+    "src/sandbox_users.rs",
+    "src/setup_main_win.rs",
+    "src/token.rs",
+    "src/unified_exec/backends/mod.rs",
+    "src/unified_exec/tests.rs",
+    "src/wfp.rs",
+    "src/wfp_setup.rs",
+    "src/winutil.rs",
+    "src/workspace_acl.rs",
+]
