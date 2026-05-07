@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use codex_protocol::ThreadId;
 use http::HeaderValue;
 
 pub(crate) const X_OAI_ATTESTATION_HEADER: &str = "x-oai-attestation";
@@ -13,6 +14,8 @@ pub type GenerateAttestationFuture<'a> =
 #[derive(Clone, Copy, Debug)]
 pub struct AttestationContext {
     pub uses_chatgpt_auth: bool,
+    /// Thread whose upstream request is being prepared.
+    pub thread_id: ThreadId,
 }
 
 /// Host integration boundary for just-in-time attestation header values.

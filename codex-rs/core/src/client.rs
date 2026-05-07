@@ -659,6 +659,7 @@ impl ModelClient {
             .as_ref()?
             .header_for_request(AttestationContext {
                 uses_chatgpt_auth: provider.uses_chatgpt_auth,
+                thread_id: self.state.thread_id,
             })
             .await
     }
