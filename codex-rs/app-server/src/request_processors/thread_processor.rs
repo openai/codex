@@ -1,4 +1,5 @@
 use super::*;
+use crate::error_code::method_not_found;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -592,6 +593,15 @@ impl ThreadRequestProcessor {
         self.thread_turns_list_response_inner(params)
             .await
             .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_turns_items_list(
+        &self,
+        _params: ThreadTurnsItemsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        Err(method_not_found(
+            "thread/turns/items/list is not supported yet",
+        ))
     }
 
     pub(crate) async fn thread_shell_command(
@@ -2079,7 +2089,9 @@ impl ThreadRequestProcessor {
             cursor,
             limit,
             sort_direction,
+            items_view,
         } = params;
+        let items_view = items_view.unwrap_or(TurnItemsView::Summary);
 
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -2108,7 +2120,7 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        let turns = reconstruct_thread_turns_for_turns_list(
+        let mut turns = reconstruct_thread_turns_for_turns_list(
             &items,
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread_uuid.to_string())
@@ -2116,6 +2128,41 @@ impl ThreadRequestProcessor {
             has_live_running_thread,
             active_turn,
         );
+        for turn in &mut turns {
+            match items_view {
+                TurnItemsView::NotLoaded => {
+                    turn.items.clear();
+                    turn.items_view = TurnItemsView::NotLoaded;
+                }
+                TurnItemsView::Summary => {
+                    let first_user_message = turn
+                        .items
+                        .iter()
+                        .find(|item| matches!(item, ThreadItem::UserMessage { .. }))
+                        .cloned();
+                    let final_agent_message = turn
+                        .items
+                        .iter()
+                        .rev()
+                        .find(|item| matches!(item, ThreadItem::AgentMessage { .. }))
+                        .cloned();
+                    turn.items = match (first_user_message, final_agent_message) {
+                        (Some(user_message), Some(agent_message))
+                            if user_message.id() != agent_message.id() =>
+                        {
+                            vec![user_message, agent_message]
+                        }
+                        (Some(user_message), _) => vec![user_message],
+                        (None, Some(agent_message)) => vec![agent_message],
+                        (None, None) => Vec::new(),
+                    };
+                    turn.items_view = TurnItemsView::Summary;
+                }
+                TurnItemsView::Full => {
+                    turn.items_view = TurnItemsView::Full;
+                }
+            }
+        }
         let page = paginate_thread_turns(
             turns,
             cursor.as_deref(),
@@ -3499,19 +3546,30 @@ fn normalize_thread_turns_status(
 
 enum ThreadReadViewError {
     InvalidRequest(String),
+    Unsupported(&'static str),
     Internal(String),
 }
 
 fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     match err {
         ThreadReadViewError::InvalidRequest(message) => invalid_request(message),
+        ThreadReadViewError::Unsupported(operation) => {
+            unsupported_thread_store_operation(operation)
+        }
         ThreadReadViewError::Internal(message) => internal_error(message),
     }
+}
+
+fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {
+    method_not_found(format!("{operation} is not supported yet"))
 }
 
 fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!("failed to list threads: {err}")),
     }
 }
@@ -3519,6 +3577,9 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
 fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         ThreadStoreError::ThreadNotFound { thread_id } => {
             invalid_request(format!("no rollout found for thread id {thread_id}"))
         }
@@ -3541,6 +3602,7 @@ fn thread_turns_list_history_load_error(
         ThreadStoreError::InvalidRequest { message } => {
             ThreadReadViewError::InvalidRequest(message)
         }
+        ThreadStoreError::Unsupported { operation } => ThreadReadViewError::Unsupported(operation),
         err => ThreadReadViewError::Internal(format!(
             "failed to load thread history for thread {thread_id}: {err}"
         )),
@@ -3567,6 +3629,7 @@ fn thread_read_history_load_error(
         ThreadStoreError::InvalidRequest { message } => {
             ThreadReadViewError::InvalidRequest(message)
         }
+        ThreadStoreError::Unsupported { operation } => ThreadReadViewError::Unsupported(operation),
         err => ThreadReadViewError::Internal(format!(
             "failed to load thread history for thread {thread_id}: {err}"
         )),
@@ -3581,6 +3644,9 @@ fn conversation_summary_thread_id_read_error(
     match err {
         ThreadStoreError::InvalidRequest { message } if message == no_rollout_message => {
             conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
         }
         ThreadStoreError::ThreadNotFound { thread_id } if thread_id == conversation_id => {
             conversation_summary_not_found_error(conversation_id)
@@ -3604,6 +3670,9 @@ fn conversation_summary_rollout_path_read_error(
 ) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!(
             "failed to load conversation summary from {}: {}",
             path.display(),
@@ -3618,6 +3687,9 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
             invalid_request(format!("thread not found: {thread_id}"))
         }
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!("failed to {operation}: {err}")),
     }
 }
@@ -3625,6 +3697,9 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported {
+            operation: unsupported_operation,
+        } => unsupported_thread_store_operation(unsupported_operation),
         err => internal_error(format!("failed to {operation} thread: {err}")),
     }
 }

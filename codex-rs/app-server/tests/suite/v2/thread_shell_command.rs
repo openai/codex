@@ -151,6 +151,7 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
             cursor: None,
             limit: None,
             sort_direction: Some(SortDirection::Asc),
+            items_view: None,
         })
         .await?;
     let turns_list_resp: JSONRPCResponse = timeout(

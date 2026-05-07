@@ -96,6 +96,59 @@ fn turn_defaults_legacy_missing_items_view_to_full() {
 }
 
 #[test]
+fn thread_turns_list_params_accepts_items_view() {
+    let params = serde_json::from_value::<ThreadTurnsListParams>(json!({
+        "threadId": "thr_123",
+        "cursor": null,
+        "limit": 25,
+        "sortDirection": "desc",
+        "itemsView": "notLoaded",
+    }))
+    .expect("thread turns list params should deserialize");
+
+    assert_eq!(params.thread_id, "thr_123");
+    assert_eq!(params.items_view, Some(TurnItemsView::NotLoaded));
+}
+
+#[test]
+fn thread_turns_items_list_round_trips() {
+    let params = ThreadTurnsItemsListParams {
+        thread_id: "thr_123".to_string(),
+        turn_id: "turn_456".to_string(),
+        cursor: Some("cursor_1".to_string()),
+        limit: Some(50),
+        sort_direction: Some(SortDirection::Asc),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&params).expect("serialize params"),
+        json!({
+            "threadId": "thr_123",
+            "turnId": "turn_456",
+            "cursor": "cursor_1",
+            "limit": 50,
+            "sortDirection": "asc",
+        })
+    );
+    let response = ThreadTurnsItemsListResponse {
+        data: vec![ThreadItem::ContextCompaction {
+            id: "item_1".to_string(),
+        }],
+        next_cursor: None,
+        backwards_cursor: Some("cursor_0".to_string()),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&response).expect("serialize response"),
+        json!({
+            "data": [{"type": "contextCompaction", "id": "item_1"}],
+            "nextCursor": null,
+            "backwardsCursor": "cursor_0",
+        })
+    );
+}
+
+#[test]
 fn thread_list_params_accepts_single_cwd() {
     let params = serde_json::from_value::<ThreadListParams>(json!({
         "cwd": "/workspace",
