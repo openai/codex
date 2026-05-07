@@ -162,23 +162,12 @@ fn app_server_attestation_provider(
     AttestationProvider::new(move || {
         let outgoing = outgoing.clone();
         let attestation_connection_ids = attestation_connection_ids.clone();
-        Box::pin(request_attestation_header_value(
+        Box::pin(request_attestation_header_value_with_timeout(
             outgoing,
             attestation_connection_ids,
+            ATTESTATION_GENERATE_TIMEOUT,
         ))
     })
-}
-
-async fn request_attestation_header_value(
-    outgoing: Arc<OutgoingMessageSender>,
-    attestation_connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
-) -> Option<String> {
-    request_attestation_header_value_with_timeout(
-        outgoing,
-        attestation_connection_ids,
-        ATTESTATION_GENERATE_TIMEOUT,
-    )
-    .await
 }
 
 async fn request_attestation_header_value_with_timeout(

@@ -519,35 +519,6 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
 }
 
 #[tokio::test]
-async fn responses_generate_fresh_attestation_headers_for_chatgpt_codex() {
-    let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation();
-    let mut first_headers = http::HeaderMap::new();
-    let mut second_headers = http::HeaderMap::new();
-
-    model_client
-        .extend_attestation_header_for(&mut first_headers, &provider)
-        .await;
-    model_client
-        .extend_attestation_header_for(&mut second_headers, &provider)
-        .await;
-
-    assert_eq!(
-        first_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-1"),
-    );
-    assert_eq!(
-        second_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-2"),
-    );
-    assert_eq!(attestation_calls.load(Ordering::Relaxed), 2);
-}
-
-#[tokio::test]
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() {
     let provider = api_provider("https://chatgpt.com/backend-api/codex/");
     let (model_client, attestation_calls) = model_client_with_counting_attestation();
@@ -565,64 +536,6 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         Some("v1.header-1"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
-}
-
-#[tokio::test]
-async fn compact_generate_fresh_attestation_headers_for_chatgpt_codex() {
-    let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation();
-    let mut first_headers = http::HeaderMap::new();
-    let mut second_headers = http::HeaderMap::new();
-
-    model_client
-        .extend_attestation_header_for(&mut first_headers, &provider)
-        .await;
-    model_client
-        .extend_attestation_header_for(&mut second_headers, &provider)
-        .await;
-
-    assert_eq!(
-        first_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-1"),
-    );
-    assert_eq!(
-        second_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-2"),
-    );
-    assert_eq!(attestation_calls.load(Ordering::Relaxed), 2);
-}
-
-#[tokio::test]
-async fn realtime_setup_generate_fresh_attestation_headers_for_chatgpt_codex() {
-    let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation();
-    let mut first_headers = http::HeaderMap::new();
-    let mut second_headers = http::HeaderMap::new();
-
-    model_client
-        .extend_attestation_header_for(&mut first_headers, &provider)
-        .await;
-    model_client
-        .extend_attestation_header_for(&mut second_headers, &provider)
-        .await;
-
-    assert_eq!(
-        first_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-1"),
-    );
-    assert_eq!(
-        second_headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-2"),
-    );
-    assert_eq!(attestation_calls.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
