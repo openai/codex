@@ -14,11 +14,11 @@ support Windows lifecycle management.
 ## Commands
 
 ```sh
-codex app-server start
-codex app-server restart
-codex app-server stop
-codex app-server version
-codex app-server bootstrap --remote-control
+codex app-server daemon start
+codex app-server daemon restart
+codex app-server daemon stop
+codex app-server daemon version
+codex app-server daemon bootstrap --remote-control
 ```
 
 On success, every command writes exactly one JSON object to stdout. Consumers
@@ -32,7 +32,7 @@ For a new remote machine:
 
 ```sh
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
-$HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-control
+$HOME/.codex/packages/standalone/current/codex app-server daemon bootstrap --remote-control
 ```
 
 `bootstrap` requires the standalone managed install. It records the daemon

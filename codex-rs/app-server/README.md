@@ -99,10 +99,10 @@ For SSH-driven local lifecycle management, `codex app-server` also provides
 machine-readable daemon commands:
 
 ```sh
-codex app-server start
-codex app-server restart
-codex app-server stop
-codex app-server version
+codex app-server daemon start
+codex app-server daemon restart
+codex app-server daemon stop
+codex app-server daemon version
 ```
 
 On success, these commands print one JSON object to stdout. `start` and
@@ -118,7 +118,7 @@ managed app-server process:
 
 ```sh
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
-$HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-control
+$HOME/.codex/packages/standalone/current/codex app-server daemon bootstrap --remote-control
 ```
 
 On success, `bootstrap` also prints one JSON object. It requires the standalone

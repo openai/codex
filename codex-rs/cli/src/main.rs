@@ -471,6 +471,31 @@ struct ExecServerCommand {
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
+    /// Manage the local app-server daemon.
+    Daemon(AppServerDaemonCommand),
+
+    /// Proxy stdio bytes to the running app-server control socket.
+    Proxy(AppServerProxyCommand),
+
+    /// [experimental] Generate TypeScript bindings for the app server protocol.
+    GenerateTs(GenerateTsCommand),
+
+    /// [experimental] Generate JSON Schema for the app server protocol.
+    GenerateJsonSchema(GenerateJsonSchemaCommand),
+
+    /// [internal] Generate internal JSON Schema artifacts for Codex tooling.
+    #[clap(hide = true)]
+    GenerateInternalJsonSchema(GenerateInternalJsonSchemaCommand),
+}
+
+#[derive(Debug, Args)]
+struct AppServerDaemonCommand {
+    #[command(subcommand)]
+    subcommand: AppServerDaemonSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AppServerDaemonSubcommand {
     /// Install durable local app-server management for SSH-driven use.
     Bootstrap(AppServerBootstrapCommand),
 
@@ -489,19 +514,6 @@ enum AppServerSubcommand {
     /// [internal] Run the detached pid-backed standalone updater loop.
     #[clap(hide = true)]
     PidUpdateLoop,
-
-    /// Proxy stdio bytes to the running app-server control socket.
-    Proxy(AppServerProxyCommand),
-
-    /// [experimental] Generate TypeScript bindings for the app server protocol.
-    GenerateTs(GenerateTsCommand),
-
-    /// [experimental] Generate JSON Schema for the app server protocol.
-    GenerateJsonSchema(GenerateJsonSchemaCommand),
-
-    /// [internal] Generate internal JSON Schema artifacts for Codex tooling.
-    #[clap(hide = true)]
-    GenerateInternalJsonSchema(GenerateInternalJsonSchemaCommand),
 }
 
 #[derive(Debug, Args)]
@@ -903,28 +915,31 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     )
                     .await?;
                 }
-                Some(AppServerSubcommand::Start) => {
-                    print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
-                }
-                Some(AppServerSubcommand::Bootstrap(bootstrap_cli)) => {
-                    let output = codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
-                        remote_control_enabled: bootstrap_cli.remote_control,
-                    })
-                    .await?;
-                    println!("{}", serde_json::to_string(&output)?);
-                }
-                Some(AppServerSubcommand::Restart) => {
-                    print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
-                }
-                Some(AppServerSubcommand::Stop) => {
-                    print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
-                }
-                Some(AppServerSubcommand::Version) => {
-                    print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
-                }
-                Some(AppServerSubcommand::PidUpdateLoop) => {
-                    codex_app_server_daemon::run_pid_update_loop().await?;
-                }
+                Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
+                    AppServerDaemonSubcommand::Start => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                    }
+                    AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
+                        let output =
+                            codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
+                                remote_control_enabled: bootstrap_cli.remote_control,
+                            })
+                            .await?;
+                        println!("{}", serde_json::to_string(&output)?);
+                    }
+                    AppServerDaemonSubcommand::Restart => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::Stop => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                    }
+                    AppServerDaemonSubcommand::Version => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
+                    }
+                    AppServerDaemonSubcommand::PidUpdateLoop => {
+                        codex_app_server_daemon::run_pid_update_loop().await?;
+                    }
+                },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
@@ -1597,12 +1612,14 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
         None => "app-server",
-        Some(AppServerSubcommand::Bootstrap(_)) => "app-server bootstrap",
-        Some(AppServerSubcommand::Start) => "app-server start",
-        Some(AppServerSubcommand::Restart) => "app-server restart",
-        Some(AppServerSubcommand::Stop) => "app-server stop",
-        Some(AppServerSubcommand::Version) => "app-server version",
-        Some(AppServerSubcommand::PidUpdateLoop) => "app-server pid-update-loop",
+        Some(AppServerSubcommand::Daemon(daemon)) => match daemon.subcommand {
+            AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
+            AppServerDaemonSubcommand::Start => "app-server daemon start",
+            AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::Stop => "app-server daemon stop",
+            AppServerDaemonSubcommand::Version => "app-server daemon version",
+            AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
+        },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
@@ -2589,27 +2606,46 @@ mod tests {
     #[test]
     fn app_server_daemon_subcommands_parse() {
         assert!(matches!(
-            app_server_from_args(["codex", "app-server", "bootstrap", "--remote-control"].as_ref())
-                .subcommand,
-            Some(AppServerSubcommand::Bootstrap(AppServerBootstrapCommand {
-                remote_control: true
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "bootstrap",
+                    "--remote-control"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
+                    remote_control: true
+                })
             }))
         ));
         assert!(matches!(
-            app_server_from_args(["codex", "app-server", "start"].as_ref()).subcommand,
-            Some(AppServerSubcommand::Start)
+            app_server_from_args(["codex", "app-server", "daemon", "start"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Start
+            }))
         ));
         assert!(matches!(
-            app_server_from_args(["codex", "app-server", "restart"].as_ref()).subcommand,
-            Some(AppServerSubcommand::Restart)
+            app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Restart
+            }))
         ));
         assert!(matches!(
-            app_server_from_args(["codex", "app-server", "stop"].as_ref()).subcommand,
-            Some(AppServerSubcommand::Stop)
+            app_server_from_args(["codex", "app-server", "daemon", "stop"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Stop
+            }))
         ));
         assert!(matches!(
-            app_server_from_args(["codex", "app-server", "version"].as_ref()).subcommand,
-            Some(AppServerSubcommand::Version)
+            app_server_from_args(["codex", "app-server", "daemon", "version"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Version
+            }))
         ));
     }
 
@@ -2643,13 +2679,16 @@ mod tests {
 
     #[test]
     fn reject_remote_auth_token_env_for_app_server_version() {
+        let subcommand = AppServerSubcommand::Daemon(AppServerDaemonCommand {
+            subcommand: AppServerDaemonSubcommand::Version,
+        });
         let err = reject_remote_mode_for_app_server_subcommand(
             /*remote*/ None,
             Some("CODEX_REMOTE_AUTH_TOKEN"),
-            Some(&AppServerSubcommand::Version),
+            Some(&subcommand),
         )
-        .expect_err("app-server version should reject --remote-auth-token-env");
-        assert!(err.to_string().contains("app-server version"));
+        .expect_err("app-server daemon version should reject --remote-auth-token-env");
+        assert!(err.to_string().contains("app-server daemon version"));
     }
 
     #[test]

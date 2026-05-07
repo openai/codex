@@ -359,7 +359,7 @@ impl PidBackend {
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
             } => vec!["app-server", "--listen", "unix://"],
-            PidCommandKind::UpdateLoop => vec!["app-server", "pid-update-loop"],
+            PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
         }
     }
 
@@ -794,7 +794,7 @@ mod tests {
 
         assert_eq!(
             backend.command_args(),
-            vec!["app-server", "pid-update-loop"]
+            vec!["app-server", "daemon", "pid-update-loop"]
         );
     }
 }
