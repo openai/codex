@@ -100,6 +100,7 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
         Ok(EnvironmentProviderSnapshot {
             environments,
             default: self.default.clone(),
+            include_all_environments_by_default: true,
         })
     }
 }
@@ -302,15 +303,6 @@ mod tests {
 
     #[tokio::test]
     async fn toml_provider_adds_implicit_local_and_configured_environments() {
-        let ssh_transport = ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
-            program: "ssh".to_string(),
-            args: vec![
-                "dev".to_string(),
-                "codex exec-server --listen stdio".to_string(),
-            ],
-            env: HashMap::from([("CODEX_LOG".to_string(), "debug".to_string())]),
-            cwd: None,
-        });
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml {
             default: Some("ssh-dev".to_string()),
             environments: vec![
@@ -344,7 +336,16 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
+            include_all_environments_by_default,
         } = snapshot;
+        let environment_ids: Vec<_> = environments
+            .iter()
+            .map(|(id, _environment)| id.as_str())
+            .collect();
+        assert_eq!(
+            environment_ids,
+            vec![LOCAL_ENVIRONMENT_ID, "devbox", "ssh-dev"]
+        );
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
@@ -352,14 +353,13 @@ mod tests {
             environments["devbox"].exec_server_url(),
             Some("ws://127.0.0.1:8765")
         );
-        assert_eq!(provider.environments[1].0, "ssh-dev");
-        assert_eq!(provider.environments[1].1, ssh_transport);
         assert!(environments["ssh-dev"].is_remote());
         assert_eq!(environments["ssh-dev"].exec_server_url(), None);
         assert_eq!(
             default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
         );
+        assert!(include_all_environments_by_default);
     }
 
     #[tokio::test]

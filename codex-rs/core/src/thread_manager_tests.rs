@@ -424,8 +424,26 @@ args = ["dev", "cd /tmp && true"]
         })
         .expect("environment context prompt item");
     assert!(environment_context.contains("<environments>"));
-    assert!(environment_context.contains("<environment id=\"local\">"));
-    assert!(environment_context.contains("<environment id=\"dev\">"));
+    let cwd = thread.session_configured.cwd.display().to_string();
+    let dev_entry = format!(
+        r#"<environment id="dev">
+      <cwd>{cwd}</cwd>
+      <shell>"#
+    );
+    let local_entry = format!(
+        r#"<environment id="local">
+      <cwd>{cwd}</cwd>
+      <shell>"#
+    );
+    let dev_position = environment_context
+        .find(&dev_entry)
+        .expect("dev environment entry");
+    let local_position = environment_context
+        .find(&local_entry)
+        .expect("local environment entry");
+    assert!(dev_position < local_position);
+    assert!(!environment_context.contains("\n  <cwd>"));
+    assert!(!environment_context.contains("\n  <shell>"));
 }
 
 #[tokio::test]

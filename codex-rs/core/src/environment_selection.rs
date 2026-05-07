@@ -85,7 +85,6 @@ pub(crate) fn resolve_environment_selections(
 #[cfg(test)]
 mod tests {
     use codex_exec_server::ExecServerRuntimePaths;
-    use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -111,16 +110,10 @@ mod tests {
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
-            vec![
-                TurnEnvironmentSelection {
-                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: cwd.clone(),
-                },
-                TurnEnvironmentSelection {
-                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd,
-                },
-            ]
+            vec![TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd,
+            }]
         );
     }
 
