@@ -383,8 +383,6 @@ pub enum ThreadStoreConfig {
     /// Persist threads locally using rollout JSONL files and sqlite metadata.
     #[default]
     Local,
-    /// Persist threads through the remote thread-store service.
-    Remote { endpoint: String },
     /// In-memory thread store for test and debug configurations.
     InMemory { id: String },
 }
@@ -1736,17 +1734,11 @@ fn resolve_tool_suggest_config_from_config(
     }
 }
 
-fn thread_store_config(
-    thread_store: Option<ThreadStoreToml>,
-    legacy_remote_endpoint: Option<String>,
-) -> ThreadStoreConfig {
+fn thread_store_config(thread_store: Option<ThreadStoreToml>) -> ThreadStoreConfig {
     match thread_store {
         Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
-        Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
         Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
-        None => legacy_remote_endpoint.map_or(ThreadStoreConfig::Local, |endpoint| {
-            ThreadStoreConfig::Remote { endpoint }
-        }),
+        None => ThreadStoreConfig::Local,
     }
 }
 
@@ -3124,10 +3116,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
-            experimental_thread_store: thread_store_config(
-                cfg.experimental_thread_store,
-                cfg.experimental_thread_store_endpoint,
-            ),
+            experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,

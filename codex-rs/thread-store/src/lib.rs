@@ -8,7 +8,6 @@ mod error;
 mod in_memory;
 mod live_thread;
 mod local;
-mod remote;
 mod store;
 mod types;
 
@@ -20,7 +19,6 @@ pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
 pub use local::LocalThreadStoreConfig;
-pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
 pub use types::ArchiveThreadParams;

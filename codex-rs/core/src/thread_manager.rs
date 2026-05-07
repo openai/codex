@@ -57,7 +57,6 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
-use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
@@ -277,7 +276,6 @@ pub fn thread_store_from_config(
             LocalThreadStoreConfig::from_config(config),
             state_db,
         )),
-        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
 }
