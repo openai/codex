@@ -231,6 +231,7 @@ pub enum McpServerStartupState {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpServerStatusUpdatedNotification {
+    pub thread_id: String,
     pub name: String,
     pub status: McpServerStartupState,
     pub error: Option<String>,

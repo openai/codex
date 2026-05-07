@@ -10,6 +10,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -195,7 +196,10 @@ pub(crate) async fn run_codex_thread_one_shot(
     })
     .await?;
 
-    // Bridge events so we can observe completion and shut down automatically.
+    Ok(spawn_one_shot_event_bridge(io, child_cancel))
+}
+
+fn spawn_one_shot_event_bridge(io: Codex, child_cancel: CancellationToken) -> Codex {
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
@@ -203,11 +207,9 @@ pub(crate) async fn run_codex_thread_one_shot(
     let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
+        let mut shutdown_gate = OneShotShutdownGate::default();
         while let Ok(event) = io_for_bridge.next_event().await {
-            let should_shutdown = matches!(
-                event.msg,
-                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
-            );
+            let should_shutdown = shutdown_gate.observe(&event.msg);
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
                 let _ = ops_tx
@@ -229,13 +231,13 @@ pub(crate) async fn run_codex_thread_one_shot(
     let (tx_closed, rx_closed) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     drop(rx_closed);
 
-    Ok(Codex {
+    Codex {
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
         session,
         session_loop_termination,
-    })
+    }
 }
 
 async fn forward_events(
@@ -409,6 +411,36 @@ async fn forward_event_or_shutdown(
             shutdown_delegate(codex).await;
             false
         }
+    }
+}
+
+#[derive(Default)]
+struct OneShotShutdownGate {
+    turn_finished: bool,
+    mcp_startup_pending: bool,
+}
+
+impl OneShotShutdownGate {
+    fn observe(&mut self, msg: &EventMsg) -> bool {
+        match msg {
+            EventMsg::McpStartupUpdate(update)
+                if matches!(&update.status, McpStartupStatus::Starting) =>
+            {
+                self.mcp_startup_pending = true;
+            }
+            EventMsg::McpStartupComplete(_) => {
+                self.mcp_startup_pending = false;
+            }
+            EventMsg::TurnComplete(_) => {
+                self.turn_finished = true;
+            }
+            EventMsg::TurnAborted(_) => {
+                self.turn_finished = true;
+                self.mcp_startup_pending = false;
+            }
+            _ => {}
+        }
+        self.turn_finished && !self.mcp_startup_pending
     }
 }
 
