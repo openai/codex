@@ -1466,7 +1466,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "cargo install cargo-insta && rm -rf /tmp/codex".to_string(),
+        "cargo install --locked cargo-insta && rm -rf /tmp/codex".to_string(),
     ];
     let manager = ExecPolicyManager::default();
 

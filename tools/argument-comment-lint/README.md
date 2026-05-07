@@ -54,7 +54,7 @@ create_openai_url(None, 3);
 Install the required tooling once:
 
 ```bash
-cargo install cargo-dylint dylint-link
+cargo install --locked cargo-dylint dylint-link
 rustup toolchain install nightly-2025-09-18 \
   --component llvm-tools-preview \
   --component rustc-dev \
