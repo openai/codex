@@ -807,7 +807,7 @@ impl ModelClient {
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self
-            .build_websocket_headers(&api_provider, turn_state.as_ref(), turn_metadata_header)
+            .build_websocket_headers(turn_state.as_ref(), turn_metadata_header)
             .await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
@@ -887,7 +887,6 @@ impl ModelClient {
     /// replayed on reconnect within the same turn.
     async fn build_websocket_headers(
         &self,
-        _provider: &codex_api::Provider,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
@@ -957,7 +956,6 @@ impl ModelClientSession {
     /// regardless of transport choice.
     async fn build_responses_options(
         &self,
-        _provider: &codex_api::Provider,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
@@ -1255,11 +1253,7 @@ impl ModelClientSession {
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let options = self
-                .build_responses_options(
-                    &client_setup.api_provider,
-                    turn_metadata_header,
-                    compression,
-                )
+                .build_responses_options(turn_metadata_header, compression)
                 .await;
 
             let request = self.client.build_responses_request(
@@ -1368,11 +1362,7 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
             let options = self
-                .build_responses_options(
-                    &client_setup.api_provider,
-                    turn_metadata_header,
-                    compression,
-                )
+                .build_responses_options(turn_metadata_header, compression)
                 .await;
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
