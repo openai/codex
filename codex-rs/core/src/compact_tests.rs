@@ -1,5 +1,4 @@
 use super::*;
-use codex_app_server_protocol::AuthMode;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -209,26 +208,6 @@ fn should_use_remote_compact_task_for_azure_provider() {
 
     assert!(should_use_remote_compact_task(&provider));
 }
-
-#[test]
-fn service_tier_for_compaction_omits_service_tier_for_api_key_auth() {
-    assert_eq!(
-        service_tier_for_compaction_auth_mode(Some(AuthMode::ApiKey), Some("priority".to_string()),),
-        None,
-    );
-}
-
-#[test]
-fn service_tier_for_compaction_preserves_service_tier_for_chatgpt_auth() {
-    assert_eq!(
-        service_tier_for_compaction_auth_mode(
-            Some(AuthMode::Chatgpt),
-            Some("priority".to_string()),
-        ),
-        Some("priority".to_string()),
-    );
-}
-
 #[tokio::test]
 async fn process_compacted_history_replaces_developer_messages() {
     let compacted_history = vec![

@@ -7,7 +7,6 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
-use crate::compact::service_tier_for_compaction;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -23,6 +22,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -198,10 +198,11 @@ async fn run_remote_compact_task_inner_impl(
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort,
                 summary: turn_context.reasoning_summary,
-                service_tier: service_tier_for_compaction(
-                    sess,
-                    turn_context.config.service_tier.clone(),
-                ),
+                service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+                    None
+                } else {
+                    turn_context.config.service_tier.clone()
+                },
             },
             &turn_context.session_telemetry,
             &compaction_trace,

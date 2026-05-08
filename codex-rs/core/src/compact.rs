@@ -22,7 +22,6 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -65,27 +64,6 @@ pub(crate) enum InitialContextInjection {
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
-}
-
-pub(crate) fn service_tier_for_compaction_auth_mode(
-    auth_mode: Option<AuthMode>,
-    configured_service_tier: Option<String>,
-) -> Option<String> {
-    if auth_mode == Some(AuthMode::ApiKey) {
-        None
-    } else {
-        configured_service_tier
-    }
-}
-
-pub(crate) fn service_tier_for_compaction(
-    sess: &Session,
-    configured_service_tier: Option<String>,
-) -> Option<String> {
-    service_tier_for_compaction_auth_mode(
-        sess.services.auth_manager.auth_mode(),
-        configured_service_tier,
-    )
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
@@ -565,7 +543,7 @@ async fn drain_to_completed(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            service_tier_for_compaction(sess, turn_context.config.service_tier.clone()),
+            turn_context.config.service_tier.clone(),
             turn_metadata_header,
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.
