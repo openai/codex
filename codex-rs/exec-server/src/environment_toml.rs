@@ -100,7 +100,6 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
         Ok(EnvironmentProviderSnapshot {
             environments,
             default: self.default.clone(),
-            include_all_environments_by_default: true,
         })
     }
 }
@@ -336,7 +335,6 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
         let environment_ids: Vec<_> = environments
             .iter()
@@ -359,7 +357,6 @@ mod tests {
             default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
         );
-        assert!(include_all_environments_by_default);
     }
 
     #[tokio::test]

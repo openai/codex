@@ -26,7 +26,6 @@ pub trait EnvironmentProvider: Send + Sync {
 pub struct EnvironmentProviderSnapshot {
     pub environments: Vec<(String, Environment)>,
     pub default: EnvironmentDefault,
-    pub include_all_environments_by_default: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,7 +82,6 @@ impl DefaultEnvironmentProvider {
         EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default: false,
         }
     }
 }
@@ -134,7 +132,6 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
@@ -148,7 +145,6 @@ mod tests {
             default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
         );
-        assert!(!include_all_environments_by_default);
     }
 
     #[tokio::test]
@@ -162,7 +158,6 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
@@ -172,7 +167,6 @@ mod tests {
             default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
         );
-        assert!(!include_all_environments_by_default);
     }
 
     #[tokio::test]
@@ -186,14 +180,12 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(default, EnvironmentDefault::Disabled);
-        assert!(!include_all_environments_by_default);
     }
 
     #[tokio::test]
@@ -207,7 +199,6 @@ mod tests {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
@@ -222,7 +213,6 @@ mod tests {
             default,
             EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string())
         );
-        assert!(!include_all_environments_by_default);
     }
 
     #[tokio::test]

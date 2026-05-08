@@ -111,10 +111,16 @@ mod tests {
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
-            vec![TurnEnvironmentSelection {
-                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd,
-            }]
+            vec![
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.clone(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd,
+                },
+            ]
         );
     }
 

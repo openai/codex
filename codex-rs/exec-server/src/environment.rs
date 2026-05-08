@@ -40,7 +40,6 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
-    startup_environment_ids: Vec<String>,
     environments: HashMap<String, Arc<Environment>>,
     local_environment: Arc<Environment>,
 }
@@ -66,7 +65,6 @@ impl EnvironmentManager {
     pub fn default_for_tests() -> Self {
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
-            startup_environment_ids: vec![LOCAL_ENVIRONMENT_ID.to_string()],
             environments: HashMap::from([(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::new(Environment::default_for_tests()),
@@ -79,7 +77,6 @@ impl EnvironmentManager {
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             default_environment: None,
-            startup_environment_ids: Vec::new(),
             environments: HashMap::new(),
             local_environment: Arc::new(Environment::local(local_runtime_paths)),
         }
@@ -158,9 +155,7 @@ impl EnvironmentManager {
         let EnvironmentProviderSnapshot {
             environments,
             default,
-            include_all_environments_by_default,
         } = snapshot;
-        let mut configured_environment_ids = Vec::with_capacity(environments.len());
         let mut environment_map = HashMap::with_capacity(environments.len());
         for (id, environment) in environments {
             if id.is_empty() {
@@ -176,7 +171,6 @@ impl EnvironmentManager {
                     "environment id `{id}` is duplicated"
                 )));
             }
-            configured_environment_ids.push(id);
         }
         let default_environment = match default {
             EnvironmentDefault::Disabled => None,
@@ -190,25 +184,9 @@ impl EnvironmentManager {
             }
         };
         let local_environment = Arc::new(Environment::local(local_runtime_paths));
-        let startup_environment_ids = match default_environment.as_ref() {
-            None => Vec::new(),
-            Some(default_environment_id) if include_all_environments_by_default => {
-                let mut environment_ids = Vec::with_capacity(configured_environment_ids.len());
-                environment_ids.push(default_environment_id.clone());
-                environment_ids.extend(
-                    configured_environment_ids
-                        .iter()
-                        .filter(|environment_id| environment_id.as_str() != default_environment_id)
-                        .cloned(),
-                );
-                environment_ids
-            }
-            Some(default_environment_id) => vec![default_environment_id.clone()],
-        };
 
         Ok(Self {
             default_environment,
-            startup_environment_ids,
             environments: environment_map,
             local_environment,
         })
@@ -228,7 +206,18 @@ impl EnvironmentManager {
 
     /// Returns the ordered environment ids used for new thread startup.
     pub fn default_environment_ids(&self) -> Vec<String> {
-        self.startup_environment_ids.clone()
+        let Some(default_environment_id) = self.default_environment.as_ref() else {
+            return Vec::new();
+        };
+        let mut environment_ids = Vec::with_capacity(self.environments.len());
+        environment_ids.push(default_environment_id.clone());
+        environment_ids.extend(
+            self.environments
+                .keys()
+                .filter(|environment_id| *environment_id != default_environment_id)
+                .cloned(),
+        );
+        environment_ids
     }
 
     /// Returns the local environment instance used for internal runtime work.
@@ -517,7 +506,6 @@ mod tests {
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
-                include_all_environments_by_default: false,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -544,7 +532,6 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![("".to_string(), Environment::default_for_tests())],
                 default: EnvironmentDefault::Disabled,
-                include_all_environments_by_default: false,
             },
         };
         let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -573,7 +560,6 @@ mod tests {
                     ),
                 ],
                 default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
-                include_all_environments_by_default: true,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -597,7 +583,6 @@ mod tests {
                     Environment::default_for_tests(),
                 )],
                 default: EnvironmentDefault::Disabled,
-                include_all_environments_by_default: true,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -618,7 +603,6 @@ mod tests {
                     Environment::default_for_tests(),
                 )],
                 default: EnvironmentDefault::EnvironmentId("missing".to_string()),
-                include_all_environments_by_default: true,
             },
         };
         let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
