@@ -961,8 +961,8 @@ mod tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn connect_for_transport_initializes_stdio_command() {
-        let client = ExecServerClient::connect_for_transport(
-            ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
+        let client = ExecServerClient::connect_for_transport(ExecServerTransportParams::stdio_command(
+            StdioExecServerCommand {
                 program: "sh".to_string(),
                 args: vec![
                     "-c".to_string(),
@@ -970,8 +970,8 @@ mod tests {
                 ],
                 env: HashMap::new(),
                 cwd: None,
-            }),
-        )
+            },
+        ))
         .await
         .expect("stdio transport should connect");
 

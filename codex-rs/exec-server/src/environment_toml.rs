@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -11,6 +12,8 @@ use crate::DefaultEnvironmentProvider;
 use crate::Environment;
 use crate::EnvironmentProvider;
 use crate::ExecServerError;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
@@ -38,6 +41,10 @@ struct EnvironmentToml {
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     cwd: Option<PathBuf>,
+    #[serde(default, with = "option_duration_secs")]
+    connect_timeout_sec: Option<Duration>,
+    #[serde(default, with = "option_duration_secs")]
+    initialize_timeout_sec: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +115,8 @@ fn parse_environment_toml(
         args,
         env,
         cwd,
+        connect_timeout_sec,
+        initialize_timeout_sec,
     } = item;
     validate_environment_id(&id)?;
     if program.is_none() && (args.is_some() || env.is_some() || cwd.is_some()) {
@@ -115,11 +124,24 @@ fn parse_environment_toml(
             "environment `{id}` args, env, and cwd require program"
         )));
     }
+    if url.is_none() && connect_timeout_sec.is_some() {
+        return Err(ExecServerError::Protocol(format!(
+            "environment `{id}` connect_timeout_sec requires url"
+        )));
+    }
+
+    let connect_timeout = connect_timeout_sec.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT);
+    let initialize_timeout =
+        initialize_timeout_sec.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT);
 
     let transport_params = match (url, program) {
         (Some(url), None) => {
             let url = validate_websocket_url(url)?;
-            ExecServerTransportParams::WebSocketUrl(url)
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url: url,
+                connect_timeout,
+                initialize_timeout,
+            }
         }
         (None, Some(program)) => {
             let program = program.trim().to_string();
@@ -129,12 +151,15 @@ fn parse_environment_toml(
                 )));
             }
             let cwd = normalize_stdio_cwd(&id, cwd, config_dir)?;
-            ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
-                program,
-                args: args.unwrap_or_default(),
-                env: env.unwrap_or_default(),
-                cwd,
-            })
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program,
+                    args: args.unwrap_or_default(),
+                    env: env.unwrap_or_default(),
+                    cwd,
+                },
+                initialize_timeout,
+            }
         }
         (None, None) | (Some(_), Some(_)) => {
             return Err(ExecServerError::Protocol(format!(
@@ -276,6 +301,22 @@ fn load_environments_toml(path: &Path) -> Result<EnvironmentsToml, ExecServerErr
             path.display()
         ))
     })
+}
+
+mod option_duration_secs {
+    use std::time::Duration;
+
+    use serde::Deserialize;
+    use serde::Deserializer;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = Option::<f64>::deserialize(deserializer)?;
+        secs.map(|secs| Duration::try_from_secs_f64(secs).map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 #[cfg(test)]
@@ -424,6 +465,15 @@ mod tests {
                 },
                 "environment `devbox` args, env, and cwd require program",
             ),
+            (
+                EnvironmentToml {
+                    id: "ssh-dev".to_string(),
+                    program: Some("ssh".to_string()),
+                    connect_timeout_sec: Some(Duration::from_secs(1)),
+                    ..Default::default()
+                },
+                "environment `ssh-dev` connect_timeout_sec requires url",
+            ),
         ];
 
         for (item, expected) in cases {
@@ -459,12 +509,59 @@ mod tests {
 
         assert_eq!(
             provider.environments[0].1,
-            ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
-                program: "ssh".to_string(),
-                args: Vec::new(),
-                env: HashMap::new(),
-                cwd: Some(config_dir.path().join("workspace")),
-            })
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "ssh".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: Some(config_dir.path().join("workspace")),
+                },
+                initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
+            }
+        );
+    }
+
+    #[test]
+    fn toml_provider_parses_configured_transport_timeouts() {
+        let provider = TomlEnvironmentProvider::new(EnvironmentsToml {
+            default: None,
+            environments: vec![
+                EnvironmentToml {
+                    id: "devbox".to_string(),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
+                    connect_timeout_sec: Some(Duration::from_secs(12)),
+                    initialize_timeout_sec: Some(Duration::from_secs(34)),
+                    ..Default::default()
+                },
+                EnvironmentToml {
+                    id: "ssh-dev".to_string(),
+                    program: Some("ssh".to_string()),
+                    initialize_timeout_sec: Some(Duration::from_secs(56)),
+                    ..Default::default()
+                },
+            ],
+        })
+        .expect("provider");
+
+        assert_eq!(
+            provider.environments[0].1,
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url: "ws://127.0.0.1:8765".to_string(),
+                connect_timeout: Duration::from_secs(12),
+                initialize_timeout: Duration::from_secs(34),
+            }
+        );
+        assert_eq!(
+            provider.environments[1].1,
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "ssh".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: Duration::from_secs(56),
+            }
         );
     }
 
@@ -559,6 +656,8 @@ default = "ssh-dev"
 [[environments]]
 id = "devbox"
 url = "ws://127.0.0.1:4512"
+connect_timeout_sec = 12.0
+initialize_timeout_sec = 34.0
 
 [[environments]]
 id = "ssh-dev"
@@ -575,7 +674,16 @@ CODEX_LOG = "debug"
 
         assert_eq!(environments.default.as_deref(), Some("ssh-dev"));
         assert_eq!(environments.environments.len(), 2);
-        assert_eq!(environments.environments[0].id, "devbox");
+        assert_eq!(
+            environments.environments[0],
+            EnvironmentToml {
+                id: "devbox".to_string(),
+                url: Some("ws://127.0.0.1:4512".to_string()),
+                connect_timeout_sec: Some(Duration::from_secs(12)),
+                initialize_timeout_sec: Some(Duration::from_secs(34)),
+                ..Default::default()
+            }
+        );
         assert_eq!(
             environments.environments[1],
             EnvironmentToml {

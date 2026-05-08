@@ -330,7 +330,7 @@ impl Environment {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
         Self::remote_with_transport(
-            ExecServerTransportParams::WebSocketUrl(exec_server_url),
+            ExecServerTransportParams::websocket_url(exec_server_url),
             local_runtime_paths,
         )
     }
@@ -340,10 +340,11 @@ impl Environment {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
         let exec_server_url = match &remote_transport {
-            ExecServerTransportParams::WebSocketUrl(exec_server_url) => {
-                Some(exec_server_url.clone())
-            }
-            ExecServerTransportParams::StdioCommand(_) => None,
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url: exec_server_url,
+                ..
+            } => Some(exec_server_url.clone()),
+            ExecServerTransportParams::StdioCommand { .. } => None,
         };
         let client = LazyRemoteExecServerClient::new(remote_transport.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
