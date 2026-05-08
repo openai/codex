@@ -28,6 +28,7 @@ use crate::auth::AuthDotJson;
 use crate::auth::load_auth_from_storage;
 use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
+use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
@@ -823,7 +824,10 @@ pub(crate) async fn persist_tokens_async(
             agent_identity: None,
         };
         save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
-        Ok::<_, io::Error>(previous_auth)
+        Ok::<_, io::Error>(
+            previous_auth
+                .filter(|previous_auth| should_revoke_auth_tokens(Some(previous_auth), &auth)),
+        )
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
@@ -1253,6 +1257,42 @@ mod tests {
             })
         );
         server.verify().await;
+        Ok(())
+    }
+
+    #[serial_test::serial(logout_revoke)]
+    #[tokio::test]
+    async fn persist_tokens_async_does_not_revoke_reused_refresh_token() -> anyhow::Result<()> {
+        skip_if_no_network!(Ok(()));
+
+        let server = MockServer::start().await;
+        let _env_guard = EnvGuard::set(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        );
+
+        let codex_home = tempdir()?;
+        save_auth(
+            codex_home.path(),
+            &chatgpt_auth("old-access", "shared-refresh", "old-account"),
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        persist_tokens_async(
+            codex_home.path(),
+            /*api_key*/ None,
+            jwt_for_account("new-account"),
+            "new-access".to_string(),
+            "shared-refresh".to_string(),
+            AuthCredentialsStoreMode::File,
+        )
+        .await?;
+
+        let requests = server
+            .received_requests()
+            .await
+            .context("failed to fetch revoke requests")?;
+        assert_eq!(requests.len(), 0);
         Ok(())
     }
 

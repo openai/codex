@@ -55,32 +55,40 @@ struct RevokeTokenRequest<'a> {
 pub(crate) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
 ) -> Result<(), std::io::Error> {
-    let Some(tokens) = auth_dot_json.and_then(managed_chatgpt_tokens) else {
+    let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());
     };
 
     let client = create_client();
     let endpoint = revoke_token_endpoint();
+    revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
+}
+
+pub(crate) fn should_revoke_auth_tokens(
+    auth_dot_json: Option<&AuthDotJson>,
+    replacement_auth: &AuthDotJson,
+) -> bool {
+    let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
+        return false;
+    };
+    let Some(replacement_tokens) = managed_chatgpt_tokens(replacement_auth) else {
+        return true;
+    };
+
+    match kind {
+        RevokeTokenKind::Access => replacement_tokens.access_token != token,
+        RevokeTokenKind::Refresh => replacement_tokens.refresh_token != token,
+    }
+}
+
+fn revocable_token(auth_dot_json: &AuthDotJson) -> Option<(&str, RevokeTokenKind)> {
+    let tokens = managed_chatgpt_tokens(auth_dot_json)?;
     if !tokens.refresh_token.is_empty() {
-        revoke_oauth_token(
-            &client,
-            endpoint.as_str(),
-            tokens.refresh_token.as_str(),
-            RevokeTokenKind::Refresh,
-            REVOKE_HTTP_TIMEOUT,
-        )
-        .await
+        Some((tokens.refresh_token.as_str(), RevokeTokenKind::Refresh))
     } else if !tokens.access_token.is_empty() {
-        revoke_oauth_token(
-            &client,
-            endpoint.as_str(),
-            tokens.access_token.as_str(),
-            RevokeTokenKind::Access,
-            REVOKE_HTTP_TIMEOUT,
-        )
-        .await
+        Some((tokens.access_token.as_str(), RevokeTokenKind::Access))
     } else {
-        Ok(())
+        None
     }
 }
 

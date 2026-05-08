@@ -13,3 +13,4 @@ pub use error::RefreshTokenFailedReason;
 pub(crate) use manager::load_auth_from_storage;
 pub use manager::*;
 pub(crate) use revoke::revoke_auth_tokens;
+pub(crate) use revoke::should_revoke_auth_tokens;
