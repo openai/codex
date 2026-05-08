@@ -242,6 +242,8 @@ jobs:
 
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          # Keep the helpers next to codex.exe in the runtime wheel so Windows
+          # sandbox/elevation lookup matches the standalone release zip.
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
