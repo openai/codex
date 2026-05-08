@@ -125,7 +125,8 @@ On success, `bootstrap` also prints one JSON object. It requires the standalone
 managed install, persists the launch settings used by later lifecycle commands,
 starts app-server with `remote_control` enabled when requested, and starts a
 detached updater loop that periodically refreshes the standalone install while
-the machine remains up.
+the machine remains up. The updater restarts the managed app-server only when
+the refreshed managed binary reports a different version.
 
 For persisted state and install/update behavior, including how standalone and
 out-of-band binary updates behave, see

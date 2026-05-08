@@ -15,6 +15,7 @@ use backend::BackendPaths;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_core::config::find_codex_home;
 use managed_install::managed_codex_bin;
+use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
 use tokio::time::sleep;
@@ -228,6 +229,13 @@ impl Daemon {
         }
         let settings = self.load_settings().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
+            let Ok(info) = client::probe(&self.socket_path).await else {
+                return Ok(RestartIfRunningOutcome::Completed);
+            };
+            let managed_version = managed_codex_version(&self.managed_codex_bin).await?;
+            if info.app_server_version == managed_version {
+                return Ok(RestartIfRunningOutcome::Completed);
+            }
             backend.stop().await?;
             let _ = self.start_managed_backend(&settings).await?;
             self.wait_until_ready().await?;

@@ -47,7 +47,7 @@ the standalone managed binary under `CODEX_HOME`.
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
 | `install.sh` has run, but only `start` is used | `start` uses `CODEX_HOME/packages/standalone/current/codex` | No | No. The managed path is used when starting or restarting, but no updater is installed. |
-| `install.sh` has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive. After a successful fetch, it restarts a currently running app-server onto the managed binary. |
+| `install.sh` has run, then `bootstrap` is used | The pidfile backend uses `CODEX_HOME/packages/standalone/current/codex` | Yes. Bootstrap launches a detached updater loop that runs `install.sh` hourly. | Yes, while that updater process is alive. After a successful fetch, it restarts a currently running app-server only when the managed binary reports a different version. |
 | Some other tool updates the managed binary path | The next fresh start or restart uses the updated file at that path | No | Not automatically. The existing process keeps the old executable image until an explicit `restart`. |
 
 ### Standalone installs
@@ -57,7 +57,7 @@ For installs created by `install.sh`:
 - lifecycle commands always use the standalone managed binary path
 - `bootstrap` is supported
 - `bootstrap` starts a detached pid-backed updater loop that fetches via
-  `install.sh`, then restarts app-server if it is running
+  `install.sh`, then restarts app-server if it is running on a different version
 - the updater loop is not reboot-persistent; it must be started again by
   rerunning `bootstrap` after a reboot
 
