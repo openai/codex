@@ -1,8 +1,9 @@
-//! Best-effort OAuth token revocation used during logout.
+//! Best-effort OAuth token revocation for managed auth cleanup.
 //!
-//! Managed ChatGPT auth stores OAuth tokens locally. Logout attempts to revoke the
-//! refresh token, falling back to the access token when no refresh token is
-//! available, and callers still remove local auth if the revoke request fails.
+//! Managed ChatGPT auth stores OAuth tokens locally. Cleanup attempts to revoke
+//! the refresh token, falling back to the access token when no refresh token is
+//! available, and callers still complete their primary work if the revoke request
+//! fails.
 
 use serde::Serialize;
 use std::time::Duration;
@@ -51,7 +52,7 @@ struct RevokeTokenRequest<'a> {
     client_id: Option<&'static str>,
 }
 
-pub(super) async fn revoke_auth_tokens(
+pub(crate) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
 ) -> Result<(), std::io::Error> {
     let Some(tokens) = auth_dot_json.and_then(managed_chatgpt_tokens) else {
