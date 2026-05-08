@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
+use tracing::warn;
 
 use crate::ConnectorDirectoryCacheKey;
 
@@ -49,11 +50,21 @@ pub(crate) fn load_cached_directory_connectors_from_disk(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return CachedConnectorDirectoryDiskLoad::Missing;
         }
-        Err(_) => return CachedConnectorDirectoryDiskLoad::Invalid,
+        Err(err) => {
+            warn!(
+                cache_path = %cache_path.display(),
+                "failed to read connector directory disk cache: {err}"
+            );
+            return CachedConnectorDirectoryDiskLoad::Invalid;
+        }
     };
     let cache: ConnectorDirectoryDiskCache = match serde_json::from_slice(&bytes) {
         Ok(cache) => cache,
-        Err(_) => {
+        Err(err) => {
+            warn!(
+                cache_path = %cache_path.display(),
+                "failed to parse connector directory disk cache: {err}"
+            );
             let _ = std::fs::remove_file(cache_path);
             return CachedConnectorDirectoryDiskLoad::Invalid;
         }

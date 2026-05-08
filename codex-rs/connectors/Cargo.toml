@@ -13,6 +13,7 @@ codex-app-server-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+tracing = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]

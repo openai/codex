@@ -2419,6 +2419,7 @@ dependencies = [
  "sha1",
  "tempfile",
  "tokio",
+ "tracing",
  "urlencoding",
 ]
 
