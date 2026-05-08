@@ -57,8 +57,11 @@ their raw names:
 - `src_binding_ptrcomp_sandbox_release_<target>.rs`
 
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-Every tagged run builds the current musl release pairs from source and keeps the
-release artifacts as the statically linked form:
+For GNU Linux, Darwin, and Windows MSVC, the workflow checks out the exact
+upstream `denoland/rusty_v8` tag and uses its `V8_FROM_SOURCE=true` Cargo/GN
+build to produce sandbox-profile artifacts with the same archive shape upstream
+publishes. Musl remains an extra platform that upstream does not publish, so
+tagged runs still build the current musl release pairs with our Bazel producer:
 
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
@@ -76,12 +79,11 @@ The same run also builds the matching sandbox pair targets:
 
 If a tagged run targets an existing GitHub release, publication amends only the
 sandbox-profile files and leaves the current release-profile assets unchanged.
-Unix sandbox archives are staged with matching static libc++ and libc++abi
-runtime objects merged in so Cargo consumers can link them with the `v8` crate's
-default `use_custom_libcxx` feature. Linux artifacts use the hermetic LLVM
-runtime builds directly; Darwin artifacts reuse the matching runtime members
-from the upstream `rusty_v8` archive because the upstream release already ships
-those custom libc++ objects for Apple targets.
+The upstream-shaped GNU, Darwin, and MSVC builds let GN fold custom libc++ into
+the final archive the same way `rusty_v8` does for its own releases. Musl
+sandbox archives still merge the matching static libc++ and libc++abi runtime
+libraries after the Bazel build so Cargo consumers can link them with the `v8`
+crate's default `use_custom_libcxx` feature.
 
 Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
 `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
