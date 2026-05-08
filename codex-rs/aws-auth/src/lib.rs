@@ -230,6 +230,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn aws_config_login_credentials_provider_is_compiled_in() {
+        let _provider = aws_config::login::LoginCredentialsProvider::builder(
+            "arn:aws:iam::0123456789012:user/Admin",
+        )
+        .build();
+    }
+
     #[tokio::test]
     async fn sign_includes_session_token_when_credentials_have_one() {
         let signed = test_context(Some("session-token"))

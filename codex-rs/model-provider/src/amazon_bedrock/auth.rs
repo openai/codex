@@ -20,7 +20,6 @@ use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
-const LEGACY_SESSION_ID_HEADER: &str = "session_id";
 
 pub(super) enum BedrockAuthMethod {
     EnvBearerToken { token: String, region: String },
@@ -87,10 +86,18 @@ fn aws_auth_error_to_auth_error(error: AwsAuthError) -> AuthError {
 }
 
 fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
-    // The Bedrock Mantle front door does not preserve this legacy OpenAI header
-    // for SigV4 verification. Signing it makes the richer Codex agent request
-    // fail even though raw Responses requests work.
-    headers.remove(LEGACY_SESSION_ID_HEADER);
+    // The Bedrock Mantle front door does not preserve legacy OpenAI
+    // compatibility headers that use snake_case, such as `session_id` and
+    // `thread_id`, before SigV4 verification. Signing that header class makes
+    // richer Codex agent requests fail even though raw Responses requests work.
+    let headers_to_remove = headers
+        .keys()
+        .filter(|name| name.as_str().contains('_'))
+        .cloned()
+        .collect::<Vec<_>>();
+    for name in headers_to_remove {
+        headers.remove(name);
+    }
 }
 
 /// AWS SigV4 auth provider for Bedrock Mantle OpenAI-compatible requests.
@@ -182,10 +189,18 @@ mod tests {
     }
 
     #[test]
-    fn bedrock_mantle_sigv4_strips_legacy_session_id_header() {
+    fn bedrock_mantle_sigv4_strips_headers_not_preserved_by_mantle() {
         let mut headers = HeaderMap::new();
         headers.insert(
-            LEGACY_SESSION_ID_HEADER,
+            "session_id",
+            HeaderValue::from_static("019dae79-15c3-70c3-8736-3219b8602b37"),
+        );
+        headers.insert(
+            "thread_id",
+            HeaderValue::from_static("019dae79-15c3-70c3-8736-3219b8602b37"),
+        );
+        headers.insert(
+            "future_identity_header",
             HeaderValue::from_static("019dae79-15c3-70c3-8736-3219b8602b37"),
         );
         headers.insert(
@@ -195,7 +210,9 @@ mod tests {
 
         remove_headers_not_preserved_by_bedrock_mantle(&mut headers);
 
-        assert!(!headers.contains_key(LEGACY_SESSION_ID_HEADER));
+        assert!(!headers.contains_key("session_id"));
+        assert!(!headers.contains_key("thread_id"));
+        assert!(!headers.contains_key("future_identity_header"));
         assert_eq!(
             headers
                 .get("x-client-request-id")

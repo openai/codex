@@ -757,6 +757,7 @@ checksum = "96571e6996817bf3d58f6b569e4b9fd2e9d2fcf9f7424eed07b2ce9bb87535e5"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
+ "aws-sdk-signin",
  "aws-sdk-sso",
  "aws-sdk-ssooidc",
  "aws-sdk-sts",
@@ -767,15 +768,20 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
+ "base64-simd",
  "bytes",
  "fastrand",
  "hex",
  "http 1.4.0",
+ "p256",
+ "rand 0.8.5",
  "ring",
+ "sha2",
  "time",
  "tokio",
  "tracing",
  "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -836,6 +842,28 @@ dependencies = [
  "pin-project-lite",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aws-sdk-signin"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c084bd63941916e1348cb8d9e05ac2e49bdd40a380e9167702683184c6c6be53"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
