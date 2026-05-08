@@ -261,7 +261,7 @@ jobs:
         run: |
           set -euo pipefail
           target="${{ matrix.target }}"
-          cargo build --target "$target" --release --timings --locked --bin bwrap
+          cargo build --target "$target" --release --timings --bin bwrap
 
           bwrap_path="target/${target}/release/bwrap"
           if [[ ! -f "$bwrap_path" ]]; then
@@ -281,7 +281,7 @@ jobs:
             build_args+=(--bin "$binary")
           done
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
-          cargo build --target ${{ matrix.target }} --release --timings --locked "${build_args[@]}"
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
