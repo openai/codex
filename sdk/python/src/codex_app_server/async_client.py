@@ -41,8 +41,6 @@ class AsyncAppServerClient:
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self._sync = AppServerClient(config=config)
-        # Single stdio transport cannot be read safely from multiple threads.
-        self._transport_lock = asyncio.Lock()
 
     async def __aenter__(self) -> "AsyncAppServerClient":
         await self.start()
@@ -58,8 +56,7 @@ class AsyncAppServerClient:
         *args: ParamsT.args,
         **kwargs: ParamsT.kwargs,
     ) -> ReturnT:
-        async with self._transport_lock:
-            return await asyncio.to_thread(fn, *args, **kwargs)
+        return await asyncio.to_thread(fn, *args, **kwargs)
 
     @staticmethod
     def _next_from_iterator(
@@ -211,13 +208,12 @@ class AsyncAppServerClient:
         text: str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> AsyncIterator[AgentMessageDeltaNotification]:
-        async with self._transport_lock:
-            iterator = self._sync.stream_text(thread_id, text, params)
-            while True:
-                has_value, chunk = await asyncio.to_thread(
-                    self._next_from_iterator,
-                    iterator,
-                )
-                if not has_value:
-                    break
-                yield chunk
+        iterator = self._sync.stream_text(thread_id, text, params)
+        while True:
+            has_value, chunk = await asyncio.to_thread(
+                self._next_from_iterator,
+                iterator,
+            )
+            if not has_value:
+                break
+            yield chunk
