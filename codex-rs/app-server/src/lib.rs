@@ -31,6 +31,7 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
@@ -686,7 +687,10 @@ pub async fn run_main_with_transport_options(
     }
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
-        config.chatgpt_base_url.clone(),
+        RemoteControlStartConfig {
+            remote_control_url: config.chatgpt_base_url.clone(),
+            installation_id: installation_id.clone(),
+        },
         state_db.clone(),
         auth_manager.clone(),
         transport_event_tx.clone(),
@@ -977,6 +981,7 @@ pub async fn run_main_with_transport_options(
                             .send_server_notification(ServerNotification::RemoteControlStatusChanged(
                                 RemoteControlStatusChangedNotification {
                                     status: status.status,
+                                    installation_id: status.installation_id,
                                     environment_id: status.environment_id,
                                 },
                             ))
