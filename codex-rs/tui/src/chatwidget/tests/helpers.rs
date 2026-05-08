@@ -414,7 +414,7 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "default_reasoning_summary": "none",
         "support_verbosity": false,
         "default_verbosity": null,
-        "apply_patch_tool_type": null,
+        "supports_apply_patch_tool": false,
         "truncation_policy": {"mode": "bytes", "limit": 10_000},
         "supports_parallel_tool_calls": false,
         "supports_image_detail_original": false,
