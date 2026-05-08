@@ -12,7 +12,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 pub use backend::BackendKind;
 use backend::BackendPaths;
-use codex_app_server::app_server_control_socket_path;
+use codex_app_server_transport::app_server_control_socket_path;
 use codex_core::config::find_codex_home;
 use managed_install::managed_codex_bin;
 use serde::Serialize;
@@ -84,6 +84,11 @@ pub struct BootstrapOutput {
     pub socket_path: PathBuf,
     pub cli_version: String,
     pub app_server_version: String,
+}
+
+pub(crate) enum RestartIfRunningOutcome {
+    Completed,
+    Busy,
 }
 
 pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
@@ -214,14 +219,17 @@ impl Daemon {
         ))
     }
 
-    async fn restart_if_running(&self) -> Result<()> {
-        let _operation_lock = self.acquire_operation_lock().await?;
+    pub(crate) async fn try_restart_if_running(&self) -> Result<RestartIfRunningOutcome> {
+        let operation_lock = self.open_operation_lock_file().await?;
+        if !try_lock_file(&operation_lock)? {
+            return Ok(RestartIfRunningOutcome::Busy);
+        }
         let settings = self.load_settings().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
             let _ = self.start_managed_backend(&settings).await?;
             self.wait_until_ready().await?;
-            return Ok(());
+            return Ok(RestartIfRunningOutcome::Completed);
         }
 
         if client::probe(&self.socket_path).await.is_ok() {
@@ -230,7 +238,7 @@ impl Daemon {
             ));
         }
 
-        Ok(())
+        Ok(RestartIfRunningOutcome::Completed)
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
@@ -384,26 +392,7 @@ impl Daemon {
     }
 
     async fn acquire_operation_lock(&self) -> Result<tokio::fs::File> {
-        if let Some(parent) = self.operation_lock_file.parent() {
-            tokio::fs::create_dir_all(parent).await.with_context(|| {
-                format!(
-                    "failed to create daemon state directory {}",
-                    parent.display()
-                )
-            })?;
-        }
-        let operation_lock = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&self.operation_lock_file)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to open daemon operation lock {}",
-                    self.operation_lock_file.display()
-                )
-            })?;
+        let operation_lock = self.open_operation_lock_file().await?;
         let deadline = tokio::time::Instant::now() + OPERATION_LOCK_TIMEOUT;
         while !try_lock_file(&operation_lock)? {
             if tokio::time::Instant::now() >= deadline {
@@ -415,6 +404,29 @@ impl Daemon {
             sleep(START_POLL_INTERVAL).await;
         }
         Ok(operation_lock)
+    }
+
+    async fn open_operation_lock_file(&self) -> Result<tokio::fs::File> {
+        if let Some(parent) = self.operation_lock_file.parent() {
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!(
+                    "failed to create daemon state directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.operation_lock_file)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to open daemon operation lock {}",
+                    self.operation_lock_file.display()
+                )
+            })
     }
 
     fn output(

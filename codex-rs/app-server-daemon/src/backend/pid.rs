@@ -366,7 +366,7 @@ impl PidBackend {
     fn terminate_process(&self, pid: u32) -> Result<()> {
         match self.command_kind {
             PidCommandKind::AppServer { .. } => terminate_process(pid),
-            PidCommandKind::UpdateLoop => terminate_process_group(pid),
+            PidCommandKind::UpdateLoop => terminate_process(pid),
         }
     }
 
@@ -378,15 +378,7 @@ impl PidBackend {
     }
 
     async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
-        match self.command_kind {
-            PidCommandKind::AppServer { .. } => process_matches_record(record).await,
-            PidCommandKind::UpdateLoop => {
-                if process_matches_record(record).await? {
-                    return Ok(true);
-                }
-                Ok(process_group_exists(record.pid))
-            }
-        }
+        process_matches_record(record).await
     }
 }
 
@@ -397,20 +389,6 @@ fn process_exists(pid: u32) -> bool {
     };
     let result = unsafe { libc::kill(pid, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(unix)]
-fn process_group_exists(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    let result = unsafe { libc::kill(-pid, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(not(unix))]
-fn process_group_exists(_pid: u32) -> bool {
-    false
 }
 
 #[cfg(unix)]
@@ -426,21 +404,6 @@ fn terminate_process(pid: u32) -> Result<()> {
         return Ok(());
     }
     Err(err).with_context(|| format!("failed to terminate pid-managed app server {pid}"))
-}
-
-#[cfg(unix)]
-fn terminate_process_group(pid: u32) -> Result<()> {
-    let raw_pid = libc::pid_t::try_from(pid)
-        .with_context(|| format!("pid-managed updater pid {pid} is out of range"))?;
-    let result = unsafe { libc::kill(-raw_pid, libc::SIGTERM) };
-    if result == 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(err).with_context(|| format!("failed to terminate pid-managed updater group {pid}"))
 }
 
 #[cfg(unix)]
@@ -476,11 +439,6 @@ fn force_terminate_process_group(pid: u32) -> Result<()> {
 #[cfg(not(unix))]
 fn terminate_process(_pid: u32) -> Result<()> {
     bail!("pid-managed app-server shutdown is unsupported on this platform")
-}
-
-#[cfg(not(unix))]
-fn terminate_process_group(_pid: u32) -> Result<()> {
-    bail!("pid-managed updater shutdown is unsupported on this platform")
 }
 
 #[cfg(not(unix))]
@@ -638,163 +596,5 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use std::time::Duration;
-
-    use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
-
-    use super::PidBackend;
-    use super::PidCommandKind;
-    use super::PidFileState;
-    use super::PidRecord;
-    use super::try_lock_file;
-
-    #[tokio::test]
-    async fn locked_empty_pid_file_is_treated_as_active_reservation() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let pid_file = temp_dir.path().join("app-server.pid");
-        tokio::fs::write(&pid_file, "")
-            .await
-            .expect("write pid file");
-        let backend = PidBackend::new(
-            temp_dir.path().join("codex"),
-            pid_file.clone(),
-            /*remote_control_enabled*/ false,
-        );
-        let reservation = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&backend.lock_file)
-            .await
-            .expect("open pid lock file");
-        assert!(try_lock_file(&reservation).expect("lock reservation"));
-
-        assert_eq!(
-            backend.read_pid_file_state().await.expect("read pid"),
-            PidFileState::Starting
-        );
-        assert!(pid_file.exists());
-    }
-
-    #[tokio::test]
-    async fn unlocked_empty_pid_file_is_treated_as_stale_reservation() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let pid_file = temp_dir.path().join("app-server.pid");
-        tokio::fs::write(&pid_file, "")
-            .await
-            .expect("write pid file");
-        let backend = PidBackend::new(
-            temp_dir.path().join("codex"),
-            pid_file.clone(),
-            /*remote_control_enabled*/ false,
-        );
-
-        assert_eq!(
-            backend.read_pid_file_state().await.expect("read pid"),
-            PidFileState::Missing
-        );
-        assert!(!pid_file.exists());
-    }
-
-    #[tokio::test]
-    async fn stop_waits_for_live_reservation_to_resolve() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let pid_file = temp_dir.path().join("app-server.pid");
-        tokio::fs::write(&pid_file, "")
-            .await
-            .expect("write pid file");
-        let backend = PidBackend::new(
-            temp_dir.path().join("codex"),
-            pid_file.clone(),
-            /*remote_control_enabled*/ false,
-        );
-        let reservation = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&backend.lock_file)
-            .await
-            .expect("open pid lock file");
-        assert!(try_lock_file(&reservation).expect("lock reservation"));
-        let cleanup = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            drop(reservation);
-            tokio::fs::remove_file(pid_file)
-                .await
-                .expect("remove pid file");
-        });
-
-        backend.stop().await.expect("stop");
-        cleanup.await.expect("cleanup task");
-    }
-
-    #[tokio::test]
-    async fn start_retries_stale_empty_pid_file_under_its_own_lock() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let pid_file = temp_dir.path().join("app-server.pid");
-        tokio::fs::write(&pid_file, "")
-            .await
-            .expect("write pid file");
-        let backend = PidBackend::new(
-            temp_dir.path().join("missing-codex"),
-            pid_file,
-            /*remote_control_enabled*/ false,
-        );
-
-        let err = backend.start().await.expect_err("start");
-        assert!(
-            err.to_string()
-                .starts_with("failed to spawn detached app-server process using ")
-        );
-    }
-
-    #[tokio::test]
-    async fn stale_record_cleanup_preserves_replacement_record() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let pid_file = temp_dir.path().join("app-server.pid");
-        let backend = PidBackend::new(
-            temp_dir.path().join("codex"),
-            pid_file.clone(),
-            /*remote_control_enabled*/ false,
-        );
-        let stale = PidRecord {
-            pid: 1,
-            process_start_time: "old".to_string(),
-        };
-        let replacement = PidRecord {
-            pid: 2,
-            process_start_time: "new".to_string(),
-        };
-        tokio::fs::write(
-            &pid_file,
-            serde_json::to_vec(&replacement).expect("serialize replacement"),
-        )
-        .await
-        .expect("write replacement pid file");
-
-        assert_eq!(
-            backend
-                .refresh_after_stale_record(&stale)
-                .await
-                .expect("cleanup"),
-            PidFileState::Running(replacement)
-        );
-    }
-
-    #[test]
-    fn update_loop_uses_hidden_app_server_subcommand() {
-        let backend = PidBackend {
-            codex_bin: "codex".into(),
-            pid_file: "updater.pid".into(),
-            lock_file: "updater.pid.lock".into(),
-            command_kind: PidCommandKind::UpdateLoop,
-        };
-
-        assert_eq!(
-            backend.command_args(),
-            vec!["app-server", "daemon", "pid-update-loop"]
-        );
-    }
-}
+#[path = "pid_tests.rs"]
+mod tests;

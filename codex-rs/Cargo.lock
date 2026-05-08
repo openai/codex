@@ -1984,13 +1984,14 @@ name = "codex-app-server-daemon"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-app-server",
  "codex-app-server-protocol",
+ "codex-app-server-transport",
  "codex-core",
  "codex-uds",
  "futures",
  "libc",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
