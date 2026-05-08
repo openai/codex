@@ -1,5 +1,6 @@
 use super::input_queue::InputQueue;
 use super::*;
+use crate::config::ConstraintError;
 use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -291,6 +292,32 @@ impl SessionConfiguration {
                 updates.profile_workspace_roots.clone().unwrap_or_default(),
                 Some(&current_file_system_sandbox_policy),
             )?;
+            if let Some(active_permission_profile) =
+                next_configuration.active_permission_profile()
+            {
+                let mut config = (*next_configuration.original_config_do_not_use).clone();
+                let permission_profile = next_configuration.permission_profile();
+                config.permissions.network = config
+                    .network_proxy_spec_for_active_permission_profile(
+                        &active_permission_profile,
+                        &permission_profile,
+                    )
+                    .map_err(|err| ConstraintError::InvalidValue {
+                        field_name: "default_permissions",
+                        candidate: active_permission_profile.id.clone(),
+                        allowed: format!(
+                            "configured permission profile with valid network policy ({err})"
+                        ),
+                        requirement_source: codex_config::RequirementSource::Unknown,
+                    })?;
+                config
+                    .permissions
+                    .set_permission_profile_with_active_profile(
+                        permission_profile,
+                        Some(active_permission_profile),
+                    )?;
+                next_configuration.original_config_do_not_use = Arc::new(config);
+            }
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -885,7 +912,7 @@ impl Session {
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
-                        network_proxy_audit_metadata,
+                        network_proxy_audit_metadata.clone(),
                     )
                     .instrument(info_span!(
                         "session_init.network_proxy",
@@ -977,7 +1004,9 @@ impl Session {
                 session_extension_data,
                 thread_extension_data,
                 agent_control,
-                network_proxy,
+                network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
+                network_proxy_audit_metadata,
+                managed_network_requirements_configured,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),

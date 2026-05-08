@@ -952,9 +952,6 @@ impl Session {
     }
 
     async fn refresh_managed_network_proxy_for_current_permission_profile(&self) {
-        let Some(started_proxy) = self.services.network_proxy.as_ref() else {
-            return;
-        };
         let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
             error!("managed network proxy refresh semaphore closed");
             return;
@@ -968,7 +965,9 @@ impl Session {
             .permissions
             .network
             .as_ref()
+            .cloned()
         else {
+            self.services.network_proxy.store(None);
             return;
         };
 
@@ -991,8 +990,36 @@ impl Session {
                 spec
             }
         };
-        if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
-            warn!("failed to refresh managed network proxy for sandbox change: {err}");
+        if let Some(started_proxy) = self.services.network_proxy.load_full() {
+            if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
+                warn!("failed to refresh managed network proxy for sandbox change: {err}");
+            }
+            return;
+        }
+
+        match Self::start_managed_network_proxy(
+            &spec,
+            current_exec_policy.as_ref(),
+            &session_configuration.permission_profile(),
+            /*network_policy_decider*/ None,
+            self.services
+                .managed_network_requirements_configured
+                .then(|| {
+                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
+                }),
+            self.services.managed_network_requirements_configured,
+            self.services.network_proxy_audit_metadata.clone(),
+        )
+        .await
+        {
+            Ok((started_proxy, _session_network_proxy)) => {
+                self.services
+                    .network_proxy
+                    .store(Some(Arc::new(started_proxy)));
+            }
+            Err(err) => {
+                warn!("failed to start managed network proxy for sandbox change: {err}");
+            }
         }
     }
 
@@ -1886,7 +1913,7 @@ impl Session {
         let execpolicy_amendment =
             execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
 
-        if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
+        if let Some(started_network_proxy) = self.services.network_proxy.load_full() {
             let proxy = started_network_proxy.proxy();
             match amendment.action {
                 NetworkPolicyRuleAction::Allow => proxy
