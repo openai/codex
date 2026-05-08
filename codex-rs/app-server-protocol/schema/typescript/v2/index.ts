@@ -287,6 +287,7 @@ export type { PluginSharePrincipalType } from "./PluginSharePrincipalType";
 export type { PluginShareSaveParams } from "./PluginShareSaveParams";
 export type { PluginShareSaveResponse } from "./PluginShareSaveResponse";
 export type { PluginShareTarget } from "./PluginShareTarget";
+export type { PluginShareUpdateDiscoverability } from "./PluginShareUpdateDiscoverability";
 export type { PluginShareUpdateTargetsParams } from "./PluginShareUpdateTargetsParams";
 export type { PluginShareUpdateTargetsResponse } from "./PluginShareUpdateTargetsResponse";
 export type { PluginSkillReadParams } from "./PluginSkillReadParams";

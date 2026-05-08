@@ -133,6 +133,33 @@ fn remote_plugin_share_discoverability(
     }
 }
 
+fn remote_plugin_share_update_discoverability(
+    discoverability: PluginShareUpdateDiscoverability,
+) -> codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability {
+    match discoverability {
+        PluginShareUpdateDiscoverability::Unlisted => {
+            codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability::Unlisted
+        }
+        PluginShareUpdateDiscoverability::Private => {
+            codex_core_plugins::remote::RemotePluginShareUpdateDiscoverability::Private
+        }
+    }
+}
+
+fn validate_client_plugin_share_targets(
+    targets: &[PluginShareTarget],
+) -> Result<(), JSONRPCErrorError> {
+    if targets
+        .iter()
+        .any(|target| target.principal_type == PluginSharePrincipalType::Workspace)
+    {
+        return Err(invalid_request(
+            "shareTargets cannot include workspace principals; use discoverability UNLISTED for workspace link access",
+        ));
+    }
+    Ok(())
+}
+
 fn remote_plugin_share_targets(
     targets: Vec<PluginShareTarget>,
 ) -> Vec<codex_core_plugins::remote::RemotePluginShareTarget> {
@@ -729,8 +756,16 @@ impl PluginRequestProcessor {
         }
         if remote_plugin_id.is_some() && (discoverability.is_some() || share_targets.is_some()) {
             return Err(invalid_request(
-                "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share targets",
+                "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share settings",
             ));
+        }
+        if discoverability == Some(PluginShareDiscoverability::Listed) {
+            return Err(invalid_request(
+                "discoverability LISTED is not supported for plugin/share/save; use UNLISTED or PRIVATE",
+            ));
+        }
+        if let Some(share_targets) = share_targets.as_ref() {
+            validate_client_plugin_share_targets(share_targets)?;
         }
 
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -765,11 +800,14 @@ impl PluginRequestProcessor {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let PluginShareUpdateTargetsParams {
             remote_plugin_id,
+            discoverability,
             share_targets,
         } = params;
         if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
             return Err(invalid_request("invalid remote plugin id"));
         }
+        validate_client_plugin_share_targets(&share_targets)?;
+        let requested_share_targets = share_targets.clone();
 
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
@@ -779,6 +817,7 @@ impl PluginRequestProcessor {
             auth.as_ref(),
             &remote_plugin_id,
             remote_plugin_share_targets(share_targets),
+            remote_plugin_share_update_discoverability(discoverability),
         )
         .await
         .map_err(|err| {
@@ -790,7 +829,14 @@ impl PluginRequestProcessor {
                 .principals
                 .into_iter()
                 .map(plugin_share_principal_from_remote)
+                .filter(|principal| {
+                    requested_share_targets.iter().any(|target| {
+                        target.principal_type == principal.principal_type
+                            && target.principal_id == principal.principal_id
+                    })
+                })
                 .collect(),
+            discoverability: remote_plugin_share_discoverability_to_info(result.discoverability),
         })
     }
 
@@ -1484,6 +1530,22 @@ fn remote_plugin_share_context_to_info(
                 .map(plugin_share_principal_from_remote)
                 .collect()
         }),
+    }
+}
+
+fn remote_plugin_share_discoverability_to_info(
+    discoverability: codex_core_plugins::remote::RemotePluginShareDiscoverability,
+) -> PluginShareDiscoverability {
+    match discoverability {
+        codex_core_plugins::remote::RemotePluginShareDiscoverability::Listed => {
+            PluginShareDiscoverability::Listed
+        }
+        codex_core_plugins::remote::RemotePluginShareDiscoverability::Unlisted => {
+            PluginShareDiscoverability::Unlisted
+        }
+        codex_core_plugins::remote::RemotePluginShareDiscoverability::Private => {
+            PluginShareDiscoverability::Private
+        }
     }
 }
 

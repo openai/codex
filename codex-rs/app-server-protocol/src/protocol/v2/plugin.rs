@@ -231,6 +231,7 @@ pub struct PluginShareSaveResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsParams {
     pub remote_plugin_id: String,
+    pub discoverability: PluginShareUpdateDiscoverability,
     pub share_targets: Vec<PluginShareTarget>,
 }
 
@@ -239,6 +240,7 @@ pub struct PluginShareUpdateTargetsParams {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsResponse {
     pub principals: Vec<PluginSharePrincipal>,
+    pub discoverability: PluginShareDiscoverability,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -280,6 +282,17 @@ pub enum PluginShareDiscoverability {
     #[serde(rename = "LISTED")]
     #[ts(rename = "LISTED")]
     Listed,
+    #[serde(rename = "UNLISTED")]
+    #[ts(rename = "UNLISTED")]
+    Unlisted,
+    #[serde(rename = "PRIVATE")]
+    #[ts(rename = "PRIVATE")]
+    Private,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginShareUpdateDiscoverability {
     #[serde(rename = "UNLISTED")]
     #[ts(rename = "UNLISTED")]
     Unlisted,
