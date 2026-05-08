@@ -1,5 +1,8 @@
 # codex-app-server-daemon
 
+> `codex-app-server-daemon` is experimental and its lifecycle contract may
+> change while the remote-management flow is still being developed.
+
 `codex-app-server-daemon` backs the machine-readable `codex app-server`
 lifecycle commands used by remote clients such as the desktop and mobile apps.
 It is intended for Codex instances launched over SSH, including fresh developer
