@@ -325,6 +325,7 @@ impl AnalyticsReducer {
             } => {}
             AnalyticsFact::ServerResponse {
                 response: _response,
+                ..
             } => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {

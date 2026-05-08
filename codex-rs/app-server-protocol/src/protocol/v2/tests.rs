@@ -277,6 +277,7 @@ fn command_execution_request_approval_rejects_relative_additional_permission_pat
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "command": "cat file",
         "cwd": absolute_path_string("tmp"),
         "commandActions": null,
@@ -317,6 +318,7 @@ fn permissions_request_approval_uses_request_permission_profile() {
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "cwd": absolute_path_string("repo"),
         "reason": "Select a workspace root",
         "permissions": {
@@ -379,6 +381,7 @@ fn permissions_request_approval_rejects_macos_permissions() {
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
+        "startedAtMs": 1,
         "cwd": absolute_path_string("repo"),
         "reason": "Select a workspace root",
         "permissions": {
@@ -2505,33 +2508,20 @@ fn skills_list_params_serialization_uses_force_reload() {
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
             force_reload: false,
-            per_cwd_extra_user_roots: None,
         })
         .unwrap(),
-        json!({
-            "perCwdExtraUserRoots": null,
-        }),
+        json!({}),
     );
 
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
             force_reload: true,
-            per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
-                cwd: PathBuf::from("/repo"),
-                extra_user_roots: vec![PathBuf::from("/shared/skills"), PathBuf::from("/tmp/x")],
-            }]),
         })
         .unwrap(),
         json!({
             "cwds": ["/repo"],
             "forceReload": true,
-            "perCwdExtraUserRoots": [
-                {
-                    "cwd": "/repo",
-                    "extraUserRoots": ["/shared/skills", "/tmp/x"],
-                }
-            ],
         }),
     );
 }
@@ -2946,6 +2936,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
     assert_eq!(
         serde_json::to_value(PluginShareUpdateTargetsParams {
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            discoverability: PluginShareUpdateDiscoverability::Unlisted,
             share_targets: vec![PluginShareTarget {
                 principal_type: PluginSharePrincipalType::Group,
                 principal_id: "group-1".to_string(),
@@ -2954,6 +2945,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         .unwrap(),
         json!({
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "discoverability": "UNLISTED",
             "shareTargets": [{
                 "principalType": "group",
                 "principalId": "group-1",
@@ -2968,6 +2960,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
                 principal_id: "user-1".to_string(),
                 name: "Gavin".to_string(),
             }],
+            discoverability: PluginShareDiscoverability::Unlisted,
         })
         .unwrap(),
         json!({
@@ -2976,6 +2969,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
                 "principalId": "user-1",
                 "name": "Gavin",
             }],
+            "discoverability": "UNLISTED",
         }),
     );
 

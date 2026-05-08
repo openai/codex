@@ -1656,7 +1656,6 @@ mod tests {
             params: v2::SkillsListParams {
                 cwds: Vec::new(),
                 force_reload: false,
-                per_cwd_extra_user_roots: None,
             },
         };
         assert_eq!(
@@ -2967,6 +2966,7 @@ mod tests {
             thread_id: "thr_123".to_string(),
             turn_id: "turn_123".to_string(),
             item_id: "call_123".to_string(),
+            started_at_ms: 0,
             approval_id: None,
             reason: None,
             network_approval_context: None,

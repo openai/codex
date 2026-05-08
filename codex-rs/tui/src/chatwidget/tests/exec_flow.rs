@@ -54,6 +54,7 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
+            started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
             reason: None,
             network_approval_context: None,

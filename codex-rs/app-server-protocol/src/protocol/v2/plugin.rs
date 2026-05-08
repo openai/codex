@@ -15,7 +15,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
@@ -26,19 +26,6 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
-
-    /// Optional per-cwd extra roots to scan as user-scoped skills.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsListExtraRootsForCwd {
-    pub cwd: PathBuf,
-    pub extra_user_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -231,6 +218,7 @@ pub struct PluginShareSaveResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsParams {
     pub remote_plugin_id: String,
+    pub discoverability: PluginShareUpdateDiscoverability,
     pub share_targets: Vec<PluginShareTarget>,
 }
 
@@ -239,6 +227,7 @@ pub struct PluginShareUpdateTargetsParams {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsResponse {
     pub principals: Vec<PluginSharePrincipal>,
+    pub discoverability: PluginShareDiscoverability,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -280,6 +269,17 @@ pub enum PluginShareDiscoverability {
     #[serde(rename = "LISTED")]
     #[ts(rename = "LISTED")]
     Listed,
+    #[serde(rename = "UNLISTED")]
+    #[ts(rename = "UNLISTED")]
+    Unlisted,
+    #[serde(rename = "PRIVATE")]
+    #[ts(rename = "PRIVATE")]
+    Private,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginShareUpdateDiscoverability {
     #[serde(rename = "UNLISTED")]
     #[ts(rename = "UNLISTED")]
     Unlisted,

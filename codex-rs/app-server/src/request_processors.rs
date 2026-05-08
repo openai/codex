@@ -124,6 +124,7 @@ use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginShareSaveParams;
 use codex_app_server_protocol::PluginShareSaveResponse;
 use codex_app_server_protocol::PluginShareTarget;
+use codex_app_server_protocol::PluginShareUpdateDiscoverability;
 use codex_app_server_protocol::PluginShareUpdateTargetsParams;
 use codex_app_server_protocol::PluginShareUpdateTargetsResponse;
 use codex_app_server_protocol::PluginSkillReadParams;

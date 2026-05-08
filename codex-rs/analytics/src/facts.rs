@@ -296,6 +296,7 @@ pub(crate) enum AnalyticsFact {
         request: Box<ServerRequest>,
     },
     ServerResponse {
+        completed_at_ms: u64,
         response: Box<ServerResponse>,
     },
     Notification(Box<ServerNotification>),
