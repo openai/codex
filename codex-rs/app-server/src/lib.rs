@@ -160,22 +160,33 @@ enum ShutdownAction {
     Finish,
 }
 
-async fn shutdown_signal() -> IoResult<()> {
+#[derive(Clone, Copy)]
+enum ShutdownSignal {
+    Forceable,
+    #[cfg(unix)]
+    GracefulOnly,
+}
+
+async fn shutdown_signal() -> IoResult<ShutdownSignal> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::SignalKind;
         use tokio::signal::unix::signal;
 
         let mut term = signal(SignalKind::terminate())?;
+        let mut hangup = signal(SignalKind::hangup())?;
         tokio::select! {
-            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result,
-            _ = term.recv() => Ok(()),
+            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result.map(|_| ShutdownSignal::Forceable),
+            _ = term.recv() => Ok(ShutdownSignal::Forceable),
+            _ = hangup.recv() => Ok(ShutdownSignal::GracefulOnly),
         }
     }
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await
+        tokio::signal::ctrl_c()
+            .await
+            .map(|_| ShutdownSignal::Forceable)
     }
 }
 
@@ -188,9 +199,16 @@ impl ShutdownState {
         self.forced
     }
 
-    fn on_signal(&mut self, connection_count: usize, running_turn_count: usize) {
+    fn on_signal(
+        &mut self,
+        signal: ShutdownSignal,
+        connection_count: usize,
+        running_turn_count: usize,
+    ) {
         if self.requested {
-            self.forced = true;
+            if matches!(signal, ShutdownSignal::Forceable) {
+                self.forced = true;
+            }
             return;
         }
 
@@ -814,11 +832,15 @@ pub async fn run_main_with_transport_options(
 
                 tokio::select! {
                     shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
-                        if let Err(err) = shutdown_signal_result {
-                            warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
-                        }
+                        let signal = match shutdown_signal_result {
+                            Ok(signal) => signal,
+                            Err(err) => {
+                                warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
+                                continue;
+                            }
+                        };
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_signal(connections.len(), running_turn_count);
+                        shutdown_state.on_signal(signal, connections.len(), running_turn_count);
                     }
                     changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
