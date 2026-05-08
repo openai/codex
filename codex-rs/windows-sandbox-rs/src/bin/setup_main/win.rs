@@ -1,6 +1,5 @@
-#![cfg(target_os = "windows")]
-
 mod firewall;
+mod read_acl_mutex;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -67,9 +66,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
 
-mod read_acl_mutex;
 mod sandbox_users;
-#[path = "setup_runtime_bin.rs"]
 mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
