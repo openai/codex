@@ -36,8 +36,15 @@ use futures::future::BoxFuture;
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize)]
+pub(crate) struct ApplyPatchApprovalKey {
+    environment_id: String,
+    path: AbsolutePathBuf,
+}
+
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
+    pub environment_id: String,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
@@ -78,6 +85,18 @@ impl ApplyPatchRuntime {
         }
     }
 
+    fn approval_reason(req: &ApplyPatchRequest, reason: Option<String>) -> Option<String> {
+        let context = format!(
+            "Environment `{}`, cwd `{}`.",
+            req.environment_id,
+            req.action.cwd.display()
+        );
+        Some(match reason {
+            Some(reason) => format!("{reason}\n{context}"),
+            None => context,
+        })
+    }
+
     fn file_system_sandbox_context_for_attempt(
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
@@ -108,10 +127,17 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = AbsolutePathBuf;
+    type ApprovalKey = ApplyPatchApprovalKey;
 
     fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.file_paths.clone()
+        req.file_paths
+            .iter()
+            .cloned()
+            .map(|path| ApplyPatchApprovalKey {
+                environment_id: req.environment_id.clone(),
+                path,
+            })
+            .collect()
     }
 
     fn start_approval_async<'a>(
@@ -136,12 +162,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
+                let reason = ApplyPatchRuntime::approval_reason(req, Some(reason));
                 let rx_approve = session
                     .request_patch_approval(
                         turn,
                         call_id,
                         changes.clone(),
-                        Some(reason),
+                        reason,
                         /*grant_root*/ None,
                     )
                     .await;
@@ -153,9 +180,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 "apply_patch",
                 approval_keys,
                 || async move {
+                    let reason = ApplyPatchRuntime::approval_reason(req, /*reason*/ None);
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
+                            turn, call_id, changes, reason, /*grant_root*/ None,
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
@@ -198,15 +226,25 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRuntime {
+    fn sandbox_cwd<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a AbsolutePathBuf> {
+        Some(&req.action.cwd)
+    }
+
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
-        let turn_environment = ctx.turn.environments.primary().ok_or_else(|| {
-            ToolError::Rejected("apply_patch is unavailable in this session".to_string())
-        })?;
+        let turn_environment = ctx
+            .turn
+            .environments
+            .turn_environments
+            .iter()
+            .find(|environment| environment.environment_id == req.environment_id)
+            .ok_or_else(|| {
+                ToolError::Rejected("apply_patch is unavailable in this session".to_string())
+            })?;
         let started_at = Instant::now();
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);

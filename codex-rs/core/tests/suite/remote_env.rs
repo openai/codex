@@ -18,6 +18,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -242,6 +243,188 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.include_apply_patch_tool = true;
+    });
+    let test = builder.build_remote_aware(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let file_name = "apply_patch_remote_freeform.txt";
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-apply-patch-freeform-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    test.fs()
+        .create_directory(
+            &remote_cwd,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let patch = format!(
+        "*** Begin Patch\n*** Environment ID: {REMOTE_ENVIRONMENT_ID}\n*** Add File: {file_name}\n+patched remote freeform\n*** End Patch"
+    );
+    let call_id = "apply-patch-remote-freeform";
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "apply patch to remote environment",
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: local_cwd.path().abs(),
+            },
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd.clone(),
+            },
+        ]),
+    )
+    .await?;
+
+    let remote_contents = test
+        .fs()
+        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .await?;
+    assert_eq!(remote_contents, "patched remote freeform\n");
+    assert!(
+        !local_cwd.path().join(file_name).exists(),
+        "freeform apply_patch should not create the file in the local environment"
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environment() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let test = unified_exec_test(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let file_name = "apply_patch_remote_exec.txt";
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-apply-patch-exec-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    test.fs()
+        .create_directory(
+            &remote_cwd,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let patch =
+        format!("*** Begin Patch\n*** Add File: {file_name}\n+patched remote exec\n*** End Patch");
+    let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let call_id = "apply-patch-remote-exec";
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&json!({
+                        "shell": "/bin/sh",
+                        "cmd": command,
+                        "login": false,
+                        "yield_time_ms": 5_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "apply patch through exec command to remote environment",
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: local_cwd.path().abs(),
+            },
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd.clone(),
+            },
+        ]),
+    )
+    .await?;
+
+    let remote_contents = test
+        .fs()
+        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .await?;
+    assert_eq!(remote_contents, "patched remote exec\n");
+    assert!(
+        !local_cwd.path().join(file_name).exists(),
+        "intercepted apply_patch should not create the file in the local environment"
     );
 
     test.fs()

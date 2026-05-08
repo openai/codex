@@ -273,6 +273,7 @@ impl ToolHandler for ExecCommandHandler {
             &command,
             &cwd,
             fs.as_ref(),
+            &turn_environment.environment_id,
             context.session.clone(),
             context.turn.clone(),
             Some(&tracker),

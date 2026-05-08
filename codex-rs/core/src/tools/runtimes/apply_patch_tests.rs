@@ -49,6 +49,7 @@ fn guardian_review_request_includes_patch_context() {
     let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         action,
         file_paths: vec![path.clone()],
         changes: HashMap::from([(
@@ -87,6 +88,7 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
     let expected_patch = action.patch.clone();
     let req = ApplyPatchRequest {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         action,
         file_paths: vec![path],
         changes: HashMap::new(),
@@ -114,6 +116,87 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
 }
 
 #[test]
+fn approval_keys_include_environment_id() {
+    let runtime = ApplyPatchRuntime::new();
+    let path = std::env::temp_dir()
+        .join("apply-patch-approval-key.txt")
+        .abs();
+    let req = ApplyPatchRequest {
+        environment_id: "remote".to_string(),
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
+        file_paths: vec![path.clone()],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+
+    let keys = runtime.approval_keys(&req);
+
+    assert_eq!(
+        serde_json::to_value(&keys).expect("serialize approval keys"),
+        serde_json::json!([
+            {
+                "environment_id": "remote",
+                "path": path,
+            }
+        ])
+    );
+}
+
+#[test]
+fn sandbox_cwd_uses_patch_action_cwd() {
+    let runtime = ApplyPatchRuntime::new();
+    let path = std::env::temp_dir()
+        .join("apply-patch-runtime-sandbox-cwd.txt")
+        .abs();
+    let req = ApplyPatchRequest {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
+        file_paths: vec![path.clone()],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+
+    assert_eq!(runtime.sandbox_cwd(&req), Some(&req.action.cwd));
+}
+
+#[test]
+fn approval_reason_includes_environment_and_cwd() {
+    let path = std::env::temp_dir()
+        .join("apply-patch-approval-reason.txt")
+        .abs();
+    let req = ApplyPatchRequest {
+        environment_id: "remote".to_string(),
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
+        file_paths: vec![path],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+
+    assert_eq!(
+        ApplyPatchRuntime::approval_reason(&req, Some("retry".to_string())),
+        Some(format!(
+            "retry\nEnvironment `remote`, cwd `{}`.",
+            req.action.cwd.display()
+        ))
+    );
+}
+
+#[test]
 fn file_system_sandbox_context_uses_active_attempt() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-attempt.txt")
@@ -126,6 +209,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
         )),
     };
     let req = ApplyPatchRequest {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -183,6 +267,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         .join("apply-patch-runtime-none.txt")
         .abs();
     let req = ApplyPatchRequest {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),

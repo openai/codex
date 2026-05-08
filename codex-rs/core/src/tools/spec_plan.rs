@@ -258,7 +258,9 @@ pub fn build_tool_registry_builder(
     }
 
     if config.environment_mode.has_environment() && config.apply_patch_tool_type.is_some() {
-        builder.register_handler(Arc::new(ApplyPatchHandler));
+        let include_environment_id =
+            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
+        builder.register_handler(Arc::new(ApplyPatchHandler::new(include_environment_id)));
     }
 
     if config
