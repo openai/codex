@@ -1524,10 +1524,10 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
     .await?;
 
     let output = wait_for_raw_unified_exec_output(&test, call_id).await?;
-    assert_eq!(output.original_token_count, Some(8_127));
+    assert_eq!(output.original_token_count, Some(8_991));
     let output_text = output.output.replace("\r\n", "\n");
     assert_regex_match(
-        r"^Total output lines: 903\n\nEXEC-LINE-0001 x{20}\nEXEC-LINE-0002 x{20}\nEXEC-LINE-0003 x{13}…8077 tokens truncated…E-0997 x{20}\nEXEC-LINE-0998 x{20}\nEXEC-LINE-0999 x{20}\n$",
+        r"^Total output lines: 999\n\nEXEC-LINE-0001 x{20}\nEXEC-LINE-0002 x{20}\nEXEC-LINE-0003 x{13}…8941 tokens truncated…E-0997 x{20}\nEXEC-LINE-0998 x{20}\nEXEC-LINE-0999 x{20}\n$",
         &output_text,
     );
 
