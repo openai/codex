@@ -88,17 +88,15 @@ pub fn cached_directory_connectors(
         return Some(cached_connectors);
     }
 
-    let directory_cache::CachedConnectorDirectoryDiskLoad::Hit {
-        connectors,
-        ttl_remaining,
-    } = directory_cache::load_cached_directory_connectors_from_disk(cache_context)
+    let directory_cache::CachedConnectorDirectoryDiskLoad::Hit { connectors } =
+        directory_cache::load_cached_directory_connectors_from_disk(cache_context)
     else {
         return None;
     };
     write_cached_directory_connectors_in_memory(
         cache_context.cache_key.clone(),
         &connectors,
-        ttl_remaining,
+        Duration::ZERO,
     );
     Some(connectors)
 }
@@ -106,20 +104,25 @@ pub fn cached_directory_connectors(
 fn cached_directory_connectors_in_memory(
     cache_key: &ConnectorDirectoryCacheKey,
 ) -> Option<Vec<AppInfo>> {
-    let mut cache_guard = CONNECTOR_DIRECTORY_CACHE
+    let cache_guard = CONNECTOR_DIRECTORY_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let now = Instant::now();
+    cache_guard
+        .as_ref()
+        .filter(|cached| cached.key == *cache_key)
+        .map(|cached| cached.connectors.clone())
+}
 
-    if let Some(cached) = cache_guard.as_ref() {
-        if now < cached.expires_at && cached.key == *cache_key {
-            return Some(cached.connectors.clone());
-        }
-        if now >= cached.expires_at {
-            *cache_guard = None;
-        }
+fn fresh_directory_connectors_in_memory(
+    cache_key: &ConnectorDirectoryCacheKey,
+) -> Option<Vec<AppInfo>> {
+    let cache_guard = CONNECTOR_DIRECTORY_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let cached = cache_guard.as_ref()?;
+    if cached.key == *cache_key && Instant::now() < cached.expires_at {
+        return Some(cached.connectors.clone());
     }
-
     None
 }
 
@@ -133,7 +136,10 @@ where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = anyhow::Result<DirectoryListResponse>>,
 {
-    if !force_refetch && let Some(cached_connectors) = cached_directory_connectors(&cache_context) {
+    if !force_refetch
+        && let Some(cached_connectors) =
+            fresh_directory_connectors_in_memory(&cache_context.cache_key)
+    {
         return Ok(cached_connectors);
     }
 
@@ -174,11 +180,7 @@ fn write_cached_directory_connectors(
         connectors,
         CONNECTORS_CACHE_TTL,
     );
-    directory_cache::write_cached_directory_connectors_to_disk(
-        cache_context,
-        connectors,
-        CONNECTORS_CACHE_TTL,
-    );
+    directory_cache::write_cached_directory_connectors_to_disk(cache_context, connectors);
 }
 
 fn write_cached_directory_connectors_in_memory(
@@ -634,8 +636,7 @@ mod tests {
         clippy::await_holding_invalid_type,
         reason = "test serializes access to the shared connector cache for its full duration"
     )]
-    async fn list_all_connectors_rehydrates_memory_from_directory_disk_cache() -> anyhow::Result<()>
-    {
+    async fn cached_directory_connectors_reads_directory_disk_cache() -> anyhow::Result<()> {
         let _cache_guard = CONNECTOR_DIRECTORY_CACHE_TEST_LOCK.lock().await;
 
         let codex_home = TempDir::new()?;
@@ -662,18 +663,77 @@ mod tests {
 
         clear_directory_memory_cache();
 
-        let second = list_all_connectors_with_options(
-            cache_context,
+        let second = cached_directory_connectors(&cache_context).expect("disk cache should load");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(first, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
+    async fn list_all_connectors_refreshes_when_only_directory_disk_cache_exists()
+    -> anyhow::Result<()> {
+        let _cache_guard = CONNECTOR_DIRECTORY_CACHE_TEST_LOCK.lock().await;
+
+        let codex_home = TempDir::new()?;
+        let cache_context = cache_context(&codex_home, "disk-refresh");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let call_counter = Arc::clone(&calls);
+
+        list_all_connectors_with_options(
+            cache_context.clone(),
             /*is_workspace_account*/ false,
             /*force_refetch*/ false,
-            move |_path| async move {
-                anyhow::bail!("disk cache should have been used");
+            move |_path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: None,
+                    })
+                }
             },
         )
         .await?;
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(first, second);
+        clear_directory_memory_cache();
+        let mut cached_expected = directory_app_to_app_info(app("alpha", "Alpha"));
+        cached_expected.install_url = Some(connector_install_url(
+            &cached_expected.name,
+            &cached_expected.id,
+        ));
+        assert_eq!(
+            cached_directory_connectors(&cache_context),
+            Some(vec![cached_expected])
+        );
+        let refreshed_calls = Arc::clone(&calls);
+
+        let refreshed = list_all_connectors_with_options(
+            cache_context,
+            /*is_workspace_account*/ false,
+            /*force_refetch*/ false,
+            move |_path| {
+                let call_counter = Arc::clone(&refreshed_calls);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("beta", "Beta")],
+                        next_token: None,
+                    })
+                }
+            },
+        )
+        .await?;
+
+        let mut expected = directory_app_to_app_info(app("beta", "Beta"));
+        expected.install_url = Some(connector_install_url(&expected.name, &expected.id));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(refreshed, vec![expected]);
         Ok(())
     }
 
@@ -690,7 +750,6 @@ mod tests {
             &cache_path,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "schema_version": 0,
-                "expires_at_unix_ms": u64::MAX,
                 "connectors": [],
             }))?,
         )?;

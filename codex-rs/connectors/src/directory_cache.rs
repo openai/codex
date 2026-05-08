@@ -1,7 +1,4 @@
 use std::path::PathBuf;
-use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
@@ -38,10 +35,7 @@ impl ConnectorDirectoryCacheContext {
 }
 
 pub(crate) enum CachedConnectorDirectoryDiskLoad {
-    Hit {
-        connectors: Vec<AppInfo>,
-        ttl_remaining: Duration,
-    },
+    Hit { connectors: Vec<AppInfo> },
     Missing,
     Invalid,
 }
@@ -69,26 +63,14 @@ pub(crate) fn load_cached_directory_connectors_from_disk(
         return CachedConnectorDirectoryDiskLoad::Invalid;
     }
 
-    let now_unix_ms = unix_timestamp_millis();
-    let Some(ttl_remaining_ms) = cache.expires_at_unix_ms.checked_sub(now_unix_ms) else {
-        let _ = std::fs::remove_file(cache_path);
-        return CachedConnectorDirectoryDiskLoad::Invalid;
-    };
-    if ttl_remaining_ms == 0 {
-        let _ = std::fs::remove_file(cache_path);
-        return CachedConnectorDirectoryDiskLoad::Invalid;
-    }
-
     CachedConnectorDirectoryDiskLoad::Hit {
         connectors: cache.connectors,
-        ttl_remaining: Duration::from_millis(ttl_remaining_ms),
     }
 }
 
 pub(crate) fn write_cached_directory_connectors_to_disk(
     cache_context: &ConnectorDirectoryCacheContext,
     connectors: &[AppInfo],
-    ttl: Duration,
 ) {
     let cache_path = cache_context.cache_path();
     if let Some(parent) = cache_path.parent()
@@ -96,14 +78,8 @@ pub(crate) fn write_cached_directory_connectors_to_disk(
     {
         return;
     }
-    let Some(expires_at_unix_ms) =
-        unix_timestamp_millis().checked_add(ttl.as_millis().try_into().unwrap_or(u64::MAX))
-    else {
-        return;
-    };
     let Ok(bytes) = serde_json::to_vec_pretty(&ConnectorDirectoryDiskCache {
         schema_version: CONNECTOR_DIRECTORY_DISK_CACHE_SCHEMA_VERSION,
-        expires_at_unix_ms,
         connectors: connectors.to_vec(),
     }) else {
         return;
@@ -114,15 +90,7 @@ pub(crate) fn write_cached_directory_connectors_to_disk(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectorDirectoryDiskCache {
     schema_version: u8,
-    expires_at_unix_ms: u64,
     connectors: Vec<AppInfo>,
-}
-
-fn unix_timestamp_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
-        .unwrap_or_default()
 }
 
 fn sha1_hex(value: &str) -> String {
