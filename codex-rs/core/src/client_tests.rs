@@ -78,23 +78,6 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
     )
 }
 
-fn api_provider(base_url: &str) -> codex_api::Provider {
-    codex_api::Provider {
-        name: "test".to_string(),
-        base_url: base_url.to_string(),
-        query_params: None,
-        headers: http::HeaderMap::new(),
-        retry: codex_api::RetryConfig {
-            max_attempts: 1,
-            base_delay: Duration::from_millis(1),
-            retry_429: false,
-            retry_5xx: true,
-            retry_transport: true,
-        },
-        stream_idle_timeout: Duration::from_secs(1),
-    }
-}
-
 fn test_model_info() -> ModelInfo {
     serde_json::from_value(json!({
         "slug": "gpt-test",
