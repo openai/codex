@@ -7,7 +7,7 @@ expression: terminal_title_popup_snapshot(&mut chat)
 
   Type to search
   >
-› [x] thread-title   Current thread title (omitted when unavailable)
+› [x] thread-title   Current thread title, or thread identifier when unnamed
   [x] git-branch     Current Git branch (omitted when unavailable)
   [x] task-progress  Latest task progress from update_plan (omitted until available)
   [ ] app-name       Codex app name

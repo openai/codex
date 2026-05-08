@@ -648,10 +648,17 @@ impl ChatWidget {
                 },
             ),
             StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
-            StatusLineItem::ThreadTitle => self.thread_name.as_ref().and_then(|name| {
-                let trimmed = name.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }),
+            StatusLineItem::ThreadTitle => self.thread_name.as_ref().map_or_else(
+                || self.thread_id.map(|id| id.to_string()),
+                |name| {
+                    let trimmed = name.trim();
+                    if trimmed.is_empty() {
+                        self.thread_id.map(|id| id.to_string())
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                },
+            ),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
@@ -713,17 +720,9 @@ impl ChatWidget {
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
-            TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
-                let trimmed = name.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(Self::truncate_terminal_title_part(
-                        trimmed.to_string(),
-                        /*max_chars*/ 48,
-                    ))
-                }
-            }),
+            TerminalTitleItem::Thread => self
+                .status_line_value_for_item(StatusLineItem::ThreadTitle)
+                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48)),
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
             }),
