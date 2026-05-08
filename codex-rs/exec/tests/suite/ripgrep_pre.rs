@@ -76,15 +76,9 @@ async fn blocks_escaped_ripgrep_preprocessor() -> anyhow::Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success(),
-        "escaped rg --pre should be blocked, but codex-exec succeeded\nStatus: {}\nStdout:\n{}\nStderr:\n{}",
-        output.status,
-        stdout,
-        stderr
-    );
-    assert!(
         stderr.contains("rejected")
             || stderr.contains("approval")
+            || stderr.contains("declined")
             || stderr.contains("unacceptable risk"),
         "blocked run should report approval rejection\nStatus: {}\nStdout:\n{}\nStderr:\n{}",
         output.status,
@@ -93,8 +87,22 @@ async fn blocks_escaped_ripgrep_preprocessor() -> anyhow::Result<()> {
     );
     if let Some(tool_output) = resp_mock.function_call_output_text(call_id) {
         assert!(
+            tool_output.contains("rejected")
+                || tool_output.contains("approval")
+                || tool_output.contains("unacceptable risk"),
+            "blocked command should report approval rejection: {tool_output}"
+        );
+        assert!(
             !tool_output.contains("Exit code: 0"),
             "blocked command should not return a successful shell result: {tool_output}"
+        );
+    } else {
+        assert!(
+            !output.status.success(),
+            "successful run should send the blocked command result back to the model\nStatus: {}\nStdout:\n{}\nStderr:\n{}",
+            output.status,
+            stdout,
+            stderr
         );
     }
     assert!(!marker.exists(), "ripgrep --pre helper should not execute");
