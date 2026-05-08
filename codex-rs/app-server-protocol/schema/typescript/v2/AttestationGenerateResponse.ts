@@ -4,6 +4,6 @@
 
 export type AttestationGenerateResponse = {
 /**
- * Opaque client attestation payload to embed in the upstream header envelope.
+ * Opaque client attestation token.
  */
-headerValue: string, };
+token: string, };

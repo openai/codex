@@ -116,7 +116,7 @@ async fn request_attestation_header_value_with_timeout(
     match serde_json::from_value::<AttestationGenerateResponse>(result) {
         Ok(response) => app_server_attestation_header_value(
             AppServerAttestationStatus::Ok,
-            Some(&response.header_value),
+            Some(&response.token),
         ),
         Err(err) => {
             warn!("failed to deserialize attestation generation response: {err}");

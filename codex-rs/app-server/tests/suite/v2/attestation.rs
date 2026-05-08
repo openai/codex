@@ -137,7 +137,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
                     mcp.send_response(
                         request_id,
                         serde_json::to_value(AttestationGenerateResponse {
-                            header_value: ATTESTATION_HEADER.to_string(),
+                            token: ATTESTATION_HEADER.to_string(),
                         })?,
                     )
                     .await?;
