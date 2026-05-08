@@ -55,7 +55,6 @@ use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
-use crate::wait_for_event_match;
 use crate::wait_for_event_with_timeout;
 use wiremock::Match;
 use wiremock::matchers::path_regex;
@@ -65,6 +64,9 @@ type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
+const REMOTE_CODEX_PATH_ENV_VAR: &str = "CODEX_TEST_REMOTE_CODEX_PATH";
+const DEFAULT_REMOTE_CODEX_PATH: &str = "/tmp/codex-remote-env/codex";
+const REMOTE_CODEX_LINUX_SANDBOX_BASENAME: &str = "codex-linux-sandbox";
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -73,6 +75,8 @@ const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
     exec_server_url: Option<String>,
+    remote_codex_path: Option<PathBuf>,
+    remote_codex_linux_sandbox_exe: Option<PathBuf>,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
     remote_container_name: Option<String>,
@@ -87,6 +91,8 @@ impl TestEnv {
         Ok(Self {
             environment,
             exec_server_url: None,
+            remote_codex_path: None,
+            remote_codex_linux_sandbox_exe: None,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
             remote_container_name: None,
@@ -133,6 +139,8 @@ pub async fn test_env() -> Result<TestEnv> {
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
+                remote_codex_path: Some(remote_codex_path()?),
+                remote_codex_linux_sandbox_exe: Some(remote_codex_linux_sandbox_exe()?),
                 cwd,
                 local_cwd_temp_dir: None,
                 remote_container_name: Some(remote_env.container_name),
@@ -161,6 +169,24 @@ fn remote_exec_server_url() -> Result<String> {
         ));
     }
     Ok(listen_url.to_string())
+}
+
+fn remote_codex_path() -> Result<PathBuf> {
+    let codex_path = std::env::var(REMOTE_CODEX_PATH_ENV_VAR)
+        .unwrap_or_else(|_| DEFAULT_REMOTE_CODEX_PATH.to_string());
+    let codex_path = codex_path.trim();
+    if codex_path.is_empty() {
+        return Err(anyhow!("{REMOTE_CODEX_PATH_ENV_VAR} must not be empty"));
+    }
+    Ok(PathBuf::from(codex_path))
+}
+
+fn remote_codex_linux_sandbox_exe() -> Result<PathBuf> {
+    let remote_codex_path = remote_codex_path()?;
+    let remote_codex_dir = remote_codex_path
+        .parent()
+        .ok_or_else(|| anyhow!("{REMOTE_CODEX_PATH_ENV_VAR} must have a parent directory"))?;
+    Ok(remote_codex_dir.join(REMOTE_CODEX_LINUX_SANDBOX_BASENAME))
 }
 
 fn remote_test_instance_id() -> String {
@@ -406,9 +432,15 @@ impl TestCodexBuilder {
         test_env: TestEnv,
         include_local_environment: bool,
     ) -> anyhow::Result<TestCodex> {
-        let (config, fallback_cwd) = self
+        let (mut config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
+        if let Some(remote_codex_path) = &test_env.remote_codex_path {
+            config.codex_self_exe = Some(remote_codex_path.clone());
+        }
+        if let Some(remote_codex_linux_sandbox_exe) = &test_env.remote_codex_linux_sandbox_exe {
+            config.codex_linux_sandbox_exe = Some(remote_codex_linux_sandbox_exe.clone());
+        }
         let exec_server_url = self
             .exec_server_url
             .clone()
@@ -783,11 +815,16 @@ impl TestCodex {
             })
             .await?;
 
-        let turn_id = wait_for_event_match(&self.codex, |event| match event {
-            EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
-            _ => None,
-        })
-        .await;
+        let turn_id = match wait_for_event_with_timeout(
+            &self.codex,
+            |event| matches!(event, EventMsg::TurnStarted(_)),
+            SUBMIT_TURN_COMPLETE_TIMEOUT,
+        )
+        .await
+        {
+            EventMsg::TurnStarted(event) => event.turn_id,
+            _ => unreachable!("predicate only matches TurnStarted"),
+        };
         wait_for_event_with_timeout(
             &self.codex,
             |event| match event {
