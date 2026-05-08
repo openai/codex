@@ -10,8 +10,8 @@
 #![cfg(target_os = "windows")]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use super::cwd_junction;
-use crate::read_acl_mutex;
+mod cwd_junction;
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_windows_sandbox::ErrorPayload;
@@ -37,6 +37,7 @@ use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
+use codex_windows_sandbox::read_acl_mutex_exists;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
@@ -193,7 +194,7 @@ fn read_spawn_request(reader: &mut File) -> Result<SpawnRequest> {
 
 /// Pick an effective CWD, using a junction if the ACL helper is active.
 fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
-    let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
+    let use_junction = match read_acl_mutex_exists() {
         Ok(exists) => exists,
         Err(err) => {
             log_note(

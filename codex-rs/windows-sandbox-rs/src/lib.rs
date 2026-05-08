@@ -6,9 +6,6 @@
 mod ssh_config_dependencies;
 
 #[cfg(target_os = "windows")]
-extern crate self as codex_windows_sandbox;
-
-#[cfg(target_os = "windows")]
 mod acl;
 #[cfg(target_os = "windows")]
 mod allow;
@@ -50,8 +47,6 @@ mod sandbox_utils;
 mod setup;
 #[cfg(target_os = "windows")]
 mod setup_error;
-#[cfg(target_os = "windows")]
-mod setup_main_win;
 #[cfg(target_os = "windows")]
 mod spawn_prep;
 #[cfg(target_os = "windows")]
@@ -170,6 +165,18 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+// Public only so the same-package Windows helper binaries can coordinate while
+// read ACLs are being applied. Keep these out of normal docs; ordinary callers
+// should not treat them as supported library API.
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use read_acl_mutex::ReadAclMutexGuard;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use read_acl_mutex::acquire_read_acl_mutex;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use read_acl_mutex::read_acl_mutex_exists;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
@@ -243,18 +250,6 @@ pub use winutil::string_from_sid_bytes;
 pub use winutil::to_wide;
 #[cfg(target_os = "windows")]
 pub use workspace_acl::is_command_cwd_root;
-
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub fn command_runner_main() -> anyhow::Result<()> {
-    elevated::command_runner_win::main()
-}
-
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub fn setup_main() -> anyhow::Result<()> {
-    setup_main_win::main()
-}
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
