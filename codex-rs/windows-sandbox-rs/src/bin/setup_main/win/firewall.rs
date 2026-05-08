@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use anyhow::Result;
 use std::fs::File;
 use std::io::Write;

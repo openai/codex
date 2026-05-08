@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use crate::logging::log_note;
 use crate::winutil::format_last_error;
 use crate::winutil::to_wide;

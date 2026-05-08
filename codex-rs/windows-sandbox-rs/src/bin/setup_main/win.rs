@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 mod firewall;
 
 use anyhow::Context;

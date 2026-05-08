@@ -7,7 +7,6 @@
 //! accepts stdin/terminate frames, and emits a final exit frame. The legacy restricted‑token
 //! path spawns the child directly and does not use this runner.
 
-#![cfg(target_os = "windows")]
 #![allow(unsafe_op_in_unsafe_fn)]
 
 mod cwd_junction;

@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 mod filter_specs;
 
 use crate::to_wide;
