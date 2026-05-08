@@ -8,6 +8,7 @@ use crate::client_common::ResponseEvent;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
+use crate::compact::service_tier_for_compaction;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
@@ -259,7 +260,7 @@ async fn run_remote_compaction_request_v2(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier.clone(),
+            service_tier_for_compaction(sess, turn_context.config.service_tier.clone()),
             turn_metadata_header,
             &InferenceTraceContext::disabled(),
         )
