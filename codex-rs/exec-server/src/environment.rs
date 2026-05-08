@@ -194,6 +194,7 @@ impl EnvironmentManager {
 #[derive(Clone)]
 pub struct Environment {
     exec_server_url: Option<String>,
+    remote_transport: Option<ExecServerTransportParams>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
@@ -205,6 +206,7 @@ impl Environment {
     pub fn default_for_tests() -> Self {
         Self {
             exec_server_url: None,
+            remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
@@ -260,6 +262,7 @@ impl Environment {
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             exec_server_url: None,
+            remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
@@ -273,15 +276,30 @@ impl Environment {
         exec_server_url: String,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl(
-            exec_server_url.clone(),
-        ));
+        Self::remote_with_transport(
+            ExecServerTransportParams::WebSocketUrl(exec_server_url),
+            local_runtime_paths,
+        )
+    }
+
+    pub(crate) fn remote_with_transport(
+        remote_transport: ExecServerTransportParams,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Self {
+        let exec_server_url = match &remote_transport {
+            ExecServerTransportParams::WebSocketUrl(exec_server_url) => {
+                Some(exec_server_url.clone())
+            }
+            ExecServerTransportParams::StdioCommand(_) => None,
+        };
+        let client = LazyRemoteExecServerClient::new(remote_transport.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
-            exec_server_url: Some(exec_server_url),
+            exec_server_url,
+            remote_transport: Some(remote_transport),
             exec_backend,
             filesystem,
             http_client: Arc::new(client),
@@ -290,7 +308,7 @@ impl Environment {
     }
 
     pub fn is_remote(&self) -> bool {
-        self.exec_server_url.is_some()
+        self.remote_transport.is_some()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
