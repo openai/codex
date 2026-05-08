@@ -188,7 +188,6 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
     Freeform,
-    Function,
     Shell,
     ShellViaHeredoc,
     ShellCommandViaHeredoc,
@@ -950,8 +949,7 @@ impl TestCodexHarness {
             ApplyPatchModelOutput::Freeform => {
                 Box::pin(self.custom_tool_call_output(call_id)).await
             }
-            ApplyPatchModelOutput::Function
-            | ApplyPatchModelOutput::Shell
+            ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
                 Box::pin(self.function_call_stdout(call_id)).await

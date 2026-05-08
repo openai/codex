@@ -17,7 +17,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -394,7 +394,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         ]),
         sse(vec![
             ev_response_created(&format!("{response_prefix}-2")),
-            ev_apply_patch_function_call("apply-patch-call", &patch),
+            ev_apply_patch_custom_tool_call("apply-patch-call", &patch),
             ev_completed(&format!("{response_prefix}-2")),
         ]),
     ];
