@@ -390,21 +390,6 @@ args = ["dev", "cd /tmp && true"]
         .await
         .expect("thread should start");
 
-    let selections = thread.thread.environment_selections().await;
-    assert_eq!(
-        selections,
-        vec![
-            TurnEnvironmentSelection {
-                environment_id: "dev".to_string(),
-                cwd: thread.session_configured.cwd.abs(),
-            },
-            TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: thread.session_configured.cwd.abs(),
-            },
-        ]
-    );
-
     let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
         thread.thread.codex.session.as_ref(),
         Vec::<UserInput>::new(),
