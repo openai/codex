@@ -1893,7 +1893,6 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-config",
  "codex-core",
- "codex-core-api",
  "codex-core-plugins",
  "codex-exec-server",
  "codex-external-agent-migration",
