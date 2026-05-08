@@ -135,7 +135,7 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
-    client._route_notification(
+    client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
             {
@@ -146,7 +146,7 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
             },
         )
     )
-    client._route_notification(
+    client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
             {
@@ -172,7 +172,7 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
 
 def test_turn_notification_router_buffers_events_before_registration() -> None:
     client = AppServerClient()
-    client._route_notification(
+    client._router.route_notification(
         client._coerce_notification(
             "turn/completed",
             {
