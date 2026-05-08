@@ -117,6 +117,15 @@ impl EnvironmentManager {
         Self::from_provider(provider.as_ref(), local_runtime_paths).await
     }
 
+    /// Builds a manager from the legacy environment-variable provider without
+    /// reading user config files from `CODEX_HOME`.
+    pub async fn from_env(
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Result<Self, ExecServerError> {
+        let provider = DefaultEnvironmentProvider::from_env();
+        Self::from_provider(&provider, local_runtime_paths).await
+    }
+
     async fn from_default_provider_url(
         exec_server_url: Option<String>,
         local_runtime_paths: ExecServerRuntimePaths,
