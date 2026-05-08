@@ -72,6 +72,61 @@ class RustyV8BazelTest(unittest.TestCase):
             )
         )
 
+    def test_needs_built_runtime_archives(self) -> None:
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+        ]:
+            self.assertTrue(rusty_v8_bazel.needs_built_runtime_archives(target))
+
+        self.assertFalse(rusty_v8_bazel.needs_built_runtime_archives("x86_64-apple-darwin"))
+        self.assertFalse(rusty_v8_bazel.needs_built_runtime_archives("x86_64-pc-windows-msvc"))
+
+    def test_upstream_rusty_v8_archive_url(self) -> None:
+        self.assertEqual(
+            (
+                "https://github.com/denoland/rusty_v8/releases/download/"
+                "v147.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz"
+            ),
+            rusty_v8_bazel.upstream_rusty_v8_archive_url(
+                "x86_64-apple-darwin",
+                "147.4.0",
+            ),
+        )
+
+    @patch("rusty_v8_bazel.merged_built_runtime_archive")
+    @patch("rusty_v8_bazel.merged_darwin_runtime_archive")
+    def test_runtime_merged_archive_dispatches_by_target(
+        self,
+        merged_darwin_runtime_archive: Mock,
+        merged_built_runtime_archive: Mock,
+    ) -> None:
+        merged_darwin_runtime_archive.return_value = Path("/tmp/darwin.a")
+        merged_built_runtime_archive.return_value = Path("/tmp/linux.a")
+
+        self.assertEqual(
+            Path("/tmp/darwin.a"),
+            rusty_v8_bazel.runtime_merged_archive(
+                "macos_amd64",
+                "x86_64-apple-darwin",
+                Path("/tmp/v8.a"),
+            ),
+        )
+        self.assertEqual(
+            Path("/tmp/linux.a"),
+            rusty_v8_bazel.runtime_merged_archive(
+                "linux_amd64",
+                "x86_64-unknown-linux-gnu",
+                Path("/tmp/v8.a"),
+            ),
+        )
+        with self.assertRaisesRegex(SystemExit, "unsupported runtime merge target"):
+            rusty_v8_bazel.runtime_merged_archive(
+                "windows_amd64",
+                "x86_64-pc-windows-msvc",
+                Path("/tmp/v8.a"),
+            )
+
     @patch("rusty_v8_bazel.ensure_bazel_output_files")
     @patch("rusty_v8_bazel.subprocess.run")
     def test_host_runnable_bazel_output_file_selects_runnable_candidate(

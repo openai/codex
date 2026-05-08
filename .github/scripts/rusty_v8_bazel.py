@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import urllib.request
 from pathlib import Path
 
 from rusty_v8_module_bazel import (
@@ -26,6 +27,71 @@ RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 STATIC_RUNTIME_ARCHIVE_LABELS = [
     "@llvm//runtimes/libcxx:libcxx.static",
     "@llvm//runtimes/libcxx:libcxxabi.static",
+]
+DARWIN_RUNTIME_ARCHIVE_MEMBERS = [
+    "algorithm.o",
+    "any.o",
+    "atomic.o",
+    "barrier.o",
+    "bind.o",
+    "call_once.o",
+    "charconv.o",
+    "chrono.o",
+    "condition_variable.o",
+    "condition_variable_destructor.o",
+    "error_category.o",
+    "exception.o",
+    "directory_iterator.o",
+    "filesystem_error.o",
+    "operations.o",
+    "path.o",
+    "functional.o",
+    "future.o",
+    "hash.o",
+    "ios.o",
+    "ios.instantiations.o",
+    "iostream.o",
+    "locale.o",
+    "memory.o",
+    "mutex.o",
+    "mutex_destructor.o",
+    "new_handler.o",
+    "new_helpers.o",
+    "optional.o",
+    "random.o",
+    "random_shuffle.o",
+    "regex.o",
+    "d2fixed.o",
+    "d2s.o",
+    "f2s.o",
+    "shared_mutex.o",
+    "stdexcept.o",
+    "string.o",
+    "strstream.o",
+    "system_error.o",
+    "thread.o",
+    "typeinfo.o",
+    "valarray.o",
+    "variant.o",
+    "vector.o",
+    "verbose_abort.o",
+    "new.o",
+    "abort_message.o",
+    "cxa_aux_runtime.o",
+    "cxa_default_handlers.o",
+    "cxa_exception.o",
+    "cxa_exception_storage.o",
+    "cxa_handlers.o",
+    "cxa_personality.o",
+    "cxa_vector.o",
+    "cxa_virtual.o",
+    "fallback_malloc.o",
+    "private_typeinfo.o",
+    "stdlib_exception.o",
+    "stdlib_stdexcept.o",
+    "stdlib_typeinfo.o",
+    "cxa_guard.o",
+    "cxa_demangle.o",
 ]
 LLVM_AR_LABEL = "@llvm//tools:llvm-ar"
 LLVM_RANLIB_LABEL = "@llvm//tools:llvm-ranlib"
@@ -203,6 +269,17 @@ def needs_merged_runtime_archive(target: str, source_path: Path) -> bool:
     )
 
 
+def needs_built_runtime_archives(target: str) -> bool:
+    return target.endswith(("-unknown-linux-gnu", "-unknown-linux-musl"))
+
+
+def upstream_rusty_v8_archive_url(target: str, version: str) -> str:
+    return (
+        "https://github.com/denoland/rusty_v8/releases/download/"
+        f"v{version}/librusty_v8_release_{target}.a.gz"
+    )
+
+
 def single_bazel_output_file(
     platform: str,
     label: str,
@@ -247,9 +324,10 @@ def host_runnable_bazel_output_file(
     return runnable_outputs[0]
 
 
-def merged_runtime_archive(
+def merged_archive(
     platform: str,
     lib_path: Path,
+    extra_archives: list[Path],
     compilation_mode: str = "fastbuild",
     bazel_configs: list[str] | None = None,
 ) -> Path:
@@ -265,18 +343,13 @@ def merged_runtime_archive(
         compilation_mode,
         bazel_configs,
     )
-    runtime_archives = [
-        single_bazel_output_file(platform, label, compilation_mode, bazel_configs)
-        for label in STATIC_RUNTIME_ARCHIVE_LABELS
-    ]
-
     temp_dir = Path(tempfile.mkdtemp(prefix="rusty-v8-runtime-stage-"))
     merged_archive = temp_dir / lib_path.name
     merge_commands = "\n".join(
         [
             f"create {merged_archive}",
             f"addlib {lib_path}",
-            *[f"addlib {archive}" for archive in runtime_archives],
+            *[f"addlib {archive}" for archive in extra_archives],
             "save",
             "end",
         ]
@@ -290,6 +363,134 @@ def merged_runtime_archive(
     )
     subprocess.run([str(llvm_ranlib), str(merged_archive)], cwd=ROOT, check=True)
     return merged_archive
+
+
+def merged_built_runtime_archive(
+    platform: str,
+    lib_path: Path,
+    compilation_mode: str = "fastbuild",
+    bazel_configs: list[str] | None = None,
+) -> Path:
+    runtime_archives = [
+        single_bazel_output_file(platform, label, compilation_mode, bazel_configs)
+        for label in STATIC_RUNTIME_ARCHIVE_LABELS
+    ]
+    return merged_archive(
+        platform,
+        lib_path,
+        runtime_archives,
+        compilation_mode,
+        bazel_configs,
+    )
+
+
+def downloaded_darwin_runtime_archive(
+    target: str,
+    version: str,
+    llvm_ar: Path,
+) -> Path:
+    temp_dir = Path(tempfile.mkdtemp(prefix="rusty-v8-darwin-runtime-"))
+    compressed_archive = temp_dir / f"librusty_v8_release_{target}.a.gz"
+    source_archive = temp_dir / f"librusty_v8_release_{target}.a"
+    runtime_archive = temp_dir / f"libcxx_runtime_{target}.a"
+
+    with urllib.request.urlopen(upstream_rusty_v8_archive_url(target, version)) as src:
+        with compressed_archive.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+    with gzip.open(compressed_archive, "rb") as src:
+        with source_archive.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+    listed_members = subprocess.run(
+        [str(llvm_ar), "t", str(source_archive)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    missing_members = [
+        member for member in DARWIN_RUNTIME_ARCHIVE_MEMBERS if member not in listed_members
+    ]
+    if missing_members:
+        raise SystemExit(
+            f"missing Darwin runtime members in {source_archive}: {missing_members}"
+        )
+
+    subprocess.run(
+        [
+            str(llvm_ar),
+            "x",
+            str(source_archive),
+            *DARWIN_RUNTIME_ARCHIVE_MEMBERS,
+        ],
+        cwd=temp_dir,
+        check=True,
+    )
+    merge_commands = "\n".join(
+        [
+            f"create {runtime_archive}",
+            *[f"addmod {temp_dir / member}" for member in DARWIN_RUNTIME_ARCHIVE_MEMBERS],
+            "save",
+            "end",
+        ]
+    )
+    subprocess.run(
+        [str(llvm_ar), "-M"],
+        cwd=ROOT,
+        check=True,
+        input=merge_commands,
+        text=True,
+    )
+    return runtime_archive
+
+
+def merged_darwin_runtime_archive(
+    platform: str,
+    target: str,
+    lib_path: Path,
+    compilation_mode: str = "fastbuild",
+    bazel_configs: list[str] | None = None,
+) -> Path:
+    llvm_ar = host_runnable_bazel_output_file(
+        platform,
+        LLVM_AR_LABEL,
+        compilation_mode,
+        bazel_configs,
+    )
+    version = resolved_v8_crate_version()
+    runtime_archive = downloaded_darwin_runtime_archive(target, version, llvm_ar)
+    return merged_archive(
+        platform,
+        lib_path,
+        [runtime_archive],
+        compilation_mode,
+        bazel_configs,
+    )
+
+
+def runtime_merged_archive(
+    platform: str,
+    target: str,
+    lib_path: Path,
+    compilation_mode: str = "fastbuild",
+    bazel_configs: list[str] | None = None,
+) -> Path:
+    if target.endswith("-apple-darwin"):
+        return merged_darwin_runtime_archive(
+            platform,
+            target,
+            lib_path,
+            compilation_mode,
+            bazel_configs,
+        )
+    if not needs_built_runtime_archives(target):
+        raise SystemExit(f"unsupported runtime merge target: {target}")
+    return merged_built_runtime_archive(
+        platform,
+        lib_path,
+        compilation_mode,
+        bazel_configs,
+    )
 
 
 def stage_release_pair(
@@ -322,7 +523,7 @@ def stage_release_pair(
     staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
     staged_binding = output_dir / staged_binding_name(target, artifact_profile)
     source_archive = (
-        merged_runtime_archive(platform, lib_path, compilation_mode, bazel_configs)
+        runtime_merged_archive(platform, target, lib_path, compilation_mode, bazel_configs)
         if needs_merged_runtime_archive(target, lib_path)
         else lib_path
     )
