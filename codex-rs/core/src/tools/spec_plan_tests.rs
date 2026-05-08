@@ -2241,7 +2241,7 @@ fn model_info() -> ModelInfo {
         "default_reasoning_summary": "auto",
         "support_verbosity": false,
         "default_verbosity": null,
-        "supports_apply_patch_tool": true,
+        "apply_patch_tool_type": "freeform",
         "truncation_policy": {
             "mode": "bytes",
             "limit": 10000

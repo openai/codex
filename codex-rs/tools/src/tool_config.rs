@@ -7,6 +7,7 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -100,7 +101,7 @@ pub struct ToolsConfig {
     pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub environment_mode: ToolEnvironmentMode,
     pub allow_login_shell: bool,
-    pub include_apply_patch_tool: bool,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub web_search_config: Option<WebSearchConfig>,
     pub web_search_tool_type: WebSearchToolType,
@@ -171,8 +172,7 @@ impl ToolsConfig {
             session_source,
             ..
         } = params;
-        let include_apply_patch_tool =
-            model_info.supports_apply_patch_tool || features.enabled(Feature::ApplyPatchFreeform);
+        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_goal_tools = features.enabled(Feature::Goals);
@@ -219,6 +219,11 @@ impl ToolsConfig {
             model_shell_type
         };
 
+        let apply_patch_tool_type = model_info
+            .apply_patch_tool_type
+            .clone()
+            .or_else(|| include_apply_patch_tool.then_some(ApplyPatchToolType::Freeform));
+
         let agent_jobs_worker_tools = include_agent_jobs
             && matches!(
                 session_source,
@@ -233,7 +238,7 @@ impl ToolsConfig {
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             environment_mode: ToolEnvironmentMode::Single,
             allow_login_shell: true,
-            include_apply_patch_tool,
+            apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             web_search_config: None,
             web_search_tool_type: model_info.web_search_tool_type,
