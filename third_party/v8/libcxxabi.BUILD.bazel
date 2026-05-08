@@ -16,7 +16,7 @@ config_setting(
 cc_library(
     name = "headers",
     hdrs = glob(["include/**"]),
-    includes = ["include"],
+    strip_include_prefix = "include",
 )
 
 cc_runtime_stage0_library(

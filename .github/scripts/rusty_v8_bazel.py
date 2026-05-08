@@ -15,6 +15,7 @@ from pathlib import Path
 from rusty_v8_module_bazel import (
     RustyV8ChecksumError,
     check_module_bazel,
+    rusty_v8_http_file_versions,
     update_module_bazel,
 )
 
@@ -172,6 +173,16 @@ def rusty_v8_checksum_manifest_path(version: str) -> Path:
 def command_version(version: str | None) -> str:
     if version is not None:
         return version
+
+    manifest_versions = rusty_v8_http_file_versions(MODULE_BAZEL.read_text())
+    if len(manifest_versions) == 1:
+        return manifest_versions[0]
+    if len(manifest_versions) > 1:
+        raise SystemExit(
+            "expected at most one rusty_v8 http_file version in MODULE.bazel, "
+            f"found: {manifest_versions}; pass --version explicitly"
+        )
+
     return resolved_v8_crate_version()
 
 

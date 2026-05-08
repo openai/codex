@@ -1,7 +1,9 @@
 diff --git a/cc/cc_library.bzl b/cc/cc_library.bzl
+index c45c5fd954..2e3a01f12a 100644
 --- a/cc/cc_library.bzl
 +++ b/cc/cc_library.bzl
-@@ -16,4 +16,31 @@
+@@ -15,5 +15,39 @@
+
  load("@cc_compatibility_proxy//:proxy.bzl", _cc_library = "cc_library")
  
 +_RUSTY_V8_CUSTOM_LIBCXX_COPTS = select({
@@ -22,10 +24,17 @@ diff --git a/cc/cc_library.bzl b/cc/cc_library.bzl
 +    "//conditions:default": [],
 +})
 +
++_RUSTY_V8_CUSTOM_LIBCXX_REPOS = [
++    # V8 and ICU are patched in-tree. These external C++ dependencies still
++    # build inside the artifact closure once the LLVM toolchain's default
++    # libc++ headers are suppressed.
++    "@abseil-cpp+",
++    "@v8++http_archive+highway",
++    "@v8++http_archive+simdutf",
++]
++
 +def _should_use_rusty_v8_custom_libcxx():
-+    # V8 and ICU are patched in-tree. Abseil is the only external dependency
-+    # that still exchanges STL types with the artifact objects.
-+    return native.repository_name() == "@abseil-cpp+"
++    return native.repository_name() in _RUSTY_V8_CUSTOM_LIBCXX_REPOS
 +
  def cc_library(**kwargs):
 +    if _should_use_rusty_v8_custom_libcxx():
