@@ -115,38 +115,11 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
-    let mut directory_connectors =
-        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await;
-    let cached_connector_ids = directory_connectors
-        .iter()
-        .map(|connector| connector.id.clone())
-        .collect::<HashSet<_>>();
-    // Keep explicitly configured connector suggestions available on cold start
-    // without fetching the full connector directory.
-    directory_connectors.extend(
-        config
-            .tool_suggest
-            .discoverables
-            .iter()
-            .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
-            .filter(|discoverable| !cached_connector_ids.contains(discoverable.id.as_str()))
-            .map(|discoverable| AppInfo {
-                id: discoverable.id.clone(),
-                name: discoverable.id.clone(),
-                description: None,
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                install_url: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                is_accessible: false,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            }),
-    );
     let connector_ids = tool_suggest_connector_ids(config).await;
+    let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
+        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
+        connector_ids.iter().cloned(),
+    );
     let discoverable_connectors =
         codex_connectors::filter::filter_tool_suggest_discoverable_connectors(
             directory_connectors,

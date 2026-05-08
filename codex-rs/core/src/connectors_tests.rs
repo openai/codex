@@ -1140,7 +1140,7 @@ disabled_tools = [
 }
 
 #[tokio::test]
-async fn tool_suggest_uses_configured_connector_fallback_when_directory_cache_is_empty() {
+async fn tool_suggest_uses_connector_id_fallback_when_directory_cache_is_empty() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -1169,21 +1169,9 @@ discoverables = [
 
     assert_eq!(
         discoverable_tools,
-        vec![DiscoverableTool::from(AppInfo {
-            id: "connector_gmail".to_string(),
-            name: "connector_gmail".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: None,
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        })]
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "connector_gmail".to_string(),
+        ))]
     );
 }
 
