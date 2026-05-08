@@ -12,7 +12,7 @@ use sha1::Sha1;
 use crate::ConnectorDirectoryCacheKey;
 
 pub(crate) const CONNECTOR_DIRECTORY_DISK_CACHE_SCHEMA_VERSION: u8 = 1;
-const CONNECTOR_DIRECTORY_DISK_CACHE_DIR: &str = "cache/codex-app-directory";
+const CONNECTOR_DIRECTORY_DISK_CACHE_DIR: &str = "cache/codex_app_directory";
 
 #[derive(Clone)]
 pub struct ConnectorDirectoryCacheContext {
