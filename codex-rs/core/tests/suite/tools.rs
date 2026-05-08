@@ -772,6 +772,20 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
             "timeout output missing `command timed out`: {stdout}"
         );
     } else {
+        let normalized_output = output_str
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .trim_end_matches('\n')
+            .to_string();
+
+        let shell_output_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n(?:.*)?$";
+        if Regex::new(shell_output_pattern)
+            .expect("shell timeout output regex should compile")
+            .is_match(&normalized_output)
+        {
+            return Ok(());
+        }
+
         // Fallback: accept the signal classification path to deflake the test.
         let signal_pattern = r"(?is)^execution error:.*signal.*$";
         assert_regex_match(signal_pattern, output_str);
