@@ -70,52 +70,62 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            bazel_config: ci-v8
-            platform: linux_amd64
+            producer: upstream
             sandbox: true
             target: x86_64-unknown-linux-gnu
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
-            bazel_config: ci-v8
-            platform: linux_arm64
+            producer: upstream
             sandbox: true
             target: aarch64-unknown-linux-gnu
             variant: ptrcomp-sandbox
-          - runner: macos-15-xlarge
-            bazel_config: ci-macos
-            platform: macos_amd64
+          - runner: macos-15-large
+            producer: upstream
             sandbox: true
             target: x86_64-apple-darwin
             variant: ptrcomp-sandbox
-          - runner: macos-15-xlarge
-            bazel_config: ci-macos
-            platform: macos_arm64
+          - runner: macos-15
+            producer: upstream
             sandbox: true
             target: aarch64-apple-darwin
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04
+            producer: bazel
             bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: false
             target: x86_64-unknown-linux-musl
             variant: release
           - runner: ubuntu-24.04
+            producer: bazel
             bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: true
             target: x86_64-unknown-linux-musl
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
+            producer: bazel
             bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: false
             target: aarch64-unknown-linux-musl
             variant: release
           - runner: ubuntu-24.04-arm
+            producer: bazel
             bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: true
             target: aarch64-unknown-linux-musl
+            variant: ptrcomp-sandbox
+          - runner: windows-2022
+            producer: upstream
+            sandbox: true
+            target: x86_64-pc-windows-msvc
+            variant: ptrcomp-sandbox
+          - runner: windows-2022
+            producer: upstream
+            sandbox: true
+            target: aarch64-pc-windows-msvc
             variant: ptrcomp-sandbox
 
     steps:
@@ -125,6 +135,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Bazel
+        if: matrix.producer == 'bazel'
         uses: ./.github/actions/setup-bazel-ci
         with:
           target: ${{ matrix.target }}
@@ -134,7 +145,76 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Configure git for upstream checkout
+        if: matrix.producer == 'upstream'
+        shell: bash
+        run: git config --global core.symlinks true
+
+      - name: Check out upstream rusty_v8
+        if: matrix.producer == 'upstream'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: denoland/rusty_v8
+          ref: v${{ needs.metadata.outputs.v8_version }}
+          path: upstream-rusty-v8
+          submodules: recursive
+
+      - name: Set up upstream Rust toolchain
+        if: matrix.producer == 'upstream'
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          toolchain: "1.91.0"
+          targets: ${{ matrix.target }}
+
+      - name: Install Clang for upstream Linux build
+        if: matrix.producer == 'upstream' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain-noble-19.list
+          curl https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/llvm-snapshot.gpg >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y lld-19 clang-19 clang-tools-19 clang-tidy-19 clang-format-19 libclang-19-dev
+          echo "LIBCLANG_PATH=/usr/lib/llvm-19/lib" >> "${GITHUB_ENV}"
+
+      - name: Set LIBCLANG_PATH for upstream macOS build
+        if: matrix.producer == 'upstream' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode_clang_lib="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+          echo "LIBCLANG_PATH=${xcode_clang_lib}" >> "${GITHUB_ENV}"
+
+      - name: Install Chromium clang for ARM64 MSVC cross build
+        if: matrix.producer == 'upstream' && matrix.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: python3 tools/clang/scripts/update.py
+
+      - name: Build upstream rusty_v8 release pair
+        if: matrix.producer == 'upstream'
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: |
+          set -euo pipefail
+
+          cargo_args=(
+            build
+            --locked
+            --release
+            --target "${TARGET}"
+          )
+          if [[ "${{ matrix.sandbox }}" == "true" ]]; then
+            cargo_args+=(--features v8_enable_sandbox)
+          fi
+
+          V8_FROM_SOURCE=true cargo "${cargo_args[@]}"
+
       - name: Build Bazel V8 release pair
+        if: matrix.producer == 'bazel'
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
@@ -176,26 +256,38 @@ jobs:
       - name: Stage release pair
         env:
           PLATFORM: ${{ matrix.platform }}
+          PRODUCER: ${{ matrix.producer }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
-          stage_args=(
-            --platform "${PLATFORM}"
-            --target "${TARGET}"
-            --output-dir "dist/${TARGET}"
-          )
-          if [[ "${SANDBOX}" == "true" ]]; then
-            stage_args+=(--sandbox)
+          if [[ "${PRODUCER}" == "upstream" ]]; then
+            stage_args=(
+              --source-root upstream-rusty-v8
+              --target "${TARGET}"
+              --output-dir "dist/${TARGET}"
+            )
+            if [[ "${SANDBOX}" == "true" ]]; then
+              stage_args+=(--sandbox)
+            fi
+            python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair "${stage_args[@]}"
           else
-            stage_args+=(--bazel-config v8-release-compat)
+            stage_args=(
+              --platform "${PLATFORM}"
+              --target "${TARGET}"
+              --output-dir "dist/${TARGET}"
+            )
+            if [[ "${SANDBOX}" == "true" ]]; then
+              stage_args+=(--sandbox)
+            else
+              stage_args+=(--bazel-config v8-release-compat)
+            fi
+            python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
           fi
 
-          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
-
-      - name: Upload staged musl artifacts
+      - name: Upload staged artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}

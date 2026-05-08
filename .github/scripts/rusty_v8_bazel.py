@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-import urllib.request
 from pathlib import Path
 
 from rusty_v8_module_bazel import (
@@ -27,71 +26,6 @@ RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 STATIC_RUNTIME_ARCHIVE_LABELS = [
     "@llvm//runtimes/libcxx:libcxx.static",
     "@llvm//runtimes/libcxx:libcxxabi.static",
-]
-DARWIN_RUNTIME_ARCHIVE_MEMBERS = [
-    "algorithm.o",
-    "any.o",
-    "atomic.o",
-    "barrier.o",
-    "bind.o",
-    "call_once.o",
-    "charconv.o",
-    "chrono.o",
-    "condition_variable.o",
-    "condition_variable_destructor.o",
-    "error_category.o",
-    "exception.o",
-    "directory_iterator.o",
-    "filesystem_error.o",
-    "operations.o",
-    "path.o",
-    "functional.o",
-    "future.o",
-    "hash.o",
-    "ios.o",
-    "ios.instantiations.o",
-    "iostream.o",
-    "locale.o",
-    "memory.o",
-    "mutex.o",
-    "mutex_destructor.o",
-    "new_handler.o",
-    "new_helpers.o",
-    "optional.o",
-    "random.o",
-    "random_shuffle.o",
-    "regex.o",
-    "d2fixed.o",
-    "d2s.o",
-    "f2s.o",
-    "shared_mutex.o",
-    "stdexcept.o",
-    "string.o",
-    "strstream.o",
-    "system_error.o",
-    "thread.o",
-    "typeinfo.o",
-    "valarray.o",
-    "variant.o",
-    "vector.o",
-    "verbose_abort.o",
-    "new.o",
-    "abort_message.o",
-    "cxa_aux_runtime.o",
-    "cxa_default_handlers.o",
-    "cxa_exception.o",
-    "cxa_exception_storage.o",
-    "cxa_handlers.o",
-    "cxa_personality.o",
-    "cxa_vector.o",
-    "cxa_virtual.o",
-    "fallback_malloc.o",
-    "private_typeinfo.o",
-    "stdlib_exception.o",
-    "stdlib_stdexcept.o",
-    "stdlib_typeinfo.o",
-    "cxa_guard.o",
-    "cxa_demangle.o",
 ]
 LLVM_AR_LABEL = "@llvm//tools:llvm-ar"
 LLVM_RANLIB_LABEL = "@llvm//tools:llvm-ranlib"
@@ -265,18 +199,7 @@ def staged_checksums_name(target: str, artifact_profile: str) -> str:
 
 def needs_merged_runtime_archive(target: str, source_path: Path) -> bool:
     return source_path.suffix == ".a" and target.endswith(
-        ("-apple-darwin", "-unknown-linux-gnu", "-unknown-linux-musl")
-    )
-
-
-def needs_built_runtime_archives(target: str) -> bool:
-    return target.endswith(("-unknown-linux-gnu", "-unknown-linux-musl"))
-
-
-def upstream_rusty_v8_archive_url(target: str, version: str) -> str:
-    return (
-        "https://github.com/denoland/rusty_v8/releases/download/"
-        f"v{version}/librusty_v8_release_{target}.a.gz"
+        ("-unknown-linux-gnu", "-unknown-linux-musl")
     )
 
 
@@ -384,113 +307,62 @@ def merged_built_runtime_archive(
     )
 
 
-def downloaded_darwin_runtime_archive(
-    target: str,
-    version: str,
-    llvm_ar: Path,
-) -> Path:
-    temp_dir = Path(tempfile.mkdtemp(prefix="rusty-v8-darwin-runtime-"))
-    compressed_archive = temp_dir / f"librusty_v8_release_{target}.a.gz"
-    source_archive = temp_dir / f"librusty_v8_release_{target}.a"
-    runtime_archive = temp_dir / f"libcxx_runtime_{target}.a"
-
-    with urllib.request.urlopen(upstream_rusty_v8_archive_url(target, version)) as src:
-        with compressed_archive.open("wb") as dst:
-            shutil.copyfileobj(src, dst)
-    with gzip.open(compressed_archive, "rb") as src:
-        with source_archive.open("wb") as dst:
-            shutil.copyfileobj(src, dst)
-
-    listed_members = subprocess.run(
-        [str(llvm_ar), "t", str(source_archive)],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    missing_members = [
-        member for member in DARWIN_RUNTIME_ARCHIVE_MEMBERS if member not in listed_members
-    ]
-    if missing_members:
-        raise SystemExit(
-            f"missing Darwin runtime members in {source_archive}: {missing_members}"
-        )
-
-    subprocess.run(
-        [
-            str(llvm_ar),
-            "x",
-            str(source_archive),
-            *DARWIN_RUNTIME_ARCHIVE_MEMBERS,
-        ],
-        cwd=temp_dir,
-        check=True,
-    )
-    merge_commands = "\n".join(
-        [
-            f"create {runtime_archive}",
-            *[f"addmod {temp_dir / member}" for member in DARWIN_RUNTIME_ARCHIVE_MEMBERS],
-            "save",
-            "end",
-        ]
-    )
-    subprocess.run(
-        [str(llvm_ar), "-M"],
-        cwd=ROOT,
-        check=True,
-        input=merge_commands,
-        text=True,
-    )
-    return runtime_archive
+def upstream_release_pair_paths(source_root: Path, target: str) -> tuple[Path, Path]:
+    lib_name = "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
+    gn_out = source_root / "target" / target / "release" / "gn_out"
+    return gn_out / "obj" / lib_name, gn_out / "src_binding.rs"
 
 
-def merged_darwin_runtime_archive(
-    platform: str,
+def stage_artifacts(
     target: str,
     lib_path: Path,
-    compilation_mode: str = "fastbuild",
-    bazel_configs: list[str] | None = None,
-) -> Path:
-    llvm_ar = host_runnable_bazel_output_file(
-        platform,
-        LLVM_AR_LABEL,
-        compilation_mode,
-        bazel_configs,
-    )
-    version = resolved_v8_crate_version()
-    runtime_archive = downloaded_darwin_runtime_archive(target, version, llvm_ar)
-    return merged_archive(
-        platform,
-        lib_path,
-        [runtime_archive],
-        compilation_mode,
-        bazel_configs,
-    )
+    binding_path: Path,
+    output_dir: Path,
+    sandbox: bool,
+) -> None:
+    missing_paths = [str(path) for path in [lib_path, binding_path] if not path.exists()]
+    if missing_paths:
+        raise SystemExit(f"missing release outputs for {target}: {missing_paths}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_profile = SANDBOX_ARTIFACT_PROFILE if sandbox else RELEASE_ARTIFACT_PROFILE
+    staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
+    staged_binding = output_dir / staged_binding_name(target, artifact_profile)
+
+    with lib_path.open("rb") as src, staged_library.open("wb") as dst:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=dst,
+            compresslevel=6,
+            mtime=0,
+        ) as gz:
+            shutil.copyfileobj(src, gz)
+
+    shutil.copyfile(binding_path, staged_binding)
+
+    staged_checksums = output_dir / staged_checksums_name(target, artifact_profile)
+    with staged_checksums.open("w", encoding="utf-8") as checksums:
+        for path in [staged_library, staged_binding]:
+            digest = hashlib.sha256()
+            with path.open("rb") as artifact:
+                for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checksums.write(f"{digest.hexdigest()}  {path.name}\n")
+
+    print(staged_library)
+    print(staged_binding)
+    print(staged_checksums)
 
 
-def runtime_merged_archive(
-    platform: str,
+def stage_upstream_release_pair(
+    source_root: Path,
     target: str,
-    lib_path: Path,
-    compilation_mode: str = "fastbuild",
-    bazel_configs: list[str] | None = None,
-) -> Path:
-    if target.endswith("-apple-darwin"):
-        return merged_darwin_runtime_archive(
-            platform,
-            target,
-            lib_path,
-            compilation_mode,
-            bazel_configs,
-        )
-    if not needs_built_runtime_archives(target):
-        raise SystemExit(f"unsupported runtime merge target: {target}")
-    return merged_built_runtime_archive(
-        platform,
-        lib_path,
-        compilation_mode,
-        bazel_configs,
-    )
+    output_dir: Path,
+    sandbox: bool = False,
+) -> None:
+    lib_path, binding_path = upstream_release_pair_paths(source_root, target)
+    stage_artifacts(target, lib_path, binding_path, output_dir, sandbox)
 
 
 def stage_release_pair(
@@ -518,40 +390,12 @@ def stage_release_pair(
     except StopIteration as exc:
         raise SystemExit(f"missing Rust binding output for {target}") from exc
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    artifact_profile = SANDBOX_ARTIFACT_PROFILE if sandbox else RELEASE_ARTIFACT_PROFILE
-    staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
-    staged_binding = output_dir / staged_binding_name(target, artifact_profile)
     source_archive = (
-        runtime_merged_archive(platform, target, lib_path, compilation_mode, bazel_configs)
+        merged_built_runtime_archive(platform, lib_path, compilation_mode, bazel_configs)
         if needs_merged_runtime_archive(target, lib_path)
         else lib_path
     )
-
-    with source_archive.open("rb") as src, staged_library.open("wb") as dst:
-        with gzip.GzipFile(
-            filename="",
-            mode="wb",
-            fileobj=dst,
-            compresslevel=6,
-            mtime=0,
-        ) as gz:
-            shutil.copyfileobj(src, gz)
-
-    shutil.copyfile(binding_path, staged_binding)
-
-    staged_checksums = output_dir / staged_checksums_name(target, artifact_profile)
-    with staged_checksums.open("w", encoding="utf-8") as checksums:
-        for path in [staged_library, staged_binding]:
-            digest = hashlib.sha256()
-            with path.open("rb") as artifact:
-                for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            checksums.write(f"{digest.hexdigest()}  {path.name}\n")
-
-    print(staged_library)
-    print(staged_binding)
-    print(staged_checksums)
+    stage_artifacts(target, source_archive, binding_path, output_dir, sandbox)
 
 
 def parse_args() -> argparse.Namespace:
@@ -574,6 +418,14 @@ def parse_args() -> argparse.Namespace:
         default="fastbuild",
         choices=["fastbuild", "opt", "dbg"],
     )
+
+    stage_upstream_release_pair_parser = subparsers.add_parser(
+        "stage-upstream-release-pair"
+    )
+    stage_upstream_release_pair_parser.add_argument("--source-root", type=Path, required=True)
+    stage_upstream_release_pair_parser.add_argument("--target", required=True)
+    stage_upstream_release_pair_parser.add_argument("--output-dir", required=True)
+    stage_upstream_release_pair_parser.add_argument("--sandbox", action="store_true")
 
     subparsers.add_parser("resolved-v8-crate-version")
 
@@ -607,6 +459,14 @@ def main() -> int:
             output_dir=Path(args.output_dir),
             compilation_mode=args.compilation_mode,
             bazel_configs=args.bazel_configs,
+            sandbox=args.sandbox,
+        )
+        return 0
+    if args.command == "stage-upstream-release-pair":
+        stage_upstream_release_pair(
+            source_root=args.source_root,
+            target=args.target,
+            output_dir=Path(args.output_dir),
             sandbox=args.sandbox,
         )
         return 0

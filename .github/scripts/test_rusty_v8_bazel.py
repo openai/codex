@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import textwrap
 import unittest
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
@@ -59,7 +60,6 @@ class RustyV8BazelTest(unittest.TestCase):
 
     def test_needs_merged_runtime_archive(self) -> None:
         for target in [
-            "x86_64-apple-darwin",
             "x86_64-unknown-linux-gnu",
             "x86_64-unknown-linux-musl",
         ]:
@@ -67,64 +67,79 @@ class RustyV8BazelTest(unittest.TestCase):
 
         self.assertFalse(
             rusty_v8_bazel.needs_merged_runtime_archive(
+                "x86_64-apple-darwin",
+                Path("v8.a"),
+            )
+        )
+        self.assertFalse(
+            rusty_v8_bazel.needs_merged_runtime_archive(
                 "x86_64-pc-windows-msvc",
                 Path("v8.a"),
             )
         )
 
-    def test_needs_built_runtime_archives(self) -> None:
-        for target in [
-            "x86_64-unknown-linux-gnu",
-            "x86_64-unknown-linux-musl",
-        ]:
-            self.assertTrue(rusty_v8_bazel.needs_built_runtime_archives(target))
-
-        self.assertFalse(rusty_v8_bazel.needs_built_runtime_archives("x86_64-apple-darwin"))
-        self.assertFalse(rusty_v8_bazel.needs_built_runtime_archives("x86_64-pc-windows-msvc"))
-
-    def test_upstream_rusty_v8_archive_url(self) -> None:
+    def test_upstream_release_pair_paths(self) -> None:
         self.assertEqual(
             (
-                "https://github.com/denoland/rusty_v8/releases/download/"
-                "v147.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz"
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/obj/"
+                    "librusty_v8.a"
+                ),
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/"
+                    "src_binding.rs"
+                ),
             ),
-            rusty_v8_bazel.upstream_rusty_v8_archive_url(
+            rusty_v8_bazel.upstream_release_pair_paths(
+                Path("/tmp/rusty_v8"),
                 "x86_64-apple-darwin",
-                "147.4.0",
-            ),
-        )
-
-    @patch("rusty_v8_bazel.merged_built_runtime_archive")
-    @patch("rusty_v8_bazel.merged_darwin_runtime_archive")
-    def test_runtime_merged_archive_dispatches_by_target(
-        self,
-        merged_darwin_runtime_archive: Mock,
-        merged_built_runtime_archive: Mock,
-    ) -> None:
-        merged_darwin_runtime_archive.return_value = Path("/tmp/darwin.a")
-        merged_built_runtime_archive.return_value = Path("/tmp/linux.a")
-
-        self.assertEqual(
-            Path("/tmp/darwin.a"),
-            rusty_v8_bazel.runtime_merged_archive(
-                "macos_amd64",
-                "x86_64-apple-darwin",
-                Path("/tmp/v8.a"),
             ),
         )
         self.assertEqual(
-            Path("/tmp/linux.a"),
-            rusty_v8_bazel.runtime_merged_archive(
-                "linux_amd64",
-                "x86_64-unknown-linux-gnu",
-                Path("/tmp/v8.a"),
+            (
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
+                    "obj/rusty_v8.lib"
+                ),
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
+                    "src_binding.rs"
+                ),
             ),
-        )
-        with self.assertRaisesRegex(SystemExit, "unsupported runtime merge target"):
-            rusty_v8_bazel.runtime_merged_archive(
-                "windows_amd64",
+            rusty_v8_bazel.upstream_release_pair_paths(
+                Path("/tmp/rusty_v8"),
                 "x86_64-pc-windows-msvc",
-                Path("/tmp/v8.a"),
+            ),
+        )
+
+    def test_stage_upstream_release_pair(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
+            source_root = Path(source_dir)
+            gn_out = (
+                source_root
+                / "target"
+                / "aarch64-apple-darwin"
+                / "release"
+                / "gn_out"
+            )
+            (gn_out / "obj").mkdir(parents=True)
+            (gn_out / "obj" / "librusty_v8.a").write_bytes(b"archive")
+            (gn_out / "src_binding.rs").write_text("binding")
+
+            rusty_v8_bazel.stage_upstream_release_pair(
+                source_root,
+                "aarch64-apple-darwin",
+                Path(output_dir),
+                sandbox=True,
+            )
+
+            self.assertEqual(
+                {
+                    "librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz",
+                    "src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs",
+                    "rusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.sha256",
+                },
+                {path.name for path in Path(output_dir).iterdir()},
             )
 
     @patch("rusty_v8_bazel.ensure_bazel_output_files")
