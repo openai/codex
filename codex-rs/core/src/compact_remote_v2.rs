@@ -19,6 +19,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -185,29 +186,29 @@ async fn run_remote_compact_task_inner_impl(
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
 
-    let compaction_output_result = if let Some(client_session) = client_session {
-        run_remote_compaction_request_v2(
-            sess,
-            turn_context,
-            client_session,
-            &prompt,
-            turn_metadata_header.as_deref(),
-        )
-        .await
-    } else {
-        let mut owned_client_session = sess.services.model_client.new_session();
-        run_remote_compaction_request_v2(
-            sess,
-            turn_context,
-            &mut owned_client_session,
-            &prompt,
-            turn_metadata_header.as_deref(),
-        )
-        .await
+    let mut owned_client_session;
+    let client_session = match client_session {
+        Some(client_session) => client_session,
+        None => {
+            owned_client_session = sess.services.model_client.new_session();
+            &mut owned_client_session
+        }
     };
+    let compaction_output_result = run_remote_compaction_request_v2(
+        sess,
+        turn_context,
+        client_session,
+        &prompt,
+        turn_metadata_header.as_deref(),
+    )
+    .await;
 
-    trace_attempt.record_result(compaction_output_result.as_ref().map(std::slice::from_ref));
-    let compaction_output = compaction_output_result?;
+    trace_attempt.record_result(
+        compaction_output_result
+            .as_ref()
+            .map(|(item, _)| std::slice::from_ref(item)),
+    );
+    let (compaction_output, response_id) = compaction_output_result?;
     let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
     let new_history = process_compacted_history(
         sess.as_ref(),
@@ -235,6 +236,12 @@ async fn run_remote_compact_task_inner_impl(
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
+    if turn_context
+        .features
+        .enabled(Feature::ResponsesWebsocketResponseProcessed)
+    {
+        client_session.send_response_processed(&response_id).await;
+    }
     Ok(())
 }
 
@@ -244,7 +251,7 @@ async fn run_remote_compaction_request_v2(
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     turn_metadata_header: Option<&str>,
-) -> CodexResult<ResponseItem> {
+) -> CodexResult<(ResponseItem, String)> {
     let stream = client_session
         .stream(
             prompt,
@@ -274,11 +281,11 @@ async fn run_remote_compaction_request_v2(
 
 async fn collect_context_compaction_output(
     mut stream: ResponseStream,
-) -> CodexResult<ResponseItem> {
+) -> CodexResult<(ResponseItem, String)> {
     let mut output_item_count = 0usize;
     let mut context_compaction_count = 0usize;
     let mut context_compaction_output = None;
-    let mut completed = false;
+    let mut completed_response_id = None;
     while let Some(event) = stream.next().await {
         match event? {
             ResponseEvent::OutputItemDone(item) => {
@@ -303,19 +310,19 @@ async fn collect_context_compaction_output(
                     _ => {}
                 }
             }
-            ResponseEvent::Completed { .. } => {
-                completed = true;
+            ResponseEvent::Completed { response_id, .. } => {
+                completed_response_id = Some(response_id);
                 break;
             }
             _ => {}
         }
     }
 
-    if !completed {
+    let Some(response_id) = completed_response_id else {
         return Err(CodexErr::Fatal(
             "remote compaction v2 stream closed before response.completed".to_string(),
         ));
-    }
+    };
 
     if context_compaction_count != 1 {
         return Err(CodexErr::Fatal(format!(
@@ -326,7 +333,7 @@ async fn collect_context_compaction_output(
     let Some(context_compaction_output) = context_compaction_output else {
         unreachable!("context compaction output must exist when count is exactly one");
     };
-    Ok(context_compaction_output)
+    Ok((context_compaction_output, response_id))
 }
 
 fn build_v2_compacted_history(
@@ -439,10 +446,11 @@ mod tests {
             }),
         ]);
 
-        let output = collect_context_compaction_output(stream)
+        let (output, response_id) = collect_context_compaction_output(stream)
             .await
             .expect("context compaction should be collected");
 
         assert_eq!(output, context_compaction);
+        assert_eq!(response_id, "resp-compact");
     }
 }
