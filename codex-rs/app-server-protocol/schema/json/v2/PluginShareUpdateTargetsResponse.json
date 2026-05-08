@@ -1,6 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "PluginShareDiscoverability": {
+      "enum": [
+        "LISTED",
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
     "PluginSharePrincipal": {
       "properties": {
         "name": {
@@ -30,6 +38,9 @@
     }
   },
   "properties": {
+    "discoverability": {
+      "$ref": "#/definitions/PluginShareDiscoverability"
+    },
     "principals": {
       "items": {
         "$ref": "#/definitions/PluginSharePrincipal"
@@ -38,6 +49,7 @@
     }
   },
   "required": [
+    "discoverability",
     "principals"
   ],
   "title": "PluginShareUpdateTargetsResponse",

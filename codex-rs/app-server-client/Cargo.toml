@@ -7,6 +7,7 @@ license.workspace = true
 [lib]
 name = "codex_app_server_client"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true

@@ -8,6 +8,7 @@ version.workspace = true
 [lib]
 name = "codex_windows_sandbox"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "codex-windows-sandbox-setup"

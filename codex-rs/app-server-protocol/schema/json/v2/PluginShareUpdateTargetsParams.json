@@ -23,9 +23,19 @@
         "principalType"
       ],
       "type": "object"
+    },
+    "PluginShareUpdateDiscoverability": {
+      "enum": [
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
     }
   },
   "properties": {
+    "discoverability": {
+      "$ref": "#/definitions/PluginShareUpdateDiscoverability"
+    },
     "remotePluginId": {
       "type": "string"
     },
@@ -37,6 +47,7 @@
     }
   },
   "required": [
+    "discoverability",
     "remotePluginId",
     "shareTargets"
   ],

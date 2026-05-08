@@ -340,8 +340,9 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_server_response(&self, response: ServerResponse) {
+    pub fn track_server_response(&self, completed_at_ms: u64, response: ServerResponse) {
         self.record_fact(AnalyticsFact::ServerResponse {
+            completed_at_ms,
             response: Box::new(response),
         });
     }

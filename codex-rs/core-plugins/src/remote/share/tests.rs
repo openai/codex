@@ -204,7 +204,7 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         .and(body_json(json!({
             "file_id": "file_123",
             "etag": "\"upload_etag_123\"",
-            "discoverability": "PRIVATE",
+            "discoverability": "UNLISTED",
             "share_targets": [
                 {
                     "principal_type": "user",
@@ -212,7 +212,7 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
                 },
                 {
                     "principal_type": "workspace",
-                    "principal_id": "workspace-1",
+                    "principal_id": "account_id",
                 },
             ],
         })))
@@ -231,17 +231,11 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         &plugin_path,
         /*remote_plugin_id*/ None,
         RemotePluginShareAccessPolicy {
-            discoverability: Some(RemotePluginShareDiscoverability::Private),
-            share_targets: Some(vec![
-                RemotePluginShareTarget {
-                    principal_type: RemotePluginSharePrincipalType::User,
-                    principal_id: "user-1".to_string(),
-                },
-                RemotePluginShareTarget {
-                    principal_type: RemotePluginSharePrincipalType::Workspace,
-                    principal_id: "workspace-1".to_string(),
-                },
-            ]),
+            discoverability: Some(RemotePluginShareDiscoverability::Unlisted),
+            share_targets: Some(vec![RemotePluginShareTarget {
+                principal_type: RemotePluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+            }]),
         },
     )
     .await
@@ -401,10 +395,11 @@ async fn update_remote_plugin_share_targets_updates_targets() {
     let auth = test_auth();
 
     Mock::given(method("PUT"))
-        .and(path("/backend-api/public/plugins/plugins_123/shares"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
         .and(body_json(json!({
+            "discoverability": "UNLISTED",
             "targets": [
                 {
                     "principal_type": "user",
@@ -413,6 +408,10 @@ async fn update_remote_plugin_share_targets_updates_targets() {
                 {
                     "principal_type": "group",
                     "principal_id": "group-1",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account_id",
                 },
             ],
         })))
@@ -429,6 +428,7 @@ async fn update_remote_plugin_share_targets_updates_targets() {
                     "name": "Engineering",
                 },
             ],
+            "discoverability": "UNLISTED",
         })))
         .expect(1)
         .mount(&server)
@@ -448,6 +448,7 @@ async fn update_remote_plugin_share_targets_updates_targets() {
                 principal_id: "group-1".to_string(),
             },
         ],
+        RemotePluginShareUpdateDiscoverability::Unlisted,
     )
     .await
     .unwrap();
@@ -467,6 +468,65 @@ async fn update_remote_plugin_share_targets_updates_targets() {
                     name: "Engineering".to_string(),
                 },
             ],
+            discoverability: RemotePluginShareDiscoverability::Unlisted,
+        }
+    );
+}
+
+#[tokio::test]
+async fn update_remote_plugin_share_targets_falls_back_to_requested_discoverability() {
+    let server = MockServer::start().await;
+    let config = test_config(&server);
+    let auth = test_auth();
+
+    Mock::given(method("PUT"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(body_json(json!({
+            "discoverability": "PRIVATE",
+            "targets": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-1",
+                },
+            ],
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "principals": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-1",
+                    "name": "Gavin",
+                },
+            ],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = update_remote_plugin_share_targets(
+        &config,
+        Some(&auth),
+        "plugins_123",
+        vec![RemotePluginShareTarget {
+            principal_type: RemotePluginSharePrincipalType::User,
+            principal_id: "user-1".to_string(),
+        }],
+        RemotePluginShareUpdateDiscoverability::Private,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result,
+        RemotePluginShareUpdateTargetsResult {
+            principals: vec![RemotePluginSharePrincipal {
+                principal_type: RemotePluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+                name: "Gavin".to_string(),
+            }],
+            discoverability: RemotePluginShareDiscoverability::Private,
         }
     );
 }

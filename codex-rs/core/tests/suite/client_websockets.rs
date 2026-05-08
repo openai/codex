@@ -226,6 +226,81 @@ async fn responses_websocket_sends_response_processed_when_feature_enabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_sends_response_processed_after_remote_compaction_v2() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hi"),
+            ev_completed("resp-1"),
+        ],
+        vec![],
+        vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "context_compaction",
+                    "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                }
+            }),
+            ev_completed("resp-compact"),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::RemoteCompactionV2)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ResponsesWebsocketResponseProcessed)
+            .expect("test config should allow feature update");
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should send response.processed after processing");
+
+    test.codex
+        .submit(Op::Compact)
+        .await
+        .expect("compact submission should succeed");
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    let compact_processed = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 4)
+        .await;
+    assert_eq!(
+        compact_processed.body_json(),
+        json!({
+            "type": "response.processed",
+            "response_id": "resp-compact",
+        })
+    );
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 5);
+    assert_eq!(
+        connection[3].body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_omits_response_processed_without_feature() {
     skip_if_no_network!();
 

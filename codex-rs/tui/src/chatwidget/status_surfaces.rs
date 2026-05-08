@@ -6,7 +6,13 @@
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
+use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
+use codex_app_server_protocol::AskForApproval;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
+use codex_utils_sandbox_summary::summarize_permission_profile;
 
 /// Items shown in the terminal title when the user has not configured a
 /// custom selection. Intentionally minimal: activity indicator + project name.
@@ -590,9 +596,11 @@ impl ChatWidget {
                     }
                 }),
             StatusLineItem::Status => Some(self.run_state_status_text()),
+            StatusLineItem::Permissions => Some(permissions_display(&self.config)),
+            StatusLineItem::ApprovalMode => Some(approval_mode_display(&self.config)),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
-                let total = usage.tokens_in_context_window();
+                let total = usage.blended_total();
                 if total <= 0 {
                     None
                 } else {
@@ -641,17 +649,24 @@ impl ChatWidget {
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
-                if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
+                if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
                     "Fast on".to_string()
                 } else {
                     "Fast off".to_string()
                 },
             ),
             StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
-            StatusLineItem::ThreadTitle => self.thread_name.as_ref().and_then(|name| {
-                let trimmed = name.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }),
+            StatusLineItem::ThreadTitle => self.thread_name.as_ref().map_or_else(
+                || self.thread_id.map(|id| id.to_string()),
+                |name| {
+                    let trimmed = name.trim();
+                    if trimmed.is_empty() {
+                        self.thread_id.map(|id| id.to_string())
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                },
+            ),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
@@ -678,6 +693,8 @@ impl ChatWidget {
             StatusSurfacePreviewItem::GitBranch => StatusLineItem::GitBranch,
             StatusSurfacePreviewItem::PullRequestNumber => StatusLineItem::PullRequestNumber,
             StatusSurfacePreviewItem::BranchChanges => StatusLineItem::BranchChanges,
+            StatusSurfacePreviewItem::Permissions => StatusLineItem::Permissions,
+            StatusSurfacePreviewItem::ApprovalMode => StatusLineItem::ApprovalMode,
             StatusSurfacePreviewItem::ContextRemaining => StatusLineItem::ContextRemaining,
             StatusSurfacePreviewItem::ContextUsed => StatusLineItem::ContextUsed,
             StatusSurfacePreviewItem::FiveHourLimit => StatusLineItem::FiveHourLimit,
@@ -713,17 +730,9 @@ impl ChatWidget {
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
-            TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
-                let trimmed = name.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(Self::truncate_terminal_title_part(
-                        trimmed.to_string(),
-                        /*max_chars*/ 48,
-                    ))
-                }
-            }),
+            TerminalTitleItem::Thread => self
+                .status_line_value_for_item(StatusLineItem::ThreadTitle)
+                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48)),
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
             }),
@@ -771,13 +780,18 @@ impl ChatWidget {
 
     fn model_with_reasoning_display_name(&self) -> String {
         let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-        let fast_label =
-            if self.should_show_fast_status(self.current_model(), self.current_service_tier()) {
-                " fast"
-            } else {
-                ""
-            };
-        format!("{} {label}{fast_label}", self.model_display_name())
+        let service_tier_label = self
+            .current_service_tier()
+            .and_then(|service_tier| {
+                self.current_model_service_tier_commands()
+                    .into_iter()
+                    .find(|tier| tier.id == service_tier)
+                    .map(|tier| tier.name)
+            })
+            .filter(|_| self.has_chatgpt_account)
+            .map(|tier| format!(" {tier}"))
+            .unwrap_or_default();
+        format!("{} {label}{service_tier_label}", self.model_display_name())
     }
 
     /// Computes the compact runtime status label used by word-based status items.
@@ -887,6 +901,44 @@ impl ChatWidget {
         let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+}
+
+fn permissions_display(config: &Config) -> String {
+    let active_permission_profile = config.permissions.active_permission_profile();
+    if let Some(active_permission_profile) = active_permission_profile.as_ref()
+        && !active_permission_profile.id.starts_with(':')
+    {
+        return active_permission_profile.id.clone();
+    }
+
+    let permission_profile = config.permissions.permission_profile();
+    let summary = summarize_permission_profile(&permission_profile, config.cwd.as_path());
+    if let Some(details) = summary.strip_prefix("read-only")
+        && !details.contains("(network access enabled)")
+    {
+        return "Read Only".to_string();
+    }
+    if let Some(details) = summary.strip_prefix("workspace-write")
+        && !details.contains("(network access enabled)")
+    {
+        return "Workspace".to_string();
+    }
+    if permission_profile == PermissionProfile::Disabled {
+        return "Full Access".to_string();
+    }
+
+    "Custom permissions".to_string()
+}
+
+fn approval_mode_display(config: &Config) -> String {
+    let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
+    if approval_policy == AskForApproval::OnRequest
+        && config.approvals_reviewer == ApprovalsReviewer::AutoReview
+    {
+        "auto-review".to_string()
+    } else {
+        config.permissions.approval_policy.value().to_string()
     }
 }
 

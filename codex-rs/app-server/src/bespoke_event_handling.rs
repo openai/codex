@@ -511,6 +511,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: event.turn_id.clone(),
                 item_id: item_id.clone(),
+                started_at_ms: event.started_at_ms,
                 reason: event.reason.clone(),
                 grant_root: event.grant_root.clone(),
             };
@@ -542,6 +543,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 call_id,
                 approval_id,
                 turn_id,
+                started_at_ms,
                 command,
                 cwd,
                 reason,
@@ -615,6 +617,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: turn_id.clone(),
                 item_id: call_id.clone(),
+                started_at_ms,
                 approval_id: approval_id.clone(),
                 reason,
                 network_approval_context,
@@ -764,6 +767,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: request.turn_id.clone(),
                 item_id: request.call_id.clone(),
+                started_at_ms: request.started_at_ms,
                 cwd: request_cwd.clone(),
                 reason: request.reason,
                 permissions: request.permissions.into(),
@@ -2249,6 +2253,9 @@ mod tests {
             id: format!("review-{id}"),
             target_item_id: Some(id.to_string()),
             turn_id: turn_id.to_string(),
+            started_at_ms: 1_000,
+            completed_at_ms: (!matches!(status, GuardianAssessmentStatus::InProgress))
+                .then_some(1_042),
             status,
             risk_level,
             user_authorization,
@@ -2313,6 +2320,8 @@ mod tests {
                 id: "review-1".to_string(),
                 target_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
+                started_at_ms: 1_000,
+                completed_at_ms: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
@@ -2326,6 +2335,7 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
+                assert_eq!(payload.started_at_ms, 1_000);
                 assert_eq!(payload.review_id, "review-1");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
@@ -2356,6 +2366,8 @@ mod tests {
                 id: "review-2".to_string(),
                 target_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
+                started_at_ms: 1_000,
+                completed_at_ms: Some(1_042),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
@@ -2371,6 +2383,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.started_at_ms, 1_000);
+                assert_eq!(payload.completed_at_ms, 1_042);
                 assert_eq!(payload.review_id, "review-2");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
                 assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
@@ -2406,6 +2420,8 @@ mod tests {
                 id: "review-3".to_string(),
                 target_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
+                started_at_ms: 1_000,
+                completed_at_ms: Some(1_042),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_level: None,
                 user_authorization: None,

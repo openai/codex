@@ -1,6 +1,6 @@
 {
   "models": [
-    {
+    { 
       "prefer_websockets": true,
       "support_verbosity": true,
       "default_verbosity": "low",
@@ -82,6 +82,13 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "1.5x speed, increased usage"
+        }
+      ],
       "additional_speed_tiers": [
         "fast"
       ],
@@ -111,7 +118,7 @@
       "slug": "gpt-5.4",
       "display_name": "gpt-5.4",
       "description": "Strong model for everyday coding.",
-      "default_reasoning_level": "xhigh",
+      "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -164,6 +171,18 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "1.5x speed, increased usage"
+        },
+        {
+          "id": "ultrafast",
+          "name": "Ultrafast",
+          "description": "The fastest available responses for latency-sensitive work."
+        }
+      ],
       "additional_speed_tiers": [
         "fast"
       ],
@@ -249,6 +268,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [],
       "additional_speed_tiers": [],
       "supports_reasoning_summaries": true
     },
@@ -332,6 +352,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [],
       "additional_speed_tiers": [],
       "supports_reasoning_summaries": true
     },
@@ -411,6 +432,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [],
       "additional_speed_tiers": [],
       "supports_reasoning_summaries": true
     },
@@ -491,6 +513,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "service_tiers": [],
       "additional_speed_tiers": [],
       "supports_reasoning_summaries": true
     }

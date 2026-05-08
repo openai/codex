@@ -17,6 +17,7 @@ use ts_rs::TS;
 
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
@@ -479,13 +480,23 @@ impl ModelPreset {
     pub fn supports_fast_mode(&self) -> bool {
         self.service_tiers
             .iter()
-            .any(|tier| tier.id == SPEED_TIER_FAST)
+            .any(|tier| tier.id == ServiceTier::Fast.request_value())
             || self
                 .additional_speed_tiers
                 .iter()
                 .any(|tier| tier == SPEED_TIER_FAST)
     }
+}
 
+impl ModelInfo {
+    pub fn supports_service_tier(&self, service_tier: &str) -> bool {
+        self.service_tiers
+            .iter()
+            .any(|tier| tier.id == service_tier)
+    }
+}
+
+impl ModelPreset {
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -853,7 +864,7 @@ mod tests {
     fn model_preset_supports_fast_mode_from_service_tiers() {
         let preset = ModelPreset::from(ModelInfo {
             service_tiers: vec![ModelServiceTier {
-                id: SPEED_TIER_FAST.to_string(),
+                id: ServiceTier::Fast.request_value().to_string(),
                 name: "Fast".to_string(),
                 description: "Priority processing.".to_string(),
             }],

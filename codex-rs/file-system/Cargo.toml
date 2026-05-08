@@ -12,3 +12,7 @@ async-trait = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+
+[lib]
+test = false
+doctest = false

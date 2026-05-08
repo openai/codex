@@ -35,6 +35,7 @@ pub use share::RemotePluginSharePrincipal;
 pub use share::RemotePluginSharePrincipalType;
 pub use share::RemotePluginShareSaveResult;
 pub use share::RemotePluginShareTarget;
+pub use share::RemotePluginShareUpdateDiscoverability;
 pub use share::RemotePluginShareUpdateTargetsResult;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;

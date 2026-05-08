@@ -174,7 +174,7 @@ impl MemoryStartupContext {
         let session_source = self.thread.config_snapshot().await.session_source;
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
-            SessionId::from(self.thread_id),
+            SessionId::from(self.thread_id), // We use thread_id to detach this query from the foreground user session.
             self.thread_id,
             installation_id,
             config.model_provider.clone(),

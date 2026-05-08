@@ -219,7 +219,7 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
         .and(body_json(json!({
             "file_id": "file_123",
             "etag": "\"upload_etag_123\"",
-            "discoverability": "PRIVATE",
+            "discoverability": "UNLISTED",
             "share_targets": [
                 {
                     "principal_type": "user",
@@ -227,7 +227,7 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
                 },
                 {
                     "principal_type": "workspace",
-                    "principal_id": "workspace-1",
+                    "principal_id": "account-123",
                 },
             ],
         })))
@@ -247,15 +247,11 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
             "plugin/share/save",
             Some(json!({
                 "pluginPath": expected_plugin_path,
-                "discoverability": "PRIVATE",
+                "discoverability": "UNLISTED",
                 "shareTargets": [
                     {
                         "principalType": "user",
                         "principalId": "user-1",
-                    },
-                    {
-                        "principalType": "workspace",
-                        "principalId": "workspace-1",
                     },
                 ],
             })),
@@ -275,6 +271,124 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_save_rejects_listed_discoverability() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = TempDir::new()?;
+    let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/save",
+            Some(json!({
+                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+                "discoverability": "LISTED",
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "discoverability LISTED is not supported for plugin/share/save; use UNLISTED or PRIVATE"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_rejects_workspace_targets_from_client() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = TempDir::new()?;
+    let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/save",
+            Some(json!({
+                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+                "discoverability": "UNLISTED",
+                "shareTargets": [
+                    {
+                        "principalType": "workspace",
+                        "principalId": "account-123",
+                    },
+                ],
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "shareTargets cannot include workspace principals; use discoverability UNLISTED for workspace link access"
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/updateTargets",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+                "discoverability": "UNLISTED",
+                "shareTargets": [
+                    {
+                        "principalType": "workspace",
+                        "principalId": "account-123",
+                    },
+                ],
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "shareTargets cannot include workspace principals; use discoverability UNLISTED for workspace link access"
     );
     Ok(())
 }
@@ -323,7 +437,7 @@ async fn plugin_share_save_rejects_access_policy_for_existing_plugin() -> Result
     assert_eq!(error.error.code, -32600);
     assert_eq!(
         error.error.message,
-        "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share targets"
+        "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share settings"
     );
     Ok(())
 }
@@ -420,14 +534,19 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
     )?;
 
     Mock::given(method("PUT"))
-        .and(path("/backend-api/public/plugins/plugins_123/shares"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .and(body_json(json!({
+            "discoverability": "UNLISTED",
             "targets": [
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account-123",
                 },
             ],
         })))
@@ -435,8 +554,18 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
             "principals": [
                 {
                     "principal_type": "user",
+                    "principal_id": "owner-1",
+                    "name": "Owner",
+                },
+                {
+                    "principal_type": "user",
                     "principal_id": "user-1",
                     "name": "Gavin",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account-123",
+                    "name": "Workspace",
                 },
             ],
         })))
@@ -451,6 +580,7 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
             "plugin/share/updateTargets",
             Some(json!({
                 "remotePluginId": "plugins_123",
+                "discoverability": "UNLISTED",
                 "shareTargets": [
                     {
                         "principalType": "user",
@@ -476,6 +606,7 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
                 principal_id: "user-1".to_string(),
                 name: "Gavin".to_string(),
             }],
+            discoverability: codex_app_server_protocol::PluginShareDiscoverability::Unlisted,
         }
     );
     Ok(())

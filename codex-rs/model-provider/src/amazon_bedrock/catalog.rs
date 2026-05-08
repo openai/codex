@@ -1,14 +1,17 @@
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::SPEED_TIER_FAST;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 
@@ -46,8 +49,12 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
-        additional_speed_tiers: vec!["fast".to_string()],
-        service_tiers: Vec::new(),
+        additional_speed_tiers: Vec::new(),
+        service_tiers: vec![ModelServiceTier {
+            id: ServiceTier::Fast.request_value().to_string(),
+            name: SPEED_TIER_FAST.to_string(),
+            description: "Fastest inference with increased plan usage".to_string(),
+        }],
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),

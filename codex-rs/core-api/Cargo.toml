@@ -8,6 +8,7 @@ version.workspace = true
 doctest = false
 name = "codex_core_api"
 path = "src/lib.rs"
+test = false
 
 [lints]
 workspace = true

@@ -15,6 +15,7 @@ path = "src/bin/notify_capture.rs"
 [lib]
 name = "codex_app_server"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true

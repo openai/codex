@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -357,8 +359,10 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, entry)) => {
+                let completed_at_ms = now_unix_timestamp_ms();
                 if let Ok(response) = entry.request.response_from_result(result.clone()) {
-                    self.analytics_events_client.track_server_response(response);
+                    self.analytics_events_client
+                        .track_server_response(completed_at_ms, response);
                 }
                 if let Err(err) = entry.callback.send(Ok(result)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
@@ -648,6 +652,15 @@ impl OutgoingMessageSender {
     }
 }
 
+fn now_unix_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -903,6 +916,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "item-1".to_string(),
+                started_at_ms: 0,
                 approval_id: None,
                 reason: None,
                 network_approval_context: None,
@@ -1195,6 +1209,7 @@ mod tests {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "call-2".to_string(),
+                    started_at_ms: 0,
                     reason: None,
                     grant_root: None,
                 },
