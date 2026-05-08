@@ -1,13 +1,18 @@
+#[cfg(unix)]
 use std::process::Stdio;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(not(unix))]
 use anyhow::bail;
 #[cfg(unix)]
 use futures::FutureExt;
+#[cfg(unix)]
 use tokio::io::AsyncWriteExt;
+#[cfg(unix)]
 use tokio::process::Command;
 #[cfg(unix)]
 use tokio::signal::unix::Signal;
@@ -15,13 +20,19 @@ use tokio::signal::unix::Signal;
 use tokio::signal::unix::SignalKind;
 #[cfg(unix)]
 use tokio::signal::unix::signal;
+#[cfg(unix)]
 use tokio::time::sleep;
 
+#[cfg(unix)]
 use crate::Daemon;
+#[cfg(unix)]
 use crate::RestartIfRunningOutcome;
 
+#[cfg(unix)]
 const INITIAL_UPDATE_DELAY: Duration = Duration::from_secs(5 * 60);
+#[cfg(unix)]
 const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg(unix)]
 const UPDATE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[cfg(unix)]
@@ -81,6 +92,7 @@ async fn update_once(terminate: &mut Signal) -> Result<UpdateLoopControl> {
     }
 }
 
+#[cfg(unix)]
 async fn install_latest_standalone() -> Result<()> {
     let script = reqwest::get("https://chatgpt.com/codex/install.sh")
         .await

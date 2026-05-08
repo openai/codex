@@ -86,6 +86,7 @@ pub struct BootstrapOutput {
     pub app_server_version: String,
 }
 
+#[cfg(unix)]
 pub(crate) enum RestartIfRunningOutcome {
     Completed,
     Busy,
@@ -219,6 +220,7 @@ impl Daemon {
         ))
     }
 
+    #[cfg(unix)]
     pub(crate) async fn try_restart_if_running(&self) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
         if !try_lock_file(&operation_lock)? {
