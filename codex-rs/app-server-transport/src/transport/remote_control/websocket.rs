@@ -55,6 +55,7 @@ use tracing::warn;
 
 pub(super) const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "3";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 const REMOTE_CONTROL_SUBSCRIBE_CURSOR_HEADER: &str = "x-codex-subscribe-cursor";
 const REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(10);
@@ -929,6 +930,7 @@ fn build_remote_control_websocket_request(
     websocket_url: &str,
     enrollment: &RemoteControlEnrollment,
     auth: &RemoteControlConnectionAuth,
+    installation_id: &str,
     subscribe_cursor: Option<&str>,
 ) -> io::Result<tungstenite::http::Request<()>> {
     let mut request = websocket_url.into_client_request().map_err(|err| {
@@ -953,6 +955,11 @@ fn build_remote_control_websocket_request(
     auth.auth_provider.add_auth_headers(&mut auth_headers);
     headers.extend(auth_headers);
     set_remote_control_header(headers, REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)?;
+    set_remote_control_header(
+        headers,
+        REMOTE_CONTROL_INSTALLATION_ID_HEADER,
+        installation_id,
+    )?;
     if let Some(subscribe_cursor) = subscribe_cursor {
         set_remote_control_header(
             headers,
@@ -1126,6 +1133,7 @@ pub(super) async fn connect_remote_control_websocket(
         &remote_control_target.websocket_url,
         enrollment_ref,
         &auth,
+        connect_options.installation_id,
         connect_options.subscribe_cursor,
     )?;
 

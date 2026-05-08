@@ -1,4 +1,5 @@
 use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
+use super::enroll::REMOTE_CONTROL_INSTALLATION_ID_HEADER;
 use super::enroll::RemoteControlEnrollment;
 use super::enroll::load_persisted_remote_control_enrollment;
 use super::enroll::update_persisted_remote_control_enrollment;
@@ -961,6 +962,12 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         Some(&"account_id".to_string())
     );
     assert_eq!(
+        enroll_request
+            .headers
+            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        Some(&TEST_INSTALLATION_ID.to_string())
+    );
+    assert_eq!(
         serde_json::from_str::<serde_json::Value>(&enroll_request.body)
             .expect("enroll body should deserialize"),
         json!({
@@ -998,6 +1005,12 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             .headers
             .get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
         Some(&"account_id".to_string())
+    );
+    assert_eq!(
+        handshake_request
+            .headers
+            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        Some(&TEST_INSTALLATION_ID.to_string())
     );
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
