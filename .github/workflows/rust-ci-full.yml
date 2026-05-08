@@ -18,6 +18,8 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           components: rustfmt
@@ -32,6 +34,8 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
@@ -48,6 +52,8 @@ jobs:
       DYLINT_LINK_VERSION: 5.0.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           toolchain: nightly-2025-09-18
@@ -98,6 +104,8 @@ jobs:
               labels: codex-windows-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-bazel-ci
         with:
           target: ${{ runner.os }}
@@ -234,6 +242,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -560,6 +570,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -722,10 +734,12 @@ jobs:
         shell: bash
         run: |
           set +e
-          if [[ "${{ steps.test.outcome }}" != "success" ]]; then
+          if [[ "${STEPS_TEST_OUTCOME}" != "success" ]]; then
             docker logs codex-remote-test-env || true
           fi
           docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
+        env:
+          STEPS_TEST_OUTCOME: ${{ steps.test.outcome }}
 
       - name: verify tests passed
         if: steps.test.outcome == 'failure'
