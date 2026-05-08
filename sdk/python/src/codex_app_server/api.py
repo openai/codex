@@ -38,14 +38,14 @@ from .generated.v2_all import (
 )
 from .models import InitializeResponse, JsonObject, Notification, ServerInfo
 from ._inputs import (
-    ImageInput,  # noqa: F401
+    ImageInput as ImageInput,
     Input,
-    InputItem,  # noqa: F401
-    LocalImageInput,  # noqa: F401
-    MentionInput,  # noqa: F401
+    InputItem as InputItem,
+    LocalImageInput as LocalImageInput,
+    MentionInput as MentionInput,
     RunInput,
-    SkillInput,  # noqa: F401
-    TextInput,  # noqa: F401
+    SkillInput as SkillInput,
+    TextInput as TextInput,
     _normalize_run_input,
     _to_wire_input,
 )
