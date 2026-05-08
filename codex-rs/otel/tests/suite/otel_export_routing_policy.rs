@@ -248,7 +248,10 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             std::time::Duration::from_millis(42),
             /*success*/ true,
             "secret output\nsecond line",
-            &[],
+            &[
+                ("sandbox", "workspace-write"),
+                ("sandbox_policy", "workspace-write"),
+            ],
             Some("internal-mcp"),
             Some("stdio"),
         );
@@ -276,6 +279,12 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
     assert_eq!(
         tool_log_attrs.get("mcp_server").map(String::as_str),
         Some("internal-mcp")
+    );
+    assert_eq!(
+        tool_log_attrs.get("tags").map(String::as_str),
+        Some(
+            r#"[["tool","shell"],["success","true"],["sandbox","workspace-write"],["sandbox_policy","workspace-write"]]"#
+        )
     );
 
     let spans = span_exporter.get_finished_spans().expect("span export");
@@ -306,6 +315,12 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
     assert_eq!(
         tool_trace_attrs.get("mcp_tool").map(String::as_str),
         Some("true")
+    );
+    assert_eq!(
+        tool_trace_attrs.get("tags").map(String::as_str),
+        Some(
+            r#"[["tool","shell"],["success","true"],["sandbox","workspace-write"],["sandbox_policy","workspace-write"]]"#
+        )
     );
     assert!(!tool_trace_attrs.contains_key("arguments"));
     assert!(!tool_trace_attrs.contains_key("output"));
