@@ -13,6 +13,7 @@ use tokio::sync::Semaphore;
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
+    pub(crate) hook_session_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
@@ -860,7 +861,7 @@ impl Session {
                 // TODO(jif): extract session to share between sub-agents
                 session_extension_data,
                 thread_extension_data,
-                agent_control,
+                agent_control: agent_control.clone(),
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
@@ -890,8 +891,16 @@ impl Session {
                 watch::channel(false);
 
             let (mailbox, mailbox_rx) = Mailbox::new();
+            let hook_session_id = super::hook_session_id::resolve_hook_session_id(
+                thread_id,
+                &session_configuration.session_source,
+                &agent_control,
+                thread_store.as_ref(),
+            )
+            .await;
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
+                hook_session_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,

@@ -523,7 +523,7 @@ pub(crate) async fn run_turn(
                     }
                     .to_string();
                     let stop_request = codex_hooks::StopRequest {
-                        session_id: sess.conversation_id,
+                        session_id: sess.hook_session_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,
@@ -573,7 +573,7 @@ pub(crate) async fn run_turn(
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {
-                            session_id: sess.conversation_id,
+                            session_id: sess.hook_session_id,
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),

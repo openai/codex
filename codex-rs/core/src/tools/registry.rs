@@ -631,7 +631,6 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
         _ => format!("unsupported call: {tool_name}"),
     }
 }
-
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
