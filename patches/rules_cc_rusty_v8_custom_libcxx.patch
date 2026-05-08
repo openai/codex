@@ -1,0 +1,35 @@
+diff --git a/cc/cc_library.bzl b/cc/cc_library.bzl
+--- a/cc/cc_library.bzl
++++ b/cc/cc_library.bzl
+@@ -16,4 +16,31 @@
+ load("@cc_compatibility_proxy//:proxy.bzl", _cc_library = "cc_library")
+ 
++_RUSTY_V8_CUSTOM_LIBCXX_COPTS = select({
++    "@@//third_party/v8:use_rusty_v8_custom_libcxx": [
++        "-nostdinc++",
++        "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
++        "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
++        "-D_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
++        "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
++    ],
++    "//conditions:default": [],
++})
++
++_RUSTY_V8_CUSTOM_LIBCXX_DEPS = select({
++    "@@//third_party/v8:use_rusty_v8_custom_libcxx": [
++        "@@//third_party/v8:rusty_v8_custom_libcxx_headers",
++    ],
++    "//conditions:default": [],
++})
++
++def _should_use_rusty_v8_custom_libcxx():
++    # V8 and ICU are patched in-tree. Abseil is the only external dependency
++    # that still exchanges STL types with the artifact objects.
++    return native.repository_name() == "@abseil-cpp+"
++
+ def cc_library(**kwargs):
++    if _should_use_rusty_v8_custom_libcxx():
++        kwargs["copts"] = (kwargs.get("copts", []) or []) + _RUSTY_V8_CUSTOM_LIBCXX_COPTS
++        kwargs["deps"] = (kwargs.get("deps", []) or []) + _RUSTY_V8_CUSTOM_LIBCXX_DEPS
++        kwargs["features"] = (kwargs.get("features", []) or []) + ["-module_maps"]
+     _cc_library(**kwargs)

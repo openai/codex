@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import textwrap
 import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
-from unittest.mock import Mock
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import rusty_v8_bazel
@@ -14,6 +13,22 @@ import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
+    def test_artifact_bazel_configs_always_enable_upstream_libcxx(self) -> None:
+        self.assertEqual(
+            ["rusty-v8-upstream-libcxx"],
+            rusty_v8_bazel.artifact_bazel_configs(),
+        )
+        self.assertEqual(
+            ["rusty-v8-upstream-libcxx", "v8-release-compat"],
+            rusty_v8_bazel.artifact_bazel_configs(["v8-release-compat"]),
+        )
+        self.assertEqual(
+            ["rusty-v8-upstream-libcxx", "v8-release-compat"],
+            rusty_v8_bazel.artifact_bazel_configs(
+                ["rusty-v8-upstream-libcxx", "v8-release-compat"]
+            ),
+        )
+
     def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(self) -> None:
         self.assertEqual(
             "//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl",
@@ -36,7 +51,7 @@ class RustyV8BazelTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            "librusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.a.gz",
+            "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz",
             rusty_v8_bazel.staged_archive_name(
                 "x86_64-pc-windows-msvc",
                 Path("v8.a"),
@@ -58,77 +73,18 @@ class RustyV8BazelTest(unittest.TestCase):
             ),
         )
 
-    def test_needs_merged_runtime_archive(self) -> None:
-        for target in [
-            "x86_64-unknown-linux-gnu",
-            "x86_64-unknown-linux-musl",
-        ]:
-            self.assertTrue(rusty_v8_bazel.needs_merged_runtime_archive(target, Path("v8.a")))
-
-        self.assertFalse(
-            rusty_v8_bazel.needs_merged_runtime_archive(
-                "x86_64-apple-darwin",
-                Path("v8.a"),
-            )
-        )
-        self.assertFalse(
-            rusty_v8_bazel.needs_merged_runtime_archive(
-                "x86_64-pc-windows-msvc",
-                Path("v8.a"),
-            )
-        )
-
-    def test_upstream_release_pair_paths(self) -> None:
-        self.assertEqual(
-            (
-                Path(
-                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/obj/"
-                    "librusty_v8.a"
-                ),
-                Path(
-                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/"
-                    "src_binding.rs"
-                ),
-            ),
-            rusty_v8_bazel.upstream_release_pair_paths(
-                Path("/tmp/rusty_v8"),
-                "x86_64-apple-darwin",
-            ),
-        )
-        self.assertEqual(
-            (
-                Path(
-                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
-                    "obj/rusty_v8.lib"
-                ),
-                Path(
-                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
-                    "src_binding.rs"
-                ),
-            ),
-            rusty_v8_bazel.upstream_release_pair_paths(
-                Path("/tmp/rusty_v8"),
-                "x86_64-pc-windows-msvc",
-            ),
-        )
-
-    def test_stage_upstream_release_pair(self) -> None:
+    def test_stage_artifacts(self) -> None:
         with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
             source_root = Path(source_dir)
-            gn_out = (
-                source_root
-                / "target"
-                / "aarch64-apple-darwin"
-                / "release"
-                / "gn_out"
-            )
-            (gn_out / "obj").mkdir(parents=True)
-            (gn_out / "obj" / "librusty_v8.a").write_bytes(b"archive")
-            (gn_out / "src_binding.rs").write_text("binding")
+            archive = source_root / "librusty_v8.a"
+            binding = source_root / "src_binding.rs"
+            archive.write_bytes(b"archive")
+            binding.write_text("binding")
 
-            rusty_v8_bazel.stage_upstream_release_pair(
-                source_root,
+            rusty_v8_bazel.stage_artifacts(
                 "aarch64-apple-darwin",
+                archive,
+                binding,
                 Path(output_dir),
                 sandbox=True,
             )
@@ -142,53 +98,40 @@ class RustyV8BazelTest(unittest.TestCase):
                 {path.name for path in Path(output_dir).iterdir()},
             )
 
-    @patch("rusty_v8_bazel.ensure_bazel_output_files")
-    @patch("rusty_v8_bazel.subprocess.run")
-    def test_host_runnable_bazel_output_file_selects_runnable_candidate(
-        self,
-        run: Mock,
-        ensure_outputs: Mock,
-    ) -> None:
-        amd64_tool = Path("/tmp/llvm-amd64/bin/llvm-ar")
-        arm64_tool = Path("/tmp/llvm-arm64/bin/llvm-ar")
-        ensure_outputs.return_value = [amd64_tool, arm64_tool]
-        run.side_effect = [
-            OSError("Exec format error"),
-            Mock(returncode=0),
-        ]
+    def test_ensure_bazel_output_files_rebuilds_existing_outputs(self) -> None:
+        with TemporaryDirectory() as output_dir:
+            output = Path(output_dir) / "libv8.a"
+            output.write_bytes(b"archive")
 
-        self.assertEqual(
-            arm64_tool,
-            rusty_v8_bazel.host_runnable_bazel_output_file(
-                "linux_arm64_musl",
-                "@llvm//tools:llvm-ar",
+            with (
+                patch.object(rusty_v8_bazel, "bazel_build") as bazel_build,
+                patch.object(
+                    rusty_v8_bazel,
+                    "bazel_output_files",
+                    return_value=[output],
+                ) as bazel_output_files,
+            ):
+                self.assertEqual(
+                    [output],
+                    rusty_v8_bazel.ensure_bazel_output_files(
+                        "macos_arm64",
+                        ["//third_party/v8:pair"],
+                        "opt",
+                        ["rusty-v8-upstream-libcxx"],
+                    ),
+                )
+
+            bazel_build.assert_called_once_with(
+                "macos_arm64",
+                ["//third_party/v8:pair"],
                 "opt",
-            ),
-        )
-
-    @patch("rusty_v8_bazel.ensure_bazel_output_files")
-    @patch("rusty_v8_bazel.subprocess.run")
-    def test_host_runnable_bazel_output_file_rejects_ambiguous_candidates(
-        self,
-        run: Mock,
-        ensure_outputs: Mock,
-    ) -> None:
-        amd64_tool = Path("/tmp/llvm-amd64/bin/llvm-ar")
-        arm64_tool = Path("/tmp/llvm-arm64/bin/llvm-ar")
-        ensure_outputs.return_value = [amd64_tool, arm64_tool]
-        run.side_effect = [
-            Mock(returncode=0),
-            Mock(returncode=0),
-        ]
-
-        with self.assertRaisesRegex(
-            SystemExit,
-            "expected exactly one host-runnable output",
-        ):
-            rusty_v8_bazel.host_runnable_bazel_output_file(
-                "linux_arm64_musl",
-                "@llvm//tools:llvm-ar",
+                ["rusty-v8-upstream-libcxx"],
+            )
+            bazel_output_files.assert_called_once_with(
+                "macos_arm64",
+                ["//third_party/v8:pair"],
                 "opt",
+                ["rusty-v8-upstream-libcxx"],
             )
 
     def test_update_module_bazel_replaces_and_inserts_sha256(self) -> None:

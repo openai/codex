@@ -1,0 +1,98 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "is_linux",
+    constraint_values = ["@platforms//os:linux"],
+)
+
+config_setting(
+    name = "is_windows",
+    constraint_values = ["@platforms//os:windows"],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/**"]),
+    includes = ["include"],
+)
+
+cc_runtime_stage0_library(
+    name = "libcxxabi",
+    srcs = [
+        "src/abort_message.cpp",
+        "src/cxa_aux_runtime.cpp",
+        "src/cxa_default_handlers.cpp",
+        "src/cxa_demangle.cpp",
+        "src/cxa_exception.cpp",
+        "src/cxa_exception_storage.cpp",
+        "src/cxa_guard.cpp",
+        "src/cxa_handlers.cpp",
+        "src/cxa_personality.cpp",
+        "src/cxa_vector.cpp",
+        "src/cxa_virtual.cpp",
+        "src/fallback_malloc.cpp",
+        "src/private_typeinfo.cpp",
+        "src/stdlib_exception.cpp",
+        "src/stdlib_stdexcept.cpp",
+        "src/stdlib_typeinfo.cpp",
+    ] + select({
+        ":is_linux": ["src/cxa_thread_atexit.cpp"],
+        "//conditions:default": [],
+    }),
+    textual_hdrs = glob([
+        "src/**/*.def",
+        "src/**/*.h",
+        "src/**/*.inc",
+    ]),
+    copts = [
+        "-fexceptions",
+        "-frtti",
+        "-fstrict-aliasing",
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+        "-nostdinc++",
+        "-std=c++23",
+        "-Wno-nullability-completeness",
+        "-Wno-unused-parameter",
+        "-Wundef",
+    ] + select({
+        ":is_windows": ["-Wno-macro-redefined"],
+        "//conditions:default": ["-fPIC"],
+    }),
+    defines = [
+        "LIBCXXABI_SILENT_TERMINATE",
+        "_LIBCPP_BUILDING_LIBRARY",
+        "_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
+        "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
+        "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+    ] + select({
+        "@llvm//platforms/config:musl": [
+            "ANDROID_HOST_MUSL",
+        ],
+        "//conditions:default": [],
+    }),
+    includes = ["src"],
+    implementation_deps = [
+        ":headers",
+        "@rusty_v8_libcxx//:headers",
+        "@rusty_v8_libcxx//:internal_headers",
+        "@//third_party/v8/libcxx_config:headers",
+    ] + select({
+        ":is_linux": [
+            "@@llvm++kernel_headers+kernel_headers//:kernel_headers",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@llvm//platforms/config:gnu": [
+            "@@llvm++glibc+glibc//:gnu_libc_headers",
+        ],
+        "@llvm//platforms/config:musl": [
+            "@@llvm++musl+musl_libc//:musl_libc_headers",
+        ],
+        "//conditions:default": [],
+    }),
+)

@@ -1,0 +1,157 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "is_linux",
+    constraint_values = ["@platforms//os:linux"],
+)
+
+config_setting(
+    name = "is_windows",
+    constraint_values = ["@platforms//os:windows"],
+)
+
+LIBCXX_SRCS = [
+    "src/algorithm.cpp",
+    "src/any.cpp",
+    "src/atomic.cpp",
+    "src/barrier.cpp",
+    "src/bind.cpp",
+    "src/call_once.cpp",
+    "src/charconv.cpp",
+    "src/chrono.cpp",
+    "src/condition_variable.cpp",
+    "src/condition_variable_destructor.cpp",
+    "src/error_category.cpp",
+    "src/exception.cpp",
+    "src/filesystem/directory_iterator.cpp",
+    "src/filesystem/filesystem_error.cpp",
+    "src/filesystem/operations.cpp",
+    "src/filesystem/path.cpp",
+    "src/functional.cpp",
+    "src/future.cpp",
+    "src/hash.cpp",
+    "src/ios.cpp",
+    "src/ios.instantiations.cpp",
+    "src/iostream.cpp",
+    "src/locale.cpp",
+    "src/memory.cpp",
+    "src/mutex.cpp",
+    "src/mutex_destructor.cpp",
+    "src/new.cpp",
+    "src/new_handler.cpp",
+    "src/new_helpers.cpp",
+    "src/optional.cpp",
+    "src/random.cpp",
+    "src/random_shuffle.cpp",
+    "src/regex.cpp",
+    "src/ryu/d2fixed.cpp",
+    "src/ryu/d2s.cpp",
+    "src/ryu/f2s.cpp",
+    "src/shared_mutex.cpp",
+    "src/stdexcept.cpp",
+    "src/string.cpp",
+    "src/strstream.cpp",
+    "src/system_error.cpp",
+    "src/thread.cpp",
+    "src/typeinfo.cpp",
+    "src/valarray.cpp",
+    "src/variant.cpp",
+    "src/vector.cpp",
+    "src/verbose_abort.cpp",
+]
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/**"]),
+    includes = ["include"],
+    deps = ["@//third_party/v8/libcxx_config:headers"],
+)
+
+cc_library(
+    name = "internal_headers",
+    hdrs = glob([
+        "src/**/*.h",
+        "src/**/*.ipp",
+    ]),
+    includes = ["src"],
+)
+
+cc_runtime_stage0_library(
+    name = "libcxx",
+    srcs = LIBCXX_SRCS + select({
+        ":is_linux": [
+            "src/filesystem/directory_entry.cpp",
+            "src/filesystem/filesystem_clock.cpp",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_windows": [
+            "src/support/win32/locale_win32.cpp",
+            "src/support/win32/support.cpp",
+            "src/support/win32/thread_win32.cpp",
+        ],
+        "//conditions:default": [],
+    }),
+    copts = [
+        "-fexceptions",
+        "-frtti",
+        "-fstrict-aliasing",
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+        "-nostdinc++",
+        "-std=c++23",
+        "-Wno-nullability-completeness",
+        "-Wno-unused-parameter",
+        "-Wundef",
+    ] + select({
+        ":is_windows": ["-Wno-macro-redefined"],
+        "//conditions:default": ["-fPIC"],
+    }),
+    defines = [
+        "CR_LIBCXX_REVISION=7ab65651aed6802d2599dcb7a73b1f82d5179d05",
+        "LIBCXX_BUILDING_LIBCXXABI",
+        "LIBC_NAMESPACE=__llvm_libc_cr",
+        "_LIBCPP_BUILDING_LIBRARY",
+        "_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
+        "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
+        "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+    ] + select({
+        "@llvm//platforms/config:musl": [
+            # Chromium's checked-in __config_site uses this switch to enable
+            # libc++'s musl-specific configuration.
+            "ANDROID_HOST_MUSL",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_windows": [
+            "NTDDI_VERSION=NTDDI_WIN7",
+            "WINVER=_WIN32_WINNT_WIN7",
+            "_WIN32_WINNT=_WIN32_WINNT_WIN7",
+        ],
+        "//conditions:default": [],
+    }),
+    includes = ["src"],
+    implementation_deps = [
+        ":headers",
+        ":internal_headers",
+        "@rusty_v8_libcxxabi//:headers",
+        "@rusty_v8_llvm_libc//:headers",
+    ] + select({
+        ":is_linux": [
+            "@@llvm++kernel_headers+kernel_headers//:kernel_headers",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@llvm//platforms/config:gnu": [
+            "@@llvm++glibc+glibc//:gnu_libc_headers",
+        ],
+        "@llvm//platforms/config:musl": [
+            "@@llvm++musl+musl_libc//:musl_libc_headers",
+        ],
+        "//conditions:default": [],
+    }),
+)
