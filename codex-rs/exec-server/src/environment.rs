@@ -13,6 +13,7 @@ use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
 use crate::environment_provider::EnvironmentProviderSnapshot;
 use crate::environment_provider::normalize_exec_server_url;
+use crate::environment_toml::environment_provider_from_codex_home;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
@@ -97,6 +98,20 @@ impl EnvironmentManager {
         } = args;
         let exec_server_url = std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok();
         Self::from_default_provider_url(exec_server_url, local_runtime_paths).await
+    }
+
+    /// Builds a manager from `CODEX_HOME` and local runtime paths used when
+    /// creating local filesystem helpers.
+    ///
+    /// If `CODEX_HOME/environments.toml` is present, it defines the configured
+    /// environments. Otherwise this preserves the legacy
+    /// `CODEX_EXEC_SERVER_URL` behavior.
+    pub async fn from_codex_home(
+        codex_home: impl AsRef<std::path::Path>,
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Result<Self, ExecServerError> {
+        let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
+        Self::from_provider(provider.as_ref(), local_runtime_paths).await
     }
 
     async fn from_default_provider_url(
