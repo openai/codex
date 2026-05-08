@@ -5,6 +5,7 @@ use clap_complete::Shell;
 use clap_complete::generate;
 use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
 use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
+use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -505,6 +506,12 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
+    /// Enable remote_control for future starts and a currently running managed daemon.
+    EnableRemoteControl,
+
+    /// Disable remote_control for future starts and a currently running managed daemon.
+    DisableRemoteControl,
+
     /// Stop the local app server daemon.
     Stop,
 
@@ -929,6 +936,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     }
                     AppServerDaemonSubcommand::Restart => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::EnableRemoteControl => {
+                        print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
+                            .await?;
+                    }
+                    AppServerDaemonSubcommand::DisableRemoteControl => {
+                        print_app_server_remote_control_output(
+                            AppServerRemoteControlMode::Disabled,
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::Stop => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
@@ -1616,6 +1633,12 @@ fn reject_remote_mode_for_app_server_subcommand(
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::EnableRemoteControl => {
+                "app-server daemon enable-remote-control"
+            }
+            AppServerDaemonSubcommand::DisableRemoteControl => {
+                "app-server daemon disable-remote-control"
+            }
             AppServerDaemonSubcommand::Stop => "app-server daemon stop",
             AppServerDaemonSubcommand::Version => "app-server daemon version",
             AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
@@ -1632,6 +1655,14 @@ fn reject_remote_mode_for_app_server_subcommand(
 
 async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
     let output = codex_app_server_daemon::run(command).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+async fn print_app_server_remote_control_output(
+    mode: AppServerRemoteControlMode,
+) -> anyhow::Result<()> {
+    let output = codex_app_server_daemon::set_remote_control(mode).await?;
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
@@ -2633,6 +2664,24 @@ mod tests {
             app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::Restart
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "enable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::EnableRemoteControl
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "disable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::DisableRemoteControl
             }))
         ));
         assert!(matches!(

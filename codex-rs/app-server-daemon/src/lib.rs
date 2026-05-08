@@ -87,6 +87,40 @@ pub struct BootstrapOutput {
     pub app_server_version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteControlMode {
+    Enabled,
+    Disabled,
+}
+
+impl RemoteControlMode {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteControlStatus {
+    Enabled,
+    Disabled,
+    AlreadyEnabled,
+    AlreadyDisabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlOutput {
+    pub status: RemoteControlStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendKind>,
+    pub remote_control_enabled: bool,
+    pub socket_path: PathBuf,
+    pub cli_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_server_version: Option<String>,
+}
+
 #[cfg(unix)]
 pub(crate) enum RestartIfRunningOutcome {
     Completed,
@@ -101,6 +135,11 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.bootstrap(options).await
+}
+
+pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControlOutput> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?.set_remote_control(mode).await
 }
 
 pub async fn run_pid_update_loop() -> Result<()> {
@@ -314,6 +353,53 @@ impl Daemon {
         self.bootstrap_locked(options).await
     }
 
+    async fn set_remote_control(&self, mode: RemoteControlMode) -> Result<RemoteControlOutput> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let previous_settings = self.load_settings().await?;
+        let mut settings = previous_settings.clone();
+        let remote_control_enabled = mode.is_enabled();
+        let backend = self.running_backend_instance(&previous_settings).await?;
+
+        if backend.is_none() && client::probe(&self.socket_path).await.is_ok() {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        if settings.remote_control_enabled == remote_control_enabled {
+            let info = if backend.is_some() {
+                Some(self.wait_until_ready().await?)
+            } else {
+                None
+            };
+            return Ok(self.remote_control_output(
+                already_remote_control_status(mode),
+                backend.map(|_| BackendKind::Pid),
+                remote_control_enabled,
+                info.map(|info| info.app_server_version),
+            ));
+        }
+
+        settings.remote_control_enabled = remote_control_enabled;
+        settings.save(&self.settings_file).await?;
+
+        let app_server_version = if let Some(backend) = backend {
+            self.ensure_managed_codex_bin()?;
+            backend.stop().await?;
+            let _ = self.start_managed_backend(&settings).await?;
+            Some(self.wait_until_ready().await?.app_server_version)
+        } else {
+            None
+        };
+
+        Ok(self.remote_control_output(
+            remote_control_status(mode),
+            app_server_version.as_ref().map(|_| BackendKind::Pid),
+            remote_control_enabled,
+            app_server_version,
+        ))
+    }
+
     async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
         self.ensure_managed_codex_bin()?;
 
@@ -455,6 +541,37 @@ impl Daemon {
             app_server_version,
         }
     }
+
+    fn remote_control_output(
+        &self,
+        status: RemoteControlStatus,
+        backend: Option<BackendKind>,
+        remote_control_enabled: bool,
+        app_server_version: Option<String>,
+    ) -> RemoteControlOutput {
+        RemoteControlOutput {
+            status,
+            backend,
+            remote_control_enabled,
+            socket_path: self.socket_path.clone(),
+            cli_version: env!("CARGO_PKG_VERSION").to_string(),
+            app_server_version,
+        }
+    }
+}
+
+fn remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus {
+    match mode {
+        RemoteControlMode::Enabled => RemoteControlStatus::Enabled,
+        RemoteControlMode::Disabled => RemoteControlStatus::Disabled,
+    }
+}
+
+fn already_remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus {
+    match mode {
+        RemoteControlMode::Enabled => RemoteControlStatus::AlreadyEnabled,
+        RemoteControlMode::Disabled => RemoteControlStatus::AlreadyDisabled,
+    }
 }
 
 #[cfg(unix)]
@@ -484,6 +601,7 @@ mod tests {
 
     use super::BootstrapStatus;
     use super::LifecycleStatus;
+    use super::RemoteControlStatus;
 
     #[test]
     fn lifecycle_status_uses_camel_case_json() {
@@ -498,6 +616,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&BootstrapStatus::Bootstrapped).expect("serialize"),
             "\"bootstrapped\""
+        );
+    }
+
+    #[test]
+    fn remote_control_status_uses_camel_case_json() {
+        assert_eq!(
+            serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),
+            "\"alreadyEnabled\""
         );
     }
 }

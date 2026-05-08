@@ -19,6 +19,8 @@ support Windows lifecycle management.
 ```sh
 codex app-server daemon start
 codex app-server daemon restart
+codex app-server daemon enable-remote-control
+codex app-server daemon disable-remote-control
 codex app-server daemon stop
 codex app-server daemon version
 codex app-server daemon bootstrap --remote-control
@@ -81,12 +83,16 @@ JSON-RPC initialize handshake on the Unix control socket.
 
 `restart` stops any managed daemon and starts it again.
 
+`enable-remote-control` and `disable-remote-control` persist the launch setting
+for future starts. If a managed app-server is already running, they restart it
+so the new setting takes effect immediately.
+
 `stop` sends a graceful termination request first, then sends a second
 termination signal after the grace window if the process is still alive.
 
 All mutating lifecycle commands are serialized per `CODEX_HOME`, so a concurrent
-`start`, `restart`, `stop`, or `bootstrap` does not race another in-flight
-lifecycle operation.
+`start`, `restart`, `enable-remote-control`, `disable-remote-control`, `stop`,
+or `bootstrap` does not race another in-flight lifecycle operation.
 
 ## State
 
