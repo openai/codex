@@ -1680,7 +1680,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("xhigh")
+        Some("medium")
     );
 
     Ok(())
@@ -1722,7 +1722,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("xhigh")
+        Some("medium")
     );
 
     Ok(())
