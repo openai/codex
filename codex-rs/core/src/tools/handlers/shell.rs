@@ -29,6 +29,7 @@ use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_tools::ToolName;
 
 mod container_exec;
 mod local_shell;
@@ -72,7 +73,7 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
 }
 
 struct RunExecLikeArgs {
-    tool_name: String,
+    tool_name: ToolName,
     exec_params: ExecParams,
     hook_command: String,
     additional_permissions: Option<AdditionalPermissionProfile>,
@@ -201,7 +202,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         turn.clone(),
         Some(&tracker),
         &call_id,
-        tool_name.as_str(),
+        tool_name.name.as_str(),
     )
     .await?
     {
