@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 
 use crate::Environment;
@@ -12,9 +10,9 @@ use crate::environment::REMOTE_ENVIRONMENT_ID;
 /// Lists the concrete environments available to Codex.
 ///
 /// Implementations own a startup snapshot containing both the available
-/// environment list and default environment selection. Providers that want the
-/// local environment to be addressable by id should include it explicitly in
-/// the returned map.
+/// environment list in configured order and the default environment
+/// selection. Providers that want the local environment to be addressable by
+/// id should include it explicitly in the returned list.
 #[async_trait]
 pub trait EnvironmentProvider: Send + Sync {
     /// Returns the provider-owned environment startup snapshot.
@@ -26,7 +24,7 @@ pub trait EnvironmentProvider: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct EnvironmentProviderSnapshot {
-    pub environments: HashMap<String, Environment>,
+    pub environments: Vec<(String, Environment)>,
     pub default: EnvironmentDefault,
 }
 
@@ -57,22 +55,25 @@ impl DefaultEnvironmentProvider {
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> EnvironmentProviderSnapshot {
-        let mut environments = HashMap::from([(
+        let mut environments = vec![(
             LOCAL_ENVIRONMENT_ID.to_string(),
             Environment::local(local_runtime_paths.clone()),
-        )]);
+        )];
         let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
 
         if let Some(exec_server_url) = exec_server_url {
-            environments.insert(
+            environments.push((
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 Environment::remote_inner(exec_server_url, Some(local_runtime_paths.clone())),
-            );
+            ));
         }
 
+        let has_remote = environments
+            .iter()
+            .any(|(id, _environment)| id == REMOTE_ENVIRONMENT_ID);
         let default = if disabled {
             EnvironmentDefault::Disabled
-        } else if environments.contains_key(REMOTE_ENVIRONMENT_ID) {
+        } else if has_remote {
             EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string())
         } else {
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
@@ -105,6 +106,8 @@ pub(crate) fn normalize_exec_server_url(exec_server_url: Option<String>) -> (Opt
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -126,7 +129,11 @@ mod tests {
             .snapshot(&runtime_paths)
             .await
             .expect("environments");
-        let environments = snapshot.environments;
+        let EnvironmentProviderSnapshot {
+            environments,
+            default,
+        } = snapshot;
+        let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert_eq!(
@@ -135,7 +142,7 @@ mod tests {
         );
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(
-            snapshot.default,
+            default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
         );
     }
@@ -148,12 +155,16 @@ mod tests {
             .snapshot(&runtime_paths)
             .await
             .expect("environments");
-        let environments = snapshot.environments;
+        let EnvironmentProviderSnapshot {
+            environments,
+            default,
+        } = snapshot;
+        let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(
-            snapshot.default,
+            default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
         );
     }
@@ -166,11 +177,15 @@ mod tests {
             .snapshot(&runtime_paths)
             .await
             .expect("environments");
-        let environments = snapshot.environments;
+        let EnvironmentProviderSnapshot {
+            environments,
+            default,
+        } = snapshot;
+        let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
-        assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
+        assert_eq!(default, EnvironmentDefault::Disabled);
     }
 
     #[tokio::test]
@@ -181,7 +196,11 @@ mod tests {
             .snapshot(&runtime_paths)
             .await
             .expect("environments");
-        let environments = snapshot.environments;
+        let EnvironmentProviderSnapshot {
+            environments,
+            default,
+        } = snapshot;
+        let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
@@ -191,7 +210,7 @@ mod tests {
             Some("ws://127.0.0.1:8765")
         );
         assert_eq!(
-            snapshot.default,
+            default,
             EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string())
         );
     }
@@ -200,13 +219,14 @@ mod tests {
     async fn default_provider_normalizes_exec_server_url() {
         let provider = DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765 ".to_string()));
         let runtime_paths = test_runtime_paths();
-        let environments = provider
+        let snapshot = provider
             .snapshot(&runtime_paths)
             .await
             .expect("environments");
+        let environments: HashMap<_, _> = snapshot.environments.into_iter().collect();
 
         assert_eq!(
-            environments.environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
+            environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
             Some("ws://127.0.0.1:8765")
         );
     }

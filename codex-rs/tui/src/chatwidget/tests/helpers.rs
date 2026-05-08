@@ -192,6 +192,7 @@ pub(super) async fn make_chatwidget_manual(
         raw_output_mode: cfg.tui_raw_output_mode,
         config: cfg,
         effective_service_tier,
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,

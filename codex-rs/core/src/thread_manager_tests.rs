@@ -21,6 +21,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
@@ -337,6 +338,99 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
         .expect("explicit sticky environment should resolve by id");
 
     assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
+}
+
+#[tokio::test]
+async fn start_thread_uses_all_default_environments_from_codex_home() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    std::fs::write(
+        config.codex_home.join("environments.toml"),
+        r#"
+default = "dev"
+
+[[environments]]
+id = "dev"
+program = "ssh"
+args = ["dev", "cd /tmp && true"]
+"#,
+    )
+    .expect("write environments.toml");
+
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::from_codex_home(
+            config.codex_home.clone(),
+            runtime_paths,
+        )
+        .await
+        .expect("environment manager"),
+    );
+    assert_eq!(
+        environment_manager.default_environment_ids(),
+        vec!["dev".to_string(), "local".to_string()]
+    );
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        environment_manager,
+    );
+
+    let thread = manager
+        .start_thread(config)
+        .await
+        .expect("thread should start");
+
+    let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
+        thread.thread.codex.session.as_ref(),
+        Vec::<UserInput>::new(),
+    )
+    .await
+    .expect("prompt input");
+    let environment_context = prompt_items
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .find_map(|content| match content {
+            ContentItem::InputText { text } if text.contains("<environment_context>") => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .expect("environment context prompt item");
+    assert!(environment_context.contains("<environments>"));
+    let cwd = thread.session_configured.cwd.display().to_string();
+    let dev_entry = format!(
+        r#"<environment id="dev">
+      <cwd>{cwd}</cwd>
+      <shell>"#
+    );
+    let local_entry = format!(
+        r#"<environment id="local">
+      <cwd>{cwd}</cwd>
+      <shell>"#
+    );
+    let dev_position = environment_context
+        .find(&dev_entry)
+        .expect("dev environment entry");
+    let local_position = environment_context
+        .find(&local_entry)
+        .expect("local environment entry");
+    assert!(dev_position < local_position);
+    assert!(!environment_context.contains("\n  <cwd>"));
+    assert!(!environment_context.contains("\n  <shell>"));
 }
 
 #[tokio::test]
