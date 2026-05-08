@@ -1,6 +1,6 @@
 {
   "models": [
-    { 
+    {
       "prefer_websockets": true,
       "support_verbosity": true,
       "default_verbosity": "low",
@@ -176,11 +176,6 @@
           "id": "priority",
           "name": "Fast",
           "description": "1.5x speed, increased usage"
-        },
-        {
-          "id": "ultrafast",
-          "name": "Ultrafast",
-          "description": "The fastest available responses for latency-sensitive work."
         }
       ],
       "additional_speed_tiers": [
