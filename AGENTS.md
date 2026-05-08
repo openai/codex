@@ -130,7 +130,7 @@ When UI or text output changes intentionally, update the snapshots as follows:
 
 If you don’t have the tool:
 
-- `cargo install cargo-insta`
+- `cargo install --locked cargo-insta`
 
 ### Test assertions
 

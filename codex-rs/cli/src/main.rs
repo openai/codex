@@ -123,12 +123,11 @@ enum Subcommand {
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
-    /// Internal: start a Codex-shipped MCP server (stdio).
-    #[clap(hide = true, name = "builtin-mcp")]
-    BuiltinMcp(BuiltinMcpCommand),
-
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// [experimental] Start a headless app-server with remote control enabled.
+    RemoteControl,
 
     /// Launch the Codex desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -177,13 +176,6 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
-}
-
-#[derive(Debug, Args)]
-struct BuiltinMcpCommand {
-    name: String,
-    #[arg(long)]
-    codex_home: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -736,6 +728,14 @@ struct FeatureSetArgs {
     feature: String,
 }
 
+const REMOTE_CONTROL_FEATURE_OVERRIDE: &str = "features.remote_control=true";
+
+fn enable_remote_control_for_invocation(config_overrides: &mut CliConfigOverrides) {
+    config_overrides
+        .raw_overrides
+        .push(REMOTE_CONTROL_FEATURE_OVERRIDE.to_string());
+}
+
 fn stage_str(stage: Stage) -> &'static str {
     match stage {
         Stage::UnderDevelopment => "under development",
@@ -819,15 +819,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "mcp-server",
             )?;
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
-        }
-        Some(Subcommand::BuiltinMcp(command)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "builtin-mcp",
-            )?;
-            let codex_home = AbsolutePathBuf::try_from(command.codex_home)?;
-            codex_builtin_mcps::run_builtin_mcp_server(&command.name, &codex_home).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -915,6 +906,24 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
                 }
             }
+        }
+        Some(Subcommand::RemoteControl) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "remote-control",
+            )?;
+            enable_remote_control_for_invocation(&mut root_config_overrides);
+            codex_app_server::run_main_with_transport(
+                arg0_paths.clone(),
+                root_config_overrides,
+                codex_config::LoaderOverrides::default(),
+                /*default_analytics_enabled*/ false,
+                codex_app_server::AppServerTransport::Off,
+                codex_protocol::protocol::SessionSource::Cli,
+                codex_app_server::AppServerWebsocketAuthSettings::default(),
+            )
+            .await?;
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -1431,7 +1440,7 @@ async fn run_debug_prompt_input_command(
         });
     }
 
-    let prompt_input = codex_core::build_prompt_input(config, input).await?;
+    let prompt_input = codex_core::build_prompt_input(config, input, /*state_db*/ None).await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())
@@ -2294,6 +2303,45 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn remote_control_override_is_appended_after_root_toggles() {
+        let mut config_overrides = CliConfigOverrides::default();
+        config_overrides
+            .raw_overrides
+            .push("features.remote_control=false".to_string());
+
+        enable_remote_control_for_invocation(&mut config_overrides);
+
+        assert_eq!(
+            config_overrides.raw_overrides,
+            vec![
+                "features.remote_control=false".to_string(),
+                REMOTE_CONTROL_FEATURE_OVERRIDE.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reject_remote_flag_for_remote_control() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--remote",
+            "ws://127.0.0.1:1234",
+            "remote-control",
+        ])
+        .expect("parse");
+        assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
+
+        let err = reject_remote_mode_for_subcommand(
+            cli.remote.remote.as_deref(),
+            cli.remote.remote_auth_token_env.as_deref(),
+            "remote-control",
+        )
+        .expect_err("remote-control should reject root --remote");
+
+        assert!(err.to_string().contains("remote-control"));
     }
 
     #[test]

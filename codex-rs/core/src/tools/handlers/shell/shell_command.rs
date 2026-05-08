@@ -23,7 +23,10 @@ use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
+use codex_tools::ToolSpec;
 
+use super::super::shell_spec::CommandToolOptions;
+use super::super::shell_spec::create_shell_command_tool;
 use super::RunExecLikeArgs;
 use super::run_exec_like;
 use super::shell_command_payload_command;
@@ -36,9 +39,24 @@ enum ShellCommandBackend {
 
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
+    options: Option<ShellCommandHandlerOptions>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ShellCommandHandlerOptions {
+    pub(crate) backend_config: ShellCommandBackendConfig,
+    pub(crate) allow_login_shell: bool,
+    pub(crate) exec_permission_approvals_enabled: bool,
 }
 
 impl ShellCommandHandler {
+    pub(crate) fn new(options: ShellCommandHandlerOptions) -> Self {
+        Self {
+            options: Some(options),
+            ..Self::from(options.backend_config)
+        }
+    }
+
     fn shell_runtime_backend(&self) -> ShellRuntimeBackend {
         match self.backend {
             ShellCommandBackend::Classic => ShellRuntimeBackend::ShellCommandClassic,
@@ -99,7 +117,10 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
             ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
             ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
         };
-        Self { backend }
+        Self {
+            backend,
+            options: None,
+        }
     }
 }
 
@@ -108,6 +129,19 @@ impl ToolHandler for ShellCommandHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        self.options.map(|options| {
+            create_shell_command_tool(CommandToolOptions {
+                allow_login_shell: options.allow_login_shell,
+                exec_permission_approvals_enabled: options.exec_permission_approvals_enabled,
+            })
+        })
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.options.is_some()
     }
 
     fn kind(&self) -> ToolKind {

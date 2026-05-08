@@ -31,6 +31,7 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
@@ -46,6 +47,7 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource as ProtocolSessionSource;
@@ -223,6 +225,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             cursor: None,
             limit: Some(2),
             sort_direction: Some(SortDirection::Desc),
+            items_view: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -238,7 +241,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
     assert_eq!(turn_user_texts(&data), vec!["third", "second"]);
     assert!(
         data.iter()
-            .all(|turn| turn.items_view == TurnItemsView::Full)
+            .all(|turn| turn.items_view == TurnItemsView::Summary)
     );
     let next_cursor = next_cursor.expect("expected nextCursor for older turns");
     let backwards_cursor = backwards_cursor.expect("expected backwardsCursor for newest turn");
@@ -249,6 +252,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             cursor: Some(next_cursor),
             limit: Some(10),
             sort_direction: Some(SortDirection::Desc),
+            items_view: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -267,6 +271,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             cursor: Some(backwards_cursor),
             limit: Some(10),
             sort_direction: Some(SortDirection::Asc),
+            items_view: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -276,6 +281,74 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
     .await??;
     let ThreadTurnsListResponse { data, .. } = to_response::<ThreadTurnsListResponse>(read_resp)?;
     assert_eq!(turn_user_texts(&data), vec!["third", "fourth"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turns_list_supports_requested_items_view() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "first",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_agent_message(rollout_path.as_path(), "2025-01-05T12:01:00Z", "draft")?;
+    append_agent_message(rollout_path.as_path(), "2025-01-05T12:02:00Z", "final")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let full = read_single_turn_items_view(
+        &mut mcp,
+        conversation_id.as_str(),
+        Some(TurnItemsView::Full),
+    )
+    .await?;
+    assert_eq!(full.items_view, TurnItemsView::Full);
+    assert_eq!(
+        turn_agent_texts(std::slice::from_ref(&full)),
+        vec!["draft", "final"]
+    );
+
+    let summary = read_single_turn_items_view(
+        &mut mcp,
+        conversation_id.as_str(),
+        Some(TurnItemsView::Summary),
+    )
+    .await?;
+    assert_eq!(summary.items_view, TurnItemsView::Summary);
+    assert_eq!(
+        turn_user_texts(std::slice::from_ref(&summary)),
+        vec!["first"]
+    );
+    assert_eq!(
+        turn_agent_texts(std::slice::from_ref(&summary)),
+        vec!["final"]
+    );
+
+    let not_loaded = read_single_turn_items_view(
+        &mut mcp,
+        conversation_id.as_str(),
+        Some(TurnItemsView::NotLoaded),
+    )
+    .await?;
+    assert_eq!(not_loaded.items_view, TurnItemsView::NotLoaded);
+    assert!(not_loaded.items.is_empty());
+    assert_eq!(not_loaded.id, full.id);
+    assert_eq!(not_loaded.status, full.status);
+    assert_eq!(not_loaded.started_at, full.started_at);
+    assert_eq!(not_loaded.completed_at, full.completed_at);
+    assert_eq!(not_loaded.duration_ms, full.duration_ms);
 
     Ok(())
 }
@@ -334,6 +407,7 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
                 cursor: None,
                 limit: Some(10),
                 sort_direction: Some(SortDirection::Asc),
+                items_view: None,
             },
         })
         .await?
@@ -583,6 +657,7 @@ async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> R
             cursor: None,
             limit: Some(2),
             sort_direction: Some(SortDirection::Desc),
+            items_view: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -607,6 +682,7 @@ async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> R
             cursor: Some(backwards_cursor),
             limit: Some(10),
             sort_direction: Some(SortDirection::Asc),
+            items_view: None,
         })
         .await?;
     let read_err: JSONRPCError = timeout(
@@ -963,6 +1039,7 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
             cursor: None,
             limit: None,
             sort_direction: None,
+            items_view: None,
         })
         .await?;
     let read_err: JSONRPCError = timeout(
@@ -978,6 +1055,39 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
             .contains("thread/turns/list is unavailable before first user message"),
         "unexpected error: {}",
         read_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_456".to_string(),
+            cursor: None,
+            limit: None,
+            sort_direction: None,
+        })
+        .await?;
+    let read_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+
+    assert_eq!(read_err.error.code, -32601);
+    assert_eq!(
+        read_err.error.message,
+        "thread/turns/items/list is not supported yet"
     );
 
     Ok(())
@@ -1068,6 +1178,24 @@ fn append_user_message(path: &Path, timestamp: &str, text: &str) -> std::io::Res
     )
 }
 
+fn append_agent_message(path: &Path, timestamp: &str, text: &str) -> anyhow::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                message: text.to_string(),
+                phase: None,
+                memory_citation: None,
+            }))?,
+        })
+    )?;
+    Ok(())
+}
+
 fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
     writeln!(
@@ -1084,6 +1212,31 @@ fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::
     )
 }
 
+async fn read_single_turn_items_view(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+    items_view: Option<TurnItemsView>,
+) -> anyhow::Result<codex_app_server_protocol::Turn> {
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread_id.to_string(),
+            cursor: None,
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+            items_view,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse { mut data, .. } =
+        to_response::<ThreadTurnsListResponse>(read_resp)?;
+    assert_eq!(data.len(), 1);
+    Ok(data.remove(0))
+}
+
 fn turn_user_texts(turns: &[codex_app_server_protocol::Turn]) -> Vec<&str> {
     turns
         .iter()
@@ -1095,6 +1248,17 @@ fn turn_user_texts(turns: &[codex_app_server_protocol::Turn]) -> Vec<&str> {
                 | UserInput::Skill { .. }
                 | UserInput::Mention { .. } => None,
             },
+            _ => None,
+        })
+        .collect()
+}
+
+fn turn_agent_texts(turns: &[codex_app_server_protocol::Turn]) -> Vec<&str> {
+    turns
+        .iter()
+        .flat_map(|turn| &turn.items)
+        .filter_map(|item| match item {
+            ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect()

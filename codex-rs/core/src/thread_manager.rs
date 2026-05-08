@@ -7,8 +7,6 @@ use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
-use crate::resolve_installation_id;
-use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -19,8 +17,6 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
-use codex_agent_graph_store::AgentGraphStore;
-use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -44,6 +40,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -53,13 +50,13 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
-use codex_rollout::state_db;
 use codex_rollout::state_db::StateDbHandle;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
-use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
@@ -251,11 +248,10 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
-    state_db: StateDbHandle,
-    agent_graph_store: Arc<dyn AgentGraphStore>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
+    state_db: Option<StateDbHandle>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -271,40 +267,17 @@ pub fn build_models_manager(
     )
 }
 
-pub async fn init_state_db_from_config(config: &Config) -> Option<StateDbHandle> {
-    state_db::init(config).await
-}
-
-pub fn thread_store_from_config(config: &Config, state_db: StateDbHandle) -> Arc<dyn ThreadStore> {
+pub fn thread_store_from_config(
+    config: &Config,
+    state_db: Option<StateDbHandle>,
+) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig::from_config(config),
             state_db,
         )),
-        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
-}
-
-pub fn agent_graph_store_from_state_db(state_db: StateDbHandle) -> Arc<dyn AgentGraphStore> {
-    Arc::new(LocalAgentGraphStore::new(state_db))
-}
-
-async fn state_db_from_roots_for_tests(
-    codex_home: PathBuf,
-    sqlite_home: PathBuf,
-    default_model_provider_id: String,
-) -> StateDbHandle {
-    let config = codex_rollout::RolloutConfig {
-        codex_home: codex_home.clone(),
-        sqlite_home,
-        cwd: codex_home,
-        model_provider_id: default_model_provider_id,
-        generate_memories: false,
-    };
-    state_db::try_init(&config)
-        .await
-        .unwrap_or_else(|err| panic!("test state db should initialize: {err}"))
 }
 
 impl ThreadManager {
@@ -315,9 +288,8 @@ impl ThreadManager {
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        state_db: StateDbHandle,
         thread_store: Arc<dyn ThreadStore>,
-        agent_graph_store: Arc<dyn AgentGraphStore>,
+        state_db: Option<StateDbHandle>,
         installation_id: String,
     ) -> Self {
         let codex_home = config.codex_home.clone();
@@ -345,12 +317,11 @@ impl ThreadManager {
                 mcp_manager,
                 skills_watcher,
                 thread_store,
-                state_db,
-                agent_graph_store,
                 auth_manager,
                 session_source,
                 installation_id,
                 analytics_events_client,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -360,7 +331,7 @@ impl ThreadManager {
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
-    pub(crate) async fn with_models_provider_for_tests(
+    pub(crate) fn with_models_provider_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
     ) -> Self {
@@ -371,27 +342,11 @@ impl ThreadManager {
         ));
         std::fs::create_dir_all(&codex_home)
             .unwrap_or_else(|err| panic!("temp codex home dir create failed: {err}"));
-        let state_db = state_db_from_roots_for_tests(
-            codex_home.clone(),
-            codex_home.clone(),
-            OPENAI_PROVIDER_ID.to_string(),
-        )
-        .await;
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
-        let installation_id = resolve_installation_id(&skills_codex_home)
-            .await
-            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
-        let mut manager = Self::with_models_provider_and_home_and_state_db_for_tests(
+        let mut manager = Self::with_models_provider_and_home_for_tests(
             auth,
             provider,
             codex_home.clone(),
             Arc::new(EnvironmentManager::default_for_tests()),
-            state_db,
-            skills_codex_home,
-            installation_id,
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
         manager
@@ -399,47 +354,35 @@ impl ThreadManager {
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth and codex home.
     /// Used for integration tests: should not be used by ordinary business logic.
-    pub(crate) async fn with_models_provider_and_home_for_tests(
+    pub(crate) fn with_models_provider_and_home_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
-        let state_db = state_db_from_roots_for_tests(
-            codex_home.clone(),
-            codex_home.clone(),
-            OPENAI_PROVIDER_ID.to_string(),
-        )
-        .await;
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
-        let installation_id = resolve_installation_id(&skills_codex_home)
-            .await
-            .unwrap_or_else(|err| panic!("resolve test installation id failed: {err}"));
-        Self::with_models_provider_and_home_and_state_db_for_tests(
+        Self::with_models_provider_home_and_state_for_tests(
             auth,
             provider,
             codex_home,
             environment_manager,
-            state_db,
-            skills_codex_home,
-            installation_id,
+            /*state_db*/ None,
         )
     }
 
-    fn with_models_provider_and_home_and_state_db_for_tests(
+    pub(crate) fn with_models_provider_home_and_state_for_tests(
         auth: CodexAuth,
         provider: ModelProviderInfo,
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
-        state_db: StateDbHandle,
-        skills_codex_home: AbsolutePathBuf,
-        installation_id: String,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
@@ -458,11 +401,11 @@ impl ThreadManager {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig {
                 codex_home: codex_home.clone(),
+                sqlite_home: codex_home.clone(),
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
             },
             state_db.clone(),
         ));
-        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -475,12 +418,11 @@ impl ThreadManager {
                 mcp_manager,
                 skills_watcher,
                 thread_store,
-                state_db,
-                agent_graph_store,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
                 analytics_events_client: None,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -566,17 +508,22 @@ impl ThreadManager {
         subtree_thread_ids.push(thread_id);
         seen_thread_ids.insert(thread_id);
 
-        for descendant_id in self
-            .state
-            .agent_graph_store
-            .list_thread_spawn_descendants(thread_id, /*status_filter*/ None)
-            .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!("failed to load thread-spawn descendants: {err}"))
-            })?
-        {
-            if seen_thread_ids.insert(descendant_id) {
-                subtree_thread_ids.push(descendant_id);
+        if let Some(state_db_ctx) = thread.state_db() {
+            for status in [
+                DirectionalThreadSpawnEdgeStatus::Open,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            ] {
+                for descendant_id in state_db_ctx
+                    .list_thread_spawn_descendants_with_status(thread_id, status)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to load thread-spawn descendants: {err}"))
+                    })?
+                {
+                    if seen_thread_ids.insert(descendant_id) {
+                        subtree_thread_ids.push(descendant_id);
+                    }
+                }
             }
         }
 
@@ -667,7 +614,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -739,7 +686,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -836,7 +783,7 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = self.initial_history_from_rollout_path(path).await?;
         self.fork_thread_from_history(
             snapshot,
             config,
@@ -846,6 +793,24 @@ impl ThreadManager {
             parent_trace,
         )
         .await
+    }
+
+    async fn initial_history_from_rollout_path(
+        &self,
+        rollout_path: PathBuf,
+    ) -> CodexResult<InitialHistory> {
+        let requested_rollout_path = rollout_path.clone();
+        let stored_thread = self
+            .state
+            .thread_store
+            .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                rollout_path,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .map_err(thread_store_rollout_read_error)?;
+        stored_thread_to_initial_history(stored_thread, Some(requested_rollout_path))
     }
 
     /// Fork an existing thread from already-loaded store history.
@@ -918,12 +883,8 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
-    pub(crate) fn state_db(&self) -> StateDbHandle {
+    pub(crate) fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db.clone()
-    }
-
-    pub(crate) fn agent_graph_store(&self) -> Arc<dyn AgentGraphStore> {
-        self.agent_graph_store.clone()
     }
 
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -1242,7 +1203,6 @@ impl ThreadManagerState {
             parent_trace,
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
-            state_db: Some(self.state_db.clone()),
             thread_store: Arc::clone(&self.thread_store),
         })
         .await?;
@@ -1334,6 +1294,31 @@ impl ThreadManagerState {
             .ok()
             .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
+    }
+}
+
+fn stored_thread_to_initial_history(
+    stored_thread: StoredThread,
+    rollout_path: Option<PathBuf>,
+) -> CodexResult<InitialHistory> {
+    let thread_id = stored_thread.thread_id;
+    let history = stored_thread.history.ok_or_else(|| {
+        CodexErr::Fatal(format!(
+            "thread {thread_id} did not include persisted history"
+        ))
+    })?;
+    Ok(InitialHistory::Resumed(ResumedHistory {
+        conversation_id: thread_id,
+        history: history.items,
+        rollout_path: rollout_path.or(stored_thread.rollout_path),
+    }))
+}
+
+fn thread_store_rollout_read_error(err: ThreadStoreError) -> CodexErr {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
+        ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        err => CodexErr::Fatal(format!("failed to read thread by rollout path: {err}")),
     }
 }
 

@@ -15,9 +15,7 @@ use anyhow::anyhow;
 use codex_config::CloudRequirementsLoader;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
-use codex_core::init_state_db_from_config;
 use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
@@ -74,6 +72,7 @@ const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
+    exec_server_url: Option<String>,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
     remote_container_name: Option<String>,
@@ -87,6 +86,7 @@ impl TestEnv {
             codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
+            exec_server_url: None,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
             remote_container_name: None,
@@ -99,10 +99,6 @@ impl TestEnv {
 
     pub fn environment(&self) -> &codex_exec_server::Environment {
         &self.environment
-    }
-
-    pub fn exec_server_url(&self) -> Option<&str> {
-        self.environment.exec_server_url()
     }
 
     fn local_cwd_temp_dir(&self) -> Option<Arc<TempDir>> {
@@ -124,7 +120,7 @@ pub async fn test_env() -> Result<TestEnv> {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
             let environment =
-                codex_exec_server::Environment::create_for_tests(Some(websocket_url))?;
+                codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -136,6 +132,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 .await?;
             Ok(TestEnv {
                 environment,
+                exec_server_url: Some(websocket_url),
                 cwd,
                 local_cwd_temp_dir: None,
                 remote_container_name: Some(remote_env.container_name),
@@ -386,7 +383,7 @@ impl TestCodexBuilder {
         let exec_server_url = self
             .exec_server_url
             .clone()
-            .or_else(|| test_env.exec_server_url().map(str::to_owned));
+            .or_else(|| test_env.exec_server_url.clone());
         let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
@@ -426,33 +423,19 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = if config.model_catalog.is_some() {
-            let state_db = init_state_db_from_config(&config)
-                .await
-                .expect("test codex requires state db");
-            let thread_store = thread_store_from_config(&config, state_db.clone());
-            let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
-            let installation_id = resolve_installation_id(&config.codex_home).await?;
-            ThreadManager::new(
-                &config,
-                codex_core::test_support::auth_manager_from_auth(auth.clone()),
-                SessionSource::Exec,
-                Arc::clone(&environment_manager),
-                /*analytics_events_client*/ None,
-                state_db,
-                thread_store,
-                agent_graph_store,
-                installation_id,
-            )
-        } else {
-            codex_core::test_support::thread_manager_with_models_provider_and_home(
-                auth.clone(),
-                config.model_provider.clone(),
-                config.codex_home.to_path_buf(),
-                Arc::clone(&environment_manager),
-            )
-            .await
-        };
+        let state_db = codex_core::init_state_db(&config).await;
+        let thread_store = thread_store_from_config(&config, state_db.clone());
+        let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let thread_manager = ThreadManager::new(
+            &config,
+            codex_core::test_support::auth_manager_from_auth(auth.clone()),
+            SessionSource::Exec,
+            Arc::clone(&environment_manager),
+            /*analytics_events_client*/ None,
+            thread_store,
+            state_db.clone(),
+            installation_id,
+        );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 

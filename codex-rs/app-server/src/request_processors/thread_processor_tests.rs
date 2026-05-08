@@ -409,8 +409,7 @@ mod thread_processor_behavior_tests {
             history: None,
         };
 
-        let summary =
-            summary_from_stored_thread(stored_thread, "fallback").expect("summary should exist");
+        let summary = summary_from_stored_thread(stored_thread, "fallback");
 
         assert_eq!(
             summary.timestamp.as_deref(),

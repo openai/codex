@@ -183,6 +183,117 @@ pub struct ThreadPage {
     pub next_cursor: Option<String>,
 }
 
+/// Requested amount of item detail for stored turns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredTurnItemsView {
+    /// Return turn metadata only.
+    NotLoaded,
+    /// Return display summary items for each turn.
+    #[default]
+    Summary,
+    /// Return every persisted item available for each turn.
+    Full,
+}
+
+/// Store-owned status for a persisted turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredTurnStatus {
+    /// The turn completed normally.
+    Completed,
+    /// The turn was interrupted before normal completion.
+    Interrupted,
+    /// The turn failed.
+    Failed,
+    /// The turn is still in progress.
+    InProgress,
+}
+
+/// Store-owned error details for a failed persisted turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredTurnError {
+    /// User-visible error message.
+    pub message: String,
+    /// Optional additional detail for clients that expose expanded error context.
+    pub additional_details: Option<String>,
+}
+
+/// Parameters for listing turns within a stored thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListTurnsParams {
+    /// Thread id to read.
+    pub thread_id: ThreadId,
+    /// Whether archived threads are eligible.
+    pub include_archived: bool,
+    /// Opaque cursor returned by a previous list call.
+    pub cursor: Option<String>,
+    /// Maximum number of turns to return.
+    pub page_size: usize,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
+    /// Requested amount of item detail for each returned turn.
+    pub items_view: StoredTurnItemsView,
+}
+
+/// Store-owned turn representation used by turn pagination APIs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredTurn {
+    /// Turn id.
+    pub turn_id: String,
+    /// Persisted rollout items associated with this turn, according to `items_view`.
+    pub items: Vec<RolloutItem>,
+    /// Amount of item detail included in `items`.
+    pub items_view: StoredTurnItemsView,
+    /// Store-owned status for API layer projection.
+    pub status: StoredTurnStatus,
+    /// Error message when the turn failed.
+    pub error: Option<StoredTurnError>,
+    /// Unix timestamp (seconds) when the turn started.
+    pub started_at: Option<i64>,
+    /// Unix timestamp (seconds) when the turn completed.
+    pub completed_at: Option<i64>,
+    /// Duration between turn start and completion in milliseconds, if known.
+    pub duration_ms: Option<i64>,
+}
+
+/// A page of stored turns.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TurnPage {
+    /// Turns returned for this page.
+    pub turns: Vec<StoredTurn>,
+    /// Opaque cursor to continue listing.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor for fetching in the opposite direction.
+    pub backwards_cursor: Option<String>,
+}
+
+/// Parameters for listing persisted items within a single turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListItemsParams {
+    /// Thread id to read.
+    pub thread_id: ThreadId,
+    /// Turn id to hydrate.
+    pub turn_id: String,
+    /// Whether archived threads are eligible.
+    pub include_archived: bool,
+    /// Opaque cursor returned by a previous list call.
+    pub cursor: Option<String>,
+    /// Maximum number of items to return.
+    pub page_size: usize,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
+}
+
+/// A page of persisted rollout items within a turn.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ItemPage {
+    /// Items returned for this page.
+    pub items: Vec<RolloutItem>,
+    /// Opaque cursor to continue listing.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor for fetching in the opposite direction.
+    pub backwards_cursor: Option<String>,
+}
+
 /// Store-owned thread metadata used by list/read/resume responses.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredThread {

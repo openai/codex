@@ -21,7 +21,6 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -44,8 +43,8 @@ pub struct ToolRouter {
 }
 
 pub(crate) struct ToolRouterParams<'a> {
-    pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
-    pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,

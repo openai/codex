@@ -464,6 +464,13 @@ impl CodexThread {
         self.codex.session.get_config().await
     }
 
+    /// Refresh the thread's layer-backed user config state from a caller-supplied
+    /// config snapshot. Thread-scoped layers and session-static settings remain
+    /// unchanged.
+    pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
+        self.codex.session.refresh_runtime_config(next_config).await;
+    }
+
     pub async fn read_mcp_resource(
         &self,
         server: &str,

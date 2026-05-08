@@ -5,7 +5,6 @@ use codex_tools::ToolSearchResultSource;
 use codex_tools::ToolsConfig;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
 use codex_tools::tool_search_result_source_to_loadable_tool_spec;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
@@ -15,13 +14,13 @@ pub(crate) struct ToolSearchEntry {
 }
 
 pub(crate) fn build_tool_search_entries(
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    mcp_tools: Option<&[ToolInfo]>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mut entries = Vec::new();
 
     let mut mcp_tools = mcp_tools
-        .map(|tools| tools.values().collect::<Vec<_>>())
+        .map(|tools| tools.iter().collect::<Vec<_>>())
         .unwrap_or_default();
     mcp_tools.sort_by_key(|info| info.canonical_tool_name().display());
     for info in mcp_tools {
@@ -55,7 +54,7 @@ pub(crate) fn build_tool_search_entries(
 
 pub(crate) fn build_tool_search_entries_for_config(
     config: &ToolsConfig,
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    mcp_tools: Option<&[ToolInfo]>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mcp_tools = if config.namespace_tools {

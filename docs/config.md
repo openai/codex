@@ -26,3 +26,24 @@ When enabled, Codex appends a `Co-authored-by:` trailer using the configured
 attribution value. If `commit_attribution` is omitted, Codex uses
 `Codex <noreply@openai.com>`. Set `commit_attribution = ""` to disable the
 trailer while leaving the feature flag enabled.
+
+## OpenTelemetry Trace Metadata
+
+Codex can add static OpenTelemetry span attributes to exported trace spans and
+static W3C tracestate fields to propagated trace context:
+
+```toml
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+```
+
+Nested `otel.tracestate` tables are encoded as semicolon-separated `key:value`
+fields inside the named tracestate member. If propagated trace context already
+has the named member, Codex upserts configured fields and preserves other fields
+in that member. This config shape does not support setting opaque tracestate
+member values. Invalid trace metadata entries are ignored during config load and
+reported as startup warnings.

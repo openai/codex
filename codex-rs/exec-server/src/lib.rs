@@ -1,8 +1,10 @@
 mod client;
 mod client_api;
+mod client_transport;
 mod connection;
 mod environment;
 mod environment_provider;
+mod environment_toml;
 mod fs_helper;
 mod fs_helper_main;
 mod fs_sandbox;

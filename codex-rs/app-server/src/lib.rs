@@ -51,11 +51,11 @@ use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::find_codex_home;
-use codex_core::init_state_db_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::state_db as rollout_state_db;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -489,9 +489,9 @@ pub async fn run_main_with_transport_options(
         }
     };
 
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .ok_or_else(|| std::io::Error::other("failed to initialize sqlite state db"))?;
+    let state_db_result = rollout_state_db::try_init(&config).await;
+    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
+    let state_db = state_db_result.ok();
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -600,12 +600,10 @@ pub async fn run_main_with_transport_options(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = log_db::start(state_db.clone());
-    let log_db_layer = Some(
-        log_db
-            .clone()
-            .with_filter(Targets::new().with_default(Level::TRACE)),
-    );
+    let log_db = state_db.clone().map(log_db::start);
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
     let _ = tracing_subscriber::registry()
@@ -623,6 +621,10 @@ pub async fn run_main_with_transport_options(
         }
     }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    if let Some(err) = &state_db_init_error {
+        error!("failed to initialize sqlite state db: {err}");
+    }
+
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
@@ -667,17 +669,25 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
+    if remote_control_config_enabled && state_db.is_none() {
+        error!("remote control disabled because sqlite state db is unavailable");
+    }
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "no transport configured; use --listen or enable remote control",
+            if remote_control_config_enabled && state_db.is_none() {
+                "no transport configured; remote control disabled because sqlite state db is unavailable"
+            } else {
+                "no transport configured; use --listen or enable remote control"
+            },
         ));
     }
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
         config.chatgpt_base_url.clone(),
-        Some(state_db.clone()),
+        state_db.clone(),
         auth_manager.clone(),
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
@@ -761,7 +771,7 @@ pub async fn run_main_with_transport_options(
             config_manager,
             environment_manager,
             feedback: feedback.clone(),
-            log_db: Some(log_db),
+            log_db,
             state_db: state_db.clone(),
             config_warnings,
             session_source,

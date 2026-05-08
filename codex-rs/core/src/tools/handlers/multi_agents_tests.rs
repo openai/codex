@@ -6,7 +6,6 @@ use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
-use crate::thread_manager::agent_graph_store_from_state_db;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
@@ -91,12 +90,11 @@ fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
 }
 
-async fn thread_manager() -> ThreadManager {
+fn thread_manager() -> ThreadManager {
     ThreadManager::with_models_provider_for_tests(
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
-    .await
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
@@ -182,7 +180,7 @@ async fn handler_rejects_non_function_payloads() {
             input: "hello".to_string(),
         },
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("payload should be rejected");
     };
     assert_eq!(
@@ -202,7 +200,7 @@ async fn spawn_agent_rejects_empty_message() {
         "spawn_agent",
         function_payload(json!({"message": "   "})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("empty message should be rejected");
     };
     assert_eq!(
@@ -223,7 +221,7 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
             "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
         })),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("message+items should be rejected");
     };
     assert_eq!(
@@ -243,7 +241,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let mut config = (*turn.config).clone();
     let provider_info =
@@ -270,7 +268,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
             "agent_type": "explorer"
         })),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -298,14 +296,14 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 async fn spawn_agent_fork_context_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let err = SpawnAgentHandler
+    let err = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -330,7 +328,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
 #[tokio::test]
 async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -338,7 +336,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
 
-    let err = SpawnAgentHandler
+    let err = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -365,7 +363,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
 async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -382,7 +380,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
         ..turn
     };
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -408,7 +406,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_overrides() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -422,7 +420,7 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -449,7 +447,7 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
 async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -466,7 +464,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         ..turn
     };
 
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -505,10 +503,10 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
 #[tokio::test]
 async fn spawn_agent_returns_agent_id_without_task_name() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -532,7 +530,7 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_requires_task_name() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -554,7 +552,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
             "message": "inspect this repo"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("missing task_name should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -566,7 +564,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -590,7 +588,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
             "task_name": "worker"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("legacy items field should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -608,7 +606,7 @@ async fn spawn_agent_errors_when_manager_dropped() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("spawn should fail without a manager");
     };
     assert_eq!(
@@ -626,7 +624,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -642,7 +640,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -723,7 +721,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 #[tokio::test]
 async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -737,7 +735,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -762,7 +760,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -776,7 +774,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -801,7 +799,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -815,7 +813,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -840,7 +838,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
 #[tokio::test]
 async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -916,7 +914,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
 #[tokio::test]
 async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -997,7 +995,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 #[tokio::test]
 async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_message() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1010,7 +1008,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1091,7 +1089,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
 #[tokio::test]
 async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1178,7 +1176,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
 #[tokio::test]
 async fn multi_agent_v2_list_agents_omits_closed_agents() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1191,7 +1189,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1242,7 +1240,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 #[tokio::test]
 async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1255,7 +1253,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1298,7 +1296,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
 #[tokio::test]
 async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1311,7 +1309,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1371,7 +1369,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
 #[tokio::test]
 async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1384,7 +1382,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1506,7 +1504,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
 #[tokio::test]
 async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1519,7 +1517,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1559,7 +1557,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
 #[tokio::test]
 async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1572,7 +1570,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1636,7 +1634,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1650,7 +1648,7 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1675,7 +1673,7 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -1698,7 +1696,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
             "task_name": "BadName"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("invalid agent name should be rejected");
     };
     assert_eq!(
@@ -1718,7 +1716,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let expected_sandbox = turn.config.legacy_sandbox_policy();
     let mut expected_file_system_sandbox_policy =
@@ -1756,7 +1754,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             "agent_type": "explorer"
         })),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -1799,7 +1797,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
 #[tokio::test]
 async fn spawn_agent_rejects_when_depth_limit_exceeded() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
     let max_depth = turn.config.agent_max_depth;
@@ -1817,7 +1815,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("spawn should fail when depth limit exceeded");
     };
     assert_eq!(
@@ -1837,7 +1835,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
     let mut config = (*turn.config).clone();
@@ -1857,7 +1855,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn should succeed within configured depth");
@@ -1883,7 +1881,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let mut config = (*turn.config).clone();
     config.agent_max_depth = 1;
     config
@@ -1916,7 +1914,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
             "fork_turns": "none"
         })),
     );
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation)
         .await
         .expect("multi-agent v2 spawn should ignore max depth");
@@ -1991,7 +1989,7 @@ async fn send_input_rejects_invalid_id() {
 #[tokio::test]
 async fn send_input_reports_missing_agent() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let agent_id = ThreadId::new();
     let invocation = invocation(
@@ -2012,7 +2010,7 @@ async fn send_input_reports_missing_agent() {
 #[tokio::test]
 async fn send_input_interrupts_before_prompt() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2054,7 +2052,7 @@ async fn send_input_interrupts_before_prompt() {
 #[tokio::test]
 async fn send_input_accepts_structured_items() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2128,7 +2126,7 @@ async fn resume_agent_rejects_invalid_id() {
 #[tokio::test]
 async fn resume_agent_reports_missing_agent() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let agent_id = ThreadId::new();
     let invocation = invocation(
@@ -2149,7 +2147,7 @@ async fn resume_agent_reports_missing_agent() {
 #[tokio::test]
 async fn resume_agent_noops_for_active_agent() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2188,7 +2186,7 @@ async fn resume_agent_noops_for_active_agent() {
 #[tokio::test]
 async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2267,7 +2265,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
 #[tokio::test]
 async fn resume_agent_rejects_when_depth_limit_exceeded() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
     let max_depth = turn.config.agent_max_depth;
@@ -2308,7 +2306,7 @@ async fn wait_agent_rejects_non_positive_timeout() {
             "timeout_ms": 0
         })),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("non-positive timeout should be rejected");
     };
     assert_eq!(
@@ -2326,7 +2324,7 @@ async fn wait_agent_rejects_invalid_target() {
         "wait_agent",
         function_payload(json!({"targets": ["invalid"]})),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -2344,7 +2342,7 @@ async fn wait_agent_rejects_empty_targets() {
         "wait_agent",
         function_payload(json!({"targets": []})),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("empty ids should be rejected");
     };
     assert_eq!(
@@ -2356,7 +2354,7 @@ async fn wait_agent_rejects_empty_targets() {
 #[tokio::test]
 async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -2372,7 +2370,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2402,7 +2400,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2454,7 +2452,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 
     let early = timeout(
         Duration::from_millis(/*millis*/ 20),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session.clone(),
             turn.clone(),
             "wait_agent",
@@ -2469,7 +2467,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 
     let output = timeout(
         Duration::from_secs(/*secs*/ 1),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
             "wait_agent",
@@ -2495,7 +2493,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 #[tokio::test]
 async fn wait_agent_returns_not_found_for_missing_agents() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let id_a = ThreadId::new();
     let id_b = ThreadId::new();
@@ -2508,7 +2506,7 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
             "timeout_ms": 1000
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2531,7 +2529,7 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
 #[tokio::test]
 async fn wait_agent_times_out_when_status_is_not_final() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2548,7 +2546,7 @@ async fn wait_agent_times_out_when_status_is_not_final() {
             "timeout_ms": MIN_WAIT_TIMEOUT_MS
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2574,7 +2572,7 @@ async fn wait_agent_times_out_when_status_is_not_final() {
 #[tokio::test]
 async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2594,7 +2592,7 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
 
     let early = timeout(
         Duration::from_millis(50),
-        WaitAgentHandler.handle(invocation),
+        WaitAgentHandler::default().handle(invocation),
     )
     .await;
     assert!(
@@ -2612,7 +2610,7 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
 #[tokio::test]
 async fn wait_agent_returns_final_status_without_timeout() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -2644,7 +2642,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
             "timeout_ms": 1000
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2664,7 +2662,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
 #[tokio::test]
 async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -2680,7 +2678,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2715,7 +2713,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2755,7 +2753,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 #[tokio::test]
 async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -2771,7 +2769,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2807,7 +2805,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
 
     let output = timeout(
         Duration::from_millis(500),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
             "wait_agent",
@@ -2833,7 +2831,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
 #[tokio::test]
 async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -2850,7 +2848,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     let turn = Arc::new(turn);
 
     for task_name in ["worker_a", "worker_b"] {
-        SpawnAgentHandlerV2
+        SpawnAgentHandlerV2::default()
             .handle(invocation(
                 session.clone(),
                 turn.clone(),
@@ -2881,7 +2879,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2921,7 +2919,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
 #[tokio::test]
 async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -2937,7 +2935,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2966,7 +2964,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -3007,7 +3005,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
 #[tokio::test]
 async fn multi_agent_v2_close_agent_accepts_task_name_target() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -3023,7 +3021,7 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -3066,7 +3064,7 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
 #[tokio::test]
 async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
         .await
@@ -3114,7 +3112,7 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
 #[tokio::test]
 async fn close_agent_submits_shutdown_and_returns_previous_status() {
     let (mut session, turn) = make_session_and_context().await;
-    let manager = thread_manager().await;
+    let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
     let thread = manager
@@ -3159,18 +3157,15 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
-    let state_db = init_state_db(&config)
-        .await
-        .expect("test config should initialize state db");
+    let state_db = init_state_db(&config).await;
     let manager = ThreadManager::new(
         &config,
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        state_db.clone(),
         thread_store_from_config(&config, state_db.clone()),
-        agent_graph_store_from_state_db(state_db.clone()),
+        state_db.clone(),
         "11111111-1111-4111-8111-111111111111".to_string(),
     );
 
@@ -3181,7 +3176,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.codex.session.clone();
 
-    let child_spawn_output = SpawnAgentHandler
+    let child_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             parent_session.clone(),
             parent_session.new_default_turn().await,
@@ -3206,7 +3201,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .await
         .expect("child thread should exist");
     let child_session = child_thread.codex.session.clone();
-    let grandchild_spawn_output = SpawnAgentHandler
+    let grandchild_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             child_session.clone(),
             child_session.new_default_turn().await,

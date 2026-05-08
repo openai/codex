@@ -221,7 +221,7 @@ async fn local_shell_pre_tool_use_payload_uses_joined_command() {
         },
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = LocalShellHandler;
+    let handler = LocalShellHandler::default();
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {

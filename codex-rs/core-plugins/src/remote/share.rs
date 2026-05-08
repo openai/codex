@@ -209,6 +209,16 @@ pub async fn list_remote_plugin_shares(
         .collect())
 }
 
+pub fn load_plugin_share_remote_ids_by_local_path(
+    codex_home: &Path,
+) -> io::Result<BTreeMap<AbsolutePathBuf, String>> {
+    let local_paths = local_paths::load_plugin_share_local_paths(codex_home)?;
+    Ok(local_paths
+        .into_iter()
+        .map(|(remote_plugin_id, local_plugin_path)| (local_plugin_path, remote_plugin_id))
+        .collect())
+}
+
 pub async fn delete_remote_plugin_share(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,

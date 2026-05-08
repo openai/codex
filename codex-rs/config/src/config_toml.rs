@@ -345,13 +345,14 @@ pub struct ConfigToml {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
-    /// Experimental / do not use. When set, app-server uses a remote thread
-    /// store at this endpoint instead of the local filesystem/SQLite store.
-    pub experimental_thread_store_endpoint: Option<String>,
-
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Removed. Former remote thread-store endpoint setting kept only so we can
+    /// fail fast instead of silently falling back to local persistence.
+    #[schemars(skip)]
+    pub experimental_thread_store_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread store implementation.
     pub experimental_thread_store: Option<ThreadStoreToml>,
@@ -488,9 +489,6 @@ pub struct DebugConfigLockToml {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThreadStoreToml {
     Local {},
-    Remote {
-        endpoint: String,
-    },
     #[schemars(skip)]
     InMemory {
         id: String,

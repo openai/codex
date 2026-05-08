@@ -10,6 +10,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
+use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
@@ -29,6 +30,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_thread_store::LocalThreadStore;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -317,7 +319,7 @@ impl Session {
                 turn_context,
                 tool_name,
             } => Box::pin(async move {
-                if tool_name != codex_tools::UPDATE_GOAL_TOOL_NAME {
+                if tool_name != UPDATE_GOAL_TOOL_NAME {
                     self.account_thread_goal_progress(
                         turn_context,
                         BudgetLimitSteering::Allowed,
@@ -1337,6 +1339,17 @@ impl Session {
             state_db
         } else if let Some(state_db) = self.goal_runtime.state_db.lock().await.clone() {
             state_db
+        } else if let Some(local_store) = self
+            .services
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.state_db().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "thread goals require a local persisted thread with a state database"
+                )
+            })?
         } else {
             anyhow::bail!("thread goals require a local persisted thread with a state database");
         };

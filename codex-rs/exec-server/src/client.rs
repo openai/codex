@@ -17,13 +17,14 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
-use tokio_tungstenite::connect_async;
 use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
+use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
@@ -97,6 +98,16 @@ impl Default for ExecServerClientConnectOptions {
 
 impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
     fn from(value: RemoteExecServerConnectArgs) -> Self {
+        Self {
+            client_name: value.client_name,
+            initialize_timeout: value.initialize_timeout,
+            resume_session_id: value.resume_session_id,
+        }
+    }
+}
+
+impl From<StdioExecServerConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: StdioExecServerConnectArgs) -> Self {
         Self {
             client_name: value.client_name,
             initialize_timeout: value.initialize_timeout,
@@ -180,29 +191,25 @@ pub struct ExecServerClient {
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    websocket_url: String,
+    transport_params: ExecServerTransportParams,
     client: Arc<OnceCell<ExecServerClient>>,
 }
 
 impl LazyRemoteExecServerClient {
-    pub(crate) fn new(websocket_url: String) -> Self {
+    pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
-            websocket_url,
+            transport_params,
             client: Arc::new(OnceCell::new()),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         self.client
-            .get_or_try_init(|| async {
-                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
-                    websocket_url: self.websocket_url.clone(),
-                    client_name: "codex-environment".to_string(),
-                    connect_timeout: Duration::from_secs(5),
-                    initialize_timeout: Duration::from_secs(5),
-                    resume_session_id: None,
-                })
-                .await
+            // TODO: Add reconnect/disconnect handling here instead of reusing
+            // the first successfully initialized connection forever.
+            .get_or_try_init(|| {
+                let transport_params = self.transport_params.clone();
+                async move { ExecServerClient::connect_for_transport(transport_params).await }
             })
             .await
             .cloned()
@@ -269,32 +276,6 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
-    pub async fn connect_websocket(
-        args: RemoteExecServerConnectArgs,
-    ) -> Result<Self, ExecServerError> {
-        let websocket_url = args.websocket_url.clone();
-        let connect_timeout = args.connect_timeout;
-        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
-            .await
-            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-                url: websocket_url.clone(),
-                timeout: connect_timeout,
-            })?
-            .map_err(|source| ExecServerError::WebSocketConnect {
-                url: websocket_url.clone(),
-                source,
-            })?;
-
-        Self::connect(
-            JsonRpcConnection::from_websocket(
-                stream,
-                format!("exec-server websocket {websocket_url}"),
-            ),
-            args.into(),
-        )
-        .await
-    }
-
     pub async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
@@ -443,7 +424,7 @@ impl ExecServerClient {
             .clone()
     }
 
-    async fn connect(
+    pub(crate) async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
@@ -893,18 +874,30 @@ mod tests {
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    #[cfg(unix)]
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::process::Command;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::io::duplex;
     use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
     use tokio::time::Duration;
+    #[cfg(unix)]
+    use tokio::time::sleep;
     use tokio::time::timeout;
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use crate::ProcessId;
+    #[cfg(not(windows))]
+    use crate::client_api::ExecServerTransportParams;
+    use crate::client_api::StdioExecServerCommand;
+    use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
     use crate::process::ExecProcessEvent;
     use crate::protocol::EXEC_CLOSED_METHOD;
@@ -940,6 +933,191 @@ mod tests {
             .write_all(format!("{encoded}\n").as_bytes())
             .await
             .expect("json-rpc line should write");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn connect_stdio_command_initializes_json_rpc_client() {
+        let client = ExecServerClient::connect_stdio_command(StdioExecServerConnectArgs {
+            command: StdioExecServerCommand {
+                program: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
+                ],
+                env: HashMap::new(),
+                cwd: None,
+            },
+            client_name: "stdio-test-client".to_string(),
+            initialize_timeout: Duration::from_secs(1),
+            resume_session_id: None,
+        })
+        .await
+        .expect("stdio client should connect");
+
+        assert_eq!(client.session_id().as_deref(), Some("stdio-test"));
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn connect_for_transport_initializes_stdio_command() {
+        let client = ExecServerClient::connect_for_transport(
+            ExecServerTransportParams::StdioCommand(StdioExecServerCommand {
+                program: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
+                ],
+                env: HashMap::new(),
+                cwd: None,
+            }),
+        )
+        .await
+        .expect("stdio transport should connect");
+
+        assert_eq!(client.session_id().as_deref(), Some("stdio-test"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn connect_stdio_command_initializes_json_rpc_client_on_windows() {
+        let client = ExecServerClient::connect_stdio_command(StdioExecServerConnectArgs {
+            command: StdioExecServerCommand {
+                program: "powershell".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "$null = [Console]::In.ReadLine(); [Console]::Out.WriteLine('{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'); $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 60".to_string(),
+                ],
+                env: HashMap::new(),
+                cwd: None,
+            },
+            client_name: "stdio-test-client".to_string(),
+            initialize_timeout: Duration::from_secs(1),
+            resume_session_id: None,
+        })
+        .await
+        .expect("stdio client should connect");
+
+        assert_eq!(client.session_id().as_deref(), Some("stdio-test"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_stdio_client_terminates_spawned_process() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let pid_file = tempdir.path().join("server.pid");
+        let child_pid_file = tempdir.path().join("server-child.pid");
+        let stdio_script = format!(
+            "read _line; \
+             echo \"$$\" > {}; \
+             sleep 60 >/dev/null 2>&1 & echo \"$!\" > {}; \
+             printf '%s\\n' '{{\"id\":1,\"result\":{{\"sessionId\":\"stdio-test\"}}}}'; \
+             read _line; \
+             wait",
+            shell_quote(pid_file.as_path()),
+            shell_quote(child_pid_file.as_path()),
+        );
+
+        let client = ExecServerClient::connect_stdio_command(StdioExecServerConnectArgs {
+            command: StdioExecServerCommand {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), stdio_script],
+                env: HashMap::new(),
+                cwd: None,
+            },
+            client_name: "stdio-test-client".to_string(),
+            initialize_timeout: Duration::from_secs(1),
+            resume_session_id: None,
+        })
+        .await
+        .expect("stdio client should connect");
+        let server_pid = read_pid_file(pid_file.as_path()).await;
+        let child_pid = read_pid_file(child_pid_file.as_path()).await;
+        assert!(
+            process_exists(server_pid),
+            "spawned stdio process should be running before client drop"
+        );
+        assert!(
+            process_exists(child_pid),
+            "spawned stdio child process should be running before client drop"
+        );
+
+        drop(client);
+
+        wait_for_process_exit(server_pid).await;
+        wait_for_process_exit(child_pid).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malformed_stdio_message_terminates_spawned_process() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let pid_file = tempdir.path().join("server.pid");
+        let stdio_script = format!(
+            "read _line; \
+             echo \"$$\" > {}; \
+             printf '%s\\n' 'not-json'; \
+             sleep 60",
+            shell_quote(pid_file.as_path()),
+        );
+
+        let result = ExecServerClient::connect_stdio_command(StdioExecServerConnectArgs {
+            command: StdioExecServerCommand {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), stdio_script],
+                env: HashMap::new(),
+                cwd: None,
+            },
+            client_name: "stdio-test-client".to_string(),
+            initialize_timeout: Duration::from_secs(1),
+            resume_session_id: None,
+        })
+        .await;
+        assert!(result.is_err(), "malformed stdio server should not connect");
+
+        let server_pid = read_pid_file(pid_file.as_path()).await;
+        wait_for_process_exit(server_pid).await;
+    }
+
+    #[cfg(unix)]
+    async fn read_pid_file(path: &Path) -> u32 {
+        for _ in 0..20 {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                return contents
+                    .trim()
+                    .parse()
+                    .expect("pid file should contain a pid");
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        panic!("pid file {} should be written", path.display());
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_process_exit(pid: u32) {
+        for _ in 0..20 {
+            if !process_exists(pid) {
+                return;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        panic!("process {pid} should exit");
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(unix)]
+    fn shell_quote(path: &Path) -> String {
+        let value = path.to_string_lossy();
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 
     #[tokio::test]
@@ -1081,6 +1259,92 @@ mod tests {
         );
 
         drop(notifications_tx);
+        drop(client);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn transport_disconnect_fails_sessions_and_rejects_new_sessions() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let (disconnect_tx, disconnect_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+
+            let initialized = read_jsonrpc_line(&mut lines).await;
+            match initialized {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+
+            let _ = disconnect_rx.await;
+            drop(server_writer);
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(
+                client_stdout,
+                client_stdin,
+                "test-exec-server-client".to_string(),
+            ),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+
+        let process_id = ProcessId::from("disconnect");
+        let session = client
+            .register_session(&process_id)
+            .await
+            .expect("session should register");
+        let mut events = session.subscribe_events();
+
+        disconnect_tx.send(()).expect("disconnect should signal");
+
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("session failure should not time out")
+            .expect("session event stream should stay open");
+        let ExecProcessEvent::Failed(message) = event else {
+            panic!("expected session failure after disconnect, got {event:?}");
+        };
+        assert_eq!(message, "exec-server transport disconnected");
+
+        let response = session
+            .read(
+                /*after_seq*/ None, /*max_bytes*/ None, /*wait_ms*/ None,
+            )
+            .await
+            .expect("disconnected session read should synthesize a response");
+        assert_eq!(
+            response.failure.as_deref(),
+            Some("exec-server transport disconnected")
+        );
+        assert!(response.closed);
+
+        let new_session = client.register_session(&ProcessId::from("new")).await;
+        assert!(matches!(
+            new_session,
+            Err(super::ExecServerError::Disconnected(_))
+        ));
+
         drop(client);
         server.await.expect("server task should finish");
     }

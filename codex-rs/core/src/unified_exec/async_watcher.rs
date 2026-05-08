@@ -226,7 +226,13 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         process_id,
     );
     emitter
-        .emit(event_ctx, ToolEventStage::Success(output))
+        .emit(
+            event_ctx,
+            ToolEventStage::Success {
+                output,
+                applied_patch_delta: None,
+            },
+        )
         .await;
 }
 

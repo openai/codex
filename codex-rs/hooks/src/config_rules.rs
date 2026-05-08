@@ -13,7 +13,7 @@ use codex_config::TomlValue;
 /// disabled layers, to match the skills config behavior. Project, managed, and
 /// plugin layers can discover hooks, but they do not get to write user hook
 /// state.
-pub(crate) fn hook_states_from_stack(
+pub fn hook_states_from_stack(
     config_layer_stack: Option<&ConfigLayerStack>,
 ) -> HashMap<String, HookStateToml> {
     let Some(config_layer_stack) = config_layer_stack else {
