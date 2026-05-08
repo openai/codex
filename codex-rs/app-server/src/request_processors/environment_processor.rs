@@ -17,7 +17,7 @@ impl EnvironmentRequestProcessor {
         params: EnvironmentAddParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.environment_manager
-            .upsert_remote_environment(params.environment_id, params.exec_server_url)
+            .upsert_environment(params.environment_id, params.exec_server_url)
             .map_err(|err| invalid_request(err.to_string()))?;
         Ok(Some(EnvironmentAddResponse {}.into()))
     }

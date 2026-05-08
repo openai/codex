@@ -250,7 +250,7 @@ impl EnvironmentManager {
 
     /// Adds or replaces a named remote environment without changing the
     /// manager's default environment selection.
-    pub fn upsert_remote_environment(
+    pub fn upsert_environment(
         &self,
         environment_id: String,
         exec_server_url: String,
@@ -765,7 +765,7 @@ mod tests {
         let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
 
         manager
-            .upsert_remote_environment("executor-a".to_string(), "ws://127.0.0.1:8765".to_string())
+            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:8765".to_string())
             .expect("remote environment");
         let first = manager
             .get_environment("executor-a")
@@ -775,7 +775,7 @@ mod tests {
         assert_eq!(manager.default_environment_id(), None);
 
         manager
-            .upsert_remote_environment("executor-a".to_string(), "ws://127.0.0.1:9876".to_string())
+            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:9876".to_string())
             .expect("updated remote environment");
         let second = manager
             .get_environment("executor-a")
@@ -790,7 +790,7 @@ mod tests {
         let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
 
         let err = manager
-            .upsert_remote_environment("executor-a".to_string(), String::new())
+            .upsert_environment("executor-a".to_string(), String::new())
             .expect_err("empty URL should fail");
 
         assert_eq!(
