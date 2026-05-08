@@ -867,6 +867,7 @@ jobs:
     name: publish-python-runtime
     needs: release
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       id-token: write # Required for PyPI trusted publishing.
       contents: read
