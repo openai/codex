@@ -220,6 +220,47 @@ jobs:
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
+      - name: Build Python runtime wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.target }}" in
+            aarch64-pc-windows-msvc)
+              platform_tag="win_arm64"
+              ;;
+            x86_64-pc-windows-msvc)
+              platform_tag="win_amd64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          python -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          # Keep the helpers next to codex.exe in the runtime wheel so Windows
+          # sandbox/elevation lookup matches the standalone release zip.
+          python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime \
+            "$stage_dir" \
+            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex.exe" \
+            --codex-version "${GITHUB_REF_NAME}" \
+            --platform-tag "$platform_tag" \
+            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-command-runner.exe" \
+            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe"
+          python -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheel-${{ matrix.target }}
+          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          if-no-files-found: error
+
       - name: Install DotSlash
         uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
