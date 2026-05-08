@@ -113,7 +113,7 @@ fn cached_directory_connectors_in_memory(
         .map(|cached| cached.connectors.clone())
 }
 
-fn fresh_directory_connectors_in_memory(
+fn unexpired_directory_connectors_in_memory(
     cache_key: &ConnectorDirectoryCacheKey,
 ) -> Option<Vec<AppInfo>> {
     let cache_guard = CONNECTOR_DIRECTORY_CACHE
@@ -138,7 +138,7 @@ where
 {
     if !force_refetch
         && let Some(cached_connectors) =
-            fresh_directory_connectors_in_memory(&cache_context.cache_key)
+            unexpired_directory_connectors_in_memory(&cache_context.cache_key)
     {
         return Ok(cached_connectors);
     }
