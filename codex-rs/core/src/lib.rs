@@ -22,6 +22,7 @@ mod config_lock;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadTurnContextOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
+pub use session::turn_context::TurnContext;
 mod agent;
 mod attestation;
 mod codex_delegate;

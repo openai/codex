@@ -3725,6 +3725,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -3871,6 +3872,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -4061,6 +4065,7 @@ async fn make_session_with_config_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -4163,6 +4168,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5586,6 +5592,9 @@ where
         skills_manager,
         plugins_manager,
         mcp_manager,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -6131,6 +6140,73 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     )
     .await;
     (session, turn_context)
+}
+
+struct GitAttributionTestContributor;
+struct GitAttributionTestState;
+
+impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+    fn contribute(
+        &self,
+        _session_store: &codex_extension_api::ExtensionData,
+        thread_store: &codex_extension_api::ExtensionData,
+    ) -> Vec<codex_extension_api::PromptFragment> {
+        thread_store
+            .get::<GitAttributionTestState>()
+            .is_some()
+            .then(|| {
+                codex_extension_api::PromptFragment::developer_policy(
+                    "git attribution extension enabled",
+                )
+            })
+            .into_iter()
+            .collect()
+    }
+}
+
+fn git_attribution_test_registry()
+-> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    Arc::new(builder.build())
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_git_attribution_from_extensions() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+    session
+        .services
+        .thread_extension_data
+        .insert(GitAttributionTestState);
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "expected git attribution developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        !developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "did not expect git attribution developer text, got {developer_messages:?}"
+    );
 }
 
 #[tokio::test]

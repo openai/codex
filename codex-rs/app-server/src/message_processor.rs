@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
@@ -303,6 +304,7 @@ impl MessageProcessor {
             auth_manager.clone(),
             session_source,
             environment_manager,
+            thread_extensions(),
             Some(analytics_events_client.clone()),
             Arc::clone(&thread_store),
             state_db.clone(),
