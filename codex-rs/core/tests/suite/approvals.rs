@@ -20,7 +20,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::managed_network_requirements_loader;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -108,7 +108,7 @@ enum ActionKind {
         command: &'static str,
         justification: Option<&'static str>,
     },
-    ApplyPatchFunction {
+    ApplyPatchFreeform {
         target: TargetPath,
         content: &'static str,
     },
@@ -131,7 +131,7 @@ impl ActionKind {
             | ActionKind::RunCommand { .. }
             | ActionKind::RunCommandWithPrefixRule { .. }
             | ActionKind::RunUnifiedExecCommand { .. }
-            | ActionKind::ApplyPatchFunction { .. }
+            | ActionKind::ApplyPatchFreeform { .. }
             | ActionKind::ApplyPatchShell { .. } => None,
         }
     }
@@ -264,11 +264,11 @@ impl ActionKind {
                 )?;
                 Ok((event, Some(command.to_string())))
             }
-            ActionKind::ApplyPatchFunction { target, content } => {
+            ActionKind::ApplyPatchFreeform { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
-                Ok((ev_apply_patch_function_call(call_id, &patch), None))
+                Ok((ev_apply_patch_custom_tool_call(call_id, &patch), None))
             }
             ActionKind::ApplyPatchShell { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
@@ -1342,46 +1342,46 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_auto_inside_workspace",
+            name: "apply_patch_freeform_auto_inside_workspace",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::Workspace("apply_patch_function.txt"),
-                content: "function-apply-patch",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::Workspace("apply_patch_freeform.txt"),
+                content: "freeform-apply-patch",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
-                target: TargetPath::Workspace("apply_patch_function.txt"),
-                content: "function-apply-patch",
+                target: TargetPath::Workspace("apply_patch_freeform.txt"),
+                content: "freeform-apply-patch",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_danger_allows_outside_workspace",
+            name: "apply_patch_freeform_danger_allows_outside_workspace",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
-                content: "function-patch-danger",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_danger.txt"),
+                content: "freeform-patch-danger",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![Feature::ApplyPatchFreeform],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
-                content: "function-patch-danger",
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_danger.txt"),
+                content: "freeform-patch-danger",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_outside_requires_patch_approval",
+            name: "apply_patch_freeform_outside_requires_patch_approval",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
-                content: "function-patch-outside",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside.txt"),
+                content: "freeform-patch-outside",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1391,17 +1391,17 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::PatchApplied {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
-                content: "function-patch-outside",
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside.txt"),
+                content: "freeform-patch-outside",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_outside_denied_blocks_patch",
+            name: "apply_patch_freeform_outside_denied_blocks_patch",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
-                content: "function-patch-outside-denied",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside_denied.txt"),
+                content: "freeform-patch-outside-denied",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1411,7 +1411,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::FileNotCreated {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside_denied.txt"),
                 message_contains: &["patch rejected by user"],
             },
         },
@@ -1436,12 +1436,12 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_unless_trusted_requires_patch_approval",
+            name: "apply_patch_freeform_unless_trusted_requires_patch_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
-                content: "function-patch-unless-trusted",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
+                content: "freeform-patch-unless-trusted",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1451,24 +1451,24 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::PatchApplied {
-                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
-                content: "function-patch-unless-trusted",
+                target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
+                content: "freeform-patch-unless-trusted",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_never_rejects_outside_workspace",
+            name: "apply_patch_freeform_never_rejects_outside_workspace",
             approval_policy: Never,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
-                content: "function-patch-never",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_never.txt"),
+                content: "freeform-patch-never",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_never.txt"),
                 message_contains: &[
                     "patch rejected: writing outside of the project; rejected by user approval settings",
                 ],
@@ -1812,7 +1812,7 @@ async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
 
 fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
     match &scenario.action {
-        ActionKind::ApplyPatchFunction { .. } | ActionKind::ApplyPatchShell { .. } => {
+        ActionKind::ApplyPatchFreeform { .. } | ActionKind::ApplyPatchShell { .. } => {
             ScenarioGroup::ApplyPatch
         }
         ActionKind::RunUnifiedExecCommand { .. } => ScenarioGroup::UnifiedExec,
@@ -1982,7 +1982,12 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         }
     }
 
-    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output_request = results_mock.single_request();
+    let output_item = if matches!(scenario.action, ActionKind::ApplyPatchFreeform { .. }) {
+        output_request.custom_tool_call_output(call_id)
+    } else {
+        output_request.function_call_output(call_id)
+    };
     let result = parse_result(&output_item);
     eprintln!(
         "approval scenario {} result: exit_code={:?} stdout={:?}",
@@ -2035,7 +2040,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_apply_patch_function_call(call_id_1, &patch_add),
+            ev_apply_patch_custom_tool_call(call_id_1, &patch_add),
             ev_completed("resp-1"),
         ]),
     )
@@ -2070,7 +2075,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         &server,
         sse(vec![
             ev_response_created("resp-3"),
-            ev_apply_patch_function_call(call_id_2, &patch_update),
+            ev_apply_patch_custom_tool_call(call_id_2, &patch_update),
             ev_completed("resp-3"),
         ]),
     )

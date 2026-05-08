@@ -23,6 +23,7 @@ pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadTurnContextOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
+mod attestation;
 mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;
@@ -177,6 +178,9 @@ mod tasks;
 mod user_shell_command;
 pub mod util;
 
+pub use attestation::AttestationContext;
+pub use attestation::AttestationProvider;
+pub use attestation::GenerateAttestationFuture;
 pub use client::ModelClient;
 pub use client::ModelClientSession;
 pub use client::X_CODEX_INSTALLATION_ID_HEADER;

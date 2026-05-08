@@ -1,15 +1,15 @@
+use crate::path_normalization::canonical_path_key;
 use anyhow::Context;
 use anyhow::Result;
-use rand::rngs::SmallRng;
 use rand::RngCore;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use crate::path_normalization::canonical_path_key;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CapSids {
@@ -106,7 +106,12 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("create workspace root");
 
         let canonical = dunce::canonicalize(&workspace).expect("canonical workspace root");
-        let alt_spelling = PathBuf::from(canonical.to_string_lossy().replace('\\', "/").to_ascii_uppercase());
+        let alt_spelling = PathBuf::from(
+            canonical
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_ascii_uppercase(),
+        );
 
         let first_sid =
             workspace_cap_sid_for_cwd(&codex_home, canonical.as_path()).expect("first sid");

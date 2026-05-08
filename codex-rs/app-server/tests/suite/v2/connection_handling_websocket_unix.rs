@@ -133,6 +133,34 @@ async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() -> Result<()> {
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
+
+    send_sighup(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    send_sighup(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(10),
+        "timed out waiting for graceful repeated SIGHUP restart shutdown",
+    )
+    .await?;
+    assert!(status.success(), "expected graceful exit, got {status}");
+
+    expect_websocket_disconnect(&mut ws).await?;
+
+    Ok(())
+}
+
 struct GracefulCtrlCFixture {
     _codex_home: TempDir,
     _server: wiremock::MockServer,
@@ -234,6 +262,10 @@ fn send_sigint(process: &Child) -> Result<()> {
 
 fn send_sigterm(process: &Child) -> Result<()> {
     send_signal(process, "-TERM")
+}
+
+fn send_sighup(process: &Child) -> Result<()> {
+    send_signal(process, "-HUP")
 }
 
 fn send_signal(process: &Child, signal: &str) -> Result<()> {

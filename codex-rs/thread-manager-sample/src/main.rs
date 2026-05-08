@@ -126,6 +126,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Arc::clone(&thread_store),
         state_db,
         installation_id,
+        /*attestation_provider*/ None,
     );
 
     let NewThread {

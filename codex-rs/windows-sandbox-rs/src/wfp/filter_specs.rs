@@ -1,12 +1,10 @@
-#![cfg(target_os = "windows")]
-
-use windows_sys::core::GUID;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_CONNECT_V4;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_AUTH_CONNECT_V6;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6;
 use windows_sys::Win32::Networking::WinSock::IPPROTO_ICMP;
 use windows_sys::Win32::Networking::WinSock::IPPROTO_ICMPV6;
+use windows_sys::core::GUID;
 
 #[derive(Clone, Copy)]
 pub(super) enum ConditionSpec {
@@ -30,28 +28,40 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
         name: "codex_wfp_icmp_connect_v4",
         description: "Block sandbox-account ICMP connect v4",
         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-        conditions: &[ConditionSpec::User, ConditionSpec::Protocol(IPPROTO_ICMP as u8)],
+        conditions: &[
+            ConditionSpec::User,
+            ConditionSpec::Protocol(IPPROTO_ICMP as u8),
+        ],
     },
     FilterSpec {
         key: GUID::from_u128(0x87498484_45ab_4510_845e_ece8b791b3bc),
         name: "codex_wfp_icmp_connect_v6",
         description: "Block sandbox-account ICMP connect v6",
         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-        conditions: &[ConditionSpec::User, ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8)],
+        conditions: &[
+            ConditionSpec::User,
+            ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8),
+        ],
     },
     FilterSpec {
         key: GUID::from_u128(0xaf4751de_f874_4a7b_a34d_f0d0f22d1d9b),
         name: "codex_wfp_icmp_assign_v4",
         description: "Block sandbox-account ICMP resource assignment v4",
         layer_key: FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
-        conditions: &[ConditionSpec::User, ConditionSpec::Protocol(IPPROTO_ICMP as u8)],
+        conditions: &[
+            ConditionSpec::User,
+            ConditionSpec::Protocol(IPPROTO_ICMP as u8),
+        ],
     },
     FilterSpec {
         key: GUID::from_u128(0xea10db66_a928_4b2e_a82e_a376a54f93ba),
         name: "codex_wfp_icmp_assign_v6",
         description: "Block sandbox-account ICMP resource assignment v6",
         layer_key: FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-        conditions: &[ConditionSpec::User, ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8)],
+        conditions: &[
+            ConditionSpec::User,
+            ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8),
+        ],
     },
     // NAME_RESOLUTION_CACHE filters are intentionally omitted because ordinary
     // static filter shapes returned FWP_E_OUT_OF_BOUNDS during validation.

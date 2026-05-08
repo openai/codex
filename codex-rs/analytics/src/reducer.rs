@@ -1,3 +1,7 @@
+use crate::accepted_lines::AcceptedLineFingerprintEventInput;
+use crate::accepted_lines::accepted_line_fingerprint_event_requests;
+use crate::accepted_lines::accepted_line_fingerprints_from_unified_diff;
+use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
@@ -104,6 +108,7 @@ use codex_protocol::protocol::TokenUsage;
 use sha1::Digest;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
@@ -264,6 +269,7 @@ struct TurnState {
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
     completed: Option<CompletedTurnState>,
+    latest_diff: Option<String>,
     steer_count: usize,
 }
 
@@ -305,7 +311,7 @@ impl AnalyticsReducer {
                 response,
             } => {
                 if let Some(response) = response.into_client_response(request_id) {
-                    self.ingest_response(connection_id, response, out);
+                    self.ingest_response(connection_id, response, out).await;
                 }
             }
             AnalyticsFact::ErrorResponse {
@@ -317,7 +323,7 @@ impl AnalyticsReducer {
                 self.ingest_error_response(connection_id, request_id, error_type, out);
             }
             AnalyticsFact::Notification(notification) => {
-                self.ingest_notification(*notification, out);
+                self.ingest_notification(*notification, out).await;
             }
             AnalyticsFact::ServerRequest {
                 connection_id: _connection_id,
@@ -338,10 +344,10 @@ impl AnalyticsReducer {
                     self.ingest_guardian_review(*input, out);
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
-                    self.ingest_turn_resolved_config(*input, out);
+                    self.ingest_turn_resolved_config(*input, out).await;
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
-                    self.ingest_turn_token_usage(*input, out);
+                    self.ingest_turn_token_usage(*input, out).await;
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -473,7 +479,7 @@ impl AnalyticsReducer {
         }
     }
 
-    fn ingest_turn_resolved_config(
+    async fn ingest_turn_resolved_config(
         &mut self,
         input: TurnResolvedConfigFact,
         out: &mut Vec<TrackEventRequest>,
@@ -489,15 +495,16 @@ impl AnalyticsReducer {
             started_at: None,
             token_usage: None,
             completed: None,
+            latest_diff: None,
             steer_count: 0,
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
-        self.maybe_emit_turn_event(&turn_id, out);
+        self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
-    fn ingest_turn_token_usage(
+    async fn ingest_turn_token_usage(
         &mut self,
         input: TurnTokenUsageFact,
         out: &mut Vec<TrackEventRequest>,
@@ -511,11 +518,12 @@ impl AnalyticsReducer {
             started_at: None,
             token_usage: None,
             completed: None,
+            latest_diff: None,
             steer_count: 0,
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
-        self.maybe_emit_turn_event(&turn_id, out);
+        self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
     async fn ingest_skill_invoked(
@@ -622,7 +630,7 @@ impl AnalyticsReducer {
         });
     }
 
-    fn ingest_response(
+    async fn ingest_response(
         &mut self,
         connection_id: u64,
         response: ClientResponse,
@@ -674,12 +682,13 @@ impl AnalyticsReducer {
                     started_at: None,
                     token_usage: None,
                     completed: None,
+                    latest_diff: None,
                     steer_count: 0,
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
                 turn_state.num_input_images = Some(pending_request.num_input_images);
-                self.maybe_emit_turn_event(&turn_id, out);
+                self.maybe_emit_turn_event(&turn_id, out).await;
             }
             ClientResponse::TurnSteer {
                 request_id,
@@ -741,7 +750,7 @@ impl AnalyticsReducer {
         );
     }
 
-    fn ingest_notification(
+    async fn ingest_notification(
         &mut self,
         notification: ServerNotification,
         out: &mut Vec<TrackEventRequest>,
@@ -812,12 +821,31 @@ impl AnalyticsReducer {
                     started_at: None,
                     token_usage: None,
                     completed: None,
+                    latest_diff: None,
                     steer_count: 0,
                 });
                 turn_state.started_at = notification
                     .turn
                     .started_at
                     .and_then(|started_at| u64::try_from(started_at).ok());
+            }
+            ServerNotification::TurnDiffUpdated(notification) => {
+                let turn_state =
+                    self.turns
+                        .entry(notification.turn_id.clone())
+                        .or_insert(TurnState {
+                            connection_id: None,
+                            thread_id: None,
+                            num_input_images: None,
+                            resolved_config: None,
+                            started_at: None,
+                            token_usage: None,
+                            completed: None,
+                            latest_diff: None,
+                            steer_count: 0,
+                        });
+                turn_state.thread_id = Some(notification.thread_id);
+                turn_state.latest_diff = Some(notification.diff);
             }
             ServerNotification::TurnCompleted(notification) => {
                 let turn_state =
@@ -831,6 +859,7 @@ impl AnalyticsReducer {
                             started_at: None,
                             token_usage: None,
                             completed: None,
+                            latest_diff: None,
                             steer_count: 0,
                         });
                 turn_state.completed = Some(CompletedTurnState {
@@ -850,7 +879,7 @@ impl AnalyticsReducer {
                         .and_then(|duration_ms| u64::try_from(duration_ms).ok()),
                 });
                 let turn_id = notification.turn.id;
-                self.maybe_emit_turn_event(&turn_id, out);
+                self.maybe_emit_turn_event(&turn_id, out).await;
             }
             _ => {}
         }
@@ -986,7 +1015,7 @@ impl AnalyticsReducer {
         }));
     }
 
-    fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
+    async fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
         };
@@ -1019,18 +1048,23 @@ impl AnalyticsReducer {
             warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadMetadata);
             return;
         };
-        out.push(TrackEventRequest::TurnEvent(Box::new(
-            CodexTurnEventRequest {
-                event_type: "codex_turn_event",
-                event_params: codex_turn_event_params(
-                    connection_state.app_server_client.clone(),
-                    connection_state.runtime.clone(),
-                    turn_id.to_string(),
-                    turn_state,
-                    thread_metadata,
-                ),
-            },
-        )));
+        let turn_event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
+            event_type: "codex_turn_event",
+            event_params: codex_turn_event_params(
+                connection_state.app_server_client.clone(),
+                connection_state.runtime.clone(),
+                turn_id.to_string(),
+                turn_state,
+                thread_metadata,
+            ),
+        }));
+        let accepted_line_event = accepted_line_event_input(turn_id, turn_state);
+
+        out.push(turn_event);
+        if let Some((mut input, cwd)) = accepted_line_event {
+            input.repo_hash = accepted_line_repo_hash_for_cwd(cwd.as_path()).await;
+            out.extend(accepted_line_fingerprint_event_requests(input));
+        }
         self.turns.remove(turn_id);
     }
 
@@ -1640,6 +1674,36 @@ fn web_search_query_count(query: &str, action: Option<&WebSearchAction>) -> Opti
         | Some(WebSearchAction::Other) => None,
         None => (!query.trim().is_empty()).then_some(1),
     }
+}
+
+fn accepted_line_event_input(
+    turn_id: &str,
+    turn_state: &TurnState,
+) -> Option<(AcceptedLineFingerprintEventInput, PathBuf)> {
+    let latest_diff = turn_state.latest_diff.as_deref()?;
+    let summary = accepted_line_fingerprints_from_unified_diff(latest_diff);
+    if summary.accepted_added_lines == 0 && summary.accepted_deleted_lines == 0 {
+        return None;
+    }
+
+    let thread_id = turn_state.thread_id.clone()?;
+    let resolved_config = turn_state.resolved_config.clone()?;
+
+    Some((
+        AcceptedLineFingerprintEventInput {
+            event_type: "codex.accepted_line_fingerprints",
+            turn_id: turn_id.to_string(),
+            thread_id,
+            product_surface: Some("codex".to_string()),
+            model_slug: Some(resolved_config.model.clone()),
+            completed_at: now_unix_seconds(),
+            repo_hash: None,
+            accepted_added_lines: summary.accepted_added_lines,
+            accepted_deleted_lines: summary.accepted_deleted_lines,
+            line_fingerprints: summary.line_fingerprints,
+        },
+        resolved_config.permission_profile_cwd,
+    ))
 }
 
 fn codex_turn_event_params(

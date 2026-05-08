@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
@@ -71,6 +72,7 @@ pub(crate) enum TrackEventRequest {
     CollabAgentToolCall(CodexCollabAgentToolCallEventRequest),
     WebSearch(CodexWebSearchEventRequest),
     ImageGeneration(CodexImageGenerationEventRequest),
+    AcceptedLineFingerprints(Box<CodexAcceptedLineFingerprintsEventRequest>),
     #[allow(dead_code)]
     ReviewEvent(CodexReviewEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
@@ -78,6 +80,32 @@ pub(crate) enum TrackEventRequest {
     PluginUninstalled(CodexPluginEventRequest),
     PluginEnabled(CodexPluginEventRequest),
     PluginDisabled(CodexPluginEventRequest),
+}
+
+impl TrackEventRequest {
+    pub(crate) fn should_send_in_isolated_request(&self) -> bool {
+        matches!(self, Self::AcceptedLineFingerprints(_))
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAcceptedLineFingerprintsEventParams {
+    pub(crate) event_type: &'static str,
+    pub(crate) turn_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) product_surface: Option<String>,
+    pub(crate) model_slug: Option<String>,
+    pub(crate) completed_at: u64,
+    pub(crate) repo_hash: Option<String>,
+    pub(crate) accepted_added_lines: u64,
+    pub(crate) accepted_deleted_lines: u64,
+    pub(crate) line_fingerprints: Vec<AcceptedLineFingerprint>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAcceptedLineFingerprintsEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexAcceptedLineFingerprintsEventParams,
 }
 
 #[derive(Serialize)]

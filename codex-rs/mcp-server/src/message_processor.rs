@@ -72,6 +72,7 @@ impl MessageProcessor {
             thread_store_from_config(config.as_ref(), state_db.clone()),
             state_db.clone(),
             installation_id,
+            /*attestation_provider*/ None,
         ));
         Self {
             outgoing,

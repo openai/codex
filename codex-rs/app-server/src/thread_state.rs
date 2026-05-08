@@ -199,9 +199,14 @@ impl ThreadEntry {
 
 #[derive(Default)]
 struct ThreadStateManagerInner {
-    live_connections: HashSet<ConnectionId>,
+    live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ConnectionCapabilities {
+    pub(crate) request_attestation: bool,
 }
 
 #[derive(Clone, Default)]
@@ -214,12 +219,36 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        capabilities: ConnectionCapabilities,
+    ) {
         self.state
             .lock()
             .await
             .live_connections
-            .insert(connection_id);
+            .insert(connection_id, capabilities);
+    }
+
+    pub(crate) async fn first_attestation_capable_connection_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ConnectionId> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)?
+            .connection_ids
+            .iter()
+            .filter_map(|connection_id| {
+                state
+                    .live_connections
+                    .get(connection_id)?
+                    .request_attestation
+                    .then_some(*connection_id)
+            })
+            .min_by_key(|connection_id| connection_id.0)
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
@@ -338,7 +367,7 @@ impl ThreadStateManager {
     ) -> Option<Arc<Mutex<ThreadState>>> {
         let thread_state = {
             let mut state = self.state.lock().await;
-            if !state.live_connections.contains(&connection_id) {
+            if !state.live_connections.contains_key(&connection_id) {
                 return None;
             }
             state
@@ -366,7 +395,7 @@ impl ThreadStateManager {
         connection_id: ConnectionId,
     ) -> bool {
         let mut state = self.state.lock().await;
-        if !state.live_connections.contains(&connection_id) {
+        if !state.live_connections.contains_key(&connection_id) {
             return false;
         }
         state

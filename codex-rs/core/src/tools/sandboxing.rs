@@ -27,6 +27,7 @@ use codex_sandboxing::SandboxTransformError;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::Future;
 use futures::future::BoxFuture;
@@ -344,7 +345,7 @@ pub(crate) struct ToolCtx {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub call_id: String,
-    pub tool_name: String,
+    pub tool_name: ToolName,
 }
 
 #[derive(Debug)]
