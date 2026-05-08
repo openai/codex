@@ -18,6 +18,7 @@ use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
+use crate::request_processors::EnvironmentRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
@@ -161,6 +162,7 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
+    environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
@@ -446,6 +448,8 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
+        let environment_processor =
+            EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
@@ -467,6 +471,7 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
+            environment_processor,
             external_agent_config_processor,
             feedback_processor,
             fs_processor,
@@ -878,6 +883,9 @@ impl MessageProcessor {
                 .config_requirements_read()
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::EnvironmentAdd { params, .. } => {
+                self.environment_processor.environment_add(params).await
+            }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
                 .read_file(params)
