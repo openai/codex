@@ -1982,7 +1982,18 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         }
     }
 
-    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output_request = results_mock.single_request();
+    let output_item = match &scenario.action {
+        ActionKind::ApplyPatchFreeform { .. } => output_request.custom_tool_call_output(call_id),
+        ActionKind::ApplyPatchShell { .. }
+        | ActionKind::FetchUrl { .. }
+        | ActionKind::FetchUrlNoProxy { .. }
+        | ActionKind::RunCommand { .. }
+        | ActionKind::RunCommandWithPolicy { .. }
+        | ActionKind::RunCommandWithPrefixRule { .. }
+        | ActionKind::RunUnifiedExecCommand { .. }
+        | ActionKind::WriteFile { .. } => output_request.function_call_output(call_id),
+    };
     let result = parse_result(&output_item);
     eprintln!(
         "approval scenario {} result: exit_code={:?} stdout={:?}",

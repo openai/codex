@@ -1467,7 +1467,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
         "diff should include contents from successful patch: {diff}"
     );
 
-    let failure_out = harness.function_call_stdout(call_failure).await;
+    let failure_out = harness.custom_tool_call_output(call_failure).await;
     assert!(
         failure_out.contains("apply_patch verification failed"),
         "expected verification failure output: {failure_out}"

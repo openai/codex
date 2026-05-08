@@ -1563,7 +1563,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    requests[1].function_call_output(call_id);
+    requests[1].custom_tool_call_output(call_id);
     assert!(
         target_path.exists(),
         "approved apply_patch should create the out-of-workspace file"
@@ -2652,7 +2652,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
+    let output_item = requests[1].custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -2724,7 +2724,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
+    let output_item = requests[1].custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
