@@ -19,7 +19,6 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
-use codex_app_server_protocol::AuthMode;
 use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -260,11 +259,7 @@ async fn run_remote_compaction_request_v2(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
-                None
-            } else {
-                turn_context.config.service_tier.clone()
-            },
+            turn_context.config.service_tier.clone(),
             turn_metadata_header,
             &InferenceTraceContext::disabled(),
         )
