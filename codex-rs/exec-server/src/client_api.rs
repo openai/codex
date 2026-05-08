@@ -71,14 +71,6 @@ impl ExecServerTransportParams {
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn stdio_command(command: StdioExecServerCommand) -> Self {
-        Self::StdioCommand {
-            command,
-            initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
-        }
-    }
 }
 
 /// Sends HTTP requests through a runtime-selected transport.

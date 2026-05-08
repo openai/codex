@@ -895,6 +895,8 @@ mod tests {
     use super::ExecServerClientConnectOptions;
     use crate::ProcessId;
     #[cfg(not(windows))]
+    use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
+    #[cfg(not(windows))]
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
@@ -961,17 +963,20 @@ mod tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn connect_for_transport_initializes_stdio_command() {
-        let client = ExecServerClient::connect_for_transport(ExecServerTransportParams::stdio_command(
-            StdioExecServerCommand {
-                program: "sh".to_string(),
-                args: vec![
-                    "-c".to_string(),
-                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
-                ],
-                env: HashMap::new(),
-                cwd: None,
+        let client = ExecServerClient::connect_for_transport(
+            ExecServerTransportParams::StdioCommand {
+                command: StdioExecServerCommand {
+                    program: "sh".to_string(),
+                    args: vec![
+                        "-c".to_string(),
+                        "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
+                    ],
+                    env: HashMap::new(),
+                    cwd: None,
+                },
+                initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             },
-        ))
+        )
         .await
         .expect("stdio transport should connect");
 
