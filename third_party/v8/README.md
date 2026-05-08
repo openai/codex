@@ -23,16 +23,17 @@ Current pinned versions:
 - Rust crate: `v8 = =147.4.0`
 - Embedded upstream V8 source for Bazel-produced release builds: `14.7.173.20`
 
-When bumping the Rust crate version, keep the checked-in checksum manifest and
-`MODULE.bazel` in sync:
+When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
+checked-in checksum manifest and `MODULE.bazel` in sync:
 
 ```bash
 python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
 python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
 ```
 
-The commands read `third_party/v8/rusty_v8_<crate_version>.sha256` by default
-and validate every matching `rusty_v8_<crate_version>` `http_file` entry.
+The commands default to the single `rusty_v8_*` `http_file` version still
+present in `MODULE.bazel` and validate every matching entry. During the source
+build rollout, that asset version can lag the resolved Rust crate version.
 CI runs the check command to block checksum drift.
 
 The consumer-facing selectors are:

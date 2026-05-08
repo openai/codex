@@ -10,6 +10,7 @@ single_version_override(
     module_name = "llvm",
     patch_strip = 1,
     patches = [
+        "//patches:llvm_rusty_v8_custom_libcxx.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )

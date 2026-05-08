@@ -13,6 +13,56 @@ import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
+    def test_non_windows_consumer_selectors_track_resolved_crate_version(self) -> None:
+        build_bazel = (
+            rusty_v8_bazel.ROOT / "third_party" / "v8" / "BUILD.bazel"
+        ).read_text()
+        version_suffix = rusty_v8_bazel.resolved_v8_crate_version().replace(".", "_")
+
+        for selector in [
+            "aarch64_apple_darwin_bazel",
+            "aarch64_unknown_linux_gnu_bazel",
+            "aarch64_unknown_linux_musl_release_base",
+            "x86_64_apple_darwin_bazel",
+            "x86_64_unknown_linux_gnu_bazel",
+            "x86_64_unknown_linux_musl_release",
+        ]:
+            self.assertIn(
+                f":v8_{version_suffix}_{selector}",
+                build_bazel,
+            )
+
+        for selector in [
+            "aarch64_apple_darwin",
+            "aarch64_unknown_linux_gnu",
+            "aarch64_unknown_linux_musl",
+            "x86_64_apple_darwin",
+            "x86_64_unknown_linux_gnu",
+            "x86_64_unknown_linux_musl",
+        ]:
+            self.assertIn(
+                f":src_binding_release_{selector}_{version_suffix}_release",
+                build_bazel,
+            )
+
+    def test_command_version_tracks_remaining_http_file_assets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            module_bazel = Path(temp_dir) / "MODULE.bazel"
+            module_bazel.write_text(
+                textwrap.dedent(
+                    """\
+                    http_file(
+                        name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
+                        downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+                        urls = ["https://example.test/archive.gz"],
+                    )
+                    """
+                )
+            )
+
+            with patch.object(rusty_v8_bazel, "MODULE_BAZEL", module_bazel):
+                self.assertEqual("146.4.0", rusty_v8_bazel.command_version(None))
+
     def test_artifact_bazel_configs_always_enable_upstream_libcxx(self) -> None:
         self.assertEqual(
             ["rusty-v8-upstream-libcxx"],
@@ -245,6 +295,34 @@ class RustyV8BazelTest(unittest.TestCase):
                 checksums,
                 "146.4.0",
             )
+
+    def test_rusty_v8_http_file_versions(self) -> None:
+        module_bazel = textwrap.dedent(
+            """\
+            http_file(
+                name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
+                downloaded_file_path = "archive.gz",
+                urls = ["https://example.test/archive.gz"],
+            )
+
+            http_file(
+                name = "rusty_v8_147_4_0_x86_64_unknown_linux_gnu_archive",
+                downloaded_file_path = "new-archive.gz",
+                urls = ["https://example.test/new-archive.gz"],
+            )
+
+            http_file(
+                name = "unrelated_archive",
+                downloaded_file_path = "other.gz",
+                urls = ["https://example.test/other.gz"],
+            )
+            """
+        )
+
+        self.assertEqual(
+            ["146.4.0", "147.4.0"],
+            rusty_v8_module_bazel.rusty_v8_http_file_versions(module_bazel),
+        )
 
 
 if __name__ == "__main__":
