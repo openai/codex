@@ -54,6 +54,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use codex_core::test_support::all_model_presets;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -375,13 +376,19 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
         "never",
         &BTreeMap::default(),
     )?;
+    write_models_cache(codex_home.path())?;
+    let service_tier_model = all_model_presets()
+        .iter()
+        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
+        .expect("bundled model catalog should include a picker model with service tiers");
+    let service_tier_id = service_tier_model.service_tiers[0].id.clone();
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
+            model: Some(service_tier_model.id.clone()),
             ..Default::default()
         })
         .await?;
@@ -392,7 +399,6 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let service_tier_id = "experimental-tier-id".to_string();
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
