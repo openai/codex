@@ -1,7 +1,6 @@
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -56,7 +55,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         default_reasoning_summary: ReasoningSummary::None,
         support_verbosity: true,
         default_verbosity: Some(Verbosity::Medium),
-        apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+        supports_apply_patch_tool: true,
         web_search_tool_type: WebSearchToolType::TextAndImage,
         truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
         supports_parallel_tool_calls: true,
@@ -97,7 +96,7 @@ fn bedrock_oss_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo
         default_reasoning_summary: ReasoningSummary::None,
         support_verbosity: false,
         default_verbosity: None,
-        apply_patch_tool_type: None,
+        supports_apply_patch_tool: false,
         web_search_tool_type: WebSearchToolType::Text,
         truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
         supports_parallel_tool_calls: true,
