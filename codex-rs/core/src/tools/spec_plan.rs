@@ -289,8 +289,11 @@ pub fn build_tool_registry_builder(
     }
 
     if config.environment_mode.has_environment() {
+        let include_environment_id =
+            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         builder.register_handler(Arc::new(ViewImageHandler::new(ViewImageToolOptions {
             can_request_original_image_detail: config.can_request_original_image_detail,
+            include_environment_id,
         })));
     }
 

@@ -129,6 +129,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_image_generation_tool("png"),
         create_view_image_tool(ViewImageToolOptions {
             can_request_original_image_detail: config.can_request_original_image_detail,
+            include_environment_id: false,
         }),
     ] {
         expected.insert(spec.name().to_string(), spec);
@@ -626,6 +627,48 @@ fn disabled_environment_omits_environment_backed_tools() {
     assert_lacks_tool_name(&tools, "write_stdin");
     assert_lacks_tool_name(&tools, "apply_patch");
     assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
+fn view_image_spec_includes_environment_id_only_for_multiple_selected_environments() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &single_environment_tools,
+        VIEW_IMAGE_TOOL_NAME,
+        /*expected_present*/ false,
+    );
+
+    let multi_environment_config =
+        tools_config.with_environment_mode(ToolEnvironmentMode::Multiple);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &multi_environment_tools,
+        VIEW_IMAGE_TOOL_NAME,
+        /*expected_present*/ true,
+    );
 }
 
 #[test]
