@@ -9141,6 +9141,8 @@ impl ChatWidget {
             .set(policy.to_core())
         {
             tracing::warn!(%err, "failed to set approval_policy on chat config");
+        } else {
+            self.refresh_status_surfaces();
         }
     }
 
@@ -9150,7 +9152,9 @@ impl ChatWidget {
         &mut self,
         profile: PermissionProfile,
     ) -> ConstraintResult<()> {
-        self.config.permissions.set_permission_profile(profile)
+        self.config.permissions.set_permission_profile(profile)?;
+        self.refresh_status_surfaces();
+        Ok(())
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -9231,6 +9235,7 @@ impl ChatWidget {
 
     pub(crate) fn set_approvals_reviewer(&mut self, policy: ApprovalsReviewer) {
         self.config.approvals_reviewer = policy;
+        self.refresh_status_surfaces();
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {

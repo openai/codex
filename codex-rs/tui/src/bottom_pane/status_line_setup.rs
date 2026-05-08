@@ -12,6 +12,8 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
+//! - Permissions profile
+//! - Approval mode
 //! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (thread title, ID, tokens used)
@@ -81,6 +83,13 @@ pub(crate) enum StatusLineItem {
     #[strum(to_string = "run-state", serialize = "status")]
     Status,
 
+    /// Active permission profile or sandbox summary.
+    Permissions,
+
+    /// Active command approval mode.
+    #[strum(to_string = "approval-mode", serialize = "approval")]
+    ApprovalMode,
+
     /// Percentage of context window remaining.
     ContextRemaining,
 
@@ -143,6 +152,8 @@ impl StatusLineItem {
                 "Committed branch changes against the default branch (omitted when unavailable)"
             }
             StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
+            StatusLineItem::Permissions => "Active permission profile or sandbox mode",
+            StatusLineItem::ApprovalMode => "Active command approval mode",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -184,6 +195,8 @@ impl StatusLineItem {
             StatusLineItem::PullRequestNumber => StatusSurfacePreviewItem::PullRequestNumber,
             StatusLineItem::BranchChanges => StatusSurfacePreviewItem::BranchChanges,
             StatusLineItem::Status => StatusSurfacePreviewItem::Status,
+            StatusLineItem::Permissions => StatusSurfacePreviewItem::Permissions,
+            StatusLineItem::ApprovalMode => StatusSurfacePreviewItem::ApprovalMode,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,

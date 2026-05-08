@@ -112,6 +112,8 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
             StatusLineItem::ProjectRoot,
             StatusLineItem::GitBranch,
             StatusLineItem::ThreadTitle,
+            StatusLineItem::Permissions,
+            StatusLineItem::ApprovalMode,
         ],
         &[
             TerminalTitleItem::Thread,
