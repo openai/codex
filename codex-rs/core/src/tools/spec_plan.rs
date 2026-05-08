@@ -257,8 +257,12 @@ pub fn build_tool_registry_builder(
         )));
     }
 
-    if config.environment_mode.has_environment() && config.include_apply_patch_tool {
-        builder.register_handler(Arc::new(ApplyPatchHandler));
+    if config.environment_mode.has_environment()
+        && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
+    {
+        builder.register_handler(Arc::new(ApplyPatchHandler::new(
+            apply_patch_tool_type.clone(),
+        )));
     }
 
     if config

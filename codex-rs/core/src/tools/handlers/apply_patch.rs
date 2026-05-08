@@ -40,6 +40,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
@@ -53,6 +54,18 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct ApplyPatchHandler;
+
+impl Default for ApplyPatchHandler {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl ApplyPatchHandler {
+    pub(crate) fn new(_apply_patch_tool_type: ApplyPatchToolType) -> Self {
+        Self
+    }
+}
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
