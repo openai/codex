@@ -1661,7 +1661,6 @@ mod tests {
         let provider = Provider {
             name: "test".to_string(),
             base_url: format!("http://{addr}"),
-            uses_chatgpt_auth: false,
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -1956,7 +1955,6 @@ mod tests {
         let provider = Provider {
             name: "test".to_string(),
             base_url: format!("http://{addr}"),
-            uses_chatgpt_auth: false,
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -2072,7 +2070,6 @@ mod tests {
         let provider = Provider {
             name: "test".to_string(),
             base_url: format!("http://{addr}"),
-            uses_chatgpt_auth: false,
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -2177,7 +2174,6 @@ mod tests {
         let provider = Provider {
             name: "test".to_string(),
             base_url: format!("http://{addr}"),
-            uses_chatgpt_auth: false,
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -2268,7 +2264,6 @@ mod tests {
         let provider = Provider {
             name: "test".to_string(),
             base_url: format!("http://{addr}"),
-            uses_chatgpt_auth: false,
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {

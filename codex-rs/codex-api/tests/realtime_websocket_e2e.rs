@@ -62,7 +62,6 @@ fn test_provider(base_url: String) -> Provider {
     Provider {
         name: "test".to_string(),
         base_url,
-        uses_chatgpt_auth: false,
         query_params: Some(HashMap::new()),
         headers: HeaderMap::new(),
         retry: RetryConfig {

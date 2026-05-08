@@ -45,10 +45,6 @@ impl AttestationProvider for AppServerAttestationProvider {
         let outgoing = self.outgoing.clone();
         let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
-            if !context.uses_chatgpt_auth {
-                return None;
-            }
-
             request_attestation_header_value_with_timeout(
                 outgoing,
                 thread_state_manager,

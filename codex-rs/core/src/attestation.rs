@@ -13,7 +13,6 @@ pub type GenerateAttestationFuture<'a> =
 /// generate an attestation header value.
 #[derive(Clone, Copy, Debug)]
 pub struct AttestationContext {
-    pub uses_chatgpt_auth: bool,
     /// Thread whose upstream request is being prepared.
     pub thread_id: ThreadId,
 }

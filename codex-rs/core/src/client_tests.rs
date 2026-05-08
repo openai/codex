@@ -13,8 +13,11 @@ use crate::GenerateAttestationFuture;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
@@ -79,9 +82,6 @@ fn api_provider(base_url: &str) -> codex_api::Provider {
     codex_api::Provider {
         name: "test".to_string(),
         base_url: base_url.to_string(),
-        uses_chatgpt_auth: base_url
-            .trim_end_matches('/')
-            .eq_ignore_ascii_case(CHATGPT_CODEX_BASE_URL),
         query_params: None,
         headers: http::HeaderMap::new(),
         retry: codex_api::RetryConfig {
@@ -495,20 +495,21 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
 }
 
-fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
+fn model_client_with_counting_attestation(
+    include_attestation: bool,
+) -> (ModelClient, Arc<AtomicUsize>) {
     #[derive(Debug)]
     struct CountingAttestationProvider {
         calls: Arc<AtomicUsize>,
     }
 
     impl AttestationProvider for CountingAttestationProvider {
-        fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
+        fn header_for_request(
+            &self,
+            _context: AttestationContext,
+        ) -> GenerateAttestationFuture<'_> {
             let calls = self.calls.clone();
             Box::pin(async move {
-                if !context.uses_chatgpt_auth {
-                    return None;
-                }
-
                 let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
                 Some(http::HeaderValue::from_bytes(format!("v1.header-{call}").as_bytes()).unwrap())
             })
@@ -516,12 +517,25 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
     }
 
     let attestation_calls = Arc::new(AtomicUsize::new(0));
+    let (auth_manager, provider) = if include_attestation {
+        (
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+            ModelProviderInfo::create_openai_provider(Some(CHATGPT_CODEX_BASE_URL.to_string())),
+        )
+    } else {
+        (
+            None,
+            create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses),
+        )
+    };
     let model_client = ModelClient::new(
-        /*auth_manager*/ None,
+        auth_manager,
         SessionId::new(),
         ThreadId::new(),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
-        create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses),
+        provider,
         SessionSource::Exec,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -537,7 +551,7 @@ fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
 #[tokio::test]
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() {
     let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation();
+    let (model_client, attestation_calls) = model_client_with_counting_attestation(true);
 
     let headers = model_client
         .build_websocket_headers(
@@ -556,20 +570,19 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
 
 #[tokio::test]
 async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
-    let provider = api_provider("https://api.openai.com/v1");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation();
+    let (model_client, attestation_calls) = model_client_with_counting_attestation(false);
     let mut response_headers = http::HeaderMap::new();
 
     model_client
-        .extend_attestation_header_for(&mut response_headers, &provider)
+        .extend_attestation_header_for(&mut response_headers)
         .await;
     let mut compaction_headers = http::HeaderMap::new();
     model_client
-        .extend_attestation_header_for(&mut compaction_headers, &provider)
+        .extend_attestation_header_for(&mut compaction_headers)
         .await;
     let mut realtime_headers = http::HeaderMap::new();
     model_client
-        .extend_attestation_header_for(&mut realtime_headers, &provider)
+        .extend_attestation_header_for(&mut realtime_headers)
         .await;
 
     assert_eq!(

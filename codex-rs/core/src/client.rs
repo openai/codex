@@ -173,6 +173,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
@@ -327,6 +328,7 @@ impl ModelClient {
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
         let auth_env_telemetry =
             collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
+        let include_attestation = model_provider.supports_attestation();
         Self {
             state: Arc::new(ModelClientState {
                 session_id,
@@ -340,6 +342,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
@@ -495,8 +498,7 @@ impl ModelClient {
             Some(self.state.session_id.to_string()),
             Some(self.state.thread_id.to_string()),
         ));
-        self.extend_attestation_header_for(&mut extra_headers, &client_setup.api_provider)
-            .await;
+        self.extend_attestation_header_for(&mut extra_headers).await;
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
@@ -518,8 +520,7 @@ impl ModelClient {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
         let client_setup = self.current_client_setup().await?;
-        self.extend_attestation_header_for(&mut extra_headers, &client_setup.api_provider)
-            .await;
+        self.extend_attestation_header_for(&mut extra_headers).await;
         let mut sideband_headers = extra_headers.clone();
         sideband_headers.extend(sideband_websocket_auth_headers(
             client_setup.api_auth.as_ref(),
@@ -650,15 +651,15 @@ impl ModelClient {
         client_metadata
     }
 
-    async fn generate_attestation_header_for(
-        &self,
-        provider: &codex_api::Provider,
-    ) -> Option<HeaderValue> {
+    async fn generate_attestation_header_for(&self) -> Option<HeaderValue> {
+        if !self.state.include_attestation {
+            return None;
+        }
+
         self.state
             .attestation_provider
             .as_ref()?
             .header_for_request(AttestationContext {
-                uses_chatgpt_auth: provider.uses_chatgpt_auth,
                 thread_id: self.state.thread_id,
             })
             .await
@@ -882,7 +883,7 @@ impl ModelClient {
     /// replayed on reconnect within the same turn.
     async fn build_websocket_headers(
         &self,
-        provider: &codex_api::Provider,
+        _provider: &codex_api::Provider,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
@@ -899,8 +900,7 @@ impl ModelClient {
         }
         headers.extend(build_session_headers(Some(session_id), Some(thread_id)));
         headers.extend(self.build_responses_identity_headers());
-        self.extend_attestation_header_for(&mut headers, provider)
-            .await;
+        self.extend_attestation_header_for(&mut headers).await;
         headers.insert(
             OPENAI_BETA_HEADER,
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
@@ -951,7 +951,7 @@ impl ModelClientSession {
     /// regardless of transport choice.
     async fn build_responses_options(
         &self,
-        provider: &codex_api::Provider,
+        _provider: &codex_api::Provider,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
@@ -970,7 +970,7 @@ impl ModelClientSession {
                 );
                 headers.extend(self.client.build_responses_identity_headers());
                 self.client
-                    .extend_attestation_header_for(&mut headers, provider)
+                    .extend_attestation_header_for(&mut headers)
                     .await;
                 headers
             },
@@ -1672,12 +1672,8 @@ fn build_responses_headers(
 }
 
 impl ModelClient {
-    async fn extend_attestation_header_for(
-        &self,
-        headers: &mut ApiHeaderMap,
-        provider: &codex_api::Provider,
-    ) {
-        if let Some(header_value) = self.generate_attestation_header_for(provider).await {
+    async fn extend_attestation_header_for(&self, headers: &mut ApiHeaderMap) {
+        if let Some(header_value) = self.generate_attestation_header_for().await {
             headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
     }
