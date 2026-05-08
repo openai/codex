@@ -551,7 +551,8 @@ fn model_client_with_counting_attestation(
 #[tokio::test]
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() {
     let provider = api_provider("https://chatgpt.com/backend-api/codex/");
-    let (model_client, attestation_calls) = model_client_with_counting_attestation(true);
+    let (model_client, attestation_calls) =
+        model_client_with_counting_attestation(/*include_attestation*/ true);
 
     let headers = model_client
         .build_websocket_headers(
@@ -570,7 +571,8 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
 
 #[tokio::test]
 async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
-    let (model_client, attestation_calls) = model_client_with_counting_attestation(false);
+    let (model_client, attestation_calls) =
+        model_client_with_counting_attestation(/*include_attestation*/ false);
     let mut response_headers = http::HeaderMap::new();
 
     if let Some(header_value) = model_client.generate_attestation_header_for().await {
