@@ -860,13 +860,16 @@ jobs:
           done
 
   # Publish the platform-specific Python runtime wheels using PyPI trusted publishing.
-  # PyPI project configuration must trust this workflow and job.
+  # PyPI project configuration must trust this workflow and job. Keep this
+  # non-blocking while the Python runtime publishing path is new; failures still
+  # need release follow-up, but should not invalidate the Rust release itself.
   publish-python-runtime:
     # Publish to PyPI for stable releases and alpha pre-releases with numeric suffixes.
     if: ${{ needs.release.outputs.should_publish_python_runtime == 'true' }}
     name: publish-python-runtime
     needs: release
     runs-on: ubuntu-latest
+    continue-on-error: true
     environment: pypi
     permissions:
       id-token: write # Required for PyPI trusted publishing.
