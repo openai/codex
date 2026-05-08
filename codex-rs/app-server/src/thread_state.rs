@@ -7,6 +7,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -77,6 +78,7 @@ pub(crate) struct ThreadState {
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
+    watch_registration: WatchRegistration,
 }
 
 impl ThreadState {
@@ -91,6 +93,7 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
+        watch_registration: WatchRegistration,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
@@ -99,6 +102,7 @@ impl ThreadState {
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
+        self.watch_registration = watch_registration;
         (listener_command_rx, self.listener_generation)
     }
 
@@ -109,6 +113,7 @@ impl ThreadState {
         self.listener_command_tx = None;
         self.current_turn_history.reset();
         self.listener_thread = None;
+        self.watch_registration = WatchRegistration::default();
     }
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {

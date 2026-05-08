@@ -364,7 +364,6 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
-        skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
@@ -846,7 +845,6 @@ impl Session {
                 skills_manager,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
-                skills_watcher,
                 agent_control,
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
@@ -935,8 +933,6 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            // Start the watcher after SessionConfigured so it cannot emit earlier events.
-            sess.start_skills_watcher_listener();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
