@@ -77,6 +77,13 @@ use_repo(osx, "macos_sdk")
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
+single_version_override(
+    module_name = "rules_cc",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
+    ],
+)
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.58")
 # `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
@@ -437,6 +444,29 @@ http_archive(
     strip_prefix = "v8-147.4.0",
     type = "tar.gz",
     urls = ["https://static.crates.io/crates/v8/v8-147.4.0.crate"],
+)
+
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "rusty_v8_libcxx",
+    build_file = "//third_party/v8:libcxx.BUILD.bazel",
+    commit = "7ab65651aed6802d2599dcb7a73b1f82d5179d05",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
+)
+
+git_repository(
+    name = "rusty_v8_libcxxabi",
+    build_file = "//third_party/v8:libcxxabi.BUILD.bazel",
+    commit = "8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git",
+)
+
+git_repository(
+    name = "rusty_v8_llvm_libc",
+    build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
+    commit = "b3aa5bb702ff9e890179fd1e7d3ba346e17ecf8e",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
 http_file(

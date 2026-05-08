@@ -21,7 +21,7 @@ artifact contract.
 Current pinned versions:
 
 - Rust crate: `v8 = =147.4.0`
-- Embedded upstream V8 source for musl release builds: `14.7.173.20`
+- Embedded upstream V8 source for Bazel-produced release builds: `14.7.173.20`
 
 When bumping the Rust crate version, keep the checked-in checksum manifest and
 `MODULE.bazel` in sync:
@@ -40,7 +40,7 @@ The consumer-facing selectors are:
 - `//third_party/v8:rusty_v8_archive_for_target`
 - `//third_party/v8:rusty_v8_binding_for_target`
 
-Current musl release assets are expected at the tag:
+Published release assets are expected at the tag:
 
 - `rusty-v8-v<crate_version>`
 
@@ -57,12 +57,12 @@ their raw names:
 - `src_binding_ptrcomp_sandbox_release_<target>.rs`
 
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-For GNU Linux, Darwin, and Windows MSVC, the workflow checks out the exact
-upstream `denoland/rusty_v8` tag and uses its `V8_FROM_SOURCE=true` Cargo/GN
-build to produce sandbox-profile artifacts with the same archive shape upstream
-publishes. Musl remains an extra platform that upstream does not publish, so
-tagged runs still build the current musl release pairs with our Bazel producer:
+Tagged runs build release artifacts from the Bazel graph itself:
 
+- `//third_party/v8:rusty_v8_release_pair_x86_64_apple_darwin`
+- `//third_party/v8:rusty_v8_release_pair_aarch64_apple_darwin`
+- `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_gnu`
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
 
@@ -74,16 +74,19 @@ The same run also builds the matching sandbox pair targets:
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_pc_windows_msvc`
-- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_pc_windows_msvc`
 
-If a tagged run targets an existing GitHub release, publication amends only the
-sandbox-profile files and leaves the current release-profile assets unchanged.
-The upstream-shaped GNU, Darwin, and MSVC builds let GN fold custom libc++ into
-the final archive the same way `rusty_v8` does for its own releases. Musl
-sandbox archives still merge the matching static libc++ and libc++abi runtime
-libraries after the Bazel build so Cargo consumers can link them with the `v8`
-crate's default `use_custom_libcxx` feature.
+The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
+used by `rusty_v8 v147.4.0`, compiles published artifact targets with
+`--config=rusty-v8-upstream-libcxx`, and folds the matching runtime objects into
+the final static archive so Cargo consumers can link it with the `v8` crate's
+default `use_custom_libcxx` feature. The config keeps the object files and the
+bundled runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those
+objects with the toolchain libc++ default namespace.
+
+MSVC is not part of the Bazel-produced matrix yet. The repository's current
+hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
+it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
+add a real MSVC-targeting C++ toolchain to the Bazel graph.
 
 Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
 `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
