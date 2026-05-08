@@ -873,7 +873,7 @@
           "type": "array"
         }
       ],
-      "description": "Backward-compatible shape for workspace restrictions in config.toml."
+      "description": "Backward-compatible shape for ChatGPT workspace login restrictions in config.toml."
     },
     "ForcedLoginMethod": {
       "enum": [
