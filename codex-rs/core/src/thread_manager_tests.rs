@@ -383,8 +383,7 @@ args = ["dev", "cd /tmp && true"]
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         environment_manager,
-    )
-    .await;
+    );
 
     let thread = manager
         .start_thread(config)
