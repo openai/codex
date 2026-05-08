@@ -819,7 +819,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,
