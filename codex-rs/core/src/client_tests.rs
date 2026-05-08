@@ -573,17 +573,17 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
     let (model_client, attestation_calls) = model_client_with_counting_attestation(false);
     let mut response_headers = http::HeaderMap::new();
 
-    model_client
-        .extend_attestation_header_for(&mut response_headers)
-        .await;
+    if let Some(header_value) = model_client.generate_attestation_header_for().await {
+        response_headers.insert(crate::attestation::X_OAI_ATTESTATION_HEADER, header_value);
+    }
     let mut compaction_headers = http::HeaderMap::new();
-    model_client
-        .extend_attestation_header_for(&mut compaction_headers)
-        .await;
+    if let Some(header_value) = model_client.generate_attestation_header_for().await {
+        compaction_headers.insert(crate::attestation::X_OAI_ATTESTATION_HEADER, header_value);
+    }
     let mut realtime_headers = http::HeaderMap::new();
-    model_client
-        .extend_attestation_header_for(&mut realtime_headers)
-        .await;
+    if let Some(header_value) = model_client.generate_attestation_header_for().await {
+        realtime_headers.insert(crate::attestation::X_OAI_ATTESTATION_HEADER, header_value);
+    }
 
     assert_eq!(
         response_headers.get(crate::attestation::X_OAI_ATTESTATION_HEADER),
