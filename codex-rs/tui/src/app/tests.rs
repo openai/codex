@@ -3829,8 +3829,11 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     set_fast_mode_test_catalog(&mut app.chat_widget);
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
     set_chatgpt_auth(&mut app.chat_widget);
     set_fast_mode_test_catalog(&mut app.chat_widget);
 
@@ -4481,8 +4484,11 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
 #[tokio::test]
 async fn fresh_session_config_uses_current_service_tier() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
 
     let config = app.fresh_session_config();
 

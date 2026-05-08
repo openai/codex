@@ -648,7 +648,7 @@ impl ChatWidget {
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
-                if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
+                if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
                     "Fast on".to_string()
                 } else {
                     "Fast off".to_string()
@@ -779,13 +779,18 @@ impl ChatWidget {
 
     fn model_with_reasoning_display_name(&self) -> String {
         let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-        let fast_label =
-            if self.should_show_fast_status(self.current_model(), self.current_service_tier()) {
-                " fast"
-            } else {
-                ""
-            };
-        format!("{} {label}{fast_label}", self.model_display_name())
+        let service_tier_label = self
+            .current_service_tier()
+            .and_then(|service_tier| {
+                self.current_model_service_tier_commands()
+                    .into_iter()
+                    .find(|tier| tier.id == service_tier)
+                    .map(|tier| tier.name)
+            })
+            .filter(|_| self.has_chatgpt_account)
+            .map(|tier| format!(" {tier}"))
+            .unwrap_or_default();
+        format!("{} {label}{service_tier_label}", self.model_display_name())
     }
 
     /// Computes the compact runtime status label used by word-based status items.

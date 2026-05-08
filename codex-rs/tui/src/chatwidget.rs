@@ -282,6 +282,7 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
@@ -368,6 +369,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::SPEED_TIER_FAST;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_utils_approval_presets::ApprovalPreset;
@@ -761,7 +763,7 @@ pub(crate) struct ChatWidget {
     config: Config,
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
-    effective_service_tier: Option<ServiceTier>,
+    effective_service_tier: Option<String>,
     /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
@@ -2072,10 +2074,7 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
-        self.effective_service_tier = session
-            .service_tier
-            .as_deref()
-            .and_then(ServiceTier::from_request_value);
+        self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
             .config
             .permissions
@@ -2116,15 +2115,15 @@ impl ChatWidget {
         }
         self.refresh_model_display();
         self.refresh_status_surfaces();
-        self.sync_fast_command_enabled();
+        self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
-            let show_fast_status =
-                self.should_show_fast_status(&model_for_header, self.effective_service_tier);
+            let show_fast_status = self
+                .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
             let session_info_cell = history_cell::new_session_info(
                 &self.config,
                 &model_for_header,
@@ -4893,10 +4892,7 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
-        let effective_service_tier = config
-            .service_tier
-            .as_deref()
-            .and_then(ServiceTier::from_request_value);
+        let effective_service_tier = config.service_tier.clone();
         let current_terminal_info = terminal_info();
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();
@@ -5088,7 +5084,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_collaboration_modes_enabled(/*enabled*/ true);
-        widget.sync_fast_command_enabled();
+        widget.sync_service_tier_commands();
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
@@ -5327,6 +5323,9 @@ impl ChatWidget {
                     }
                     InputResult::Command(cmd) => {
                         self.handle_slash_command_dispatch(cmd);
+                    }
+                    InputResult::ServiceTierCommand(command) => {
+                        self.handle_service_tier_command_dispatch(command);
                     }
                     InputResult::CommandWithArgs(cmd, args, text_elements) => {
                         self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
@@ -9193,7 +9192,7 @@ impl ChatWidget {
             }
         }
         if feature == Feature::FastMode {
-            self.sync_fast_command_enabled();
+            self.sync_service_tier_commands();
         }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
@@ -9309,22 +9308,19 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
-    /// Set Fast mode in the widget's config copy.
-    pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
-        self.config.service_tier =
-            service_tier.map(|service_tier| service_tier.request_value().to_string());
+    /// Set the service tier in the widget's config copy.
+    pub(crate) fn set_service_tier(&mut self, service_tier: Option<String>) {
+        self.config.service_tier = service_tier.clone();
         self.effective_service_tier = service_tier;
+        self.refresh_model_dependent_surfaces();
     }
 
-    pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
-        self.effective_service_tier
+    pub(crate) fn current_service_tier(&self) -> Option<&str> {
+        self.effective_service_tier.as_deref()
     }
 
-    pub(crate) fn configured_service_tier(&self) -> Option<ServiceTier> {
-        self.config
-            .service_tier
-            .as_deref()
-            .and_then(ServiceTier::from_request_value)
+    pub(crate) fn configured_service_tier(&self) -> Option<String> {
+        self.config.service_tier.clone()
     }
 
     pub(crate) fn fast_default_opt_out(&self) -> Option<bool> {
@@ -9365,14 +9361,11 @@ impl ChatWidget {
             .set_connectors_enabled(self.connectors_enabled());
     }
 
-    pub(crate) fn should_show_fast_status(
-        &self,
-        model: &str,
-        service_tier: Option<ServiceTier>,
-    ) -> bool {
-        self.model_supports_fast_mode(model)
-            && matches!(service_tier, Some(ServiceTier::Fast))
-            && self.has_chatgpt_account
+    pub(crate) fn should_show_fast_status(&self, model: &str, service_tier: Option<&str>) -> bool {
+        service_tier.is_some_and(|service_tier| {
+            service_tier == ServiceTier::Fast.request_value()
+                && self.model_supports_service_tier(model, service_tier)
+        }) && self.has_chatgpt_account
     }
 
     fn fast_mode_enabled(&self) -> bool {
@@ -9381,6 +9374,7 @@ impl ChatWidget {
 
     pub(crate) fn can_toggle_fast_mode_from_keybinding(&self) -> bool {
         self.fast_mode_enabled()
+            && self.current_model_fast_service_tier().is_some()
             && !self.is_user_turn_pending_or_running()
             && self.bottom_pane.no_modal_or_popup_active()
     }
@@ -9416,11 +9410,11 @@ impl ChatWidget {
         self.refresh_model_dependent_surfaces();
     }
 
-    fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
+    fn set_service_tier_selection(&mut self, service_tier: Option<String>) {
         if service_tier.is_none() {
             self.config.notices.fast_default_opt_out = Some(true);
         }
-        self.set_service_tier(service_tier);
+        self.set_service_tier(service_tier.clone());
         self.app_event_tx
             .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
@@ -9431,7 +9425,7 @@ impl ChatWidget {
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
-                Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
+                Some(service_tier.clone()),
                 /*collaboration_mode*/ None,
                 /*personality*/ None,
             )));
@@ -9440,10 +9434,22 @@ impl ChatWidget {
     }
 
     pub(crate) fn toggle_fast_mode_from_ui(&mut self) {
-        let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
+        let Some(fast_tier) = self.current_model_fast_service_tier() else {
+            return;
+        };
+        let next_tier = if self.current_service_tier() == Some(fast_tier.id.as_str()) {
             None
         } else {
-            Some(ServiceTier::Fast)
+            Some(fast_tier.id)
+        };
+        self.set_service_tier_selection(next_tier);
+    }
+
+    pub(crate) fn toggle_service_tier_from_ui(&mut self, command: ServiceTierCommand) {
+        let next_tier = if self.current_service_tier() == Some(command.id.as_str()) {
+            None
+        } else {
+            Some(command.id)
         };
         self.set_service_tier_selection(next_tier);
     }
@@ -9474,9 +9480,11 @@ impl ChatWidget {
             .unwrap_or_else(|| "System default".to_string())
     }
 
-    fn sync_fast_command_enabled(&mut self) {
+    fn sync_service_tier_commands(&mut self) {
         self.bottom_pane
-            .set_fast_command_enabled(self.fast_mode_enabled());
+            .set_service_tier_commands_enabled(self.fast_mode_enabled());
+        self.bottom_pane
+            .set_service_tier_commands(self.current_model_service_tier_commands());
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -9508,7 +9516,7 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    fn model_supports_fast_mode(&self, model: &str) -> bool {
+    fn model_supports_service_tier(&self, model: &str, service_tier: &str) -> bool {
         self.model_catalog
             .try_list_models()
             .ok()
@@ -9516,9 +9524,44 @@ impl ChatWidget {
                 models
                     .into_iter()
                     .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_fast_mode())
+                    .map(|preset| {
+                        preset
+                            .service_tiers
+                            .iter()
+                            .any(|tier| tier.id == service_tier)
+                    })
             })
             .unwrap_or(false)
+    }
+
+    fn current_model_fast_service_tier(&self) -> Option<ServiceTierCommand> {
+        self.current_model_service_tier_commands()
+            .into_iter()
+            .find(|tier| tier.name.eq_ignore_ascii_case(SPEED_TIER_FAST))
+    }
+
+    fn current_model_service_tier_commands(&self) -> Vec<ServiceTierCommand> {
+        let model = self.current_model();
+        self.model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| {
+                        preset
+                            .service_tiers
+                            .into_iter()
+                            .map(|tier| ServiceTierCommand {
+                                id: tier.id,
+                                name: tier.name,
+                                description: tier.description,
+                            })
+                            .collect()
+                    })
+            })
+            .unwrap_or_default()
     }
 
     /// Return whether the effective model currently advertises image-input support.
@@ -9660,6 +9703,7 @@ impl ChatWidget {
         self.session_header.set_model(effective.model());
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
+        self.sync_service_tier_commands();
         self.refresh_terminal_title();
     }
 

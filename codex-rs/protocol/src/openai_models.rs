@@ -485,7 +485,17 @@ impl ModelPreset {
                 .iter()
                 .any(|tier| tier == SPEED_TIER_FAST)
     }
+}
 
+impl ModelInfo {
+    pub fn supports_service_tier(&self, service_tier: &str) -> bool {
+        self.service_tiers
+            .iter()
+            .any(|tier| tier.id == service_tier)
+    }
+}
+
+impl ModelPreset {
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
