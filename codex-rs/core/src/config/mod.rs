@@ -3718,27 +3718,28 @@ impl Config {
         active_permission_profile: &ActivePermissionProfile,
         permission_profile: &PermissionProfile,
     ) -> std::io::Result<Option<NetworkProxySpec>> {
-        let configured_network_proxy_config =
-            if profile_allows_configured_network_proxy(permission_profile) {
-                let cfg: ConfigToml = self
-                    .config_layer_stack
-                    .effective_config()
-                    .try_into()
-                    .map_err(|err| {
-                        std::io::Error::new(
-                            ErrorKind::InvalidInput,
-                            format!(
-                                "failed to read effective config for selected permission profile: {err}"
-                            ),
-                        )
-                    })?;
-                network_proxy_config_for_profile_selection(
-                    cfg.permissions.as_ref(),
-                    active_permission_profile.id.as_str(),
-                )?
-            } else {
-                NetworkProxyConfig::default()
-            };
+        let profile_allows_network_proxy =
+            profile_allows_configured_network_proxy(permission_profile);
+        let configured_network_proxy_config = if profile_allows_network_proxy {
+            let cfg: ConfigToml = self
+                .config_layer_stack
+                .effective_config()
+                .try_into()
+                .map_err(|err| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "failed to read effective config for selected permission profile: {err}"
+                        ),
+                    )
+                })?;
+            network_proxy_config_for_profile_selection(
+                cfg.permissions.as_ref(),
+                active_permission_profile.id.as_str(),
+            )?
+        } else {
+            NetworkProxyConfig::default()
+        };
 
         build_network_proxy_spec(
             configured_network_proxy_config,
