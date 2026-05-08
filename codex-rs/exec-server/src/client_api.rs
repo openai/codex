@@ -72,6 +72,7 @@ impl ExecServerTransportParams {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn stdio_command(command: StdioExecServerCommand) -> Self {
         Self::StdioCommand {
             command,
