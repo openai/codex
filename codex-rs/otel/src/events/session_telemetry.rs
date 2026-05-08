@@ -63,10 +63,6 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
-fn event_tags_attribute(tags: &[(&str, &str)]) -> String {
-    serde_json::to_string(tags).expect("serializing tag pairs should not fail")
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthEnvTelemetryMetadata {
     pub openai_api_key_env_present: bool,
@@ -985,7 +981,6 @@ impl SessionTelemetry {
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         let mcp_server = mcp_server.unwrap_or("");
         let mcp_server_origin = mcp_server_origin.unwrap_or("");
-        let event_tags = event_tags_attribute(&tags);
         log_event!(
             self,
             event.name = "codex.tool_result",
@@ -997,7 +992,6 @@ impl SessionTelemetry {
             output = %output,
             mcp_server = %mcp_server,
             mcp_server_origin = %mcp_server_origin,
-            tags = %event_tags,
         );
         trace_event!(
             self,
@@ -1011,7 +1005,6 @@ impl SessionTelemetry {
             output_line_count = output.lines().count() as i64,
             tool_origin = if mcp_server.is_empty() { "builtin" } else { "mcp" },
             mcp_tool = !mcp_server.is_empty(),
-            tags = %event_tags,
         );
     }
 
