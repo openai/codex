@@ -8,7 +8,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, TypeVar
+from typing import Callable, Iterator, TypeVar
 
 from pydantic import BaseModel
 
@@ -418,15 +418,6 @@ class AppServerClient:
                     return notification.payload
         finally:
             self.unregister_turn_notifications(turn_id)
-
-    def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
-        target_methods = {methods} if isinstance(methods, str) else set(methods)
-        out: list[Notification] = []
-        while True:
-            notification = self.next_notification()
-            out.append(notification)
-            if notification.method in target_methods:
-                return out
 
     def stream_text(
         self,

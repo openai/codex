@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from typing import AsyncIterator, Callable, Iterable, ParamSpec, TypeVar
+from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
 
@@ -196,11 +196,6 @@ class AsyncAppServerClient:
 
     async def wait_for_turn_completed(self, turn_id: str) -> TurnCompletedNotification:
         return await self._call_sync(self._sync.wait_for_turn_completed, turn_id)
-
-    async def stream_until_methods(
-        self, methods: Iterable[str] | str
-    ) -> list[Notification]:
-        return await self._call_sync(self._sync.stream_until_methods, methods)
 
     async def stream_text(
         self,
