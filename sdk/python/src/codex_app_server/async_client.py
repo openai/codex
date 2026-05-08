@@ -79,11 +79,11 @@ class AsyncAppServerClient:
     async def initialize(self) -> InitializeResponse:
         return await self._call_sync(self._sync.initialize)
 
-    def acquire_turn_consumer(self, turn_id: str) -> None:
-        self._sync.acquire_turn_consumer(turn_id)
+    def register_turn_notifications(self, turn_id: str) -> None:
+        self._sync.register_turn_notifications(turn_id)
 
-    def release_turn_consumer(self, turn_id: str) -> None:
-        self._sync.release_turn_consumer(turn_id)
+    def unregister_turn_notifications(self, turn_id: str) -> None:
+        self._sync.unregister_turn_notifications(turn_id)
 
     async def request(
         self,
@@ -99,7 +99,9 @@ class AsyncAppServerClient:
             response_model=response_model,
         )
 
-    async def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
+    async def thread_start(
+        self, params: V2ThreadStartParams | JsonObject | None = None
+    ) -> ThreadStartResponse:
         return await self._call_sync(self._sync.thread_start, params)
 
     async def thread_resume(
@@ -109,10 +111,14 @@ class AsyncAppServerClient:
     ) -> ThreadResumeResponse:
         return await self._call_sync(self._sync.thread_resume, thread_id, params)
 
-    async def thread_list(self, params: V2ThreadListParams | JsonObject | None = None) -> ThreadListResponse:
+    async def thread_list(
+        self, params: V2ThreadListParams | JsonObject | None = None
+    ) -> ThreadListResponse:
         return await self._call_sync(self._sync.thread_list, params)
 
-    async def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
+    async def thread_read(
+        self, thread_id: str, include_turns: bool = False
+    ) -> ThreadReadResponse:
         return await self._call_sync(self._sync.thread_read, thread_id, include_turns)
 
     async def thread_fork(
@@ -140,9 +146,13 @@ class AsyncAppServerClient:
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
-        return await self._call_sync(self._sync.turn_start, thread_id, input_items, params)
+        return await self._call_sync(
+            self._sync.turn_start, thread_id, input_items, params
+        )
 
-    async def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
+    async def turn_interrupt(
+        self, thread_id: str, turn_id: str
+    ) -> TurnInterruptResponse:
         return await self._call_sync(self._sync.turn_interrupt, thread_id, turn_id)
 
     async def turn_steer(
@@ -184,10 +194,15 @@ class AsyncAppServerClient:
     async def next_notification(self) -> Notification:
         return await self._call_sync(self._sync.next_notification)
 
+    async def next_turn_notification(self, turn_id: str) -> Notification:
+        return await self._call_sync(self._sync.next_turn_notification, turn_id)
+
     async def wait_for_turn_completed(self, turn_id: str) -> TurnCompletedNotification:
         return await self._call_sync(self._sync.wait_for_turn_completed, turn_id)
 
-    async def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
+    async def stream_until_methods(
+        self, methods: Iterable[str] | str
+    ) -> list[Notification]:
         return await self._call_sync(self._sync.stream_until_methods, methods)
 
     async def stream_text(

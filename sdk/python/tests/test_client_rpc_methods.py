@@ -128,3 +128,67 @@ def test_invalid_notification_payload_falls_back_to_unknown() -> None:
 
     assert event.method == "thread/tokenUsage/updated"
     assert isinstance(event.payload, UnknownNotification)
+
+
+def test_turn_notification_router_demuxes_registered_turns() -> None:
+    client = AppServerClient()
+    client.register_turn_notifications("turn-1")
+    client.register_turn_notifications("turn-2")
+
+    client._route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "two",
+                "itemId": "item-2",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        )
+    )
+    client._route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "one",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        )
+    )
+
+    first = client.next_turn_notification("turn-1")
+    second = client.next_turn_notification("turn-2")
+
+    assert [
+        (first.method, getattr(first.payload, "delta", None)),
+        (second.method, getattr(second.payload, "delta", None)),
+    ] == [
+        ("item/agentMessage/delta", "one"),
+        ("item/agentMessage/delta", "two"),
+    ]
+
+
+def test_turn_notification_router_buffers_events_before_registration() -> None:
+    client = AppServerClient()
+    client._route_notification(
+        client._coerce_notification(
+            "turn/completed",
+            {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "completed"},
+            },
+        )
+    )
+
+    client.register_turn_notifications("turn-1")
+    event = client.next_turn_notification("turn-1")
+
+    assert (
+        event.method,
+        getattr(getattr(event.payload, "turn", None), "id", None),
+    ) == (
+        "turn/completed",
+        "turn-1",
+    )
