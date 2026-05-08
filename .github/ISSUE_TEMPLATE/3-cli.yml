@@ -2,7 +2,6 @@ name: 💻 CLI Bug
 description: Report an issue in the Codex CLI
 labels:
   - bug
-  - needs triage
 body:
   - type: markdown
     attributes:
