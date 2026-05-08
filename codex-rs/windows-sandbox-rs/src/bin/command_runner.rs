@@ -1,9 +1,6 @@
-#[path = "../elevated/command_runner_win.rs"]
-mod win;
-
 #[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
-    win::main()
+    codex_windows_sandbox::command_runner_main()
 }
 
 #[cfg(not(target_os = "windows"))]

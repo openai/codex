@@ -10,6 +10,8 @@
 #![cfg(target_os = "windows")]
 #![allow(unsafe_op_in_unsafe_fn)]
 
+use super::cwd_junction;
+use crate::read_acl_mutex;
 use anyhow::Context;
 use anyhow::Result;
 use codex_windows_sandbox::ErrorPayload;
@@ -69,13 +71,6 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
-
-#[path = "cwd_junction.rs"]
-mod cwd_junction;
-
-#[allow(dead_code)]
-#[path = "../read_acl_mutex.rs"]
-mod read_acl_mutex;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 

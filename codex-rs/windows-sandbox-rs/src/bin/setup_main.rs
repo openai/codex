@@ -1,9 +1,6 @@
-#[path = "../setup_main_win.rs"]
-mod win;
-
 #[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
-    win::main()
+    codex_windows_sandbox::setup_main()
 }
 
 #[cfg(not(target_os = "windows"))]

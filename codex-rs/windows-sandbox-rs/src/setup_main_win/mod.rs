@@ -67,12 +67,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
 
-mod read_acl_mutex;
 mod sandbox_users;
-#[path = "setup_runtime_bin.rs"]
 mod setup_runtime_bin;
-use read_acl_mutex::acquire_read_acl_mutex;
-use read_acl_mutex::read_acl_mutex_exists;
+use crate::read_acl_mutex::acquire_read_acl_mutex;
+use crate::read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
