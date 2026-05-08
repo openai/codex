@@ -592,7 +592,7 @@ impl ChatWidget {
             StatusLineItem::Status => Some(self.run_state_status_text()),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
-                let total = usage.tokens_in_context_window();
+                let total = usage.blended_total();
                 if total <= 0 {
                     None
                 } else {
