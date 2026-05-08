@@ -1,9 +1,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(unix)]
 use anyhow::Context;
+#[cfg(unix)]
 use anyhow::Result;
+#[cfg(unix)]
 use anyhow::anyhow;
+#[cfg(unix)]
 use tokio::process::Command;
 
 pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
@@ -14,6 +18,7 @@ pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
         .join(managed_codex_file_name())
 }
 
+#[cfg(unix)]
 pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
     let output = Command::new(codex_bin)
         .arg("--version")
@@ -46,6 +51,7 @@ fn managed_codex_file_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
 }
 
+#[cfg(unix)]
 fn parse_codex_version(output: &str) -> Result<String> {
     let version = output
         .split_whitespace()
@@ -55,6 +61,6 @@ fn parse_codex_version(output: &str) -> Result<String> {
     Ok(version.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "managed_install_tests.rs"]
 mod tests;

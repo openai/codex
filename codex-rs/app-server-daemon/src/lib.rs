@@ -15,6 +15,7 @@ use backend::BackendPaths;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_core::config::find_codex_home;
 use managed_install::managed_codex_bin;
+#[cfg(unix)]
 use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
