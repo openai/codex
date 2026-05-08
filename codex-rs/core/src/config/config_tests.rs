@@ -7301,14 +7301,16 @@ async fn legacy_fast_service_tier_override_uses_priority_request_value() -> std:
 async fn config_toml_service_tier_accepts_arbitrary_string() -> std::io::Result<()> {
     let mut fixture = create_test_fixture()?;
     fixture.cfg.service_tier = Some("experimental-tier-id".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
 
     let config = Config::load_from_base_config_with_overrides(
         fixture.cfg,
         ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
+            cwd: Some(cwd),
             ..Default::default()
         },
-        fixture.codex_home(),
+        codex_home,
     )
     .await?;
 
@@ -7323,14 +7325,16 @@ async fn config_toml_service_tier_accepts_arbitrary_string() -> std::io::Result<
 async fn config_toml_legacy_fast_service_tier_uses_priority_request_value() -> std::io::Result<()> {
     let mut fixture = create_test_fixture()?;
     fixture.cfg.service_tier = Some("fast".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
 
     let config = Config::load_from_base_config_with_overrides(
         fixture.cfg,
         ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
+            cwd: Some(cwd),
             ..Default::default()
         },
-        fixture.codex_home(),
+        codex_home,
     )
     .await?;
 
