@@ -142,10 +142,7 @@ impl EnvironmentManager {
     where
         P: EnvironmentProvider + ?Sized,
     {
-        Self::from_provider_snapshot(
-            provider.snapshot(&local_runtime_paths).await?,
-            local_runtime_paths,
-        )
+        Self::from_provider_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
 
     fn from_provider_snapshot(
@@ -155,13 +152,27 @@ impl EnvironmentManager {
         let EnvironmentProviderSnapshot {
             environments,
             default,
+            include_local,
         } = snapshot;
-        let mut environment_map = HashMap::with_capacity(environments.len());
+        let mut environment_map =
+            HashMap::with_capacity(environments.len() + usize::from(include_local));
+        let local_environment = Arc::new(Environment::local(local_runtime_paths));
+        if include_local {
+            environment_map.insert(
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                Arc::clone(&local_environment),
+            );
+        }
         for (id, environment) in environments {
             if id.is_empty() {
                 return Err(ExecServerError::Protocol(
                     "environment id cannot be empty".to_string(),
                 ));
+            }
+            if id == LOCAL_ENVIRONMENT_ID {
+                return Err(ExecServerError::Protocol(format!(
+                    "environment id `{LOCAL_ENVIRONMENT_ID}` is reserved for EnvironmentManager"
+                )));
             }
             if environment_map
                 .insert(id.clone(), Arc::new(environment))
@@ -183,8 +194,6 @@ impl EnvironmentManager {
                 Some(environment_id)
             }
         };
-        let local_environment = Arc::new(Environment::local(local_runtime_paths));
-
         Ok(Self {
             default_environment,
             environments: environment_map,
@@ -399,10 +408,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl EnvironmentProvider for TestEnvironmentProvider {
-        async fn snapshot(
-            &self,
-            _local_runtime_paths: &ExecServerRuntimePaths,
-        ) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
+        async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
             Ok(self.snapshot.clone())
         }
     }
@@ -431,14 +437,15 @@ mod tests {
 
         let environment = manager.default_environment().expect("default environment");
         assert_eq!(manager.default_environment_id(), Some(LOCAL_ENVIRONMENT_ID));
-        assert!(!environment.is_remote());
-        assert!(
-            !manager
+        assert!(Arc::ptr_eq(
+            &environment,
+            &manager
                 .get_environment(LOCAL_ENVIRONMENT_ID)
                 .expect("local environment")
-                .is_remote()
-        );
+        ));
+        assert!(Arc::ptr_eq(&environment, &manager.local_environment()));
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
+        assert!(!environment.is_remote());
     }
 
     #[tokio::test]
@@ -473,12 +480,7 @@ mod tests {
                 .get_environment(REMOTE_ENVIRONMENT_ID)
                 .expect("remote environment")
         ));
-        assert!(
-            !manager
-                .get_environment(LOCAL_ENVIRONMENT_ID)
-                .expect("local environment")
-                .is_remote()
-        );
+        assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert!(!manager.local_environment().is_remote());
     }
 
@@ -506,6 +508,7 @@ mod tests {
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
+                include_local: false,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -532,6 +535,7 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![("".to_string(), Environment::default_for_tests())],
                 default: EnvironmentDefault::Disabled,
+                include_local: false,
             },
         };
         let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -545,21 +549,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn environment_manager_rejects_provider_supplied_local_environment() {
+        let provider = TestEnvironmentProvider {
+            snapshot: EnvironmentProviderSnapshot {
+                environments: vec![(
+                    LOCAL_ENVIRONMENT_ID.to_string(),
+                    Environment::default_for_tests(),
+                )],
+                default: EnvironmentDefault::Disabled,
+                include_local: false,
+            },
+        };
+        let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+            .await
+            .expect_err("local id should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: environment id `local` is reserved for EnvironmentManager"
+        );
+    }
+
+    #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
         let provider = TestEnvironmentProvider {
             snapshot: EnvironmentProviderSnapshot {
-                environments: vec![
-                    (
-                        LOCAL_ENVIRONMENT_ID.to_string(),
-                        Environment::default_for_tests(),
-                    ),
-                    (
-                        "devbox".to_string(),
-                        Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                            .expect("remote environment"),
-                    ),
-                ],
+                environments: vec![(
+                    "devbox".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
+                )],
                 default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
+                include_local: true,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -579,10 +600,12 @@ mod tests {
         let provider = TestEnvironmentProvider {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
-                    LOCAL_ENVIRONMENT_ID.to_string(),
-                    Environment::default_for_tests(),
+                    "devbox".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::Disabled,
+                include_local: true,
             },
         };
         let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -591,7 +614,12 @@ mod tests {
 
         assert_eq!(manager.default_environment_id(), None);
         assert!(manager.default_environment().is_none());
-        assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_some());
+        assert!(Arc::ptr_eq(
+            &manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment"),
+            &manager.local_environment()
+        ));
     }
 
     #[tokio::test]
@@ -599,10 +627,12 @@ mod tests {
         let provider = TestEnvironmentProvider {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
-                    LOCAL_ENVIRONMENT_ID.to_string(),
-                    Environment::default_for_tests(),
+                    "devbox".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId("missing".to_string()),
+                include_local: true,
             },
         };
         let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
@@ -616,20 +646,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_uses_provider_supplied_local_environment() {
+    async fn environment_manager_includes_local_for_default_provider_without_url() {
         let manager = EnvironmentManager::create_for_tests(
             /*exec_server_url*/ None,
             test_runtime_paths(),
         )
         .await;
 
+        let environment = manager.default_environment().expect("default environment");
         assert_eq!(manager.default_environment_id(), Some(LOCAL_ENVIRONMENT_ID));
-        let provider_local = manager
-            .get_environment(LOCAL_ENVIRONMENT_ID)
-            .expect("provider local environment");
-        assert!(!provider_local.is_remote());
-        assert!(!manager.local_environment().is_remote());
-        assert!(!Arc::ptr_eq(&provider_local, &manager.local_environment()));
+        assert!(Arc::ptr_eq(
+            &environment,
+            &manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+        ));
+        assert!(Arc::ptr_eq(&environment, &manager.local_environment()));
+        assert!(!environment.is_remote());
     }
 
     #[tokio::test]
@@ -641,7 +674,7 @@ mod tests {
         )
         .await;
 
-        let environment = manager.default_environment().expect("default environment");
+        let environment = manager.local_environment();
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::create_for_tests(
@@ -652,7 +685,7 @@ mod tests {
                 .clone(),
         )
         .await;
-        let environment = manager.default_environment().expect("default environment");
+        let environment = manager.local_environment();
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
     }
 
@@ -665,20 +698,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_keeps_default_provider_local_lookup_when_default_disabled() {
+    async fn environment_manager_omits_default_provider_local_lookup_when_default_disabled() {
         let manager =
             EnvironmentManager::create_for_tests(Some("none".to_string()), test_runtime_paths())
                 .await;
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);
-        assert!(
-            !manager
-                .get_environment(LOCAL_ENVIRONMENT_ID)
-                .expect("local environment")
-                .is_remote()
-        );
+        assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
+        assert!(!manager.local_environment().is_remote());
     }
 
     #[tokio::test]

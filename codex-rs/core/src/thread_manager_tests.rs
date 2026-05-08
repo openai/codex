@@ -293,7 +293,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
-async fn start_thread_accepts_explicit_environment_when_default_environment_is_disabled() {
+async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -319,7 +319,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
         environment_manager,
     );
 
-    let thread = manager
+    let result = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
             initial_history: InitialHistory::New,
@@ -334,10 +334,14 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
                 cwd: config.cwd.clone(),
             }],
         })
-        .await
-        .expect("explicit sticky environment should resolve by id");
+        .await;
+    let err = match result {
+        Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
+        Err(err) => err,
+    };
 
-    assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
+    assert_eq!(err.to_string(), "unknown turn environment id `local`");
+    assert!(manager.list_thread_ids().await.is_empty());
 }
 
 #[tokio::test]

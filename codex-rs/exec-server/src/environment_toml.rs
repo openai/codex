@@ -11,7 +11,6 @@ use crate::DefaultEnvironmentProvider;
 use crate::Environment;
 use crate::EnvironmentProvider;
 use crate::ExecServerError;
-use crate::ExecServerRuntimePaths;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
@@ -78,21 +77,14 @@ impl TomlEnvironmentProvider {
 
 #[async_trait]
 impl EnvironmentProvider for TomlEnvironmentProvider {
-    async fn snapshot(
-        &self,
-        local_runtime_paths: &ExecServerRuntimePaths,
-    ) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
-        let mut environments = Vec::with_capacity(self.environments.len() + 1);
-        environments.push((
-            LOCAL_ENVIRONMENT_ID.to_string(),
-            Environment::local(local_runtime_paths.clone()),
-        ));
+    async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
+        let mut environments = Vec::with_capacity(self.environments.len());
         for (id, transport_params) in &self.environments {
             environments.push((
                 id.clone(),
                 Environment::remote_with_transport(
                     transport_params.clone(),
-                    Some(local_runtime_paths.clone()),
+                    /*local_runtime_paths*/ None,
                 ),
             ));
         }
@@ -100,6 +92,7 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
         Ok(EnvironmentProviderSnapshot {
             environments,
             default: self.default.clone(),
+            include_local: true,
         })
     }
 }
@@ -292,16 +285,8 @@ mod tests {
 
     use super::*;
 
-    fn test_runtime_paths() -> ExecServerRuntimePaths {
-        ExecServerRuntimePaths::new(
-            std::env::current_exe().expect("current exe"),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths")
-    }
-
     #[tokio::test]
-    async fn toml_provider_adds_implicit_local_and_configured_environments() {
+    async fn toml_provider_includes_local_and_adds_configured_environments() {
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml {
             default: Some("ssh-dev".to_string()),
             environments: vec![
@@ -326,27 +311,22 @@ mod tests {
             ],
         })
         .expect("provider");
-        let runtime_paths = test_runtime_paths();
 
-        let snapshot = provider
-            .snapshot(&runtime_paths)
-            .await
-            .expect("environments");
+        let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
             default,
+            include_local,
         } = snapshot;
         let environment_ids: Vec<_> = environments
             .iter()
             .map(|(id, _environment)| id.as_str())
             .collect();
-        assert_eq!(
-            environment_ids,
-            vec![LOCAL_ENVIRONMENT_ID, "devbox", "ssh-dev"]
-        );
+        assert_eq!(environment_ids, vec!["devbox", "ssh-dev"]);
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
-        assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
+        assert!(include_local);
+        assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert_eq!(
             environments["devbox"].exec_server_url(),
             Some("ws://127.0.0.1:8765")
@@ -362,11 +342,9 @@ mod tests {
     #[tokio::test]
     async fn toml_provider_default_omitted_selects_local() {
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml::default()).expect("provider");
-        let snapshot = provider
-            .snapshot(&test_runtime_paths())
-            .await
-            .expect("environments");
+        let snapshot = provider.snapshot().await.expect("environments");
 
+        assert!(snapshot.include_local);
         assert_eq!(
             snapshot.default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
@@ -380,11 +358,9 @@ mod tests {
             environments: Vec::new(),
         })
         .expect("provider");
-        let snapshot = provider
-            .snapshot(&test_runtime_paths())
-            .await
-            .expect("environments");
+        let snapshot = provider.snapshot().await.expect("environments");
 
+        assert!(snapshot.include_local);
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
@@ -681,17 +657,15 @@ default = "none"
         let provider =
             environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
 
-        let snapshot = provider
-            .snapshot(&test_runtime_paths())
-            .await
-            .expect("environments");
+        let snapshot = provider.snapshot().await.expect("environments");
         let environment_ids: Vec<_> = snapshot
             .environments
             .into_iter()
             .map(|(id, _environment)| id)
             .collect();
 
-        assert!(environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
+        assert!(snapshot.include_local);
+        assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
@@ -702,16 +676,18 @@ default = "none"
         let provider =
             environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
 
-        let snapshot = provider
-            .snapshot(&test_runtime_paths())
-            .await
-            .expect("environments");
+        let snapshot = provider.snapshot().await.expect("environments");
         let environment_ids: Vec<_> = snapshot
             .environments
             .into_iter()
             .map(|(id, _environment)| id)
             .collect();
 
-        assert!(environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
+        assert!(snapshot.include_local);
+        assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
+        assert_eq!(
+            snapshot.default,
+            EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
+        );
     }
 }
