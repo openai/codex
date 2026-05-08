@@ -3,6 +3,8 @@
 #![deny(private_bounds, private_interfaces, unreachable_pub)]
 
 pub use codex_analytics::AnalyticsEventsClient;
+pub use codex_app_server_protocol::EnvironmentAddParams;
+pub use codex_app_server_protocol::EnvironmentAddResponse;
 pub use codex_app_server_protocol::ServerNotification;
 pub use codex_app_server_protocol::item_event_to_server_notification;
 pub use codex_arg0::Arg0DispatchPaths;
@@ -74,3 +76,11 @@ pub use codex_protocol::protocol::TurnEnvironmentSelection;
 pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;
 pub use codex_utils_absolute_path::AbsolutePathBuf;
+
+pub fn environment_add(
+    environment_manager: &EnvironmentManager,
+    params: EnvironmentAddParams,
+) -> Result<EnvironmentAddResponse, codex_exec_server::ExecServerError> {
+    environment_manager.upsert_environment(params.environment_id, params.exec_server_url)?;
+    Ok(EnvironmentAddResponse {})
+}

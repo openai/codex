@@ -16,9 +16,8 @@ impl EnvironmentRequestProcessor {
         &self,
         params: EnvironmentAddParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.environment_manager
-            .upsert_environment(params.environment_id, params.exec_server_url)
+        let response = codex_core_api::environment_add(&self.environment_manager, params)
             .map_err(|err| invalid_request(err.to_string()))?;
-        Ok(Some(EnvironmentAddResponse {}.into()))
+        Ok(Some(response.into()))
     }
 }
