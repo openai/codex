@@ -1,9 +1,8 @@
-//! Shared builders for synthetic [`ThreadItem`] values emitted by the app-server layer.
+//! Shared builders for app-server [`ThreadItem`] values derived from compatibility events.
 //!
-//! These items do not come from first-class core `ItemStarted` / `ItemCompleted` events.
-//! Instead, the app-server synthesizes them so clients can render a coherent lifecycle for
-//! approvals and other pre-execution flows before the underlying tool has started or when the
-//! tool never starts at all.
+//! Most live tool items now come from first-class core `ItemStarted` / `ItemCompleted` events.
+//! These builders remain for approval flows, rebuilt legacy history, and other pre-execution
+//! paths where the underlying tool has not started or never starts at all.
 //!
 //! Keeping these builders in one place is useful for two reasons:
 //! - Live notifications and rebuilt `thread/read` history both need to construct the same
@@ -244,6 +243,7 @@ pub fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     review_id: assessment.id.clone(),
+                    started_at_ms: assessment.started_at_ms,
                     target_item_id: assessment.target_item_id.clone(),
                     review,
                     action,
@@ -259,6 +259,10 @@ pub fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     review_id: assessment.id.clone(),
+                    started_at_ms: assessment.started_at_ms,
+                    completed_at_ms: assessment
+                        .completed_at_ms
+                        .unwrap_or(assessment.started_at_ms),
                     target_item_id: assessment.target_item_id.clone(),
                     decision_source: assessment
                         .decision_source

@@ -5,30 +5,29 @@
 //! any other backing store.
 
 mod error;
-#[cfg(debug_assertions)]
 mod in_memory;
 mod live_thread;
 mod local;
-mod remote;
 mod store;
 mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
-#[cfg(debug_assertions)]
 pub use in_memory::InMemoryThreadStore;
-#[cfg(debug_assertions)]
 pub use in_memory::InMemoryThreadStoreCalls;
 pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
-pub use remote::RemoteThreadStore;
+pub use local::LocalThreadStoreConfig;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
 pub use types::ArchiveThreadParams;
 pub use types::CreateThreadParams;
 pub use types::GitInfoPatch;
+pub use types::ItemPage;
+pub use types::ListItemsParams;
 pub use types::ListThreadsParams;
+pub use types::ListTurnsParams;
 pub use types::LoadThreadHistoryParams;
 pub use types::OptionalStringPatch;
 pub use types::ReadThreadByRolloutPathParams;
@@ -37,8 +36,14 @@ pub use types::ResumeThreadParams;
 pub use types::SortDirection;
 pub use types::StoredThread;
 pub use types::StoredThreadHistory;
+pub use types::StoredTurn;
+pub use types::StoredTurnError;
+pub use types::StoredTurnItemsView;
+pub use types::StoredTurnStatus;
 pub use types::ThreadEventPersistenceMode;
 pub use types::ThreadMetadataPatch;
 pub use types::ThreadPage;
+pub use types::ThreadPersistenceMetadata;
 pub use types::ThreadSortKey;
+pub use types::TurnPage;
 pub use types::UpdateThreadMetadataParams;

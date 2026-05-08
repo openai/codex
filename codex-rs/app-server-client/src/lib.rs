@@ -29,6 +29,7 @@ pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
+pub use codex_app_server::in_process::StateDbHandle;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -48,7 +49,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
-pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -71,12 +71,9 @@ pub mod legacy_core {
     pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
     pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
-    pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
-    pub use codex_core::lookup_message_history_entry;
-    pub use codex_core::message_history_metadata;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -97,10 +94,6 @@ pub mod legacy_core {
 
     pub mod personality_migration {
         pub use codex_core::personality_migration::*;
-    }
-
-    pub mod plugins {
-        pub use codex_core::plugins::PluginsManager;
     }
 
     pub mod review_format {
@@ -304,7 +297,15 @@ impl fmt::Display for TypedRequestError {
                 write!(f, "{method} transport error: {source}")
             }
             Self::Server { method, source } => {
-                write!(f, "{method} failed: {}", source.message)
+                write!(
+                    f,
+                    "{method} failed: {} (code {})",
+                    source.message, source.code
+                )?;
+                if let Some(data) = source.data.as_ref() {
+                    write!(f, ", data: {data}")?;
+                }
+                Ok(())
             }
             Self::Deserialize { method, source } => {
                 write!(f, "{method} response decode error: {source}")
@@ -339,6 +340,8 @@ pub struct InProcessClientStartArgs {
     pub feedback: CodexFeedback,
     /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
     pub log_db: Option<LogDbLayer>,
+    /// Process-wide SQLite state handle shared with the embedded app-server.
+    pub state_db: Option<StateDbHandle>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -371,6 +374,7 @@ impl InProcessClientStartArgs {
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
+            request_attestation: false,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {
@@ -400,6 +404,7 @@ impl InProcessClientStartArgs {
             thread_config_loader,
             feedback: self.feedback,
             log_db: self.log_db,
+            state_db: self.state_db,
             environment_manager: self.environment_manager,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
@@ -946,9 +951,13 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::config::ConfigBuilder;
+    use codex_core::init_state_db;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use std::ops::Deref;
+    use std::path::Path;
+    use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -967,18 +976,59 @@ mod tests {
         }
     }
 
+    async fn build_test_config_for_codex_home(codex_home: &Path) -> Config {
+        match ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .build()
+            .await
+        {
+            Ok(config) => config,
+            Err(_) => Config::load_default_with_cli_overrides_for_codex_home(
+                codex_home.to_path_buf(),
+                Vec::new(),
+            )
+            .await
+            .expect("default config should load"),
+        }
+    }
+
+    struct TestClient {
+        _codex_home: TempDir,
+        client: InProcessAppServerClient,
+    }
+
+    impl Deref for TestClient {
+        type Target = InProcessAppServerClient;
+
+        fn deref(&self) -> &Self::Target {
+            &self.client
+        }
+    }
+
+    impl TestClient {
+        async fn shutdown(self) -> IoResult<()> {
+            self.client.shutdown().await
+        }
+    }
+
     async fn start_test_client_with_capacity(
         session_source: SessionSource,
         channel_capacity: usize,
-    ) -> InProcessAppServerClient {
-        InProcessAppServerClient::start(InProcessClientStartArgs {
+    ) -> TestClient {
+        let codex_home = TempDir::new().expect("temp dir");
+        let config = Arc::new(build_test_config_for_codex_home(codex_home.path()).await);
+        let state_db = init_state_db(config.as_ref())
+            .await
+            .expect("state db should initialize for in-process test");
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
+            config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
+            state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
@@ -990,10 +1040,15 @@ mod tests {
             channel_capacity,
         })
         .await
-        .expect("in-process app-server client should start")
+        .expect("in-process app-server client should start");
+
+        TestClient {
+            _codex_home: codex_home,
+            client,
+        }
     }
 
-    async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
+    async fn start_test_client(session_source: SessionSource) -> TestClient {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
@@ -1130,6 +1185,7 @@ mod tests {
         ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
             thread_id: "thread".to_string(),
             turn_id: "turn".to_string(),
+            completed_at_ms: 0,
             item: codex_app_server_protocol::ThreadItem::AgentMessage {
                 id: "item".to_string(),
                 text: text.to_string(),
@@ -1144,6 +1200,7 @@ mod tests {
             thread_id: "thread".to_string(),
             turn: codex_app_server_protocol::Turn {
                 id: "turn".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
@@ -1919,11 +1976,15 @@ mod tests {
             method: "thread/read".to_string(),
             source: JSONRPCErrorError {
                 code: -32603,
-                data: None,
+                data: Some(serde_json::json!({"detail": "config lock mismatch"})),
                 message: "internal".to_string(),
             },
         };
         assert_eq!(std::error::Error::source(&server).is_some(), false);
+        assert_eq!(
+            server.to_string(),
+            "thread/read failed: internal (code -32603), data: {\"detail\":\"config lock mismatch\"}"
+        );
 
         let deserialize = TypedRequestError::Deserialize {
             method: "thread/start".to_string(),
@@ -1970,6 +2031,7 @@ mod tests {
                         thread_id: "thread".to_string(),
                         turn: codex_app_server_protocol::Turn {
                             id: "turn".to_string(),
+                            items_view: codex_app_server_protocol::TurnItemsView::Full,
                             items: Vec::new(),
                             status: codex_app_server_protocol::TurnStatus::Completed,
                             error: None,
@@ -1999,6 +2061,7 @@ mod tests {
                     codex_app_server_protocol::ItemCompletedNotification {
                         thread_id: "thread".to_string(),
                         turn_id: "turn".to_string(),
+                        completed_at_ms: 0,
                         item: codex_app_server_protocol::ThreadItem::AgentMessage {
                             id: "item".to_string(),
                             text: "hello".to_string(),
@@ -2049,6 +2112,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
+            state_db: None,
             environment_manager: environment_manager.clone(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,
@@ -2088,6 +2152,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
+            state_db: None,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,

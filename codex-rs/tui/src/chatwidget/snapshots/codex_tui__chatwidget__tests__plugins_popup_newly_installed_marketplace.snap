@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 329
+assertion_line: 339
 expression: popup
 ---
   Plugins
@@ -12,4 +12,4 @@ expression: popup
   Type to search plugins
 › [-] Debug Plugin  Available   Press Enter to install or view plugin details.
 
-  space enable/disable · ←/→ select marketplace · enter view details · esc close
+  ctrl + u upgrade · ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close

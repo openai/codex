@@ -9,3 +9,7 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
+
+[lib]
+test = false
+doctest = false

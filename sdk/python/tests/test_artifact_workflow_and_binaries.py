@@ -8,6 +8,7 @@ import sys
 import tomllib
 import urllib.error
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -350,6 +351,62 @@ def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> Non
     assert 'platform-tag = "musllinux_1_1_x86_64"' in pyproject
 
 
+def test_stage_runtime_release_copies_resource_binaries(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    helper = tmp_path / "helper"
+    fallback = tmp_path / "fallback-helper"
+    fake_binary.write_text("fake codex\n")
+    helper.write_text("fake helper\n")
+    fallback.write_text("fake fallback\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        fake_binary,
+        resource_binaries=(helper, fallback),
+    )
+
+    assert {
+        path.relative_to(
+            staged / "src" / "codex_cli_bin" / "bin"
+        ).as_posix(): path.read_text()
+        for path in (staged / "src" / "codex_cli_bin" / "bin").iterdir()
+    } == {
+        script.runtime_binary_name(): "fake codex\n",
+        "fallback-helper": "fake fallback\n",
+        "helper": "fake helper\n",
+    }
+
+
+def test_runtime_resource_binaries_are_included_by_wheel_config(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    helper = tmp_path / "helper"
+    fake_binary.write_text("fake codex\n")
+    helper.write_text("fake helper\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        fake_binary,
+        resource_binaries=(helper,),
+    )
+
+    pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
+    assert {
+        "include": pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["include"],
+        "helper": (
+            staged / "src" / "codex_cli_bin" / "bin" / "helper"
+        ).read_text(),
+    } == {
+        "include": ["src/codex_cli_bin/bin/**"],
+        "helper": "fake helper\n",
+    }
+
+
 def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(
@@ -436,6 +493,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         _runtime_version: str,
         _runtime_binary: Path,
         _platform_tag: str | None,
+        _resource_binaries: Sequence[Path],
     ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
 
@@ -476,7 +534,11 @@ def test_stage_sdk_rejects_mismatched_legacy_versions(tmp_path: Path) -> None:
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
     script = _load_update_script_module()
     fake_binary = tmp_path / script.runtime_binary_name()
+    helper = tmp_path / "helper"
+    fallback = tmp_path / "fallback-helper"
     fake_binary.write_text("fake codex\n")
+    helper.write_text("fake helper\n")
+    fallback.write_text("fake fallback\n")
     calls: list[str] = []
     args = script.parse_args(
         [
@@ -487,6 +549,10 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
             "rust-v0.116.0-alpha.1",
             "--platform-tag",
             "musllinux_1_1_x86_64",
+            "--resource-binary",
+            str(helper),
+            "--resource-binary",
+            str(fallback),
         ]
     )
 
@@ -501,8 +567,12 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         codex_version: str,
         _runtime_binary: Path,
         platform_tag: str | None,
+        resource_binaries: Sequence[Path],
     ) -> Path:
-        calls.append(f"stage_runtime:{codex_version}:{platform_tag}")
+        calls.append(
+            f"stage_runtime:{codex_version}:{platform_tag}:"
+            f"{','.join(path.name for path in resource_binaries)}"
+        )
         return tmp_path / "runtime-stage"
 
     def fake_current_sdk_version() -> str:
@@ -517,7 +587,9 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     script.run_command(args, ops)
 
-    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64"]
+    assert calls == [
+        "stage_runtime:0.116.0a1:musllinux_1_1_x86_64:helper,fallback-helper"
+    ]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(

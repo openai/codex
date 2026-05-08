@@ -8,7 +8,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
+use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -45,7 +48,7 @@ use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::policy::EventPersistenceMode;
-use super::policy::is_persisted_response_item;
+use super::policy::is_persisted_rollout_item;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
 use crate::default_client::originator;
@@ -61,6 +64,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
@@ -79,7 +83,6 @@ pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     writer_task: Arc<RolloutWriterTask>,
     pub(crate) rollout_path: PathBuf,
-    state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
 }
 
@@ -89,6 +92,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
@@ -165,6 +169,7 @@ impl RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         event_persistence_mode: EventPersistenceMode,
@@ -173,6 +178,7 @@ impl RolloutRecorderParams {
             conversation_id,
             forked_from_id,
             source,
+            thread_source,
             base_instructions,
             dynamic_tools,
             event_persistence_mode,
@@ -230,6 +236,7 @@ impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -242,6 +249,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -260,6 +268,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads_from_state_db(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -272,6 +281,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -291,6 +301,7 @@ impl RolloutRecorder {
     /// List archived threads (rollout files) under the archived sessions directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -303,6 +314,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -321,6 +333,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads_from_state_db(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -333,6 +346,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -351,6 +365,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_with_db_fallback(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -365,7 +380,6 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
-        let state_db_ctx = state_db::get_state_db(config).await;
         let archived = match archive_filter {
             ThreadListArchiveFilter::Active => false,
             ThreadListArchiveFilter::Archived => true,
@@ -575,6 +589,7 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -585,7 +600,6 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
-        let state_db_ctx = state_db::get_state_db(config).await;
         let cwd_filter = filter_cwd.map(Path::to_path_buf);
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
@@ -660,6 +674,7 @@ impl RolloutRecorder {
                     conversation_id,
                     forked_from_id,
                     source,
+                    thread_source,
                     base_instructions,
                     dynamic_tools,
                     event_persistence_mode,
@@ -688,6 +703,7 @@ impl RolloutRecorder {
                         agent_role: source.get_agent_role(),
                         agent_path: source.get_agent_path().map(Into::into),
                         source,
+                        thread_source,
                         model_provider: Some(config.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
                         dynamic_tools: if dynamic_tools.is_empty() {
@@ -770,7 +786,6 @@ impl RolloutRecorder {
             tx,
             writer_task,
             rollout_path,
-            state_db: state_db_ctx,
             event_persistence_mode,
         })
     }
@@ -779,17 +794,13 @@ impl RolloutRecorder {
         self.rollout_path.as_path()
     }
 
-    pub fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db.clone()
-    }
-
     pub async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
         let mut filtered = Vec::new();
         for item in items {
             // Note that function calls may look a bit strange if they are
             // "fully qualified MCP tool calls," so we could consider
             // reformatting them in that case.
-            if is_persisted_response_item(item, self.event_persistence_mode) {
+            if is_persisted_rollout_item(item, self.event_persistence_mode) {
                 filtered.push(sanitize_rollout_item_for_persistence(
                     item.clone(),
                     self.event_persistence_mode,
@@ -1422,7 +1433,26 @@ struct RolloutWriterState {
     state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
+    thread_updated_at_touch: ThreadUpdatedAtTouch,
     last_logged_error: Option<String>,
+}
+
+#[cfg(not(test))]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct ThreadUpdatedAtTouch {
+    last_persisted_at: Option<Instant>,
+    pending_touch: Option<(ThreadId, DateTime<Utc>)>,
+}
+
+impl ThreadUpdatedAtTouch {
+    fn mark_persisted(&mut self, now: Instant) {
+        self.last_persisted_at = Some(now);
+        self.pending_touch = None;
+    }
 }
 
 impl RolloutWriterState {
@@ -1452,6 +1482,7 @@ impl RolloutWriterState {
             state_builder,
             default_provider,
             generate_memories,
+            thread_updated_at_touch: ThreadUpdatedAtTouch::default(),
             last_logged_error: None,
         }
     }
@@ -1484,7 +1515,19 @@ impl RolloutWriterState {
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
-        self.write_pending_with_recovery("shutdown").await
+        self.write_pending_with_recovery("shutdown").await?;
+        if let Some((thread_id, updated_at)) = self.thread_updated_at_touch.pending_touch.take()
+            && state_db::touch_thread_updated_at(
+                self.state_db_ctx.as_deref(),
+                Some(thread_id),
+                updated_at,
+                "rollout_writer_shutdown",
+            )
+            .await
+        {
+            self.thread_updated_at_touch.mark_persisted(Instant::now());
+        }
+        Ok(())
     }
 
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
@@ -1561,6 +1604,7 @@ impl RolloutWriterState {
             &mut self.state_builder,
             self.default_provider.as_str(),
             self.generate_memories,
+            &mut self.thread_updated_at_touch,
         )
         .await?;
         self.meta = None;
@@ -1604,6 +1648,7 @@ impl RolloutWriterState {
                 written_items.as_slice(),
                 self.default_provider.as_str(),
                 /*new_thread_memory_mode*/ None,
+                &mut self.thread_updated_at_touch,
             )
             .await;
         }
@@ -1675,6 +1720,7 @@ async fn write_session_meta(
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
     generate_memories: bool,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) -> std::io::Result<()> {
     let git_info = collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
         commit_hash: info.commit_hash,
@@ -1700,6 +1746,7 @@ async fn write_session_meta(
         std::slice::from_ref(&rollout_item),
         default_provider,
         (!generate_memories).then_some("disabled"),
+        thread_updated_at_touch,
     )
     .await;
     Ok(())
@@ -1712,8 +1759,10 @@ async fn sync_thread_state_after_write(
     items: &[RolloutItem],
     default_provider: &str,
     new_thread_memory_mode: Option<&str>,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) {
     let updated_at = Utc::now();
+    let now = Instant::now();
     if new_thread_memory_mode.is_some()
         || items
             .iter()
@@ -1730,15 +1779,27 @@ async fn sync_thread_state_after_write(
             Some(updated_at),
         )
         .await;
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
 
     let thread_id = state_builder
         .map(|builder| builder.id)
         .or_else(|| metadata::builder_from_items(items, rollout_path).map(|builder| builder.id));
+    if thread_updated_at_touch
+        .last_persisted_at
+        .is_some_and(|last_persisted_at| {
+            now.duration_since(last_persisted_at) < THREAD_UPDATED_AT_TOUCH_INTERVAL
+        })
+    {
+        thread_updated_at_touch.pending_touch = thread_id.map(|thread_id| (thread_id, updated_at));
+        return;
+    }
+
     if state_db::touch_thread_updated_at(state_db_ctx, thread_id, updated_at, "rollout_writer")
         .await
     {
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
     state_db::apply_rollout_items(
@@ -1752,6 +1813,7 @@ async fn sync_thread_state_after_write(
         Some(updated_at),
     )
     .await;
+    thread_updated_at_touch.mark_persisted(now);
 }
 
 /// Append one already-filtered rollout item to an existing rollout JSONL file.

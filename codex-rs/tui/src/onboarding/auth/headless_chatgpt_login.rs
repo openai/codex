@@ -10,7 +10,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use uuid::Uuid;
 
-use crate::shimmer::shimmer_spans;
+use crate::motion::MotionMode;
+use crate::motion::shimmer_text;
 
 use super::AuthModeWidget;
 use super::ContinueWithDeviceCodeState;
@@ -98,7 +99,7 @@ pub(super) fn render_device_code_login(
         widget
             .request_frame
             .schedule_frame_in(std::time::Duration::from_millis(100));
-        spans.extend(shimmer_spans(banner));
+        spans.extend(shimmer_text(banner, MotionMode::Animated));
     } else {
         spans.push(banner.into());
     }

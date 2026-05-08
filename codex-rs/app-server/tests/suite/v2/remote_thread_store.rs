@@ -3,9 +3,8 @@
 //!
 //! The app-server startup path should honor `experimental_thread_store`
 //! by routing all thread persistence through the configured store. This suite uses
-//! the thread-store crate's test-only in-memory store, which exercises the same
-//! config-driven selection path as a remote store without requiring the real gRPC
-//! service.
+//! the thread-store crate's test-only in-memory store to exercise the non-local
+//! config-driven selection path without touching local rollout or sqlite storage.
 //!
 //! The important failure mode is accidentally materializing local persistence
 //! while a non-local store is configured. After `thread/start` and a simple turn,
@@ -28,6 +27,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -78,6 +79,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
@@ -136,10 +138,35 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     })
     .await??;
 
+    let response = client
+        .request(ClientRequest::ThreadList {
+            request_id: RequestId::Integer(3),
+            params: ThreadListParams {
+                cursor: None,
+                limit: Some(10),
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(Vec::new()),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: false,
+                search_term: None,
+            },
+        })
+        .await?
+        .expect("thread/list should succeed");
+    let ThreadListResponse { data, .. } =
+        serde_json::from_value(response).expect("thread/list response should parse");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, thread.id);
+    assert_eq!(data[0].path, None);
+
     client.shutdown().await?;
 
     let calls = thread_store.calls().await;
     assert_eq!(calls.create_thread, 1);
+    assert_eq!(calls.list_threads, 1);
     assert!(
         calls.append_items > 0,
         "turn/start should append rollout items through the injected store"

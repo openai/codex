@@ -20,7 +20,6 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
-use codex_thread_store::ThreadStore;
 use once_cell::sync::Lazy;
 
 use crate::ThreadManager;
@@ -74,21 +73,35 @@ pub fn thread_manager_with_models_provider_and_home(
     )
 }
 
+pub fn thread_manager_with_models_provider_home_and_state(
+    auth: CodexAuth,
+    provider: ModelProviderInfo,
+    codex_home: PathBuf,
+    environment_manager: Arc<EnvironmentManager>,
+    state_db: Option<crate::StateDbHandle>,
+) -> ThreadManager {
+    ThreadManager::with_models_provider_home_and_state_for_tests(
+        auth,
+        provider,
+        codex_home,
+        environment_manager,
+        state_db,
+    )
+}
+
 pub async fn start_thread_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
-    thread_store: Arc<dyn ThreadStore>,
     user_shell_override: crate::shell::Shell,
 ) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
-        .start_thread_with_user_shell_override_for_tests(config, thread_store, user_shell_override)
+        .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
         .await
 }
 
 pub async fn resume_thread_from_rollout_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
-    thread_store: Arc<dyn ThreadStore>,
     rollout_path: PathBuf,
     auth_manager: Arc<AuthManager>,
     user_shell_override: crate::shell::Shell,
@@ -96,7 +109,6 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
     thread_manager
         .resume_thread_from_rollout_with_user_shell_override_for_tests(
             config,
-            thread_store,
             rollout_path,
             auth_manager,
             user_shell_override,
@@ -110,11 +122,7 @@ pub fn models_manager_with_provider(
     provider: ModelProviderInfo,
 ) -> SharedModelsManager {
     let provider = create_model_provider(provider, Some(auth_manager));
-    provider.models_manager(
-        codex_home,
-        /*config_model_catalog*/ None,
-        Default::default(),
-    )
+    provider.models_manager(codex_home, /*config_model_catalog*/ None)
 }
 
 pub fn get_model_offline(model: Option<&str>) -> String {
@@ -130,7 +138,5 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 }
 
 pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    collaboration_mode_presets::builtin_collaboration_mode_presets(
-        collaboration_mode_presets::CollaborationModesConfig::default(),
-    )
+    collaboration_mode_presets::builtin_collaboration_mode_presets()
 }

@@ -1,11 +1,22 @@
 use super::*;
 use crate::agent::next_thread_spawn_depth;
+use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 use std::sync::Arc;
 
 pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = ResumeAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("resume_agent")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_resume_agent_tool())
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -46,6 +57,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabResumeBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
@@ -101,6 +113,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabResumeEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,

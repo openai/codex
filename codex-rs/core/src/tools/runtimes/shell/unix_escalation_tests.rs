@@ -38,6 +38,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -324,7 +325,7 @@ fn shell_request_escalation_execution_is_explicit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Result<()> {
-    let (mut session, mut turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     std::fs::create_dir_all(&turn_context.config.codex_home)
         .context("recreate codex home for hook fixtures")?;
     let script_path = turn_context
@@ -370,19 +371,45 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .to_string(),
     )
     .context("write hooks.json")?;
+    let config_toml_path = turn_context
+        .config
+        .codex_home
+        .join(codex_config::CONFIG_TOML_FILE);
+    let hook_list = codex_hooks::list_hooks(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+    assert_eq!(hook_list.hooks.len(), 1);
+    let trusted_config_layer_stack = turn_context.config.config_layer_stack.with_user_config(
+        &config_toml_path,
+        serde_json::from_value(serde_json::json!({
+            "hooks": {
+                "state": {
+                    hook_list.hooks[0].key.clone(): {
+                        "trusted_hash": hook_list.hooks[0].current_hash.clone(),
+                    },
+                },
+            },
+        }))
+        .context("build trusted hook state")?,
+    );
 
     let mut hook_shell_argv = session
         .user_shell()
         .derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    session.services.hooks = Hooks::new(HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        shell_program: Some(hook_shell_program),
-        shell_args: hook_shell_argv,
-        ..HooksConfig::default()
-    });
+    session
+        .services
+        .hooks
+        .store(Arc::new(Hooks::new(HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(trusted_config_layer_stack),
+            shell_program: Some(hook_shell_program),
+            shell_args: hook_shell_argv,
+            ..HooksConfig::default()
+        })));
 
     turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     turn_context.permission_profile = PermissionProfile::from_runtime_permissions(

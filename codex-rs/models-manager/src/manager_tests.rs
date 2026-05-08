@@ -187,20 +187,11 @@ fn openai_manager_for_tests_with_auth(
     endpoint_client: Arc<dyn ModelsEndpointClient>,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> OpenAiModelsManager {
-    OpenAiModelsManager::new(
-        codex_home,
-        endpoint_client,
-        auth_manager,
-        CollaborationModesConfig::default(),
-    )
+    OpenAiModelsManager::new(codex_home, endpoint_client, auth_manager)
 }
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
-    StaticModelsManager::new(
-        /*auth_manager*/ None,
-        model_catalog,
-        CollaborationModesConfig::default(),
-    )
+    StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
 }
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
@@ -301,6 +292,21 @@ async fn get_model_info_matches_namespaced_suffix() {
 
     assert_eq!(model_info.slug, namespaced_model);
     assert!(model_info.supports_image_detail_original);
+    assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
+async fn get_model_info_matches_hyphenated_provider_namespace_suffix() {
+    let config = ModelsManagerConfig::default();
+    let remote = remote_model("gpt-image", "Image", /*priority*/ 0);
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote],
+    });
+    let namespaced_model = "openai-codex/gpt-image".to_string();
+
+    let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+    assert_eq!(model_info.slug, namespaced_model);
     assert!(!model_info.used_fallback_model_metadata);
 }
 
@@ -735,7 +741,6 @@ async fn static_manager_reads_latest_auth_mode() {
         ModelsResponse {
             models: vec![chatgpt_only_model, api_model],
         },
-        CollaborationModesConfig::default(),
     );
 
     let chatgpt_models = manager.list_models(RefreshStrategy::Online).await;

@@ -16,15 +16,13 @@ use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::CodexThread;
-use codex_core_api::CollaborationModesConfig;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
 use codex_core_api::EnvironmentManager;
-use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
-use codex_core_api::Feature;
+use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
 use codex_core_api::MemoriesConfig;
@@ -41,6 +39,7 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -55,13 +54,16 @@ use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
+use codex_core_api::init_state_db;
+use codex_core_api::item_event_to_server_notification;
+use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-thread-manager-sample",
-    about = "Run one Codex turn through ThreadManager and print the final assistant output."
+    about = "Run one Codex turn through ThreadManager and print mapped notifications as newline-delimited JSON."
 )]
 struct Args {
     /// Override the model for this run.
@@ -102,6 +104,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     };
 
     let config = new_config(args.model, arg0_paths)?;
+    let state_db = init_state_db(&config).await;
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -109,41 +112,37 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let thread_store = thread_store_from_config(&config);
-    let environment_manager =
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?,
+    );
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
         environment_manager,
         /*analytics_events_client*/ None,
+        Arc::clone(&thread_store),
+        state_db,
+        installation_id,
+        /*attestation_provider*/ None,
     );
 
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config, thread_store)
+        .start_thread(config)
         .await
         .context("start Codex thread")?;
 
-    let turn_output = run_turn(&thread, prompt).await;
+    let thread_id_string = thread_id.to_string();
+    let turn_output = run_turn(&thread, &thread_id_string, prompt).await;
     let shutdown_result = thread.shutdown_and_wait().await;
     let _ = thread_manager.remove_thread(&thread_id).await;
 
-    let output = turn_output?;
+    turn_output?;
     shutdown_result.context("shut down Codex thread")?;
-
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(output.as_bytes())?;
-    if !output.ends_with('\n') {
-        stdout.write_all(b"\n")?;
-    }
 
     Ok(())
 }
@@ -158,7 +157,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         .context("OpenAI model provider should be available")?
         .clone();
 
-    Ok(Config {
+    let mut config = Config {
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
         model,
@@ -171,7 +170,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         personality: None,
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::Never),
-            permission_profile: Constrained::allow_any(PermissionProfile::default()),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            active_permission_profile: None,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -199,10 +199,14 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_raw_output_mode: false,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
+        tui_vim_mode_default: false,
         cwd,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -221,6 +225,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         memories: MemoriesConfig::default(),
         sqlite_home: codex_home.to_path_buf(),
         log_dir: codex_home.join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         codex_home,
         history: History::default(),
         ephemeral: true,
@@ -267,10 +275,15 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
         otel: OtelConfig::default(),
-    })
+    };
+    config
+        .features
+        .set(Features::with_defaults())
+        .context("configure default features")?;
+    Ok(config)
 }
 
-async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<String> {
+async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
     thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -284,15 +297,61 @@ async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<String
         .await
         .context("submit user input")?;
 
-    let mut last_agent_message = String::new();
+    let mut current_turn_id: Option<String> = None;
+    let mut stdout = std::io::stdout().lock();
     loop {
         let event = thread.next_event().await.context("read Codex event")?;
-        match event.msg {
-            EventMsg::TurnComplete(event) => {
-                return Ok(event.last_agent_message.unwrap_or(last_agent_message));
+        let notification = match &event.msg {
+            EventMsg::TurnStarted(event) => {
+                current_turn_id = Some(event.turn_id.clone());
+                None
             }
-            EventMsg::AgentMessage(event) => {
-                last_agent_message = event.message;
+            EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::McpToolCallBegin(_)
+            | EventMsg::McpToolCallEnd(_)
+            | EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_)
+            | EventMsg::CollabResumeBegin(_)
+            | EventMsg::CollabResumeEnd(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::PlanDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::AgentReasoningSectionBreak(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::PatchApplyBegin(_)
+            | EventMsg::PatchApplyUpdated(_)
+            | EventMsg::TerminalInteraction(_)
+            | EventMsg::ExecCommandBegin(_)
+            | EventMsg::ExecCommandOutputDelta(_)
+            | EventMsg::ExecCommandEnd(_) => Some(item_event_to_server_notification(
+                event.msg.clone(),
+                thread_id,
+                current_turn_id
+                    .as_deref()
+                    .context("mapped notification arrived before turn started")?,
+            )),
+            _ => None,
+        };
+        if let Some(notification) = notification {
+            serde_json::to_writer(&mut stdout, &notification)
+                .context("serialize mapped notification")?;
+            stdout
+                .write_all(b"\n")
+                .context("write notification newline")?;
+            stdout.flush().context("flush notification output")?;
+        }
+
+        match event.msg {
+            EventMsg::TurnComplete(_) => {
+                return Ok(());
             }
             EventMsg::Error(event) => {
                 bail!(event.message);

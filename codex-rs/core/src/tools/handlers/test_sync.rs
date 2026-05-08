@@ -13,8 +13,11 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::test_sync_spec::create_test_sync_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub struct TestSyncHandler;
 
@@ -55,6 +58,18 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
 
 impl ToolHandler for TestSyncHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("test_sync_tool")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_test_sync_tool())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

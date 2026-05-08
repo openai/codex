@@ -14,10 +14,8 @@
 //! `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` edges until no new children are
 //! found. The primary thread itself is never included in the output.
 
-use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::SubAgentSource;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -63,15 +61,12 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
                 continue;
             }
 
-            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: source_parent_thread_id,
-                ..
-            }) = &thread.source
+            let Some(source_parent_thread_id) = thread_spawn_parent_thread_id(&thread.source)
             else {
                 continue;
             };
 
-            if *source_parent_thread_id != parent_thread_id {
+            if source_parent_thread_id != parent_thread_id {
                 continue;
             }
 
@@ -96,6 +91,18 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
     loaded_threads
 }
 
+fn thread_spawn_parent_thread_id(
+    source: &codex_app_server_protocol::SessionSource,
+) -> Option<ThreadId> {
+    let value = serde_json::to_value(source).ok()?;
+    let parent_thread_id = value
+        .get("subAgent")?
+        .get("thread_spawn")?
+        .get("parent_thread_id")?
+        .as_str()?;
+    ThreadId::from_string(parent_thread_id).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::LoadedSubagentThread;
@@ -104,7 +111,6 @@ mod tests {
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadStatus;
     use codex_protocol::ThreadId;
-    use codex_protocol::protocol::SubAgentSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -112,6 +118,7 @@ mod tests {
     fn test_thread(thread_id: ThreadId, source: SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -123,12 +130,32 @@ mod tests {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             git_info: None,
             name: None,
             turns: Vec::new(),
         }
+    }
+
+    fn thread_spawn_source(
+        parent_thread_id: ThreadId,
+        depth: i32,
+        agent_nickname: &str,
+        agent_role: &str,
+    ) -> SessionSource {
+        serde_json::from_value(serde_json::json!({
+            "subAgent": {
+                "thread_spawn": {
+                    "parent_thread_id": parent_thread_id.to_string(),
+                    "depth": depth,
+                    "agent_nickname": agent_nickname,
+                    "agent_role": agent_role,
+                }
+            }
+        }))
+        .expect("valid subagent source")
     }
 
     #[test]
@@ -146,39 +173,21 @@ mod tests {
 
         let mut child = test_thread(
             child_thread_id,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: primary_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: Some("Scout".to_string()),
-                agent_role: Some("explorer".to_string()),
-            }),
+            thread_spawn_source(primary_thread_id, /*depth*/ 1, "Scout", "explorer"),
         );
         child.agent_nickname = Some("Scout".to_string());
         child.agent_role = Some("explorer".to_string());
 
         let mut grandchild = test_thread(
             grandchild_thread_id,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: child_thread_id,
-                depth: 2,
-                agent_path: None,
-                agent_nickname: Some("Atlas".to_string()),
-                agent_role: Some("worker".to_string()),
-            }),
+            thread_spawn_source(child_thread_id, /*depth*/ 2, "Atlas", "worker"),
         );
         grandchild.agent_nickname = Some("Atlas".to_string());
         grandchild.agent_role = Some("worker".to_string());
 
         let unrelated_child = test_thread(
             unrelated_child_id,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: unrelated_parent_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: Some("Other".to_string()),
-                agent_role: Some("researcher".to_string()),
-            }),
+            thread_spawn_source(unrelated_parent_id, /*depth*/ 1, "Other", "researcher"),
         );
 
         let loaded = find_loaded_subagent_threads_for_primary(

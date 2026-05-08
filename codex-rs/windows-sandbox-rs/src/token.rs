@@ -1,18 +1,18 @@
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LUID;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AdjustTokenPrivileges;
-use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
@@ -24,8 +24,6 @@ use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
 use windows_sys::Win32::Security::SetTokenInformation;
 
-use windows_sys::Win32::Security::TokenDefaultDacl;
-use windows_sys::Win32::Security::TokenGroups;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -35,6 +33,10 @@ use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
 use windows_sys::Win32::Security::TOKEN_DUPLICATE;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
+use windows_sys::Win32::Security::TOKEN_USER;
+use windows_sys::Win32::Security::TokenDefaultDacl;
+use windows_sys::Win32::Security::TokenGroups;
+use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
@@ -134,11 +136,7 @@ pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     }
     let mut psid: *mut c_void = std::ptr::null_mut();
     let ok = unsafe { ConvertStringSidToSidW(to_wide(s).as_ptr(), &mut psid) };
-    if ok != 0 {
-        Some(psid)
-    } else {
-        None
-    }
+    if ok != 0 { Some(psid) } else { None }
 }
 
 /// # Safety
@@ -250,6 +248,47 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
 
     Err(anyhow!("Logon SID not present on token"))
 }
+
+unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+    let mut needed: u32 = 0;
+    GetTokenInformation(h_token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return Err(anyhow!("TokenUser size query returned 0"));
+    }
+    let mut user_buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h_token,
+        TokenUser,
+        user_buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 || (needed as usize) < std::mem::size_of::<TOKEN_USER>() {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenUser) failed: {}",
+            GetLastError()
+        ));
+    }
+    let token_user: TOKEN_USER = std::ptr::read_unaligned(user_buf.as_ptr() as *const TOKEN_USER);
+    let sid_len = GetLengthSid(token_user.User.Sid);
+    if sid_len == 0 {
+        return Err(anyhow!(
+            "GetLengthSid(TokenUser) failed: {}",
+            GetLastError()
+        ));
+    }
+    let mut user_sid_bytes = vec![0u8; sid_len as usize];
+    if CopySid(
+        sid_len,
+        user_sid_bytes.as_mut_ptr() as *mut c_void,
+        token_user.User.Sid,
+    ) == 0
+    {
+        return Err(anyhow!("CopySid(TokenUser) failed: {}", GetLastError()));
+    }
+    Ok(user_sid_bytes)
+}
+
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     let mut luid = LUID {
         LowPart: 0,
@@ -300,7 +339,7 @@ pub unsafe fn create_readonly_token_with_cap_from(
     base_token: HANDLE,
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
-    let new_token = create_token_with_caps_from(base_token, &[psid_capability])?;
+    let new_token = create_token_with_caps_from(base_token, &[psid_capability], &[])?;
     Ok((new_token, psid_capability))
 }
 
@@ -312,7 +351,23 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities)
+    create_token_with_caps_from(base_token, psid_capabilities, &[])
+}
+
+/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+///
+/// This is intended for the elevated sandbox backend, where the token user is the dedicated
+/// sandbox account rather than the real signed-in user.
+///
+/// # Safety
+/// Caller must close the returned token handle; base_token must be a valid primary token.
+pub unsafe fn create_workspace_write_token_with_caps_and_user_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
+    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
+    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
 }
 
 /// Create a restricted token that includes all provided capability SIDs.
@@ -323,12 +378,29 @@ pub unsafe fn create_readonly_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities)
+    create_token_with_caps_from(base_token, psid_capabilities, &[])
+}
+
+/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+///
+/// This is intended for the elevated sandbox backend, where the token user is the dedicated
+/// sandbox account rather than the real signed-in user.
+///
+/// # Safety
+/// Caller must close the returned token handle; base_token must be a valid primary token.
+pub unsafe fn create_readonly_token_with_caps_and_user_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
+    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
+    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
 }
 
 unsafe fn create_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
+    extra_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
     if psid_capabilities.is_empty() {
         return Err(anyhow!("no capability SIDs provided"));
@@ -338,14 +410,19 @@ unsafe fn create_token_with_caps_from(
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
 
-    // Exact order: Capabilities..., Logon, Everyone
+    // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![std::mem::zeroed(); psid_capabilities.len() + 2];
+        vec![std::mem::zeroed(); psid_capabilities.len() + extra_restricting_sids.len() + 2];
     for (i, psid) in psid_capabilities.iter().enumerate() {
         entries[i].Sid = *psid;
         entries[i].Attributes = 0;
     }
-    let logon_idx = psid_capabilities.len();
+    let extras_idx = psid_capabilities.len();
+    for (i, psid) in extra_restricting_sids.iter().enumerate() {
+        entries[extras_idx + i].Sid = *psid;
+        entries[extras_idx + i].Attributes = 0;
+    }
+    let logon_idx = extras_idx + extra_restricting_sids.len();
     entries[logon_idx].Sid = psid_logon;
     entries[logon_idx].Attributes = 0;
     entries[logon_idx + 1].Sid = psid_everyone;

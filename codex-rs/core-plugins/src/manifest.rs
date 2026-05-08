@@ -18,6 +18,8 @@ struct RawPluginManifest {
     version: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
@@ -37,6 +39,7 @@ pub struct PluginManifest {
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
+    pub keywords: Vec<String>,
     pub paths: PluginManifestPaths,
     pub interface: Option<PluginManifestInterface>,
 }
@@ -143,6 +146,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 name: raw_name,
                 version,
                 description,
+                keywords,
                 skills,
                 mcp_servers,
                 apps,
@@ -232,6 +236,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 name,
                 version,
                 description,
+                keywords,
                 paths: PluginManifestPaths {
                     skills: resolve_manifest_path(plugin_root, "skills", skills.as_deref()),
                     mcp_servers: resolve_manifest_path(
@@ -566,6 +571,28 @@ mod tests {
         let manifest = load_manifest(&plugin_root);
 
         assert_eq!(manifest.version, Some("1.2.3-beta+7".to_string()));
+    }
+
+    #[test]
+    fn plugin_manifest_reads_keywords() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{
+  "name": "demo-plugin",
+  "keywords": ["api-key", "developer tools"]
+}"#,
+        )
+        .expect("write manifest");
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(
+            manifest.keywords,
+            vec!["api-key".to_string(), "developer tools".to_string()]
+        );
     }
 
     #[test]

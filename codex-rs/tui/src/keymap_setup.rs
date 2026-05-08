@@ -1,14 +1,35 @@
 //! Guided keymap remapping UI for `/keymap`.
 //!
-//! Pick an action, choose whether to set or remove its root-level custom
-//! binding, then validate and persist the resulting runtime keymap.
+//! This module owns the interactive editing flow that starts from a resolved
+//! [`RuntimeKeymap`] and produces a new root-level [`TuiKeymap`] override. The
+//! picker and action menus show users the currently active binding, which may
+//! come from defaults, global fallback, or explicit config, while writes always
+//! target the concrete `tui.keymap.<context>.<action>` slot selected by the
+//! user.
+//!
+//! The flow is intentionally split into three steps: choose an action, choose
+//! whether to replace/add/remove a binding, then capture exactly one terminal
+//! key event. Validation happens after capture by reusing runtime keymap
+//! resolution, so conflict rules stay centralized in `keymap.rs` instead of
+//! being duplicated in the UI.
+//!
+//! This module does not persist config files directly. It emits app events with
+//! the edited config so the app layer can decide how to save, reload, and
+//! surface errors.
 
 mod actions;
+mod debug;
 mod picker;
 
+pub(crate) use actions::KeymapActionFilter;
+pub(crate) use debug::build_keymap_debug_view;
 pub(crate) use picker::KEYMAP_PICKER_VIEW_ID;
+#[cfg(test)]
 pub(crate) use picker::build_keymap_picker_params;
+#[cfg(test)]
 pub(crate) use picker::build_keymap_picker_params_for_selected_action;
+pub(crate) use picker::build_keymap_picker_params_for_selected_action_with_filter;
+pub(crate) use picker::build_keymap_picker_params_with_filter;
 
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
@@ -33,6 +54,7 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -41,20 +63,22 @@ use actions::action_label;
 use actions::binding_slot;
 use actions::bindings_for_action;
 use actions::format_binding_summary;
+#[cfg(test)]
+use debug::KeymapDebugView;
 
 pub(crate) const KEYMAP_ACTION_MENU_VIEW_ID: &str = "keymap-action-menu";
 pub(crate) const KEYMAP_REPLACE_BINDING_MENU_VIEW_ID: &str = "keymap-replace-binding-menu";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum KeymapEditOutcome {
+    /// The edit produced a new config snapshot and user-facing status message.
     Updated {
         keymap_config: Box<TuiKeymap>,
         bindings: Vec<String>,
         message: String,
     },
-    Unchanged {
-        message: String,
-    },
+    /// The requested edit resolved to the same effective binding set.
+    Unchanged { message: String },
 }
 
 fn key_binding_span(binding: &str) -> ratatui::text::Span<'static> {
@@ -109,6 +133,13 @@ fn action_menu_item(
     }
 }
 
+/// Build the action-specific menu after a user chooses a shortcut row.
+///
+/// The menu is based on both active runtime bindings and root config state: the
+/// active bindings decide whether replace/add choices are available, while the
+/// config state decides whether "remove custom binding" can restore fallback
+/// behavior. Passing stale context/action strings yields a generic fallback
+/// menu rather than panicking, because selection views can outlive config reloads.
 pub(crate) fn build_keymap_action_menu_params(
     context: String,
     action: String,
@@ -362,6 +393,12 @@ pub(crate) fn build_keymap_conflict_params(
     }
 }
 
+/// Build the transient capture view for the selected keymap edit.
+///
+/// The view displays the current binding summary from the latest runtime map
+/// and then delegates the captured key back to the app event loop. Unknown
+/// actions are rendered as unbound so the eventual edit path can report the
+/// stale selection with a precise error.
 pub(crate) fn build_keymap_capture_view(
     context: String,
     action: String,
@@ -393,6 +430,14 @@ fn keymap_with_replacement(
     keymap_with_bindings(keymap, context, action, &[key.to_string()])
 }
 
+/// Apply a captured key to one action and return the edited root config.
+///
+/// The current effective bindings come from `runtime_keymap`, so adding an
+/// alternate to a default-only action first materializes those defaults into
+/// root config before appending the captured key. Replacing one binding guards
+/// against stale menus by requiring the selected `old_key` to still be active;
+/// otherwise a user could overwrite a binding that changed after the menu was
+/// opened.
 pub(crate) fn keymap_with_edit(
     keymap: &TuiKeymap,
     runtime_keymap: &RuntimeKeymap,
@@ -481,6 +526,12 @@ fn keymap_with_bindings(
     Ok(keymap)
 }
 
+/// Return the active config key specs for one runtime action.
+///
+/// This converts resolved [`crate::key_hint::KeyBinding`] values back into
+/// canonical config strings for display and for edit operations that need to
+/// preserve existing bindings. Callers should treat errors as stale UI state,
+/// because valid menu entries should always point at known actions.
 pub(crate) fn active_binding_specs(
     runtime_keymap: &RuntimeKeymap,
     context: &str,
@@ -504,6 +555,11 @@ fn dedup_bindings(bindings: Vec<String>) -> Vec<String> {
     })
 }
 
+/// Remove the root-level custom binding for one action.
+///
+/// Clearing the slot with `None` is different from setting an empty binding
+/// list: `None` restores default/global fallback behavior, while an empty list
+/// explicitly unbinds the action in runtime resolution.
 pub(crate) fn keymap_without_custom_binding(
     keymap: &TuiKeymap,
     context: &str,
@@ -525,6 +581,12 @@ fn has_custom_binding(keymap: &TuiKeymap, context: &str, action: &str) -> Result
     Ok(slot.is_some())
 }
 
+/// Bottom-pane view that captures a single key event for a pending `/keymap` edit.
+///
+/// The view is deliberately transient: it renders instructions, accepts one
+/// keypress, and emits the captured key to the app layer. It does not mutate
+/// config itself, because mutation needs the latest runtime keymap to detect
+/// conflicts and stale selections.
 pub(crate) struct KeymapCaptureView {
     context: String,
     action: String,
@@ -639,10 +701,10 @@ impl BottomPaneView for KeymapCaptureView {
 }
 
 fn key_event_to_config_key_spec(key_event: KeyEvent) -> Result<String, String> {
-    key_parts_to_config_key_spec(key_event.code, key_event.modifiers)
+    binding_to_config_key_spec(KeyBinding::from_event(key_event))
 }
 
-fn binding_to_config_key_spec(binding: crate::key_hint::KeyBinding) -> Result<String, String> {
+fn binding_to_config_key_spec(binding: KeyBinding) -> Result<String, String> {
     let (code, modifiers) = binding.parts();
     key_parts_to_config_key_spec(code, modifiers)
 }
@@ -651,6 +713,9 @@ fn key_parts_to_config_key_spec(
     code: KeyCode,
     mut modifiers: KeyModifiers,
 ) -> Result<String, String> {
+    let (code, normalized_modifiers) = crate::key_hint::normalize_key_parts(code, modifiers);
+    modifiers = normalized_modifiers;
+
     let supported_modifiers = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT;
     if !modifiers.difference(supported_modifiers).is_empty() {
         return Err(
@@ -681,7 +746,7 @@ fn key_parts_to_config_key_spec(
         KeyCode::Char(' ') => "space".to_string(),
         KeyCode::Char(mut ch) => {
             if ch == '-' {
-                return Err("The `-` key cannot be represented in `tui.keymap` yet.".to_string());
+                return Ok(format_key_spec(modifiers, "minus"));
             }
             if !ch.is_ascii() || ch.is_ascii_control() {
                 return Err("Only printable ASCII keys can be stored in `tui.keymap`.".to_string());
@@ -697,18 +762,22 @@ fn key_parts_to_config_key_spec(
         }
     };
 
+    Ok(format_key_spec(modifiers, &key))
+}
+
+fn format_key_spec(modifiers: KeyModifiers, key: &str) -> String {
     let mut parts = Vec::new();
     if modifiers.contains(KeyModifiers::CONTROL) {
-        parts.push("ctrl".to_string());
+        parts.push("ctrl");
     }
     if modifiers.contains(KeyModifiers::ALT) {
-        parts.push("alt".to_string());
+        parts.push("alt");
     }
     if modifiers.contains(KeyModifiers::SHIFT) {
-        parts.push("shift".to_string());
+        parts.push("shift");
     }
     parts.push(key);
-    Ok(parts.join("-"))
+    parts.join("-")
 }
 
 #[cfg(test)]
@@ -716,6 +785,7 @@ mod tests {
     use super::picker::KEYMAP_ALL_TAB_ID;
     use super::picker::KEYMAP_COMMON_TAB_ID;
     use super::picker::KEYMAP_CUSTOM_TAB_ID;
+    use super::picker::KEYMAP_DEBUG_TAB_ID;
     use super::picker::KEYMAP_UNBOUND_TAB_ID;
     use super::*;
     use crate::bottom_pane::BottomPane;
@@ -741,6 +811,14 @@ mod tests {
         buf
     }
 
+    fn render_debug(view: &KeymapDebugView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        render_buffer(&buf)
+    }
+
     fn render_picker(params: SelectionViewParams, width: u16) -> String {
         let view =
             ListSelectionView::new(params, app_event_sender(), RuntimeKeymap::defaults().list);
@@ -753,6 +831,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
         render_buffer(&buf)
+    }
+
+    fn fast_mode_action_filter() -> KeymapActionFilter {
+        KeymapActionFilter {
+            fast_mode_enabled: true,
+        }
     }
 
     fn render_buffer(buf: &Buffer) -> String {
@@ -825,7 +909,11 @@ mod tests {
     #[test]
     fn picker_covers_every_replaceable_action() {
         let runtime = RuntimeKeymap::defaults();
-        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
         let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
 
         assert!(params.items.is_empty());
@@ -845,6 +933,57 @@ mod tests {
         assert!(KEYMAP_ACTIONS.iter().all(|descriptor| {
             bindings_for_action(&runtime, descriptor.context, descriptor.action).is_some()
         }));
+    }
+
+    #[test]
+    fn picker_hides_fast_mode_action_when_feature_is_disabled() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+
+        assert!(
+            all_tab
+                .items
+                .iter()
+                .all(|item| item.name != "Toggle Fast Mode")
+        );
+    }
+
+    #[test]
+    fn picker_shows_fast_mode_action_when_feature_is_enabled() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+        let common_tab = selection_tab(&params, KEYMAP_COMMON_TAB_ID);
+        let app_tab = selection_tab(&params, "app-shortcuts");
+        let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
+
+        for tab in [all_tab, common_tab, app_tab, unbound_tab] {
+            assert!(
+                tab.items.iter().any(|item| item.name == "Toggle Fast Mode"),
+                "expected Toggle Fast Mode in {}",
+                tab.label
+            );
+        }
+    }
+
+    #[test]
+    fn keymap_picker_fast_mode_enabled_snapshot() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
+
+        assert_snapshot!(
+            "keymap_picker_fast_mode_enabled",
+            render_picker(params, /*width*/ 120)
+        );
     }
 
     #[test]
@@ -874,6 +1013,7 @@ mod tests {
                 "Composer.queue",
                 "Global.open_external_editor",
                 "Global.copy",
+                "Global.toggle_vim_mode",
                 "Editor.delete_backward_word",
                 "Editor.delete_forward_word",
                 "Editor.move_word_left",
@@ -983,9 +1123,35 @@ mod tests {
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
 
-        assert_eq!(unbound_tab.items.len(), 1);
-        assert_eq!(unbound_tab.items[0].name, "No unbound shortcuts");
-        assert!(unbound_tab.items[0].is_disabled);
+        assert_eq!(unbound_tab.items.len(), 2);
+        assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
+        assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
+        assert!(!unbound_tab.items[0].is_disabled);
+        assert_eq!(unbound_tab.items[1].name, "Kill Whole Line");
+        assert_eq!(unbound_tab.items[1].description.as_deref(), Some("unbound"));
+        assert!(!unbound_tab.items[1].is_disabled);
+    }
+
+    #[test]
+    fn picker_debug_tab_is_last_and_opens_inspector() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let debug_tab = params.tabs.last().expect("debug tab");
+
+        assert_eq!(debug_tab.id, KEYMAP_DEBUG_TAB_ID);
+        assert_eq!(debug_tab.label, "Debug");
+        assert_eq!(debug_tab.items.len(), 1);
+        assert_eq!(debug_tab.items[0].name, "Inspect keypresses");
+        assert_eq!(
+            debug_tab.items[0].description.as_deref(),
+            Some("Press Enter to start. Then press any key to inspect it; Ctrl+C exits.")
+        );
+        assert!(
+            params
+                .tab_footer_hints
+                .iter()
+                .any(|(tab_id, _)| tab_id == KEYMAP_DEBUG_TAB_ID)
+        );
     }
 
     #[test]
@@ -1096,7 +1262,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let multi_runtime = RuntimeKeymap::from_config(&multi_keymap).expect("runtime keymap");
@@ -1178,6 +1344,66 @@ mod tests {
             "keymap_capture_view",
             format!("{:?}", render_capture(&view, /*width*/ 80, /*height*/ 8))
         );
+    }
+
+    #[test]
+    fn debug_view_initial_snapshot() {
+        let view = build_keymap_debug_view(&RuntimeKeymap::defaults(), &TuiKeymap::default());
+
+        assert_snapshot!(
+            "keymap_debug_view_initial",
+            render_debug(&view, /*width*/ 80)
+        );
+    }
+
+    #[test]
+    fn debug_view_shows_delayed_missing_key_hint() {
+        let mut view = build_keymap_debug_view(&RuntimeKeymap::defaults(), &TuiKeymap::default());
+        view.show_delayed_hint_for_test();
+
+        let rendered = render_debug(&view, /*width*/ 100);
+        assert!(rendered.contains("Still waiting?"));
+        assert_snapshot!("keymap_debug_view_delayed_hint", rendered);
+    }
+
+    #[test]
+    fn debug_view_reports_detected_key_and_matching_actions() {
+        let mut view = build_keymap_debug_view(&RuntimeKeymap::defaults(), &TuiKeymap::default());
+        view.show_delayed_hint_for_test();
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        let rendered = render_debug(&view, /*width*/ 100);
+        assert!(!rendered.contains("Still waiting?"));
+        assert_snapshot!("keymap_debug_view_match", rendered);
+    }
+
+    #[test]
+    fn debug_view_uses_custom_binding_source() {
+        let keymap =
+            keymap_with_replacement(&TuiKeymap::default(), "global", "copy", "ctrl-x").unwrap();
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        let mut view = build_keymap_debug_view(&runtime, &keymap);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+
+        let rendered = render_debug(&view, /*width*/ 100);
+        assert!(rendered.contains("global.copy (Copy)"));
+        assert!(rendered.contains("[Custom]"));
+    }
+
+    #[test]
+    fn debug_view_labels_custom_global_fallback_source() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.queue = Some(KeybindingsSpec::One(KeybindingSpec("ctrl-q".to_string())));
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        let mut view = build_keymap_debug_view(&runtime, &keymap);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+
+        let rendered = render_debug(&view, /*width*/ 100);
+        assert!(rendered.contains("composer.queue (Queue)"));
+        assert!(rendered.contains("[Custom global]"));
     }
 
     #[test]
@@ -1384,10 +1610,46 @@ mod tests {
     }
 
     #[test]
-    fn key_capture_rejects_unrepresentable_keys() {
-        assert!(
-            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE))
-                .is_err()
+    fn key_capture_serializes_c0_control_chars_as_ctrl_bindings() {
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('\u{000a}'),
+                KeyModifiers::NONE,
+            )),
+            Ok("ctrl-j".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('\u{0015}'),
+                KeyModifiers::NONE,
+            )),
+            Ok("ctrl-u".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('\u{0010}'),
+                KeyModifiers::NONE,
+            )),
+            Ok("ctrl-p".to_string())
+        );
+    }
+
+    #[test]
+    fn key_capture_serializes_minus_as_named_key() {
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE)),
+            Ok("minus".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::ALT)),
+            Ok("alt-minus".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('-'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            )),
+            Ok("ctrl-alt-minus".to_string())
         );
     }
 
@@ -1411,7 +1673,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1532,7 +1794,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1556,12 +1818,12 @@ mod tests {
         else {
             panic!("expected updated keymap");
         };
-        assert_eq!(bindings, vec!["ctrl-shift-enter", "alt-enter"]);
+        assert_eq!(bindings, vec!["ctrl-shift-enter", "alt-shift-enter"]);
         assert_eq!(
             keymap_config.composer.submit,
             Some(KeybindingsSpec::Many(vec![
                 KeybindingSpec("ctrl-shift-enter".to_string()),
-                KeybindingSpec("alt-enter".to_string())
+                KeybindingSpec("alt-shift-enter".to_string())
             ]))
         );
     }
@@ -1572,7 +1834,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "ctrl-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1581,7 +1843,7 @@ mod tests {
             &runtime,
             "composer",
             "submit",
-            "alt-enter",
+            "ctrl-shift-enter",
             &KeymapEditIntent::ReplaceOne {
                 old_key: "ctrl-enter".to_string(),
             },
@@ -1596,11 +1858,11 @@ mod tests {
         else {
             panic!("expected updated keymap");
         };
-        assert_eq!(bindings, vec!["alt-enter"]);
+        assert_eq!(bindings, vec!["ctrl-shift-enter"]);
         assert_eq!(
             keymap_config.composer.submit,
             Some(KeybindingsSpec::One(KeybindingSpec(
-                "alt-enter".to_string()
+                "ctrl-shift-enter".to_string()
             )))
         );
     }

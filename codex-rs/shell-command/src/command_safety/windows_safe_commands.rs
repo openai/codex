@@ -1,4 +1,4 @@
-use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
+use crate::command_safety::is_safe_command::is_safe_git_command;
 use crate::command_safety::powershell_parser::PowershellParseOutcome;
 use crate::command_safety::powershell_parser::parse_with_powershell_ast;
 use std::path::Path;
@@ -9,7 +9,7 @@ pub fn is_safe_command_windows(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
         commands
             .iter()
-            .all(|cmd| is_safe_powershell_command(cmd.as_slice()))
+            .all(|cmd| is_safe_powershell_words(cmd.as_slice()))
     } else {
         // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
         false
@@ -142,7 +142,7 @@ fn quote_argument(arg: &str) -> String {
 
 /// Validates that a parsed PowerShell command stays within our read-only safelist.
 /// Everything before this is parsing, and rejecting things that make us feel uncomfortable.
-fn is_safe_powershell_command(words: &[String]) -> bool {
+pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
     if words.is_empty() {
         // Examples rejected here: "pwsh -Command ''" and "pwsh -Command \"\"".
         return false;
@@ -221,37 +221,11 @@ fn is_safe_ripgrep(words: &[String]) -> bool {
     })
 }
 
-/// Ensures a Git command sticks to whitelisted read-only subcommands and flags.
-fn is_safe_git_command(words: &[String]) -> bool {
-    const SAFE_SUBCOMMANDS: &[&str] = &["status", "log", "show", "diff", "cat-file"];
-
-    for arg in words.iter().skip(1) {
-        let arg_lc = arg.to_ascii_lowercase();
-
-        if arg.starts_with('-') {
-            if git_global_option_requires_prompt(&arg_lc)
-                || arg.eq_ignore_ascii_case("--config")
-                || arg_lc.starts_with("--config=")
-            {
-                // Examples rejected here: "pwsh -Command 'git --git-dir=.evil-git diff'" and
-                // "pwsh -Command 'git -c core.pager=cat show HEAD:foo.rs'".
-                return false;
-            }
-
-            continue;
-        }
-
-        return SAFE_SUBCOMMANDS.contains(&arg_lc.as_str());
-    }
-
-    // Examples rejected here: "pwsh -Command 'git'" and "pwsh -Command 'git status --short | Remove-Item foo'".
-    false
-}
-
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use crate::powershell::try_find_pwsh_executable_blocking;
+    use pretty_assertions::assert_eq;
     use std::string::ToString;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
@@ -342,7 +316,7 @@ mod tests {
         assert!(is_safe_command_windows(&[
             pwsh.clone(),
             "-Command".to_string(),
-            "-git cat-file -p HEAD:foo.rs".to_string()
+            "git show HEAD:foo.rs".to_string()
         ]));
 
         assert!(is_safe_command_windows(&[
@@ -391,6 +365,41 @@ mod tests {
                 "expected {script:?} to require approval due to unsafe git global option",
             );
         }
+    }
+
+    #[test]
+    fn rejects_git_subcommand_options_with_side_effects() {
+        let results: Vec<(&str, bool)> = [
+            "git diff --output codex_poc.txt",
+            "git diff --ext-diff HEAD",
+            "git log --textconv -1",
+            "git show --output=codex_poc.txt HEAD",
+            "git cat-file --filters HEAD:a.txt",
+        ]
+        .into_iter()
+        .map(|script| {
+            (
+                script,
+                is_safe_command_windows(&[
+                    "powershell.exe".to_string(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    script.to_string(),
+                ]),
+            )
+        })
+        .collect();
+
+        assert_eq!(
+            vec![
+                ("git diff --output codex_poc.txt", false),
+                ("git diff --ext-diff HEAD", false),
+                ("git log --textconv -1", false),
+                ("git show --output=codex_poc.txt HEAD", false),
+                ("git cat-file --filters HEAD:a.txt", false),
+            ],
+            results
+        );
     }
 
     #[test]

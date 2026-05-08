@@ -25,6 +25,7 @@ use std::io;
 use std::io::Write;
 
 use crossterm::cursor::MoveTo;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::queue;
 use crossterm::style::Colors;
 use crossterm::style::Print;
@@ -78,13 +79,15 @@ fn display_width(s: &str) -> usize {
     visible.width()
 }
 
-#[derive(Debug, Hash)]
 pub struct Frame<'a> {
     /// Where should the cursor be after drawing this frame?
     ///
     /// If `None`, the cursor is hidden and its position is controlled by the backend. If `Some((x,
     /// y))`, the cursor is shown and placed at `(x, y)` after the call to `Terminal::draw()`.
     pub(crate) cursor_position: Option<Position>,
+
+    /// Visible cursor shape to apply after drawing this frame.
+    cursor_style: SetCursorStyle,
 
     /// The area of the viewport
     pub(crate) viewport_area: Rect,
@@ -128,6 +131,11 @@ impl Frame<'_> {
         self.cursor_position = Some(position.into());
     }
 
+    /// After drawing this frame, set the terminal's visible cursor style.
+    pub fn set_cursor_style(&mut self, style: SetCursorStyle) {
+        self.cursor_style = style;
+    }
+
     /// Gets the buffer that this `Frame` draws into as a mutable reference.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         self.buffer
@@ -167,6 +175,10 @@ where
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
         // Attempt to restore the cursor state
+        if let Err(err) = self.reset_cursor_style() {
+            eprintln!("Failed to reset the cursor style: {err}");
+        }
+
         if self.hidden_cursor
             && let Err(err) = self.show_cursor()
         {
@@ -189,22 +201,55 @@ where
             tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
             Position { x: 0, y: 0 }
         });
-        Ok(Self {
+        Ok(Self::with_screen_size_and_cursor_position(
+            backend,
+            screen_size,
+            cursor_pos,
+        ))
+    }
+
+    /// Creates a new [`Terminal`] from a caller-provided initial cursor position.
+    ///
+    /// Startup code uses this when cursor probing has already happened outside the backend, for
+    /// example through a bounded terminal probe. Supplying a stale or synthetic position changes
+    /// the inline viewport anchor, so callers should only use this after they have chosen the same
+    /// fallback they want the first render to honor.
+    pub fn with_options_and_cursor_position(backend: B, cursor_pos: Position) -> io::Result<Self> {
+        let screen_size = backend.size()?;
+        Ok(Self::with_screen_size_and_cursor_position(
+            backend,
+            screen_size,
+            cursor_pos,
+        ))
+    }
+
+    fn with_screen_size_and_cursor_position(
+        backend: B,
+        screen_size: Size,
+        cursor_pos: Position,
+    ) -> Self {
+        Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
-            viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
+            viewport_area: Rect::new(
+                /*x*/ 0,
+                cursor_pos.y,
+                /*width*/ 0,
+                /*height*/ 0,
+            ),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             visible_history_rows: 0,
-        })
+        }
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
     pub fn get_frame(&mut self) -> Frame<'_> {
         Frame {
             cursor_position: None,
+            cursor_style: SetCursorStyle::DefaultUserShape,
             viewport_area: self.viewport_area,
             buffer: self.current_buffer_mut(),
         }
@@ -362,6 +407,7 @@ where
         // stdout first. But we also can't keep the frame around, since it holds a &mut to
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
+        let cursor_style = frame.cursor_style;
 
         // Draw to stdout
         self.flush()?;
@@ -369,6 +415,7 @@ where
         match cursor_position {
             None => self.hide_cursor()?,
             Some(position) => {
+                self.set_cursor_style(cursor_style)?;
                 self.show_cursor()?;
                 self.set_cursor_position(position)?;
             }
@@ -393,6 +440,16 @@ where
         self.backend.show_cursor()?;
         self.hidden_cursor = false;
         Ok(())
+    }
+
+    /// Sets the visible terminal cursor style.
+    pub fn set_cursor_style(&mut self, style: SetCursorStyle) -> io::Result<()> {
+        queue!(self.backend, style)
+    }
+
+    /// Restores the user-configured terminal cursor style.
+    pub fn reset_cursor_style(&mut self) -> io::Result<()> {
+        self.set_cursor_style(SetCursorStyle::DefaultUserShape)
     }
 
     /// Gets the current cursor position.
@@ -712,8 +769,109 @@ impl ModifierDiff {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::backend::WindowSize;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+
+    struct CaptureBackend {
+        output: Vec<u8>,
+        size: Size,
+        cursor: Position,
+    }
+
+    impl CaptureBackend {
+        fn new(width: u16, height: u16) -> Self {
+            Self {
+                output: Vec::new(),
+                size: Size { width, height },
+                cursor: Position { x: 0, y: 0 },
+            }
+        }
+
+        fn output(&self) -> String {
+            String::from_utf8_lossy(&self.output).into_owned()
+        }
+    }
+
+    impl Write for CaptureBackend {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Backend for CaptureBackend {
+        fn draw<'a, I>(&mut self, _content: I) -> io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn show_cursor(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn get_cursor_position(&mut self) -> io::Result<Position> {
+            Ok(self.cursor)
+        }
+
+        fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+            self.cursor = position.into();
+            Ok(())
+        }
+
+        fn clear(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn clear_region(&mut self, _clear_type: ClearType) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn append_lines(&mut self, _line_count: u16) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_up(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _scroll_by: u16,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_down(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _scroll_by: u16,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> io::Result<Size> {
+            Ok(self.size)
+        }
+
+        fn window_size(&mut self) -> io::Result<WindowSize> {
+            Ok(WindowSize {
+                columns_rows: self.size,
+                pixels: self.size,
+            })
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
@@ -758,6 +916,50 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_draw_applies_requested_cursor_style() {
+        let mut output = Vec::new();
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 2, 1));
+
+        terminal
+            .try_draw(|frame| {
+                frame.set_cursor_style(SetCursorStyle::SteadyBar);
+                frame.set_cursor_position((0, 0));
+                io::Result::Ok(())
+            })
+            .expect("draw");
+
+        queue!(output, SetCursorStyle::SteadyBar).expect("queue style");
+        let expected = String::from_utf8(output).expect("utf8");
+        let actual = terminal.backend().output();
+        assert!(
+            actual.contains(&expected),
+            "expected terminal output to contain cursor style {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn reset_cursor_style_emits_default_user_shape() {
+        let mut output = Vec::new();
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
+
+        terminal.reset_cursor_style().expect("reset cursor style");
+        ratatui::backend::Backend::flush(terminal.backend_mut()).expect("flush backend");
+
+        queue!(output, SetCursorStyle::DefaultUserShape).expect("queue style");
+        let expected = String::from_utf8(output).expect("utf8");
+        let actual = terminal.backend().output();
+        assert!(
+            actual.contains(&expected),
+            "expected terminal output to contain cursor style reset {expected:?}, got {actual:?}"
         );
     }
 }

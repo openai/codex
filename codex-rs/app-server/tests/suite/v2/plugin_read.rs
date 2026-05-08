@@ -17,11 +17,16 @@ use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalType;
+use codex_app_server_protocol::PluginSkillReadParams;
+use codex_app_server_protocol::PluginSkillReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -114,8 +119,74 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_read_rejects_remote_marketplace_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let detail_body = r#"{
+  "id": "plugins~Plugin_00000000000000000000000000000000",
+  "name": "linear",
+  "scope": "GLOBAL",
+  "installation_policy": "AVAILABLE",
+  "authentication_policy": "ON_USE",
+  "release": {
+    "display_name": "Linear",
+    "description": "Track work in Linear",
+    "app_ids": [],
+    "keywords": [],
+    "interface": {
+      "short_description": "Plan and track work",
+      "capabilities": []
+    },
+    "skills": []
+  }
+}"#;
+    let installed_body = r#"{
+  "plugins": [],
+  "pagination": {
+    "limit": 50,
+    "next_page_token": null
+  }
+}"#;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/plugins/plugins~Plugin_00000000000000000000000000000000",
+        ))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
+        .mount(&server)
+        .await;
+
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -123,23 +194,148 @@ async fn plugin_read_rejects_remote_marketplace_when_remote_plugin_is_disabled()
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: "sample-plugin".to_string(),
+            plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
 
-    let err = timeout(
+    let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(err.error.code, -32600);
-    assert!(
-        err.error
-            .message
-            .contains("remote plugin read is not enabled")
+    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(
+        response.plugin.summary.id,
+        "plugins~Plugin_00000000000000000000000000000000"
     );
-    assert!(err.error.message.contains("chatgpt-global"));
+    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.source, PluginSource::Remote);
+    assert_eq!(response.plugin.summary.share_context, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let detail_body = r#"{
+  "id": "plugins~Plugin_11111111111111111111111111111111",
+  "name": "shared-linear",
+  "scope": "WORKSPACE",
+  "creator_account_user_id": "user-gavin__account-123",
+  "creator_name": "Gavin",
+  "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+  "share_principals": [
+    {
+      "principal_type": "user",
+      "principal_id": "user-gavin__account-123",
+      "role": "owner",
+      "name": "Gavin"
+    },
+    {
+      "principal_type": "user",
+      "principal_id": "user-ada__account-123",
+      "role": "reader",
+      "name": "Ada"
+    }
+  ],
+  "installation_policy": "AVAILABLE",
+  "authentication_policy": "ON_USE",
+  "release": {
+    "display_name": "Shared Linear",
+    "description": "Track shared work",
+    "app_ids": [],
+    "keywords": [],
+    "interface": {},
+    "skills": []
+  }
+}"#;
+    let installed_body = r#"{
+  "plugins": [],
+  "pagination": {
+    "limit": 50,
+    "next_page_token": null
+  }
+}"#;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/plugins/plugins~Plugin_11111111111111111111111111111111",
+        ))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("shared-with-me".to_string()),
+            plugin_name: "plugins~Plugin_11111111111111111111111111111111".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    let share_context = response
+        .plugin
+        .summary
+        .share_context
+        .as_ref()
+        .expect("expected share context");
+    assert_eq!(
+        share_context.remote_plugin_id,
+        "plugins~Plugin_11111111111111111111111111111111"
+    );
+    assert_eq!(
+        share_context.creator_account_user_id.as_deref(),
+        Some("user-gavin__account-123")
+    );
+    assert_eq!(share_context.creator_name.as_deref(), Some("Gavin"));
+    assert_eq!(
+        share_context.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/share-key-1")
+    );
+    assert_eq!(
+        share_context.share_targets,
+        Some(vec![PluginSharePrincipal {
+            principal_type: PluginSharePrincipalType::User,
+            principal_id: "user-ada__account-123".to_string(),
+            name: "Ada".to_string(),
+        }])
+    );
     Ok(())
 }
 
@@ -170,6 +366,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "display_name": "Linear",
     "description": "Track work in Linear",
     "app_ids": [],
+    "keywords": ["issue-tracking", "project management"],
     "interface": {
       "short_description": "Plan and track work",
       "capabilities": ["Read", "Write"],
@@ -279,11 +476,82 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         response.plugin.description.as_deref(),
         Some("Track work in Linear")
     );
+    assert_eq!(
+        response.plugin.summary.keywords,
+        vec![
+            "issue-tracking".to_string(),
+            "project management".to_string()
+        ]
+    );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(response.plugin.skills[0].name, "plan-work");
     assert_eq!(response.plugin.skills[0].path, None);
     assert_eq!(response.plugin.skills[0].enabled, false);
     assert_eq!(response.plugin.apps.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let skill_body = r##"{
+  "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+  "status": "ENABLED",
+  "plugin_release_id": "release-1",
+  "name": "plan-work",
+  "description": "Plan work from Linear issues",
+  "plugin_release_skill_id": "skill-1",
+  "skill_md_contents": "# Plan Work\n\nUse Linear issues to create a plan."
+}"##;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/plugins/plugins~Plugin_00000000000000000000000000000000/skills/plan-work",
+        ))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(skill_body))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_skill_read_request(PluginSkillReadParams {
+            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            skill_name: "plan-work".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginSkillReadResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginSkillReadResponse {
+            contents: Some("# Plan Work\n\nUse Linear issues to create a plan.".to_string()),
+        }
+    );
     Ok(())
 }
 
@@ -480,6 +748,61 @@ enabled = true
 }
 
 #[tokio::test]
+async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "codex-curated",
+        "demo-plugin",
+        "./demo-plugin",
+    )?;
+    std::fs::create_dir_all(repo_root.path().join("demo-plugin/.codex-plugin"))?;
+    std::fs::write(
+        repo_root
+            .path()
+            .join("demo-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"demo-plugin"}"#,
+    )?;
+    write_plugins_enabled_config(&codex_home)?;
+    let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
+    write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?),
+            remote_marketplace_name: None,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    let share_context = response
+        .plugin
+        .summary
+        .share_context
+        .as_ref()
+        .expect("expected share context");
+    assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.share_url, None);
+    assert_eq!(share_context.creator_account_user_id, None);
+    assert_eq!(share_context.creator_name, None);
+    assert_eq!(share_context.share_targets, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -487,6 +810,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("hooks"))?;
     std::fs::create_dir_all(plugin_root.join("skills/thread-summarizer"))?;
     std::fs::create_dir_all(plugin_root.join("skills/chatgpt-only"))?;
     std::fs::write(
@@ -514,6 +838,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
         r##"{
   "name": "demo-plugin",
   "description": "Longer manifest description",
+  "keywords": ["api-key", "developer tools"],
   "interface": {
     "displayName": "Plugin Display Name",
     "shortDescription": "Short description for subtitle",
@@ -592,9 +917,41 @@ description: Visible only for ChatGPT
 }"#,
     )?;
     std::fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo first"
+          },
+          {
+            "type": "command",
+            "command": "echo second"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )?;
+    std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
+plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"
@@ -602,6 +959,9 @@ enabled = false
 
 [plugins."demo-plugin@codex-curated"]
 enabled = true
+
+[hooks.state."demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:0"]
+enabled = false
 "#,
     )?;
     write_installed_plugin(&codex_home, "codex-curated", "demo-plugin")?;
@@ -674,6 +1034,10 @@ enabled = true
             "Find my next action".to_string()
         ])
     );
+    assert_eq!(
+        response.plugin.summary.keywords,
+        vec!["api-key".to_string(), "developer tools".to_string()]
+    );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(
         response.plugin.skills[0].name,
@@ -684,6 +1048,23 @@ enabled = true
         "Summarize email threads"
     );
     assert!(!response.plugin.skills[0].enabled);
+    assert_eq!(
+        response.plugin.hooks,
+        vec![
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                event_name: HookEventName::PreToolUse,
+            },
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:pre_tool_use:0:1".to_string(),
+                event_name: HookEventName::PreToolUse,
+            },
+            codex_app_server_protocol::PluginHookSummary {
+                key: "demo-plugin@codex-curated:hooks/hooks.json:session_start:0:0".to_string(),
+                event_name: HookEventName::SessionStart,
+            },
+        ]
+    );
     assert_eq!(response.plugin.apps.len(), 1);
     assert_eq!(response.plugin.apps[0].id, "gmail");
     assert_eq!(response.plugin.apps[0].name, "gmail");
@@ -1268,4 +1649,25 @@ fn write_plugin_source(
         serde_json::to_vec_pretty(&json!({ "apps": apps }))?,
     )?;
     Ok(())
+}
+
+fn write_plugin_share_local_path_mapping(
+    codex_home: &std::path::Path,
+    remote_plugin_id: &str,
+    plugin_path: &AbsolutePathBuf,
+) -> std::io::Result<()> {
+    let mut local_plugin_paths_by_remote_plugin_id = serde_json::Map::new();
+    local_plugin_paths_by_remote_plugin_id.insert(
+        remote_plugin_id.to_string(),
+        serde_json::to_value(plugin_path).map_err(std::io::Error::other)?,
+    );
+    let contents = serde_json::to_string_pretty(&json!({
+        "localPluginPathsByRemotePluginId": local_plugin_paths_by_remote_plugin_id,
+    }))
+    .map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(codex_home.join(".tmp"))?;
+    std::fs::write(
+        codex_home.join(".tmp/plugin-share-local-paths-v1.json"),
+        format!("{contents}\n"),
+    )
 }

@@ -9,6 +9,41 @@ impl ChatWidget {
         self.add_plain_history_lines(goal_summary_lines(&goal));
     }
 
+    pub(crate) fn show_resume_paused_goal_prompt(
+        &mut self,
+        thread_id: ThreadId,
+        objective: String,
+    ) {
+        let resume_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::SetThreadGoalStatus {
+                thread_id,
+                status: AppThreadGoalStatus::Active,
+            });
+        })];
+        self.show_selection_view(SelectionViewParams {
+            title: Some("Resume paused goal?".to_string()),
+            subtitle: Some(format!("Goal: {objective}")),
+            footer_hint: Some(standard_popup_hint_line()),
+            initial_selected_idx: Some(0),
+            items: vec![
+                SelectionItem {
+                    name: "Resume goal".to_string(),
+                    description: Some("Mark it active and continue when idle".to_string()),
+                    actions: resume_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Leave paused".to_string(),
+                    description: Some("Keep it paused; use /goal resume later".to_string()),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    }
+
     pub(crate) fn on_thread_goal_cleared(&mut self, thread_id: &str) {
         if self
             .thread_id

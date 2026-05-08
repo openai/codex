@@ -1,6 +1,5 @@
 use std::env;
 use std::ffi::OsStr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
@@ -74,8 +73,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
         .record_into_history(
             &[ContextualUserFragment::into(
                 crate::context::EnvironmentContext::new(
-                    Some(PathBuf::from("/tmp")),
-                    "zsh".to_string(),
+                    Vec::new(),
                     /*current_date*/ None,
                     /*timezone*/ None,
                     /*network*/ None,

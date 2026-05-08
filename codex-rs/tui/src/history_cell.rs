@@ -10,23 +10,26 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::diff_model::FileChange;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
-use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::session_state::ThreadSessionState;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
@@ -43,32 +46,33 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::ToolRequestUserInputAnswer;
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::WebSearchAction;
 use codex_config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyAmendment;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
 use codex_protocol::mcp::ResourceTemplate;
-use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::McpAuthStatus;
-use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
@@ -95,11 +99,50 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
+const RAW_DIFF_SUMMARY_WIDTH: usize = 10_000;
+const RAW_TOOL_OUTPUT_WIDTH: usize = 10_000;
+
 mod hook_cell;
 
 pub(crate) use hook_cell::HookCell;
 pub(crate) use hook_cell::new_active_hook_cell;
 pub(crate) use hook_cell::new_completed_hook_cell;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HistoryRenderMode {
+    Rich,
+    Raw,
+}
+
+pub(crate) fn raw_lines_from_source(source: &str) -> Vec<Line<'static>> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parts = source.split('\n').collect::<Vec<_>>();
+    if source.ends_with('\n') {
+        parts.pop();
+    }
+
+    parts
+        .into_iter()
+        .map(|line| Line::from(line.to_string()))
+        .collect()
+}
+
+pub(crate) fn plain_lines(lines: impl IntoIterator<Item = Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            let text = line
+                .spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>();
+            Line::from(text)
+        })
+        .collect()
+}
 
 /// A single renderable unit of conversation history.
 ///
@@ -114,6 +157,16 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns copy-friendly plain logical lines for raw scrollback mode.
+    fn raw_lines(&self) -> Vec<Line<'static>>;
+
+    fn display_lines_for_mode(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
+        match mode {
+            HistoryRenderMode::Rich => self.display_lines(width),
+            HistoryRenderMode::Raw => self.raw_lines(),
+        }
+    }
+
     /// Returns the number of viewport rows needed to render this cell.
     ///
     /// The default delegates to `Paragraph::line_count` with
@@ -122,7 +175,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// for lines containing URL-like tokens that are wider than the
     /// terminal — the logical line count would undercount.
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(self.display_lines(width)))
+        self.desired_height_for_mode(width, HistoryRenderMode::Rich)
+    }
+
+    fn desired_height_for_mode(&self, width: u16, mode: HistoryRenderMode) -> u16 {
+        Paragraph::new(Text::from(self.display_lines_for_mode(width, mode)))
             .wrap(Wrap { trim: false })
             .line_count(width)
             .try_into()
@@ -387,6 +444,22 @@ impl HistoryCell for UserHistoryCell {
         lines.push(Line::from("").style(style));
         lines
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = raw_lines_from_source(self.message.trim_end_matches(['\r', '\n']));
+        if !self.remote_image_urls.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.extend(
+                self.remote_image_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _url)| Line::from(local_image_label_text(idx.saturating_add(1)))),
+            );
+        }
+        lines
+    }
 }
 
 #[derive(Debug)]
@@ -452,6 +525,14 @@ impl HistoryCell for ReasoningSummaryCell {
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        if self.transcript_only {
+            Vec::new()
+        } else {
+            raw_lines_from_source(self.content.trim())
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -481,6 +562,10 @@ impl HistoryCell for AgentMessageCell {
                 })
                 .subsequent_indent("  ".into()),
         )
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.lines.clone())
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -537,6 +622,10 @@ impl HistoryCell for AgentMarkdownCell {
         );
         prefix_lines(lines, "• ".dim(), "  ".into())
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        raw_lines_from_source(&self.markdown_source)
+    }
 }
 
 #[derive(Debug)]
@@ -553,6 +642,10 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.lines.clone())
     }
 }
 
@@ -608,6 +701,22 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             .max(1);
         with_border_with_inner_width(content.lines, inner_width)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let update_instruction = if let Some(update_action) = self.update_action {
+            format!("Run {} to update.", update_action.command_str())
+        } else {
+            "See https://github.com/openai/codex for installation options.".to_string()
+        };
+        vec![
+            Line::from("Update available!"),
+            Line::from(format!("{CODEX_CLI_VERSION} -> {}", self.latest_version)),
+            Line::from(update_instruction),
+            Line::from(""),
+            Line::from("See full release notes:"),
+            Line::from("https://github.com/openai/codex/releases/latest"),
+        ]
+    }
 }
 
 #[derive(Debug)]
@@ -640,6 +749,10 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
             .initial_indent(self.initial_prefix.clone())
             .subsequent_indent(self.subsequent_prefix.clone());
         adaptive_wrap_lines(&self.text, opts)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.text.clone().lines)
     }
 }
 
@@ -700,6 +813,38 @@ impl HistoryCell for UnifiedExecInteractionCell {
                 .subsequent_indent(Line::from("    ".dim())),
         );
         out.extend(input_wrapped);
+        out
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        if self.stdin.is_empty() {
+            if let Some(command) = self
+                .command_display
+                .as_ref()
+                .filter(|command| !command.is_empty())
+            {
+                out.push(Line::from(format!(
+                    "Waited for background terminal: {command}"
+                )));
+            } else {
+                out.push(Line::from("Waited for background terminal"));
+            }
+            return out;
+        }
+
+        if let Some(command) = self
+            .command_display
+            .as_ref()
+            .filter(|command| !command.is_empty())
+        {
+            out.push(Line::from(format!(
+                "Interacted with background terminal: {command}"
+            )));
+        } else {
+            out.push(Line::from("Interacted with background terminal"));
+        }
+        out.extend(raw_lines_from_source(&self.stdin));
         out
     }
 }
@@ -833,6 +978,10 @@ impl HistoryCell for UnifiedExecProcessesCell {
         out
     }
 
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(u16::MAX))
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
     }
@@ -860,13 +1009,28 @@ fn exec_snippet(command: &[String]) -> String {
     truncate_exec_snippet(&full_cmd)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReviewDecision {
+    Approved,
+    ApprovedExecpolicyAmendment {
+        proposed_execpolicy_amendment: ExecPolicyAmendment,
+    },
+    ApprovedForSession,
+    NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
+    Denied,
+    TimedOut,
+    Abort,
+}
+
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_protocol::protocol::ReviewDecision,
+    decision: ReviewDecision,
     actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
-    use codex_protocol::protocol::NetworkPolicyRuleAction;
-    use codex_protocol::protocol::ReviewDecision::*;
+    use ReviewDecision::*;
+    use codex_protocol::approvals::NetworkPolicyRuleAction;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -1089,6 +1253,14 @@ impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(create_diff_summary(
+            &self.changes,
+            &self.cwd,
+            RAW_DIFF_SUMMARY_WIDTH,
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -1098,6 +1270,10 @@ struct CompletedMcpToolCallWithImageOutput {
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec!["tool result (image output)".into()]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![Line::from("tool result (image output)")]
     }
 }
 
@@ -1209,6 +1385,10 @@ impl HistoryCell for TooltipHistoryCell {
 
         prefix_lines(lines, indent.into(), indent.into())
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![Line::from(format!("Tip: {}", self.tip))]
+    }
 }
 
 #[derive(Debug)]
@@ -1226,33 +1406,33 @@ impl HistoryCell for SessionInfoCell {
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.transcript_lines(width)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        self.0.raw_lines()
+    }
 }
 
 pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
-    event: SessionConfiguredEvent,
+    session: &ThreadSessionState,
     is_first_event: bool,
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
 ) -> SessionInfoCell {
-    let SessionConfiguredEvent {
-        model,
-        reasoning_effort,
-        approval_policy,
-        permission_profile,
-        ..
-    } = event;
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
-        model.clone(),
-        reasoning_effort,
+        session.model.clone(),
+        session.reasoning_effort,
         show_fast_status,
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
-    .with_yolo_mode(has_yolo_permissions(approval_policy, &permission_profile));
+    .with_yolo_mode(has_yolo_permissions(
+        session.approval_policy,
+        &session.permission_profile,
+    ));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1298,11 +1478,11 @@ pub(crate) fn new_session_info(
         {
             parts.push(Box::new(tooltips));
         }
-        if requested_model != model {
+        if requested_model != session.model.as_str() {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
                 format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
+                format!("used: {}", session.model).into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
         }
@@ -1313,7 +1493,7 @@ pub(crate) fn new_session_info(
 
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
-        config.permissions.approval_policy.value(),
+        AskForApproval::from(config.permissions.approval_policy.value()),
         &config.permissions.permission_profile(),
     )
 }
@@ -1322,15 +1502,25 @@ fn has_yolo_permissions(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
 ) -> bool {
+    let permission_profile = AppServerPermissionProfile::from(permission_profile.clone());
     approval_policy == AskForApproval::Never
         && matches!(
             permission_profile,
-            PermissionProfile::Disabled
-                | PermissionProfile::Managed {
-                    file_system: ManagedFileSystemPermissions::Unrestricted,
-                    network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+            AppServerPermissionProfile::Disabled
+                | AppServerPermissionProfile::Managed {
+                    file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+                    network: PermissionProfileNetworkPermissions { enabled: true },
                 }
         )
+}
+
+fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
+    match status {
+        McpAuthStatus::Unsupported => "Unsupported",
+        McpAuthStatus::NotLoggedIn => "Not logged in",
+        McpAuthStatus::BearerToken => "Bearer token",
+        McpAuthStatus::OAuth => "OAuth",
+    }
 }
 
 pub(crate) fn new_user_prompt(
@@ -1514,6 +1704,27 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         with_border(lines)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            Line::from(format!(
+                "model: {}{}",
+                self.model,
+                self.reasoning_label()
+                    .map(|reasoning| format!(" {reasoning}"))
+                    .unwrap_or_default()
+            )),
+            Line::from(format!(
+                "directory: {}",
+                self.format_directory(/*max_width*/ None)
+            )),
+        ];
+        if self.yolo_mode {
+            lines.push(Line::from("permissions: YOLO mode"));
+        }
+        lines
+    }
 }
 
 #[derive(Debug)]
@@ -1543,6 +1754,22 @@ impl HistoryCell for CompositeHistoryCell {
         }
         out
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut first = true;
+        for part in &self.parts {
+            let mut lines = part.raw_lines();
+            if !lines.is_empty() {
+                if !first {
+                    out.push(Line::from(""));
+                }
+                out.append(&mut lines);
+                first = false;
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug)]
@@ -1553,6 +1780,13 @@ pub(crate) struct McpToolCallCell {
     duration: Option<Duration>,
     result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
     animations_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct McpInvocation {
+    pub(crate) server: String,
+    pub(crate) tool: String,
+    pub(crate) arguments: Option<serde_json::Value>,
 }
 
 impl McpToolCallCell {
@@ -1638,7 +1872,12 @@ impl HistoryCell for McpToolCallCell {
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(Some(self.start_time), self.animations_enabled),
+            None => activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim()),
         };
         let header_text = if status.is_some() {
             "Called"
@@ -1722,6 +1961,32 @@ impl HistoryCell for McpToolCallCell {
         lines
     }
 
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let header_text = if self.success().is_some() {
+            "Called"
+        } else {
+            "Calling"
+        };
+        let mut lines = vec![Line::from(format!(
+            "{header_text} {}",
+            format_mcp_invocation(self.invocation.clone())
+        ))];
+
+        if let Some(result) = &self.result {
+            match result {
+                Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
+                    for block in content {
+                        let text = Self::render_content_block(block, RAW_TOOL_OUTPUT_WIDTH);
+                        lines.extend(raw_lines_from_source(&text));
+                    }
+                }
+                Err(err) => lines.push(Line::from(format!("Error: {err}"))),
+            }
+        }
+
+        lines
+    }
+
     fn transcript_animation_tick(&self) -> Option<u64> {
         if !self.animations_enabled || self.result.is_some() {
             return None;
@@ -1743,6 +2008,42 @@ fn web_search_header(completed: bool) -> &'static str {
         "Searched"
     } else {
         "Searching the web"
+    }
+}
+
+fn web_search_action_detail(action: &WebSearchAction) -> String {
+    match action {
+        WebSearchAction::Search { query, queries } => {
+            query.clone().filter(|q| !q.is_empty()).unwrap_or_else(|| {
+                let items = queries.as_ref();
+                let first = items
+                    .and_then(|queries| queries.first())
+                    .cloned()
+                    .unwrap_or_default();
+                if items.is_some_and(|queries| queries.len() > 1) && !first.is_empty() {
+                    format!("{first} ...")
+                } else {
+                    first
+                }
+            })
+        }
+        WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
+        WebSearchAction::FindInPage { url, pattern } => match (pattern, url) {
+            (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),
+            (Some(pattern), None) => format!("'{pattern}'"),
+            (None, Some(url)) => url.clone(),
+            (None, None) => String::new(),
+        },
+        WebSearchAction::Other => String::new(),
+    }
+}
+
+fn web_search_detail(action: Option<&WebSearchAction>, query: &str) -> String {
+    let detail = action.map(web_search_action_detail).unwrap_or_default();
+    if detail.is_empty() {
+        query.to_string()
+    } else {
+        detail
     }
 }
 
@@ -1792,7 +2093,12 @@ impl HistoryCell for WebSearchCell {
         let bullet = if self.completed {
             "•".dim()
         } else {
-            spinner(Some(self.start_time), self.animations_enabled)
+            activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim())
         };
         let header = web_search_header(self.completed);
         let detail = web_search_detail(self.action.as_ref(), &self.query);
@@ -1802,6 +2108,16 @@ impl HistoryCell for WebSearchCell {
             Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
         };
         PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let header = web_search_header(self.completed);
+        let detail = web_search_detail(self.action.as_ref(), &self.query);
+        if detail.is_empty() {
+            vec![Line::from(header)]
+        } else {
+            vec![Line::from(format!("{header} {detail}"))]
+        }
     }
 }
 
@@ -1938,6 +2254,16 @@ impl HistoryCell for CyberPolicyNoticeCell {
 
         lines
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from("This chat was flagged for possible cybersecurity risk"),
+            Line::from(
+                "If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program.",
+            ),
+            Line::from(TRUSTED_ACCESS_FOR_CYBER_URL),
+        ]
+    }
 }
 
 #[derive(Debug)]
@@ -1966,6 +2292,14 @@ impl HistoryCell for DeprecationNoticeCell {
             push_owned_lines(&wrapped, &mut lines);
         }
 
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(self.summary.clone())];
+        if let Some(details) = &self.details {
+            lines.extend(raw_lines_from_source(details));
+        }
         lines
     }
 }
@@ -2041,7 +2375,13 @@ pub(crate) fn new_mcp_tools_output(
         }
         lines.push(header.into());
         lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(
+            vec![
+                "    • Auth: ".into(),
+                mcp_auth_status_label(auth_status).into(),
+            ]
+            .into(),
+        );
 
         match &cfg.transport {
             McpServerTransportConfig::Stdio {
@@ -2219,7 +2559,13 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                 codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
             })
             .unwrap_or(McpAuthStatus::Unsupported);
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(
+            vec![
+                "    • Auth: ".into(),
+                mcp_auth_status_label(auth_status).into(),
+            ]
+            .into(),
+        );
 
         if let Some(cfg) = cfg {
             match &cfg.transport {
@@ -2390,13 +2736,22 @@ impl HistoryCell for McpInventoryLoadingCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
             vec![
-                spinner(Some(self.start_time), self.animations_enabled),
+                activity_indicator(
+                    Some(self.start_time),
+                    MotionMode::from_animations_enabled(self.animations_enabled),
+                    ReducedMotionIndicator::StaticBullet,
+                )
+                .unwrap_or_else(|| "•".dim()),
                 " ".into(),
                 "Loading MCP inventory".bold(),
                 "…".dim(),
             ]
             .into(),
         ]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![Line::from("Loading MCP inventory...")]
     }
 
     fn transcript_animation_tick(&self) -> Option<u64> {
@@ -2415,8 +2770,8 @@ pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventor
 /// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
-    pub(crate) questions: Vec<RequestUserInputQuestion>,
-    pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
+    pub(crate) questions: Vec<ToolRequestUserInputQuestion>,
+    pub(crate) answers: HashMap<String, ToolRequestUserInputAnswer>,
     pub(crate) interrupted: bool,
 }
 
@@ -2517,6 +2872,48 @@ impl HistoryCell for RequestUserInputResultCell {
 
         lines
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let total = self.questions.len();
+        let answered = self
+            .questions
+            .iter()
+            .filter(|question| {
+                self.answers
+                    .get(&question.id)
+                    .is_some_and(|answer| !answer.answers.is_empty())
+            })
+            .count();
+        let mut lines = vec![Line::from(format!("Questions {answered}/{total} answered"))];
+        if self.interrupted {
+            lines.push(Line::from("(interrupted)"));
+        }
+        for question in &self.questions {
+            lines.push(Line::from(question.question.clone()));
+            if let Some(answer) = self
+                .answers
+                .get(&question.id)
+                .filter(|answer| !answer.answers.is_empty())
+            {
+                if question.is_secret {
+                    lines.push(Line::from("answer: ******"));
+                } else {
+                    let (options, note) = split_request_user_input_answer(answer);
+                    lines.extend(
+                        options
+                            .into_iter()
+                            .map(|option| Line::from(format!("answer: {option}"))),
+                    );
+                    if let Some(note) = note {
+                        lines.push(Line::from(format!("note: {note}")));
+                    }
+                }
+            } else {
+                lines.push(Line::from("(unanswered)"));
+            }
+        }
+        lines
+    }
 }
 
 /// Wrap a plain string with textwrap and prefix each line, while applying a style to the content.
@@ -2540,7 +2937,7 @@ fn wrap_with_prefix(
 /// Split a request_user_input answer into option labels and an optional freeform note.
 /// Notes are encoded as "user_note: <text>" entries in the answers list.
 fn split_request_user_input_answer(
-    answer: &RequestUserInputAnswer,
+    answer: &ToolRequestUserInputAnswer,
 ) -> (Vec<String>, Option<String>) {
     let mut options = Vec::new();
     let mut note = None;
@@ -2633,11 +3030,19 @@ impl HistoryCell for ProposedPlanCell {
         lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
         lines
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        raw_lines_from_source(&self.plan_markdown)
+    }
 }
 
 impl HistoryCell for ProposedPlanStreamCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.lines.clone())
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -2701,6 +3106,26 @@ impl HistoryCell for PlanUpdateCell {
         }
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
 
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from("Updated Plan")];
+        if let Some(explanation) = self
+            .explanation
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            lines.extend(raw_lines_from_source(explanation));
+        }
+        if self.plan.is_empty() {
+            lines.push(Line::from("(no steps provided)"));
+        } else {
+            for PlanItemArg { step, status } in &self.plan {
+                lines.push(Line::from(format!("{status:?}: {step}")));
+            }
+        }
         lines
     }
 }
@@ -2864,6 +3289,25 @@ impl HistoryCell for FinalMessageSeparator {
             .dim(),
         ]
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut label_parts = Vec::new();
+        if let Some(elapsed_seconds) = self
+            .elapsed_seconds
+            .filter(|seconds| *seconds > 60)
+            .map(super::status_indicator_widget::fmt_elapsed_compact)
+        {
+            label_parts.push(format!("Worked for {elapsed_seconds}"));
+        }
+        if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
+            label_parts.push(metrics_label);
+        }
+        if label_parts.is_empty() {
+            Vec::new()
+        } else {
+            vec![Line::from(label_parts.join(" • "))]
+        }
+    }
 }
 
 pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
@@ -2992,18 +3436,17 @@ mod tests {
     use crate::exec_cell::ExecCell;
     use crate::legacy_core::config::Config;
     use crate::legacy_core::config::ConfigBuilder;
+    use crate::session_state::ThreadSessionState;
     use crate::wrapping::word_wrap_lines;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::McpAuthStatus;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
-    use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::McpAuthStatus;
-    use codex_protocol::protocol::SessionConfiguredEvent;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -3012,9 +3455,9 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
-    use codex_protocol::protocol::ExecCommandSource;
     use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -3131,6 +3574,15 @@ mod tests {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
 
+    fn assert_unstyled_lines(lines: &[Line<'static>]) {
+        for line in lines {
+            assert_eq!(line.style, Style::default());
+            for span in &line.spans {
+                assert_eq!(span.style, Style::default());
+            }
+        }
+    }
+
     fn image_block(data: &str) -> serde_json::Value {
         serde_json::to_value(Content::image(data.to_string(), "image/png"))
             .expect("image content should serialize")
@@ -3160,6 +3612,185 @@ mod tests {
     }
 
     #[test]
+    fn raw_lines_from_source_preserves_explicit_blank_lines() {
+        let lines = raw_lines_from_source("alpha\n\nbeta\n");
+
+        assert_eq!(
+            render_lines(&lines),
+            vec!["alpha".to_string(), String::new(), "beta".to_string()]
+        );
+        assert_unstyled_lines(&lines);
+    }
+
+    #[test]
+    fn raw_lines_from_source_preserves_trailing_blank_but_not_trailing_newline() {
+        assert_eq!(
+            render_lines(&raw_lines_from_source("alpha\n\n")),
+            vec!["alpha".to_string(), String::new()]
+        );
+        assert_eq!(raw_lines_from_source(""), Vec::<Line<'static>>::new());
+    }
+
+    #[test]
+    fn source_backed_cells_render_raw_source_without_prefix_or_style() {
+        let user = new_user_prompt(
+            "hello\n\nworld\n".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let assistant = AgentMarkdownCell::new(
+            "- item\n\n| A | B |\n| - | - |\n| x | y |\n".to_string(),
+            &test_cwd(),
+        );
+        let reasoning = ReasoningSummaryCell::new(
+            "thinking".to_string(),
+            "first thought\n\nsecond thought".to_string(),
+            &test_cwd(),
+            /*transcript_only*/ false,
+        );
+        let plan = new_proposed_plan(
+            "1. Inspect\n\n```sh\ncargo test\n```".to_string(),
+            &test_cwd(),
+        );
+
+        let user_lines = user.raw_lines();
+        assert_eq!(
+            render_lines(&user_lines),
+            vec!["hello".to_string(), String::new(), "world".to_string()]
+        );
+        assert_unstyled_lines(&user_lines);
+
+        let assistant_lines = assistant.raw_lines();
+        assert_eq!(
+            render_lines(&assistant_lines),
+            vec![
+                "- item".to_string(),
+                String::new(),
+                "| A | B |".to_string(),
+                "| - | - |".to_string(),
+                "| x | y |".to_string(),
+            ]
+        );
+        assert_unstyled_lines(&assistant_lines);
+
+        let reasoning_lines = reasoning.raw_lines();
+        assert_eq!(
+            render_lines(&reasoning_lines),
+            vec![
+                "first thought".to_string(),
+                String::new(),
+                "second thought".to_string(),
+            ]
+        );
+        assert_unstyled_lines(&reasoning_lines);
+
+        let plan_lines = plan.raw_lines();
+        assert_eq!(
+            render_lines(&plan_lines),
+            vec![
+                "1. Inspect".to_string(),
+                String::new(),
+                "```sh".to_string(),
+                "cargo test".to_string(),
+                "```".to_string(),
+            ]
+        );
+        assert_unstyled_lines(&plan_lines);
+    }
+
+    #[test]
+    fn structured_tool_cell_renders_raw_plain_text_without_prefix_or_style() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({"query": "raw mode"})),
+        };
+        let result = CallToolResult {
+            content: vec![text_block("alpha\nbeta")],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        };
+        let mut cell = new_active_mcp_tool_call(
+            "call-raw".to_string(),
+            invocation,
+            /*animations_enabled*/ false,
+        );
+        assert!(
+            cell.complete(Duration::from_millis(1), Ok(result))
+                .is_none()
+        );
+
+        let lines = cell.raw_lines();
+        let rendered = render_lines(&lines);
+        assert!(rendered[0].starts_with("Called search.find_docs("));
+        assert_eq!(rendered[1..], ["alpha".to_string(), "beta".to_string()]);
+        assert_unstyled_lines(&lines);
+    }
+
+    #[test]
+    fn raw_mode_toggle_transcript_snapshot() {
+        let mut tool_cell = new_active_mcp_tool_call(
+            "call-snapshot".to_string(),
+            McpInvocation {
+                server: "workspace".to_string(),
+                tool: "inspect".to_string(),
+                arguments: Some(json!({"path": "README.md"})),
+            },
+            /*animations_enabled*/ false,
+        );
+        assert!(
+            tool_cell
+                .complete(
+                    Duration::from_millis(5),
+                    Ok(CallToolResult {
+                        content: vec![text_block("structured output\nsecond line")],
+                        is_error: None,
+                        structured_content: None,
+                        meta: None,
+                    }),
+                )
+                .is_none()
+        );
+        let cells: Vec<Box<dyn HistoryCell>> = vec![
+            Box::new(new_user_prompt(
+                "Please format this\nfor copying".to_string(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )),
+            Box::new(AgentMarkdownCell::new(
+                "- first item\n- second item\n\n| Col | Value |\n| --- | --- |\n| code | `x = 1` |\n\n```text\ncopy me\n```".to_string(),
+                &test_cwd(),
+            )),
+            Box::new(tool_cell),
+        ];
+
+        let render = |mode| {
+            cells
+                .iter()
+                .flat_map(|cell| cell.display_lines_for_mode(/*width*/ 40, mode))
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| span.content.into_owned())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let rendered = format!(
+            "rich before:\n{}\n\nraw on:\n{}\n\nrich after:\n{}",
+            render(HistoryRenderMode::Rich),
+            render(HistoryRenderMode::Raw),
+            render(HistoryRenderMode::Rich)
+        );
+
+        insta::assert_snapshot!("raw_mode_toggle_transcript", rendered);
+    }
+
+    #[test]
     fn image_generation_call_renders_saved_path() {
         let saved_path = test_path_buf("/tmp/generated-image.png").abs();
         let expected_saved_path = format!(
@@ -3183,10 +3814,11 @@ mod tests {
         );
     }
 
-    fn session_configured_event(model: &str) -> SessionConfiguredEvent {
-        SessionConfiguredEvent {
-            session_id: ThreadId::new(),
+    fn session_configured_event(model: &str) -> ThreadSessionState {
+        ThreadSessionState {
+            thread_id: ThreadId::new(),
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: model.to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -3194,11 +3826,11 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -3296,7 +3928,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3318,7 +3950,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3335,7 +3967,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ true,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3354,7 +3986,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3888,6 +4520,16 @@ mod tests {
     }
 
     #[test]
+    fn mcp_inventory_loading_without_animations_is_stable() {
+        let cell = new_mcp_inventory_loading(/*animations_enabled*/ false);
+        let first = render_lines(&cell.display_lines(/*width*/ 80));
+        let second = render_lines(&cell.display_lines(/*width*/ 80));
+
+        assert_eq!(first, second);
+        assert_eq!(first, vec!["• Loading MCP inventory…".to_string()]);
+    }
+
+    #[test]
     fn completed_mcp_tool_call_success_snapshot() {
         let invocation = McpInvocation {
             server: "search".into(),
@@ -4215,10 +4857,11 @@ mod tests {
 
     #[test]
     fn yolo_mode_includes_managed_full_access_profiles() {
-        let permission_profile = PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Unrestricted,
-            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
-        };
+        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+            network: PermissionProfileNetworkPermissions { enabled: true },
+            file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+        }
+        .into();
 
         assert!(has_yolo_permissions(
             AskForApproval::Never,
@@ -4228,9 +4871,10 @@ mod tests {
 
     #[test]
     fn yolo_mode_excludes_external_sandbox_profiles() {
-        let permission_profile = PermissionProfile::External {
-            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
-        };
+        let permission_profile: PermissionProfile = AppServerPermissionProfile::External {
+            network: PermissionProfileNetworkPermissions { enabled: true },
+        }
+        .into();
 
         assert!(!has_yolo_permissions(
             AskForApproval::Never,

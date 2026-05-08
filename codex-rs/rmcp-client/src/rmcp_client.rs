@@ -62,6 +62,7 @@ use tracing::warn;
 use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
+use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
@@ -74,6 +75,9 @@ use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 enum PendingTransport {
+    InProcess {
+        transport: tokio::io::DuplexStream,
+    },
     Stdio {
         transport: StdioServerTransport,
     },
@@ -99,6 +103,9 @@ enum ClientState {
 
 #[derive(Clone)]
 enum TransportRecipe {
+    InProcess {
+        factory: Arc<dyn InProcessTransportFactory>,
+    },
     Stdio {
         command: StdioServerCommand,
         launcher: Arc<dyn StdioServerLauncher>,
@@ -275,6 +282,26 @@ pub struct RmcpClient {
 }
 
 impl RmcpClient {
+    pub async fn new_in_process_client(
+        factory: Arc<dyn InProcessTransportFactory>,
+    ) -> io::Result<Self> {
+        let transport_recipe = TransportRecipe::InProcess { factory };
+        let transport = Self::create_pending_transport(&transport_recipe)
+            .await
+            .map_err(io::Error::other)?;
+
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            stdio_process: None,
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Semaphore::new(/*permits*/ 1),
+            elicitation_pause_state: ElicitationPauseState::new(),
+        })
+    }
+
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
@@ -292,7 +319,8 @@ impl RmcpClient {
             .map_err(io::Error::other)?;
         let stdio_process = match &transport {
             PendingTransport::Stdio { transport } => Some(transport.process_handle()),
-            PendingTransport::StreamableHttp { .. }
+            PendingTransport::InProcess { .. }
+            | PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => None,
         };
 
@@ -690,6 +718,10 @@ impl RmcpClient {
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
         match transport_recipe {
+            TransportRecipe::InProcess { factory } => {
+                let transport = factory.open().await?;
+                Ok(PendingTransport::InProcess { transport })
+            }
             TransportRecipe::Stdio { command, launcher } => {
                 let transport = launcher.launch(command.clone()).await?;
                 Ok(PendingTransport::Stdio { transport })
@@ -798,6 +830,10 @@ impl RmcpClient {
         Option<OAuthPersistor>,
     )> {
         let (transport, oauth_persistor) = match pending_transport {
+            PendingTransport::InProcess { transport } => (
+                service::serve_client(client_service, transport).boxed(),
+                None,
+            ),
             PendingTransport::Stdio { transport } => (
                 service::serve_client(client_service, transport).boxed(),
                 None,

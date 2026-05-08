@@ -22,3 +22,6 @@ ts-rs = { workspace = true, features = [
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[lib]
+doctest = false

@@ -60,6 +60,13 @@ def staged_runtime_bin_path(root: Path) -> Path:
     return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
 
 
+def staged_runtime_resource_path(root: Path, resource: Path) -> Path:
+    # Runtime wheels include the whole bin/ directory, so helper executables
+    # should be staged beside the main Codex binary instead of changing the
+    # package template for each platform.
+    return root / "src" / "codex_cli_bin" / "bin" / resource.name
+
+
 def run(cmd: list[str], cwd: Path) -> None:
     subprocess.run(cmd, cwd=str(cwd), check=True)
 
@@ -211,6 +218,7 @@ def stage_python_runtime_package(
     codex_version: str,
     binary_path: Path,
     platform_tag: str | None = None,
+    resource_binaries: Sequence[Path] = (),
 ) -> Path:
     package_version = normalize_codex_version(codex_version)
     _copy_package_tree(python_runtime_root(), staging_dir)
@@ -230,6 +238,16 @@ def stage_python_runtime_package(
         out_bin.chmod(
             out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
+    for resource_binary in resource_binaries:
+        # Some release targets need helper executables beside the main binary
+        # (for example Linux bwrap or Windows sandbox helpers). Keep this
+        # generic so release workflows own the platform-specific list.
+        out_resource = staged_runtime_resource_path(staging_dir, resource_binary)
+        shutil.copy2(resource_binary, out_resource)
+        if not _is_windows():
+            out_resource.chmod(
+                out_resource.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
     return staging_dir
 
 
@@ -632,7 +650,9 @@ class PublicFieldSpec:
 class CliOps:
     generate_types: Callable[[], None]
     stage_python_sdk_package: Callable[[Path, str], Path]
-    stage_python_runtime_package: Callable[[Path, str, Path, str | None], Path]
+    stage_python_runtime_package: Callable[
+        [Path, str, Path, str | None, Sequence[Path]], Path
+    ]
     current_sdk_version: Callable[[], str]
 
 
@@ -1047,6 +1067,13 @@ def build_parser() -> argparse.ArgumentParser:
             "macosx_11_0_arm64 or musllinux_1_1_x86_64."
         ),
     )
+    stage_runtime_parser.add_argument(
+        "--resource-binary",
+        action="append",
+        default=[],
+        type=Path,
+        help="Additional executable to package beside the codex runtime binary.",
+    )
     return parser
 
 
@@ -1101,6 +1128,7 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
             codex_version,
             args.runtime_binary.resolve(),
             args.platform_tag,
+            tuple(path.resolve() for path in args.resource_binary),
         )
 
 

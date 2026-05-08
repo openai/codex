@@ -6,11 +6,14 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 use super::DEFAULT_WAIT_YIELD_TIME_MS;
 use super::ExecContext;
 use super::WAIT_TOOL_NAME;
 use super::handle_runtime_response;
+use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler;
 
@@ -40,6 +43,14 @@ where
 
 impl ToolHandler for CodeModeWaitHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(WAIT_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_wait_tool())
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

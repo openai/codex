@@ -52,7 +52,7 @@ pub(super) async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_has_environment(parent_turn_context.tools_config.has_environment)
+    .with_environment_mode(parent_turn_context.tools_config.environment_mode)
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -102,8 +102,9 @@ pub(super) async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
-        sess.conversation_id.to_string(),
-        &session_source,
+        sess.session_id().to_string(),
+        sess.thread_id().to_string(),
+        parent_turn_context.thread_source,
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile,
@@ -123,7 +124,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
-        environment: parent_turn_context.environment.clone(),
+        thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),

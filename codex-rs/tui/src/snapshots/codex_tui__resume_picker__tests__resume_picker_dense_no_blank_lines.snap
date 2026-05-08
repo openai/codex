@@ -1,0 +1,6 @@
+---
+source: tui/src/resume_picker.rs
+expression: terminal.backend().to_string()
+---
+  15m ago     First dense row
+❯ 15m ago     Second dense row

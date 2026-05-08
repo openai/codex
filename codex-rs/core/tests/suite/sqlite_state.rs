@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
+use codex_mcp::MEMORIES_MCP_SERVER_NAME;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
@@ -48,7 +49,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let db_path = codex_state::state_db_path(test.config.sqlite_home.as_path());
 
@@ -144,6 +145,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),
+                    thread_source: None,
                     agent_path: None,
                     agent_nickname: None,
                     agent_role: None,
@@ -261,7 +263,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     test.submit_turn("another message").await?;
 
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
 
     let mut metadata = None;
     for _ in 0..100 {
@@ -304,7 +306,7 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
 
     test.submit_turn("search the web").await?;
 
@@ -396,7 +398,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
     let cwd = test.cwd_path().to_path_buf();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
@@ -446,6 +448,92 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builtin_memories_mcp_call_does_not_mark_thread_memory_mode_polluted_when_configured()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let call_id = "call-123";
+    let namespace = format!("mcp__{MEMORIES_MCP_SERVER_NAME}__");
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(call_id, &namespace, "list", "{}"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "memories list tool completed."),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::BuiltInMcp)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MemoryTool)
+            .expect("test config should allow feature update");
+        config.memories.use_memories = true;
+        config.memories.disable_on_external_context = true;
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.thread_id;
+    let cwd = test.cwd_path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
+
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "call the memories list tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(err) => Some(Err(anyhow::anyhow!(err.message.clone()))),
+        EventMsg::TurnComplete(_) => Some(Ok(())),
+        _ => None,
+    })
+    .await?;
+
+    assert_ne!(
+        db.get_thread_memory_mode(thread_id).await?.as_deref(),
+        Some("polluted")
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn tool_call_logs_include_thread_id() -> Result<()> {
     let server = start_mock_server().await;
@@ -477,7 +565,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let expected_thread_id = test.session_configured.session_id.to_string();
+    let expected_thread_id = test.session_configured.thread_id.to_string();
 
     test.submit_turn("run a shell command").await?;
 

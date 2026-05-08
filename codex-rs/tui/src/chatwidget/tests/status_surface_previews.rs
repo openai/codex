@@ -13,7 +13,7 @@ fn line_text(line: Line<'static>) -> String {
 fn status_preview_line(chat: &mut ChatWidget, items: &[StatusLineItem]) -> String {
     let preview_data = chat.status_surface_preview_data();
     let preview = preview_data
-        .line_for_items(items.iter().cloned().map(StatusLineItem::preview_item))
+        .status_line_for_items(items.iter().copied(), /*use_theme_colors*/ true)
         .expect("status preview line");
     line_text(preview)
 }
@@ -112,6 +112,8 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
             StatusLineItem::ProjectRoot,
             StatusLineItem::GitBranch,
             StatusLineItem::ThreadTitle,
+            StatusLineItem::Permissions,
+            StatusLineItem::ApprovalMode,
         ],
         &[
             TerminalTitleItem::Thread,
@@ -121,6 +123,22 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
     );
 
     assert_chatwidget_snapshot!("status_surface_previews_hardcoded_only", snapshot);
+}
+
+#[tokio::test]
+async fn thread_title_falls_back_to_thread_id_when_unnamed() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    assert_eq!(
+        status_preview_line(&mut chat, &[StatusLineItem::ThreadTitle]),
+        thread_id.to_string()
+    );
+    assert_eq!(
+        title_preview_line(&mut chat, &[TerminalTitleItem::Thread]),
+        thread_id.to_string()
+    );
 }
 
 #[tokio::test]

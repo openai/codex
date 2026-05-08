@@ -43,24 +43,6 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
 }
 
 #[tokio::test]
-async fn pre_tool_use_payload_uses_json_patch_input() {
-    let patch = sample_patch();
-    let payload = ToolPayload::Function {
-        arguments: json!({ "input": patch }).to_string(),
-    };
-    let invocation = invocation_for_payload(payload).await;
-    let handler = ApplyPatchHandler;
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&invocation),
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: json!({ "command": patch }),
-        })
-    );
-}
-
-#[tokio::test]
 async fn pre_tool_use_payload_uses_freeform_patch_input() {
     let patch = sample_patch();
     let payload = ToolPayload::Custom {
@@ -100,24 +82,6 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
 }
 
 #[test]
-fn diff_consumer_does_not_stream_json_tool_call_arguments() {
-    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
-    assert!(
-        consumer
-            .push_delta("call-1".to_string(), r#"{"input":"*** Begin Patch\n"#)
-            .is_none()
-    );
-    assert!(
-        consumer
-            .push_delta(
-                "call-1".to_string(),
-                r#"*** Add File: hello.txt\n+hello\n*** End Patch\n"}"#
-            )
-            .is_none()
-    );
-}
-
-#[test]
 fn diff_consumer_streams_apply_patch_changes() {
     let mut consumer = ApplyPatchArgumentDiffConsumer::default();
     assert!(
@@ -136,7 +100,7 @@ fn diff_consumer_streams_apply_patch_changes() {
             HashMap::from([(
                 PathBuf::from("hello.txt"),
                 FileChange::Add {
-                    content: "hello\n".to_string(),
+                    content: String::new(),
                 },
             )]),
         )
@@ -147,8 +111,16 @@ fn diff_consumer_streams_apply_patch_changes() {
             .push_delta("call-1".to_string(), "\n+world")
             .is_none()
     );
+    assert!(
+        consumer
+            .push_delta("call-1".to_string(), "\n*** End Patch")
+            .is_none()
+    );
 
-    let event = consumer.flush_update_on_complete().expect("progress event");
+    let event = consumer
+        .finish_update_on_complete()
+        .expect("finish parser")
+        .expect("progress event");
     assert_eq!(
         (event.call_id, event.changes),
         (
@@ -175,7 +147,7 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
         HashMap::from([(
             PathBuf::from("hello.txt"),
             FileChange::Add {
-                content: "hello\n".to_string(),
+                content: String::new(),
             },
         )])
     );
@@ -190,7 +162,7 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
         HashMap::from([(
             PathBuf::from("hello.txt"),
             FileChange::Add {
-                content: "hello\nworld\n".to_string(),
+                content: "hello\n".to_string(),
             },
         )])
     );

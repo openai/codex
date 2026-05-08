@@ -4,6 +4,7 @@ use codex_features::Features;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -155,7 +156,30 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 }
 
 #[test]
-fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_by_label() {
+fn fallback_apply_patch_models_use_freeform_tool_by_default() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert_eq!(
+        tools_config.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Freeform)
+    );
+}
+
+#[test]
+fn subagents_keep_request_user_input_config_and_agent_jobs_workers_opt_in_by_label() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -175,7 +199,10 @@ fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_b
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    assert!(tools_config.default_mode_request_user_input);
+    assert_eq!(
+        tools_config.request_user_input_available_modes,
+        request_user_input_available_modes(&features)
+    );
     assert!(tools_config.agent_jobs_tools);
     assert!(tools_config.agent_jobs_worker_tools);
 }

@@ -107,6 +107,30 @@ personality = true
 }
 
 #[tokio::test]
+async fn clear_missing_nested_config_is_noop() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "features.personality".to_string(),
+            value: serde_json::Value::Null,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("clear missing config succeeds");
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(response.overridden_metadata, None);
+    assert_eq!(std::fs::read_to_string(&path)?, "");
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_supports_nested_app_paths() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;

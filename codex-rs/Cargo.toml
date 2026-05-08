@@ -5,9 +5,12 @@ members = [
     "agent-graph-store",
     "agent-identity",
     "backend-client",
+    "builtin-mcps",
+    "bwrap",
     "ansi-escape",
     "async-utils",
     "app-server",
+    "app-server-transport",
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
@@ -27,7 +30,6 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
-    "device-key",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -51,6 +53,7 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
+    "memories/mcp",
     "memories/read",
     "memories/write",
     "model-provider-info",
@@ -127,6 +130,7 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
+codex-app-server-transport = { path = "app-server-transport" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -134,6 +138,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-builtin-mcps = { path = "builtin-mcps" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
@@ -148,7 +153,6 @@ codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
-codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
@@ -166,6 +170,8 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-message-history = { path = "message-history" }
+codex-memories-mcp = { path = "memories/mcp" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -311,7 +317,6 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
-p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
@@ -320,6 +325,10 @@ quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
+rcgen = { version = "0.14.7", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+] }
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
@@ -457,21 +466,19 @@ ignored = [
     "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-utils-template",
     "codex-v8-poc",
 ]
 
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable debug info
 # across local dev builds.
-debug = 1
+debug = "limited"
 
 [profile.dev-small]
 inherits = "dev"
 opt-level = 0
-debug = 0
-strip = true
+debug = "none"
+strip = "symbols"
 
 [profile.release]
 lto = "fat"
@@ -483,8 +490,15 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+[profile.profiling]
+inherits = "release"
+debug = "full"
+lto = false
+strip = false
+
 [profile.ci-test]
-debug = 1         # Reduce debug symbol size
+# Reduce binary size to reduce disk pressure.
+debug = "limited"
 inherits = "test"
 opt-level = 0
 

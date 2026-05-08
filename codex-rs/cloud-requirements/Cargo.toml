@@ -30,3 +30,6 @@ tracing = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
+
+[lib]
+doctest = false

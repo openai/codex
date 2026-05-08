@@ -170,6 +170,12 @@ pub struct ConfigLayerStack {
 
     /// Whether execpolicy should skip `.rules` files from user and project config-layer folders.
     ignore_user_and_project_exec_policy_rules: bool,
+
+    /// Startup warnings discovered while building this stack.
+    ///
+    /// `None` means the loader did not check for stack-level warnings, while
+    /// `Some(vec![])` means it checked and found nothing to report.
+    startup_warnings: Option<Vec<String>>,
 }
 
 impl ConfigLayerStack {
@@ -185,6 +191,7 @@ impl ConfigLayerStack {
             requirements,
             requirements_toml,
             ignore_user_and_project_exec_policy_rules: false,
+            startup_warnings: None,
         })
     }
 
@@ -198,6 +205,15 @@ impl ConfigLayerStack {
 
     pub fn ignore_user_and_project_exec_policy_rules(&self) -> bool {
         self.ignore_user_and_project_exec_policy_rules
+    }
+
+    pub(crate) fn with_startup_warnings(mut self, startup_warnings: Vec<String>) -> Self {
+        self.startup_warnings = Some(startup_warnings);
+        self
+    }
+
+    pub fn startup_warnings(&self) -> Option<&[String]> {
+        self.startup_warnings.as_deref()
     }
 
     /// Returns the raw user config layer, if any.
@@ -221,27 +237,32 @@ impl ConfigLayerStack {
     /// replaced; otherwise, it is inserted into the stack at the appropriate
     /// position based on precedence rules.
     pub fn with_user_config(&self, config_toml: &AbsolutePathBuf, user_config: TomlValue) -> Self {
-        let user_layer = ConfigLayerEntry::new(
+        self.with_user_layer(Some(ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: config_toml.clone(),
             },
             user_config,
-        );
+        )))
+    }
 
+    /// Returns a new stack with the user layer copied from `other`, preserving
+    /// every non-user layer already present in this stack.
+    pub fn with_user_layer_from(&self, other: &Self) -> Self {
+        self.with_user_layer(other.get_user_layer().cloned())
+    }
+
+    fn with_user_layer(&self, user_layer: Option<ConfigLayerEntry>) -> Self {
         let mut layers = self.layers.clone();
-        match self.user_layer_index {
-            Some(index) => {
+        let user_layer_index = match (self.user_layer_index, user_layer) {
+            (Some(index), Some(user_layer)) => {
                 layers[index] = user_layer;
-                Self {
-                    layers,
-                    user_layer_index: self.user_layer_index,
-                    requirements: self.requirements.clone(),
-                    requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                }
+                Some(index)
             }
-            None => {
+            (Some(index), None) => {
+                layers.remove(index);
+                None
+            }
+            (None, Some(user_layer)) => {
                 let user_layer_index = match layers
                     .iter()
                     .position(|layer| layer.name.precedence() > user_layer.name.precedence())
@@ -255,15 +276,18 @@ impl ConfigLayerStack {
                         layers.len() - 1
                     }
                 };
-                Self {
-                    layers,
-                    user_layer_index: Some(user_layer_index),
-                    requirements: self.requirements.clone(),
-                    requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                }
+                Some(user_layer_index)
             }
+            (None, None) => None,
+        };
+        Self {
+            layers,
+            user_layer_index,
+            requirements: self.requirements.clone(),
+            requirements_toml: self.requirements_toml.clone(),
+            ignore_user_and_project_exec_policy_rules: self
+                .ignore_user_and_project_exec_policy_rules,
+            startup_warnings: self.startup_warnings.clone(),
         }
     }
 

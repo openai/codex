@@ -1,9 +1,8 @@
 use crate::function_tool::FunctionCallError;
-use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::plan_spec::create_update_plan_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
@@ -11,6 +10,8 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
@@ -46,6 +47,14 @@ impl ToolOutput for PlanToolOutput {
 impl ToolHandler for PlanHandler {
     type Output = PlanToolOutput;
 
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("update_plan")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_update_plan_tool())
+    }
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -54,7 +63,7 @@ impl ToolHandler for PlanHandler {
         let ToolInvocation {
             session,
             turn,
-            call_id,
+            call_id: _,
             payload,
             ..
         } = invocation;
@@ -68,31 +77,19 @@ impl ToolHandler for PlanHandler {
             }
         };
 
-        handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+        if turn.collaboration_mode.mode == ModeKind::Plan {
+            return Err(FunctionCallError::RespondToModel(
+                "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
+            ));
+        }
+
+        let args = parse_update_plan_arguments(&arguments)?;
+        session
+            .send_event(turn.as_ref(), EventMsg::PlanUpdate(args))
+            .await;
 
         Ok(PlanToolOutput)
     }
-}
-
-/// This function doesn't do anything useful. However, it gives the model a structured way to record its plan that clients can read and render.
-/// So it's the _inputs_ to this function that are useful to clients, not the outputs and neither are actually useful for the model other
-/// than forcing it to come up and document a plan (TBD how that affects performance).
-pub(crate) async fn handle_update_plan(
-    session: &Session,
-    turn_context: &TurnContext,
-    arguments: String,
-    _call_id: String,
-) -> Result<String, FunctionCallError> {
-    if turn_context.collaboration_mode.mode == ModeKind::Plan {
-        return Err(FunctionCallError::RespondToModel(
-            "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
-        ));
-    }
-    let args = parse_update_plan_arguments(&arguments)?;
-    session
-        .send_event(turn_context, EventMsg::PlanUpdate(args))
-        .await;
-    Ok("Plan updated".to_string())
 }
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {

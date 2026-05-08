@@ -5,7 +5,6 @@ name = "codex-core"
 version.workspace = true
 
 [lib]
-doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 

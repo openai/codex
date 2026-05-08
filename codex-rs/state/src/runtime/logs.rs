@@ -300,10 +300,10 @@ WHERE id IN (
             return Ok(());
         };
         self.delete_logs_before(cutoff.timestamp()).await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.logs_pool.as_ref())
-            .await?;
-        sqlx::query("PRAGMA incremental_vacuum")
+        // Startup cleanup should not wait behind or block foreground work.
+        // PASSIVE checkpoints copy whatever is immediately available and skip
+        // frames that would require waiting on active readers or writers.
+        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
             .execute(self.logs_pool.as_ref())
             .await?;
         Ok(())

@@ -32,10 +32,13 @@ use crate::history_cell;
 use crate::render::renderable::Renderable;
 
 #[cfg(test)]
-use codex_protocol::protocol::Op;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::request_user_input::RequestUserInputResponse;
+use crate::app_command::AppCommand as Op;
+use codex_app_server_protocol::ToolRequestUserInputAnswer;
+#[cfg(test)]
+use codex_app_server_protocol::ToolRequestUserInputOption;
+use codex_app_server_protocol::ToolRequestUserInputParams;
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
 
@@ -122,9 +125,9 @@ impl FooterTip {
 
 pub(crate) struct RequestUserInputOverlay {
     app_event_tx: AppEventSender,
-    request: RequestUserInputEvent,
+    request: ToolRequestUserInputParams,
     // Queue of incoming requests to process after the current one.
-    queue: VecDeque<RequestUserInputEvent>,
+    queue: VecDeque<ToolRequestUserInputParams>,
     // Reuse the shared chat composer so notes/freeform answers match the
     // primary input styling and behavior.
     composer: ChatComposer,
@@ -139,7 +142,7 @@ pub(crate) struct RequestUserInputOverlay {
 
 impl RequestUserInputOverlay {
     pub(crate) fn new(
-        request: RequestUserInputEvent,
+        request: ToolRequestUserInputParams,
         app_event_tx: AppEventSender,
         has_input_focus: bool,
         enhanced_keys_supported: bool,
@@ -179,9 +182,7 @@ impl RequestUserInputOverlay {
         self.current_idx
     }
 
-    fn current_question(
-        &self,
-    ) -> Option<&codex_protocol::request_user_input::RequestUserInputQuestion> {
+    fn current_question(&self) -> Option<&ToolRequestUserInputQuestion> {
         self.request.questions.get(self.current_index())
     }
 
@@ -586,9 +587,7 @@ impl RequestUserInputOverlay {
         self.pending_submission_draft = None;
     }
 
-    fn options_len_for_question(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
-    ) -> usize {
+    fn options_len_for_question(question: &ToolRequestUserInputQuestion) -> usize {
         let options_len = question
             .options
             .as_ref()
@@ -601,9 +600,7 @@ impl RequestUserInputOverlay {
         }
     }
 
-    fn other_option_enabled_for_question(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
-    ) -> bool {
+    fn other_option_enabled_for_question(question: &ToolRequestUserInputQuestion) -> bool {
         question.is_other
             && question
                 .options
@@ -612,7 +609,7 @@ impl RequestUserInputOverlay {
     }
 
     fn option_label_for_index(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+        question: &ToolRequestUserInputQuestion,
         idx: usize,
     ) -> Option<String> {
         let options = question.options.as_ref()?;
@@ -753,14 +750,14 @@ impl RequestUserInputOverlay {
             }
             answers.insert(
                 question.id.clone(),
-                RequestUserInputAnswer {
+                ToolRequestUserInputAnswer {
                     answers: answer_list,
                 },
             );
         }
         self.app_event_tx.user_input_answer(
             self.request.turn_id.clone(),
-            RequestUserInputResponse {
+            ToolRequestUserInputResponse {
                 answers: answers.clone(),
             },
         );
@@ -781,8 +778,8 @@ impl RequestUserInputOverlay {
 
         let queue_len = self.queue.len();
         self.queue
-            .retain(|queued_request| queued_request.call_id != *call_id);
-        if self.request.call_id == *call_id {
+            .retain(|queued_request| queued_request.item_id != *call_id);
+        if self.request.item_id == *call_id {
             self.advance_queue_or_complete();
             return true;
         }
@@ -1294,8 +1291,8 @@ impl BottomPaneView for RequestUserInputOverlay {
 
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         self.queue.push_back(request);
         None
     }
@@ -1308,12 +1305,9 @@ impl BottomPaneView for RequestUserInputOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_command::AppCommand;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
-    use codex_protocol::request_user_input::RequestUserInputQuestion;
-    use codex_protocol::request_user_input::RequestUserInputQuestionOption;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -1341,23 +1335,23 @@ mod tests {
         );
     }
 
-    fn question_with_options(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_with_options(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 1".to_string(),
                     description: "First choice.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 2".to_string(),
                     description: "Second choice.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 3".to_string(),
                     description: "Third choice.".to_string(),
                 },
@@ -1365,23 +1359,23 @@ mod tests {
         }
     }
 
-    fn question_with_options_and_other(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_with_options_and_other(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
             is_other: true,
             is_secret: false,
             options: Some(vec![
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 1".to_string(),
                     description: "First choice.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 2".to_string(),
                     description: "Second choice.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Option 3".to_string(),
                     description: "Third choice.".to_string(),
                 },
@@ -1389,27 +1383,27 @@ mod tests {
         }
     }
 
-    fn question_with_wrapped_options(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_with_wrapped_options(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose the next step for this task.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Discuss a code change".to_string(),
                     description:
                         "Walk through a plan, then implement it together with careful checks."
                             .to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Run targeted tests".to_string(),
                     description:
                         "Pick the most relevant crate and validate the current behavior first."
                             .to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Review the diff".to_string(),
                     description:
                         "Summarize the changes and highlight the most important risks and gaps."
@@ -1419,19 +1413,19 @@ mod tests {
         }
     }
 
-    fn question_with_very_long_option_text(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_with_very_long_option_text(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose one option.".to_string(),
             is_other: false,
             is_secret: false,
             options: Some(vec![
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/unknown (Recommended when triaging long-running background work and status transitions)".to_string(),
                     description: "Keep async job statuses for progress tracking and include enough context for debugging retries, stale workers, and unexpected expiration paths.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Add a short status model".to_string(),
                     description: "Simpler labels with less detail for quick rollouts.".to_string(),
                 },
@@ -1439,8 +1433,8 @@ mod tests {
         }
     }
 
-    fn question_with_long_scroll_options(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_with_long_scroll_options(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question:
@@ -1449,19 +1443,19 @@ mod tests {
             is_other: false,
             is_secret: false,
             options: Some(vec![
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Use Detailed Hint A (Recommended)".to_string(),
                     description: "Select this if you want a deliberately overextended explanatory hint that reads like a miniature specification, including context, rationale, expected behavior, and an explicit statement that this choice is mainly for testing how gracefully the interface wraps, truncates, and preserves readability under unusually verbose helper text conditions.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Use Detailed Hint B".to_string(),
                     description: "Select this if you want an equally verbose but differently phrased guidance block that emphasizes user-facing clarity, spacing tolerance, multiline wrapping, visual hierarchy interactions, and whether long descriptive metadata remains understandable when scanned quickly in a constrained layout where cognitive load is already high.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "Use Detailed Hint C".to_string(),
                     description: "Select this when you specifically want to verify that navigating downward will keep the currently highlighted option visible, even when previous options consume many wrapped lines and would otherwise push the selection out of the viewport.".to_string(),
                 },
-                RequestUserInputQuestionOption {
+                ToolRequestUserInputOption {
                     label: "None of the above".to_string(),
                     description:
                         "Use this only if the previous long-form options do not apply.".to_string(),
@@ -1470,8 +1464,8 @@ mod tests {
         }
     }
 
-    fn question_without_options(id: &str, header: &str) -> RequestUserInputQuestion {
-        RequestUserInputQuestion {
+    fn question_without_options(id: &str, header: &str) -> ToolRequestUserInputQuestion {
+        ToolRequestUserInputQuestion {
             id: id.to_string(),
             header: header.to_string(),
             question: "Share details.".to_string(),
@@ -1483,10 +1477,11 @@ mod tests {
 
     fn request_event(
         turn_id: &str,
-        questions: Vec<RequestUserInputQuestion>,
-    ) -> RequestUserInputEvent {
-        RequestUserInputEvent {
-            call_id: "call-1".to_string(),
+        questions: Vec<ToolRequestUserInputQuestion>,
+    ) -> ToolRequestUserInputParams {
+        ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
             questions,
         }
@@ -1546,13 +1541,15 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(RequestUserInputEvent {
-            call_id: "call-2".to_string(),
+        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
             questions: vec![question_with_options("q2", "Second")],
         });
-        overlay.try_consume_user_input_request(RequestUserInputEvent {
-            call_id: "call-3".to_string(),
+        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
             questions: vec![question_with_options("q3", "Third")],
         });
@@ -1567,8 +1564,9 @@ mod tests {
     fn resolved_request_dismisses_overlay_without_emitting_events() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            RequestUserInputEvent {
-                call_id: "call-1".to_string(),
+            ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
             },
@@ -1594,8 +1592,9 @@ mod tests {
     fn resolved_current_request_advances_to_next_same_turn_prompt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            RequestUserInputEvent {
-                call_id: "call-1".to_string(),
+            ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
             },
@@ -1604,8 +1603,9 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(RequestUserInputEvent {
-            call_id: "call-2".to_string(),
+        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
         });
@@ -1617,7 +1617,7 @@ mod tests {
         );
 
         assert!(!overlay.done, "newer same-turn prompt should stay pending");
-        assert_eq!(overlay.request.call_id, "call-2");
+        assert_eq!(overlay.request.item_id, "call-2");
         assert_eq!(overlay.request.turn_id, "turn-1");
         assert_eq!(overlay.request.questions[0].id, "q2");
         assert!(
@@ -1630,8 +1630,9 @@ mod tests {
     fn resolved_queued_request_removes_only_that_prompt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            RequestUserInputEvent {
-                call_id: "call-1".to_string(),
+            ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
             },
@@ -1640,13 +1641,15 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(RequestUserInputEvent {
-            call_id: "call-2".to_string(),
+        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
         });
-        overlay.try_consume_user_input_request(RequestUserInputEvent {
-            call_id: "call-3".to_string(),
+        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q3", "Third")],
         });
@@ -1657,13 +1660,13 @@ mod tests {
             })
         );
 
-        assert_eq!(overlay.request.call_id, "call-1");
+        assert_eq!(overlay.request.item_id, "call-1");
         assert!(
             rx.try_recv().is_err(),
             "dismissing a stale queued request should not emit an event"
         );
         overlay.submit_answers();
-        assert_eq!(overlay.request.call_id, "call-3");
+        assert_eq!(overlay.request.item_id, "call-3");
         assert_eq!(overlay.request.questions[0].id, "q3");
         assert!(
             rx.try_recv().is_ok(),
@@ -1689,7 +1692,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { id, response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         assert_eq!(id, "turn-1");
@@ -1711,7 +1714,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1747,19 +1750,19 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let mut expected = HashMap::new();
         expected.insert(
             "q1".to_string(),
-            RequestUserInputAnswer {
+            ToolRequestUserInputAnswer {
                 answers: vec!["Option 1".to_string()],
             },
         );
         expected.insert(
             "q2".to_string(),
-            RequestUserInputAnswer {
+            ToolRequestUserInputAnswer {
                 answers: vec!["Option 1".to_string()],
             },
         );
@@ -1780,7 +1783,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2030,7 +2033,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2330,7 +2333,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2355,7 +2358,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2398,7 +2401,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2434,7 +2437,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2519,7 +2522,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2852,30 +2855,30 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event(
                 "turn-1",
-                vec![RequestUserInputQuestion {
+                vec![ToolRequestUserInputQuestion {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Discuss a code change (Recommended)".to_string(),
                             description: "Walk through a plan and edit code together.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Run tests".to_string(),
                             description: "Pick a crate and run its tests.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Review a diff".to_string(),
                             description: "Summarize or review current changes.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Refactor".to_string(),
                             description: "Tighten structure and remove dead code.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Ship it".to_string(),
                             description: "Finalize and open a PR.".to_string(),
                         },
@@ -2904,30 +2907,30 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event(
                 "turn-1",
-                vec![RequestUserInputQuestion {
+                vec![ToolRequestUserInputQuestion {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Discuss a code change (Recommended)".to_string(),
                             description: "Walk through a plan and edit code together.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Run tests".to_string(),
                             description: "Pick a crate and run its tests.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Review a diff".to_string(),
                             description: "Summarize or review current changes.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Refactor".to_string(),
                             description: "Tighten structure and remove dead code.".to_string(),
                         },
-                        RequestUserInputQuestionOption {
+                        ToolRequestUserInputOption {
                             label: "Ship it".to_string(),
                             description: "Finalize and open a PR.".to_string(),
                         },

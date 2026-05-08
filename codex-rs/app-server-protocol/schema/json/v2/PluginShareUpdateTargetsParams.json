@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PluginSharePrincipalType": {
+      "enum": [
+        "user",
+        "group",
+        "workspace"
+      ],
+      "type": "string"
+    },
+    "PluginShareTarget": {
+      "properties": {
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        }
+      },
+      "required": [
+        "principalId",
+        "principalType"
+      ],
+      "type": "object"
+    },
+    "PluginShareUpdateDiscoverability": {
+      "enum": [
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "discoverability": {
+      "$ref": "#/definitions/PluginShareUpdateDiscoverability"
+    },
+    "remotePluginId": {
+      "type": "string"
+    },
+    "shareTargets": {
+      "items": {
+        "$ref": "#/definitions/PluginShareTarget"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "discoverability",
+    "remotePluginId",
+    "shareTargets"
+  ],
+  "title": "PluginShareUpdateTargetsParams",
+  "type": "object"
+}

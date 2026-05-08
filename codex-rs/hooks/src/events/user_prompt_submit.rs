@@ -194,7 +194,7 @@ fn parse_completed(
                             });
                         }
                     }
-                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
+                } else if output_parser::looks_like_json(&run_result.stdout) {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
@@ -414,7 +414,6 @@ mod tests {
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::UserPromptSubmit,
-            is_managed: false,
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 5,

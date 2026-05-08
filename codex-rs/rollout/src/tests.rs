@@ -58,7 +58,7 @@ async fn insert_state_db_thread(
     thread_id: ThreadId,
     rollout_path: &Path,
     archived: bool,
-) {
+) -> crate::state_db::StateDbHandle {
     let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
         .await
         .expect("state db should initialize");
@@ -87,6 +87,7 @@ async fn insert_state_db_thread(
         .upsert_thread(&metadata)
         .await
         .expect("state db upsert should succeed");
+    runtime
 }
 
 // TODO(jif) fix
@@ -236,7 +237,7 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     let stale_db_path = home.join(format!(
         "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
     ));
-    insert_state_db_thread(
+    let runtime = insert_state_db_thread(
         home,
         thread_id,
         stale_db_path.as_path(),
@@ -244,7 +245,52 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     )
     .await;
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path.clone()));
+    assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[tokio::test]
+async fn find_thread_path_falls_back_when_db_path_points_to_another_thread() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(304);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+
+    let other_uuid = Uuid::from_u128(1304);
+    let other_ts = "2025-01-04T13-00-00";
+    write_session_file(
+        home,
+        other_ts,
+        other_uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let stale_db_path = home.join(format!(
+        "sessions/2025/01/04/rollout-{other_ts}-{other_uuid}.jsonl"
+    ));
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        stale_db_path.as_path(),
+        /*archived*/ false,
+    )
+    .await;
+
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
@@ -269,19 +315,42 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
 
     // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
-    let _runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+    let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
         .await
         .expect("state db should initialize");
-    _runtime
+    runtime
         .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[tokio::test]
+async fn find_thread_path_accepts_existing_state_db_path_without_canonical_filename() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(305);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let db_rollout_path = home.join("sessions/2025/01/03/custom-rollout-name.jsonl");
+    fs::create_dir_all(db_rollout_path.parent().expect("rollout parent")).unwrap();
+    fs::write(&db_rollout_path, "").unwrap();
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        db_rollout_path.as_path(),
+        /*archived*/ false,
+    )
+    .await;
+
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(db_rollout_path));
 }
 
 #[test]
@@ -1145,6 +1214,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
+                thread_source: None,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,

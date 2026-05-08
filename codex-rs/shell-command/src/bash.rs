@@ -131,6 +131,9 @@ pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<St
     if !has_named_descendant_kind(root, "heredoc_redirect") {
         return None;
     }
+    if has_named_descendant_kind(root, "file_redirect") {
+        return None;
+    }
 
     let command_node = find_single_command_node(root)?;
     parse_heredoc_command_words(command_node, script)
@@ -218,9 +221,11 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
                 }
                 words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
             }
-            // Allow shell constructs that attach IO to a single command without
-            // changing argv matching semantics for the executable prefix.
-            "variable_assignment" | "comment" => {}
+            // Allow heredoc constructs that attach stdin to a single command
+            // without changing argv matching semantics for the executable
+            // prefix. Other file redirects may write outside the sandbox and
+            // must not be collapsed to the executable prefix for execpolicy.
+            "comment" => {}
             kind if is_allowed_heredoc_attachment_kind(kind) => {}
             _ => return None,
         }
@@ -244,7 +249,6 @@ fn is_allowed_heredoc_attachment_kind(kind: &str) -> bool {
             | "simple_heredoc_body"
             | "heredoc_redirect"
             | "herestring_redirect"
-            | "file_redirect"
             | "redirected_statement"
     )
 }
@@ -536,16 +540,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_shell_lc_single_command_prefix_accepts_heredoc_with_extra_redirect() {
+    fn parse_shell_lc_single_command_prefix_rejects_heredoc_with_extra_file_redirect() {
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
             "python3 <<'PY' > /tmp/out.txt\nprint('hello')\nPY".to_string(),
         ];
-        assert_eq!(
-            parse_shell_lc_single_command_prefix(&command),
-            Some(vec!["python3".to_string()])
-        );
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_heredoc_with_variable_assignment() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "PATH=/tmp/evil:$PATH cat <<'EOF'\nhello\nEOF".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
     }
 
     #[test]
