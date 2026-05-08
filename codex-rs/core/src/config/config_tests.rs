@@ -7298,6 +7298,50 @@ async fn legacy_fast_service_tier_override_uses_priority_request_value() -> std:
 }
 
 #[tokio::test]
+async fn config_toml_service_tier_accepts_arbitrary_string() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("experimental-tier-id".to_string());
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some("experimental-tier-id".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_legacy_fast_service_tier_uses_priority_request_value() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("fast".to_string());
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn fast_default_opt_out_notice_config_is_respected() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
     let mut cfg = fixture.cfg.clone();
