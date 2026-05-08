@@ -1,4 +1,5 @@
 mod firewall;
+mod read_acl_mutex;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -22,7 +23,6 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
-use codex_windows_sandbox::read_acl_mutex_exists;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -68,7 +68,8 @@ const DENY_ACCESS: i32 = 3;
 
 mod sandbox_users;
 mod setup_runtime_bin;
-use codex_windows_sandbox::acquire_read_acl_mutex;
+use read_acl_mutex::acquire_read_acl_mutex;
+use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;

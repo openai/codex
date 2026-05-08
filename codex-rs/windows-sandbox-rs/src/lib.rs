@@ -40,8 +40,6 @@ mod proc_thread_attr;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
-mod read_acl_mutex;
-#[cfg(target_os = "windows")]
 mod sandbox_utils;
 #[cfg(target_os = "windows")]
 mod setup;
@@ -165,18 +163,6 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
-// Public only so the same-package Windows helper binaries can coordinate while
-// read ACLs are being applied. Keep these out of normal docs; ordinary callers
-// should not treat them as supported library API.
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub use read_acl_mutex::ReadAclMutexGuard;
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub use read_acl_mutex::acquire_read_acl_mutex;
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub use read_acl_mutex::read_acl_mutex_exists;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
