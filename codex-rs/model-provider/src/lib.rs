@@ -9,6 +9,7 @@ pub use auth::unauthenticated_auth_provider;
 pub use bearer_auth_provider::BearerAuthProvider;
 pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
 pub use codex_protocol::account::ProviderAccount;
+pub use models_endpoint::validate_api_key_with_models_endpoint;
 pub use provider::ModelProvider;
 pub use provider::ProviderAccountError;
 pub use provider::ProviderAccountResult;

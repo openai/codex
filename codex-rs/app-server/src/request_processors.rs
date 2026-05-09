@@ -343,6 +343,7 @@ use codex_mcp::resolve_oauth_scopes;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_model_provider::ProviderAccountError;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::validate_api_key_with_models_endpoint;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;

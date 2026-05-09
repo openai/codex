@@ -883,7 +883,23 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
 #[tokio::test]
 async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": []
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -925,6 +941,45 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     pretty_assertions::assert_eq!(payload.plan_type, None);
 
     assert!(codex_home.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_api_key_rejects_unusable_key_before_persisting() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": { "message": "Invalid API key" }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_api_key_request("sk-invalid-key")
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.message, "API key is invalid or unusable.");
+    assert!(!codex_home.path().join("auth.json").exists());
     Ok(())
 }
 
