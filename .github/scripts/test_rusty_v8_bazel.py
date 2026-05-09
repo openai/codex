@@ -148,6 +148,70 @@ class RustyV8BazelTest(unittest.TestCase):
                 {path.name for path in Path(output_dir).iterdir()},
             )
 
+    def test_upstream_release_pair_paths(self) -> None:
+        self.assertEqual(
+            (
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/obj/"
+                    "librusty_v8.a"
+                ),
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-apple-darwin/release/gn_out/"
+                    "src_binding.rs"
+                ),
+            ),
+            rusty_v8_bazel.upstream_release_pair_paths(
+                Path("/tmp/rusty_v8"),
+                "x86_64-apple-darwin",
+            ),
+        )
+        self.assertEqual(
+            (
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
+                    "obj/rusty_v8.lib"
+                ),
+                Path(
+                    "/tmp/rusty_v8/target/x86_64-pc-windows-msvc/release/gn_out/"
+                    "src_binding.rs"
+                ),
+            ),
+            rusty_v8_bazel.upstream_release_pair_paths(
+                Path("/tmp/rusty_v8"),
+                "x86_64-pc-windows-msvc",
+            ),
+        )
+
+    def test_stage_upstream_release_pair(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
+            source_root = Path(source_dir)
+            gn_out = (
+                source_root
+                / "target"
+                / "x86_64-pc-windows-msvc"
+                / "release"
+                / "gn_out"
+            )
+            (gn_out / "obj").mkdir(parents=True)
+            (gn_out / "obj" / "rusty_v8.lib").write_bytes(b"archive")
+            (gn_out / "src_binding.rs").write_text("binding")
+
+            rusty_v8_bazel.stage_upstream_release_pair(
+                source_root,
+                "x86_64-pc-windows-msvc",
+                Path(output_dir),
+                sandbox=True,
+            )
+
+            self.assertEqual(
+                {
+                    "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz",
+                    "src_binding_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.rs",
+                    "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.sha256",
+                },
+                {path.name for path in Path(output_dir).iterdir()},
+            )
+
     def test_ensure_bazel_output_files_rebuilds_existing_outputs(self) -> None:
         with TemporaryDirectory() as output_dir:
             output = Path(output_dir) / "libv8.a"

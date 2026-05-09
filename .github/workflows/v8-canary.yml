@@ -3,14 +3,17 @@ name: v8-canary
 on:
   pull_request:
     paths:
+      - ".bazelrc"
       - ".github/actions/setup-bazel-ci/**"
       - ".github/scripts/rusty_v8_bazel.py"
+      - ".github/scripts/rusty_v8_module_bazel.py"
       - ".github/workflows/rusty-v8-release.yml"
       - ".github/workflows/v8-canary.yml"
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
       - "codex-rs/Cargo.toml"
       - "patches/BUILD.bazel"
+      - "patches/llvm_*.patch"
       - "patches/rules_cc_*.patch"
       - "patches/v8_*.patch"
       - "third_party/v8/**"
@@ -18,14 +21,17 @@ on:
     branches:
       - main
     paths:
+      - ".bazelrc"
       - ".github/actions/setup-bazel-ci/**"
       - ".github/scripts/rusty_v8_bazel.py"
+      - ".github/scripts/rusty_v8_module_bazel.py"
       - ".github/workflows/rusty-v8-release.yml"
       - ".github/workflows/v8-canary.yml"
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
       - "codex-rs/Cargo.toml"
       - "patches/BUILD.bazel"
+      - "patches/llvm_*.patch"
       - "patches/rules_cc_*.patch"
       - "patches/v8_*.patch"
       - "third_party/v8/**"
@@ -262,4 +268,138 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+  build-windows-source:
+    name: Build ptrcomp-sandbox ${{ matrix.target }} from source
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - runner: windows-2022
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Configure git for upstream checkout
+        shell: bash
+        run: git config --global core.symlinks true
+
+      - name: Check out upstream rusty_v8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: denoland/rusty_v8
+          ref: v${{ needs.metadata.outputs.v8_version }}
+          path: upstream-rusty-v8
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      - name: Set up rusty_v8 Rust toolchain
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          toolchain: "1.91.0"
+          targets: ${{ matrix.target }}
+
+      - name: Set up Codex Rust toolchain for Cargo smoke
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          toolchain: "1.93.0"
+          targets: ${{ matrix.target }}
+
+      - name: Write upstream submodule status
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: git submodule status --recursive > git_submodule_status.txt
+
+      - name: Restore upstream source-build cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            upstream-rusty-v8/target/sccache
+            upstream-rusty-v8/target/${{ matrix.target }}/release/gn_out
+          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+          restore-keys: |
+            rusty-v8-source-${{ matrix.target }}-sandbox-
+
+      - name: Install and start sccache
+        shell: pwsh
+        env:
+          SCCACHE_CACHE_SIZE: 256M
+          SCCACHE_DIR: ${{ github.workspace }}/upstream-rusty-v8/target/sccache
+          SCCACHE_IDLE_TIMEOUT: 0
+        run: |
+          $version = "v0.8.2"
+          $platform = "x86_64-pc-windows-msvc"
+          $basename = "sccache-$version-$platform"
+          $url = "https://github.com/mozilla/sccache/releases/download/$version/$basename.tar.gz"
+          cd ~
+          curl -LO $url
+          tar -xzvf "$basename.tar.gz"
+          . $basename/sccache --start-server
+          echo "$(pwd)/$basename" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Chromium clang for ARM64 MSVC cross build
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: python3 tools/clang/scripts/update.py
+
+      - name: Build upstream rusty_v8 sandbox release pair
+        env:
+          SCCACHE_IDLE_TIMEOUT: 0
+          TARGET: ${{ matrix.target }}
+          V8_FROM_SOURCE: "1"
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: cargo +1.91.0 build --locked --release --target "${TARGET}" --features v8_enable_sandbox
+
+      - name: Stage upstream sandbox release pair
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/rusty_v8_bazel.py stage-upstream-release-pair \
+            --source-root upstream-rusty-v8 \
+            --target "${TARGET}" \
+            --output-dir "dist/${TARGET}" \
+            --sandbox
+
+      - name: Smoke link staged artifact with Cargo
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'rusty_v8_*.lib.gz' -print -quit)"
+          binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
+          if [[ -z "${archive}" || -z "${binding}" ]]; then
+            echo "Missing staged archive or binding for ${TARGET}." >&2
+            exit 1
+          fi
+
+          (
+            cd codex-rs
+            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
+            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
+            cargo +1.93.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
+          )
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
