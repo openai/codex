@@ -6409,6 +6409,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -8814,10 +8819,20 @@
             "null"
           ]
         },
+        "discoverability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginShareDiscoverability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "remotePluginId": {
           "type": "string"
         },
-        "shareTargets": {
+        "sharePrincipals": {
           "items": {
             "$ref": "#/definitions/PluginSharePrincipal"
           },
@@ -8878,14 +8893,10 @@
         },
         "plugin": {
           "$ref": "#/definitions/PluginSummary"
-        },
-        "shareUrl": {
-          "type": "string"
         }
       },
       "required": [
-        "plugin",
-        "shareUrl"
+        "plugin"
       ],
       "type": "object"
     },
@@ -8920,14 +8931,26 @@
         },
         "principalType": {
           "$ref": "#/definitions/PluginSharePrincipalType"
+        },
+        "role": {
+          "$ref": "#/definitions/PluginSharePrincipalRole"
         }
       },
       "required": [
         "name",
         "principalId",
-        "principalType"
+        "principalType",
+        "role"
       ],
       "type": "object"
+    },
+    "PluginSharePrincipalRole": {
+      "enum": [
+        "reader",
+        "editor",
+        "owner"
+      ],
+      "type": "string"
     },
     "PluginSharePrincipalType": {
       "enum": [
@@ -8999,13 +9022,24 @@
         },
         "principalType": {
           "$ref": "#/definitions/PluginSharePrincipalType"
+        },
+        "role": {
+          "$ref": "#/definitions/PluginShareTargetRole"
         }
       },
       "required": [
         "principalId",
-        "principalType"
+        "principalType",
+        "role"
       ],
       "type": "object"
+    },
+    "PluginShareTargetRole": {
+      "enum": [
+        "reader",
+        "editor"
+      ],
+      "type": "string"
     },
     "PluginShareUpdateDiscoverability": {
       "enum": [
@@ -9899,7 +9933,7 @@
     },
     "RemoteControlStatusChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Current remote-control connection status and environment id exposed to clients.",
+      "description": "Current remote-control connection status and remote identity exposed to clients.",
       "properties": {
         "environmentId": {
           "type": [
@@ -9907,11 +9941,15 @@
             "null"
           ]
         },
+        "installationId": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/definitions/RemoteControlConnectionStatus"
         }
       },
       "required": [
+        "installationId",
         "status"
       ],
       "title": "RemoteControlStatusChangedNotification",

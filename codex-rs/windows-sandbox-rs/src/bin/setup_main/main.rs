@@ -1,4 +1,4 @@
-#[path = "../setup_main_win.rs"]
+#[cfg(target_os = "windows")]
 mod win;
 
 #[cfg(target_os = "windows")]

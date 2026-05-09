@@ -10,6 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -31,6 +32,7 @@ use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
+use crate::style::accent_style;
 
 const EVENT_COLUMN_WIDTH: usize = 22;
 const COUNT_COLUMN_WIDTH: usize = 12;
@@ -338,8 +340,9 @@ impl HooksBrowserView {
             row_line.push(Span::from(event_description(row.event_name)));
 
             if selected {
+                let style = accent_style();
                 for span in &mut row_line {
-                    *span = span.clone().cyan().bold();
+                    *span = span.clone().set_style(style);
                 }
             } else {
                 row_line[1] = row_line[1].clone().dim();
@@ -424,7 +427,7 @@ impl HooksBrowserView {
                     if needs_review {
                         line = line.yellow().bold();
                     } else {
-                        line = line.cyan().bold();
+                        line = line.patch_style(accent_style());
                     }
                 } else if needs_review {
                     line = line.yellow();
@@ -854,6 +857,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Modifier;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn render_lines(view: &HooksBrowserView, width: u16) -> String {
@@ -881,6 +885,14 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn render_buffer(view: &HooksBrowserView, width: u16) -> Buffer {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        buf
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -963,6 +975,26 @@ mod tests {
     fn renders_event_browser() {
         let view = view();
         assert_snapshot!("hooks_browser_events", render_lines(&view, /*width*/ 112));
+    }
+
+    #[test]
+    fn selected_event_rows_use_the_shared_accent_style() {
+        let view = view();
+        let buf = render_buffer(&view, /*width*/ 112);
+        let expected = accent_style();
+
+        let selected_cell = buf
+            .content
+            .iter()
+            .find(|cell| {
+                let style = cell.style();
+                cell.symbol() == "P"
+                    && style.fg == expected.fg
+                    && style.add_modifier.contains(Modifier::BOLD)
+            })
+            .expect("selected event row should use the shared accent style");
+
+        assert_eq!(selected_cell.style().fg, expected.fg);
     }
 
     #[test]

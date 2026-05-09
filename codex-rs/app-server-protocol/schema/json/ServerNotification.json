@@ -2737,7 +2737,7 @@
       "type": "string"
     },
     "RemoteControlStatusChangedNotification": {
-      "description": "Current remote-control connection status and environment id exposed to clients.",
+      "description": "Current remote-control connection status and remote identity exposed to clients.",
       "properties": {
         "environmentId": {
           "type": [
@@ -2745,11 +2745,15 @@
             "null"
           ]
         },
+        "installationId": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/definitions/RemoteControlConnectionStatus"
         }
       },
       "required": [
+        "installationId",
         "status"
       ],
       "type": "object"

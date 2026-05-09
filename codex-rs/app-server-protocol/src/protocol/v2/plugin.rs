@@ -259,7 +259,6 @@ pub struct PluginShareDeleteResponse {}
 #[ts(export_to = "v2/")]
 pub struct PluginShareListItem {
     pub plugin: PluginSummary,
-    pub share_url: String,
     pub local_plugin_path: Option<AbsolutePathBuf>,
 }
 
@@ -308,6 +307,7 @@ pub enum PluginSharePrincipalType {
 pub struct PluginShareTarget {
     pub principal_type: PluginSharePrincipalType,
     pub principal_id: String,
+    pub role: PluginShareTargetRole,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -316,7 +316,27 @@ pub struct PluginShareTarget {
 pub struct PluginSharePrincipal {
     pub principal_type: PluginSharePrincipalType,
     pub principal_id: String,
+    pub role: PluginSharePrincipalRole,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum PluginShareTargetRole {
+    Reader,
+    Editor,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum PluginSharePrincipalRole {
+    Reader,
+    Editor,
+    Owner,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -539,10 +559,11 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    pub discoverability: Option<PluginShareDiscoverability>,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
-    pub share_targets: Option<Vec<PluginSharePrincipal>>,
+    pub share_principals: Option<Vec<PluginSharePrincipal>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

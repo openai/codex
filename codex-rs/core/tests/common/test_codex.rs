@@ -188,7 +188,6 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
     Freeform,
-    Function,
     Shell,
     ShellViaHeredoc,
     ShellCommandViaHeredoc,
@@ -384,9 +383,16 @@ impl TestCodexBuilder {
             .exec_server_url
             .clone()
             .or_else(|| test_env.exec_server_url.clone());
+        #[cfg(target_os = "linux")]
+        let codex_linux_sandbox_exe = Some(
+            crate::find_codex_linux_sandbox_exe()
+                .context("should find binary for codex-linux-sandbox")?,
+        );
+        #[cfg(not(target_os = "linux"))]
+        let codex_linux_sandbox_exe = None;
         let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
             std::env::current_exe()?,
-            /*codex_linux_sandbox_exe*/ None,
+            codex_linux_sandbox_exe,
         )?;
         let environment_manager = Arc::new(
             codex_exec_server::EnvironmentManager::create_for_tests(
@@ -435,6 +441,7 @@ impl TestCodexBuilder {
             thread_store,
             state_db.clone(),
             installation_id,
+            /*attestation_provider*/ None,
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -950,8 +957,7 @@ impl TestCodexHarness {
             ApplyPatchModelOutput::Freeform => {
                 Box::pin(self.custom_tool_call_output(call_id)).await
             }
-            ApplyPatchModelOutput::Function
-            | ApplyPatchModelOutput::Shell
+            ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
                 Box::pin(self.function_call_stdout(call_id)).await

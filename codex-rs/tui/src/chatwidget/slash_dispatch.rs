@@ -9,7 +9,10 @@ use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
-use crate::bottom_pane::slash_commands;
+use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
+use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::bottom_pane::slash_commands::SlashCommandItem;
+use crate::bottom_pane::slash_commands::find_slash_command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -45,6 +48,20 @@ impl ChatWidget {
         if cmd == SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    pub(super) fn handle_service_tier_command_dispatch(&mut self, command: ServiceTierCommand) {
+        if self.active_side_conversation {
+            self.add_error_message(format!(
+                "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+                command.name
+            ));
+            self.bottom_pane.drain_pending_submission_state();
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
+        self.toggle_service_tier_from_ui(command);
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -183,9 +200,6 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
-            }
-            SlashCommand::Fast => {
-                self.toggle_fast_mode_from_ui();
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -572,27 +586,6 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
-            SlashCommand::Fast => {
-                match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
-                    "status" => {
-                        let status =
-                            if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
-                                "on"
-                            } else {
-                                "off"
-                            };
-                        self.add_info_message(
-                            format!("Fast mode is {status}."),
-                            /*hint*/ None,
-                        );
-                    }
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                    }
-                }
-            }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -813,7 +806,9 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
+        let service_tier_commands = self.current_model_service_tier_commands();
+        let Some(command) =
+            find_slash_command(name, self.builtin_command_flags(), &service_tier_commands)
         else {
             self.add_info_message(
                 format!(
@@ -825,11 +820,19 @@ impl ChatWidget {
         };
 
         if rest.is_empty() {
-            self.dispatch_command(cmd);
-            return self.queued_command_drain_result(cmd);
+            return match command {
+                SlashCommandItem::Builtin(cmd) => {
+                    self.dispatch_command(cmd);
+                    self.queued_command_drain_result(cmd)
+                }
+                SlashCommandItem::ServiceTier(command) => {
+                    self.handle_service_tier_command_dispatch(command);
+                    QueueDrain::Continue
+                }
+            };
         }
 
-        if !cmd.supports_inline_args() {
+        if !command.supports_inline_args() {
             self.submit_user_message(UserMessage {
                 text,
                 local_images,
@@ -839,6 +842,16 @@ impl ChatWidget {
             });
             return QueueDrain::Stop;
         }
+        let SlashCommandItem::Builtin(cmd) = command else {
+            self.submit_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            return QueueDrain::Stop;
+        };
 
         let trimmed_start = rest.trim_start();
         let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
@@ -867,7 +880,7 @@ impl ChatWidget {
         self.queued_command_drain_result(cmd)
     }
 
-    fn builtin_command_flags(&self) -> slash_commands::BuiltinCommandFlags {
+    fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         #[cfg(target_os = "windows")]
         let allow_elevate_sandbox = {
             let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
@@ -876,12 +889,12 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let allow_elevate_sandbox = false;
 
-        slash_commands::BuiltinCommandFlags {
+        BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
-            fast_command_enabled: self.fast_mode_enabled(),
+            service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
@@ -895,8 +908,7 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
         match cmd {
-            SlashCommand::Fast
-            | SlashCommand::Ide
+            SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

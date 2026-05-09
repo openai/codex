@@ -8,6 +8,7 @@ use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -42,8 +43,9 @@ impl ToolHandler for McpHandler {
             return None;
         };
 
+        let tool_name = &self.tool_name;
         Some(PreToolUsePayload {
-            tool_name: HookToolName::new(self.tool_name.display()),
+            tool_name: HookToolName::new(flat_tool_name(tool_name).into_owned()),
             tool_input: mcp_hook_tool_input(raw_arguments),
         })
     }
@@ -59,8 +61,9 @@ impl ToolHandler for McpHandler {
 
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_name = &self.tool_name;
         Some(PostToolUsePayload {
-            tool_name: HookToolName::new(self.tool_name.display()),
+            tool_name: HookToolName::new(flat_tool_name(tool_name).into_owned()),
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.tool_input.clone(),
             tool_response,
@@ -93,13 +96,14 @@ impl ToolHandler for McpHandler {
         let arguments_str = raw_arguments;
 
         let started = Instant::now();
+        let hook_tool_name = flat_tool_name(&self.tool_name);
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &turn,
             call_id.clone(),
             server,
             tool,
-            self.tool_name.display(),
+            hook_tool_name.into_owned(),
             arguments_str,
         )
         .await;

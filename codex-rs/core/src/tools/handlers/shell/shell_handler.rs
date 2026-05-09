@@ -133,7 +133,7 @@ impl ToolHandler for ShellHandler {
         let exec_params =
             ShellHandler::to_exec_params(&params, turn.as_ref(), session.conversation_id);
         run_exec_like(RunExecLikeArgs {
-            tool_name: "shell".to_string(),
+            tool_name: ToolName::plain("shell"),
             exec_params,
             hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
             additional_permissions: params.additional_permissions.clone(),

@@ -58,7 +58,7 @@ impl ToolHandler for UnavailableToolHandler {
         match payload {
             ToolPayload::Function { .. } => Ok(FunctionToolOutput::from_text(
                 unavailable_tool_message(
-                    self.tool_name.display(),
+                    &self.tool_name,
                     "Retry after the tool becomes available or ask the user to re-enable it.",
                 ),
                 Some(false),

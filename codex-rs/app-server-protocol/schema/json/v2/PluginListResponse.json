@@ -246,10 +246,20 @@
             "null"
           ]
         },
+        "discoverability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginShareDiscoverability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "remotePluginId": {
           "type": "string"
         },
-        "shareTargets": {
+        "sharePrincipals": {
           "items": {
             "$ref": "#/definitions/PluginSharePrincipal"
           },
@@ -270,6 +280,14 @@
       ],
       "type": "object"
     },
+    "PluginShareDiscoverability": {
+      "enum": [
+        "LISTED",
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
     "PluginSharePrincipal": {
       "properties": {
         "name": {
@@ -280,14 +298,26 @@
         },
         "principalType": {
           "$ref": "#/definitions/PluginSharePrincipalType"
+        },
+        "role": {
+          "$ref": "#/definitions/PluginSharePrincipalRole"
         }
       },
       "required": [
         "name",
         "principalId",
-        "principalType"
+        "principalType",
+        "role"
       ],
       "type": "object"
+    },
+    "PluginSharePrincipalRole": {
+      "enum": [
+        "reader",
+        "editor",
+        "owner"
+      ],
+      "type": "string"
     },
     "PluginSharePrincipalType": {
       "enum": [

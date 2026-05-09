@@ -4,8 +4,10 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -573,11 +575,39 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
 
 #[tokio::test]
 async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
     write_skill(&codex_home, "demo")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp =
+        McpProcess::new_with_env(codex_home.path(), &[(CODEX_EXEC_SERVER_URL_ENV_VAR, None)])
+            .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let initial_skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let initial_skills_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(initial_skills_request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(initial_skills_response)?;
+    assert_eq!(data.len(), 1);
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| { skill.name == "demo" && skill.description == "demo description" })
+    );
+
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: None,
@@ -630,5 +660,24 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let notification: SkillsChangedNotification = serde_json::from_value(params)?;
 
     assert_eq!(notification, SkillsChangedNotification {});
+    let updated_skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+            force_reload: false,
+        })
+        .await?;
+    let updated_skills_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(updated_skills_request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(updated_skills_response)?;
+    assert_eq!(data.len(), 1);
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.name == "demo" && skill.description == "updated")
+    );
     Ok(())
 }
