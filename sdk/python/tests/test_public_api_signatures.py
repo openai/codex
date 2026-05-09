@@ -7,9 +7,62 @@ from pathlib import Path
 from typing import Any
 
 import codex_app_server
-from codex_app_server import AppServerConfig, RunResult
+from codex_app_server import (
+    AppServerConfig,
+    AsyncCodex,
+    AsyncThread,
+    Codex,
+    RunResult,
+    Thread,
+)
 from codex_app_server.models import InitializeResponse
-from codex_app_server.api import AsyncCodex, AsyncThread, Codex, Thread
+
+EXPECTED_ROOT_EXPORTS = [
+    "__version__",
+    "AppServerConfig",
+    "Codex",
+    "AsyncCodex",
+    "Thread",
+    "AsyncThread",
+    "TurnHandle",
+    "AsyncTurnHandle",
+    "RunResult",
+    "Input",
+    "InputItem",
+    "TextInput",
+    "ImageInput",
+    "LocalImageInput",
+    "SkillInput",
+    "MentionInput",
+    "ApprovalsReviewer",
+    "AskForApproval",
+    "Personality",
+    "PlanType",
+    "ReasoningEffort",
+    "ReasoningSummary",
+    "SandboxMode",
+    "SandboxPolicy",
+    "SortDirection",
+    "ThreadListCwdFilter",
+    "ThreadSortKey",
+    "ThreadSource",
+    "ThreadSourceKind",
+    "ThreadStartSource",
+    "TurnStatus",
+    "retry_on_overload",
+    "AppServerError",
+    "TransportClosedError",
+    "JsonRpcError",
+    "AppServerRpcError",
+    "ParseError",
+    "InvalidRequestError",
+    "MethodNotFoundError",
+    "InvalidParamsError",
+    "InternalRpcError",
+    "ServerBusyError",
+    "RetryLimitExceededError",
+    "is_retryable_error",
+]
 
 
 def _keyword_only_names(fn: object) -> list[str]:
@@ -51,6 +104,36 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
 def test_package_includes_py_typed_marker() -> None:
     marker = resources.files("codex_app_server").joinpath("py.typed")
     assert marker.is_file()
+
+
+def test_package_root_exports_only_public_api() -> None:
+    """The package root should expose the supported SDK surface, not internals."""
+    assert codex_app_server.__all__ == EXPECTED_ROOT_EXPORTS
+    assert {
+        name: hasattr(codex_app_server, name) for name in EXPECTED_ROOT_EXPORTS
+    } == {name: True for name in EXPECTED_ROOT_EXPORTS}
+    assert {
+        "AppServerClient": hasattr(codex_app_server, "AppServerClient"),
+        "AsyncAppServerClient": hasattr(codex_app_server, "AsyncAppServerClient"),
+        "InitializeResponse": hasattr(codex_app_server, "InitializeResponse"),
+        "ThreadStartParams": hasattr(codex_app_server, "ThreadStartParams"),
+        "TurnStartParams": hasattr(codex_app_server, "TurnStartParams"),
+    } == {
+        "AppServerClient": False,
+        "AsyncAppServerClient": False,
+        "InitializeResponse": False,
+        "ThreadStartParams": False,
+        "TurnStartParams": False,
+    }
+
+
+def test_package_star_import_matches_public_api() -> None:
+    """Star imports should follow the same explicit public API list."""
+    namespace: dict[str, object] = {}
+    exec("from codex_app_server import *", namespace)
+
+    exported = set(namespace) - {"__builtins__"}
+    assert exported == set(EXPECTED_ROOT_EXPORTS)
 
 
 def test_generated_public_signatures_are_snake_case_and_typed() -> None:

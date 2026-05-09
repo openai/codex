@@ -12,8 +12,6 @@ ensure_local_sdk_src()
 from codex_app_server import (
     Codex,
     TextInput,
-    ThreadTokenUsageUpdatedNotification,
-    TurnCompletedNotification,
 )
 
 print("Codex mini CLI. Type /exit to quit.")
@@ -69,12 +67,13 @@ with Codex(config=runtime_config()) as codex:
                     print(delta, end="", flush=True)
                     printed_delta = True
                 continue
-            if isinstance(payload, ThreadTokenUsageUpdatedNotification):
-                usage = payload.token_usage
+            if event.method == "thread/tokenUsage/updated":
+                usage = getattr(payload, "token_usage", None)
                 continue
-            if isinstance(payload, TurnCompletedNotification):
-                status = payload.turn.status
-                error = payload.turn.error
+            if event.method == "turn/completed":
+                turn = getattr(payload, "turn", None)
+                status = getattr(turn, "status", None)
+                error = getattr(turn, "error", None)
 
         if printed_delta:
             print()
