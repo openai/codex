@@ -135,6 +135,7 @@ def test_invalid_notification_payload_falls_back_to_unknown() -> None:
 
 
 def test_generated_notification_turn_id_handles_known_payload_shapes() -> None:
+    """Generated routing metadata should cover direct, nested, and unscoped payloads."""
     direct = AgentMessageDeltaNotification.model_validate(
         {
             "delta": "hello",
@@ -159,6 +160,7 @@ def test_generated_notification_turn_id_handles_known_payload_shapes() -> None:
 
 
 def test_turn_notification_router_demuxes_registered_turns() -> None:
+    """The router should deliver out-of-order turn events to the matching queues."""
     client = AppServerClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
@@ -201,6 +203,7 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
 
 
 def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> None:
+    """Reader-loop routing should preserve order within each interleaved turn stream."""
     client = AppServerClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
@@ -245,6 +248,7 @@ def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> Non
     ]
 
     def fake_read_message() -> dict[str, object]:
+        """Feed the reader loop a realistic interleaved stdout sequence."""
         if messages:
             return messages.pop(0)
         raise EOFError
@@ -278,6 +282,7 @@ def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> Non
 
 
 def test_turn_notification_router_buffers_events_before_registration() -> None:
+    """Early turn events should be replayed once their TurnHandle registers."""
     client = AppServerClient()
     client._router.route_notification(
         client._coerce_notification(
@@ -302,6 +307,7 @@ def test_turn_notification_router_buffers_events_before_registration() -> None:
 
 
 def test_turn_notification_router_clears_unregistered_turn_when_completed() -> None:
+    """A completed unregistered turn should not leave a pending queue behind."""
     client = AppServerClient()
     client._router.route_notification(
         client._coerce_notification(
@@ -328,6 +334,7 @@ def test_turn_notification_router_clears_unregistered_turn_when_completed() -> N
 
 
 def test_turn_notification_router_routes_unknown_turn_notifications() -> None:
+    """Unknown notifications should still route when their raw params carry a turn id."""
     client = AppServerClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")

@@ -678,6 +678,7 @@ class TurnHandle:
         return self._client.turn_interrupt(self.thread_id, self.id)
 
     def stream(self) -> Iterator[Notification]:
+        """Yield only notifications routed to this turn handle."""
         self._client.register_turn_notifications(self.id)
         try:
             while True:
@@ -730,6 +731,7 @@ class AsyncTurnHandle:
         return await self._codex._client.turn_interrupt(self.thread_id, self.id)
 
     async def stream(self) -> AsyncIterator[Notification]:
+        """Yield only notifications routed to this async turn handle."""
         await self._codex._ensure_initialized()
         self._codex._client.register_turn_notifications(self.id)
         try:

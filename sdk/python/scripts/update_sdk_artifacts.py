@@ -61,6 +61,7 @@ def staged_runtime_bin_path(root: Path) -> Path:
 
 
 def staged_runtime_resource_path(root: Path, resource: Path) -> Path:
+    """Stage runtime helper binaries beside the main bundled Codex binary."""
     # Runtime wheels include the whole bin/ directory, so helper executables
     # should be staged beside the main Codex binary instead of changing the
     # package template for each platform.
@@ -588,6 +589,7 @@ def _notification_specs() -> list[tuple[str, str]]:
 def _notification_turn_id_specs(
     specs: list[tuple[str, str]],
 ) -> tuple[list[str], list[str]]:
+    """Classify generated notification payloads by where the turn id lives."""
     server_notifications = json.loads(
         (schema_root_dir() / "ServerNotification.json").read_text()
     )
@@ -615,6 +617,7 @@ def _notification_turn_id_specs(
 
 
 def _type_tuple_source(class_names: list[str]) -> str:
+    """Render a generated tuple literal for notification payload classes."""
     if not class_names:
         return "()"
     if len(class_names) == 1:
@@ -623,6 +626,7 @@ def _type_tuple_source(class_names: list[str]) -> str:
 
 
 def generate_notification_registry() -> None:
+    """Regenerate notification models and routing metadata from generated schemas."""
     out = (
         sdk_root()
         / "src"
@@ -666,6 +670,7 @@ def generate_notification_registry() -> None:
             "",
             "",
             "def notification_turn_id(payload: BaseModel) -> str | None:",
+            '    """Return the turn id carried by generated notification payload metadata."""',
             "    if isinstance(payload, DIRECT_TURN_ID_NOTIFICATION_TYPES):",
             "        return payload.turn_id if isinstance(payload.turn_id, str) else None",
             "    if isinstance(payload, NESTED_TURN_NOTIFICATION_TYPES):",

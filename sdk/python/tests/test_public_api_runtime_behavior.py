@@ -227,6 +227,7 @@ def test_async_codex_initializes_only_once_under_concurrency() -> None:
 
 
 def test_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
+    """Two sync TurnHandle streams should advance independently on one client."""
     client = AppServerClient()
     notifications: dict[str, deque[Notification]] = {
         "turn-1": deque(
@@ -257,10 +258,13 @@ def test_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
 
 
 def test_async_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
+    """Two async TurnHandle streams should advance independently on one client."""
     async def scenario() -> None:
+        """Interleave two async streams backed by separate per-turn queues."""
         codex = AsyncCodex()
 
         async def fake_ensure_initialized() -> None:
+            """Avoid starting a real app-server process for this stream test."""
             return None
 
         notifications: dict[str, deque[Notification]] = {
@@ -279,6 +283,7 @@ def test_async_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
         }
 
         async def fake_next_notification(turn_id: str) -> Notification:
+            """Return the next notification from the requested per-turn queue."""
             return notifications[turn_id].popleft()
 
         codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
@@ -468,6 +473,7 @@ def test_thread_run_raises_on_failed_turn() -> None:
 
 
 def test_stream_text_registers_and_consumes_turn_notifications() -> None:
+    """stream_text should register, consume, and unregister one turn queue."""
     client = AppServerClient()
     notifications: deque[Notification] = deque(
         [
@@ -482,13 +488,16 @@ def test_stream_text_registers_and_consumes_turn_notifications() -> None:
     )
 
     def fake_register(turn_id: str) -> None:
+        """Record registration for the turn created by stream_text."""
         calls.append(("register", turn_id))
 
     def fake_next(turn_id: str) -> Notification:
+        """Return the next queued notification for stream_text."""
         calls.append(("next", turn_id))
         return notifications.popleft()
 
     def fake_unregister(turn_id: str) -> None:
+        """Record cleanup for the turn created by stream_text."""
         calls.append(("unregister", turn_id))
 
     client.register_turn_notifications = fake_register  # type: ignore[method-assign]
@@ -510,10 +519,13 @@ def test_stream_text_registers_and_consumes_turn_notifications() -> None:
 
 
 def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
+    """Async Thread.run should normalize string input and collect routed results."""
     async def scenario() -> None:
+        """Feed item, usage, and completion events through the async turn stream."""
         codex = AsyncCodex()
 
         async def fake_ensure_initialized() -> None:
+            """Avoid starting a real app-server process for this run test."""
             return None
 
         item_notification = _item_completed_notification(text="Hello async.")
@@ -528,12 +540,14 @@ def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
         seen: dict[str, object] = {}
 
         async def fake_turn_start(thread_id: str, wire_input: object, *, params=None):  # noqa: ANN001,ANN202
+            """Capture normalized input and return a synthetic turn id."""
             seen["thread_id"] = thread_id
             seen["wire_input"] = wire_input
             seen["params"] = params
             return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
 
         async def fake_next_notification(_turn_id: str) -> Notification:
+            """Return the next queued notification for the synthetic turn."""
             return notifications.popleft()
 
         codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
@@ -556,10 +570,13 @@ def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
 def test_async_thread_run_uses_last_completed_assistant_message_as_final_response() -> (
     None
 ):
+    """Async run should use the last final assistant message as the response text."""
     async def scenario() -> None:
+        """Feed two completed agent messages through the async per-turn stream."""
         codex = AsyncCodex()
 
         async def fake_ensure_initialized() -> None:
+            """Avoid starting a real app-server process for this run test."""
             return None
 
         first_item_notification = _item_completed_notification(
@@ -577,9 +594,11 @@ def test_async_thread_run_uses_last_completed_assistant_message_as_final_respons
         )
 
         async def fake_turn_start(thread_id: str, wire_input: object, *, params=None):  # noqa: ANN001,ANN202,ARG001
+            """Return a synthetic turn id after AsyncThread.run builds input."""
             return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
 
         async def fake_next_notification(_turn_id: str) -> Notification:
+            """Return the next queued notification for that synthetic turn."""
             return notifications.popleft()
 
         codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
@@ -598,10 +617,13 @@ def test_async_thread_run_uses_last_completed_assistant_message_as_final_respons
 
 
 def test_async_thread_run_returns_none_when_only_commentary_messages_complete() -> None:
+    """Async Thread.run should ignore commentary-only messages for final text."""
     async def scenario() -> None:
+        """Feed a commentary item and completion through the async turn stream."""
         codex = AsyncCodex()
 
         async def fake_ensure_initialized() -> None:
+            """Avoid starting a real app-server process for this run test."""
             return None
 
         commentary_notification = _item_completed_notification(
@@ -616,9 +638,11 @@ def test_async_thread_run_returns_none_when_only_commentary_messages_complete() 
         )
 
         async def fake_turn_start(thread_id: str, wire_input: object, *, params=None):  # noqa: ANN001,ANN202,ARG001
+            """Return a synthetic turn id for commentary-only output."""
             return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
 
         async def fake_next_notification(_turn_id: str) -> Notification:
+            """Return the next queued commentary/completion notification."""
             return notifications.popleft()
 
         codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]

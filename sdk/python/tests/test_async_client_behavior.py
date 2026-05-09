@@ -13,12 +13,15 @@ from codex_app_server.models import Notification, UnknownNotification
 
 
 def test_async_client_allows_concurrent_transport_calls() -> None:
+    """Async wrappers should offload sync calls so concurrent awaits can overlap."""
     async def scenario() -> int:
+        """Run two blocking sync calls and report peak overlap."""
         client = AsyncAppServerClient()
         active = 0
         max_active = 0
 
         def fake_model_list(include_hidden: bool = False) -> bool:
+            """Simulate a blocking sync transport call."""
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
@@ -34,16 +37,20 @@ def test_async_client_allows_concurrent_transport_calls() -> None:
 
 
 def test_async_stream_text_is_incremental_without_blocking_parallel_calls() -> None:
+    """Async text streaming should yield incrementally without blocking other calls."""
     async def scenario() -> tuple[str, list[str], bool]:
+        """Start a stream, then prove another async client call can finish."""
         client = AsyncAppServerClient()
 
         def fake_stream_text(thread_id: str, text: str, params=None):  # type: ignore[no-untyped-def]
+            """Yield one item before sleeping so the async wrapper can interleave."""
             yield "first"
             time.sleep(0.03)
             yield "second"
             yield "third"
 
         def fake_model_list(include_hidden: bool = False) -> str:
+            """Return immediately to prove the event loop was not monopolized."""
             return "done"
 
         client._sync.stream_text = fake_stream_text  # type: ignore[method-assign]
@@ -70,7 +77,9 @@ def test_async_stream_text_is_incremental_without_blocking_parallel_calls() -> N
 
 
 def test_async_client_turn_notification_methods_delegate_to_sync_client() -> None:
+    """Async turn routing methods should preserve sync-client registration semantics."""
     async def scenario() -> tuple[list[tuple[str, str]], Notification, str]:
+        """Record the sync-client calls made by async turn notification wrappers."""
         client = AsyncAppServerClient()
         event = Notification(
             method="unknown/direct",
@@ -85,16 +94,20 @@ def test_async_client_turn_notification_methods_delegate_to_sync_client() -> Non
         calls: list[tuple[str, str]] = []
 
         def fake_register(turn_id: str) -> None:
+            """Record turn registration through the wrapped sync client."""
             calls.append(("register", turn_id))
 
         def fake_unregister(turn_id: str) -> None:
+            """Record turn unregistration through the wrapped sync client."""
             calls.append(("unregister", turn_id))
 
         def fake_next(turn_id: str) -> Notification:
+            """Return one routed notification through the wrapped sync client."""
             calls.append(("next", turn_id))
             return event
 
         def fake_wait(turn_id: str) -> TurnCompletedNotification:
+            """Return one completion through the wrapped sync client."""
             calls.append(("wait", turn_id))
             return completed
 
@@ -132,7 +145,9 @@ def test_async_client_turn_notification_methods_delegate_to_sync_client() -> Non
 
 
 def test_async_stream_text_uses_sync_turn_routing() -> None:
+    """Async text streaming should consume the same per-turn routing path as sync."""
     async def scenario() -> tuple[list[tuple[str, str]], list[str]]:
+        """Record routing calls while streaming two deltas and one completion."""
         client = AsyncAppServerClient()
         notifications = [
             Notification(
@@ -170,17 +185,21 @@ def test_async_stream_text_uses_sync_turn_routing() -> None:
         calls: list[tuple[str, str]] = []
 
         def fake_turn_start(thread_id: str, text: str, *, params=None):  # type: ignore[no-untyped-def]
+            """Return a started turn id while recording the request thread."""
             calls.append(("turn_start", thread_id))
             return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
 
         def fake_register(turn_id: str) -> None:
+            """Record stream registration for the started turn."""
             calls.append(("register", turn_id))
 
         def fake_next(turn_id: str) -> Notification:
+            """Return the next queued turn notification."""
             calls.append(("next", turn_id))
             return notifications.pop(0)
 
         def fake_unregister(turn_id: str) -> None:
+            """Record stream cleanup for the started turn."""
             calls.append(("unregister", turn_id))
 
         client._sync.turn_start = fake_turn_start  # type: ignore[method-assign]
