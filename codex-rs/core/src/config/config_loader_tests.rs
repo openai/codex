@@ -1748,7 +1748,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         ConfigLayerSource::Project {
             dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
         },
-        child_config.clone(),
+        child_config,
     );
     assert_eq!(vec![&expected_project_layer], project_layers);
     assert_eq!(
