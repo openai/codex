@@ -1,6 +1,7 @@
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::SandboxPolicy;
@@ -195,39 +196,13 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
 }
 
 #[test]
-fn extract_patch_environment_id_strips_header_only_when_enabled() {
-    let patch = "*** Begin Patch\n*** Environment ID: remote\n*** Add File: hello.txt\n+hello\n*** End Patch";
-
+fn reconcile_environment_id_requires_selection_when_enabled() {
     assert_eq!(
-        extract_patch_environment_id(patch, /*allow_environment_id*/ true),
-        Ok((
-            Some("remote".to_string()),
-            "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch".to_string(),
-        ))
-    );
-    assert_eq!(
-        extract_patch_environment_id(patch, /*allow_environment_id*/ false),
+        require_environment_id(Some("remote"), /*allow_environment_id*/ false),
         Err(FunctionCallError::RespondToModel(
             "apply_patch environment selection is unavailable for this turn".to_string(),
         ))
     );
-}
-
-#[test]
-fn extract_patch_environment_id_rejects_empty_header() {
-    let patch =
-        "*** Begin Patch\n*** Environment ID:   \n*** Add File: hello.txt\n+hello\n*** End Patch";
-
-    assert_eq!(
-        extract_patch_environment_id(patch, /*allow_environment_id*/ true),
-        Err(FunctionCallError::RespondToModel(
-            "apply_patch environment_id cannot be empty".to_string(),
-        ))
-    );
-}
-
-#[test]
-fn reconcile_environment_id_requires_selection_when_enabled() {
     assert_eq!(
         require_environment_id(
             /*parsed_environment_id*/ None, /*allow_environment_id*/ true
@@ -269,6 +244,50 @@ async fn approval_keys_include_move_destination() {
 
     let keys = file_paths_for_action(&action);
     assert_eq!(keys.len(), 2);
+}
+
+#[tokio::test]
+async fn intercepted_apply_patch_verification_uses_local_sandbox() {
+    let tmp = TempDir::new().expect("tmp");
+    std::fs::write(tmp.path().join("file.txt"), "old content\n").expect("write file");
+    let cwd = tmp.path().abs();
+    let command = vec![
+        "apply_patch".to_string(),
+        r#"*** Begin Patch
+*** Update File: file.txt
+@@
+-old content
++new content
+*** End Patch"#
+            .to_string(),
+    ];
+    let (session, mut turn) = make_session_and_context().await;
+    turn.permission_profile = PermissionProfile::read_only();
+
+    let result = intercept_apply_patch(
+        &command,
+        &cwd,
+        LOCAL_FS.as_ref(),
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        Arc::new(session),
+        Arc::new(turn),
+        /*tracker*/ None,
+        "call-1",
+        "exec_command",
+    )
+    .await;
+
+    let Err(FunctionCallError::RespondToModel(message)) = result else {
+        panic!("expected sandboxed filesystem error");
+    };
+    assert!(
+        message.contains("apply_patch verification failed"),
+        "{message}"
+    );
+    assert!(
+        message.contains("sandboxed filesystem operations require configured runtime paths"),
+        "{message}"
+    );
 }
 
 #[test]

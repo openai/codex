@@ -26,6 +26,7 @@ pub use streaming_parser::StreamingPatchParser;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::verify_apply_patch_args;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
@@ -97,6 +98,7 @@ pub struct ApplyPatchArgs {
     pub patch: String,
     pub hunks: Vec<Hunk>,
     pub workdir: Option<String>,
+    pub environment_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -143,6 +145,9 @@ pub struct ApplyPatchAction {
 
     /// The working directory that was used to resolve relative paths in the patch.
     pub cwd: AbsolutePathBuf,
+
+    /// Optional environment selected by the patch preamble.
+    pub environment_id: Option<String>,
 }
 
 impl ApplyPatchAction {
@@ -176,6 +181,7 @@ impl ApplyPatchAction {
             changes,
             cwd: path.parent().expect("path should have parent"),
             patch,
+            environment_id: None,
         }
     }
 }

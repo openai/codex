@@ -52,8 +52,6 @@ use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
-const APPLY_PATCH_ENVIRONMENT_ID_MARKER: &str = "*** Environment ID: ";
-
 /// Handles freeform `apply_patch` requests and routes verified patches to the
 /// selected environment filesystem.
 #[derive(Default)]
@@ -364,13 +362,18 @@ impl ToolHandler for ApplyPatchHandler {
                 "apply_patch handler received unsupported payload".to_string(),
             ));
         };
-        let (parsed_environment_id, patch_input) =
-            extract_patch_environment_id(&patch_input, self.multi_environment)?;
+        let args = match codex_apply_patch::parse_patch(&patch_input) {
+            Ok(args) => args,
+            Err(parse_error) => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "apply_patch verification failed: {parse_error}"
+                )));
+            }
+        };
         let selected_environment_id =
-            require_environment_id(parsed_environment_id.as_deref(), self.multi_environment)?;
+            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
 
-        // Re-parse and verify the patch so we can compute changes and approval.
-        // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
+        // Verify the parsed patch against the selected environment filesystem.
         let Some(turn_environment) =
             resolve_tool_environment(turn.as_ref(), selected_environment_id.as_deref())?
         else {
@@ -379,21 +382,11 @@ impl ToolHandler for ApplyPatchHandler {
             ));
         };
         let cwd = turn_environment.cwd.clone();
-        let command = vec!["apply_patch".to_string(), patch_input.clone()];
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn_environment.environment.is_remote().then(|| {
-            let mut sandbox =
-                turn.file_system_sandbox_context(/*additional_permissions*/ None);
-            sandbox.cwd = Some(cwd.clone());
-            sandbox
-        });
-        match codex_apply_patch::maybe_parse_apply_patch_verified(
-            &command,
-            &cwd,
-            fs.as_ref(),
-            sandbox.as_ref(),
-        )
-        .await
+        let mut sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+        sandbox.cwd = Some(cwd.clone());
+        match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))
+            .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
@@ -495,19 +488,9 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn
-        .environments
-        .turn_environments
-        .iter()
-        .find(|env| env.environment_id == environment_id)
-        .filter(|env| env.environment.is_remote())
-        .map(|_| {
-            let mut sandbox =
-                turn.file_system_sandbox_context(/*additional_permissions*/ None);
-            sandbox.cwd = Some(cwd.clone());
-            sandbox
-        });
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, sandbox.as_ref())
+    let mut sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+    sandbox.cwd = Some(cwd.clone());
+    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
@@ -597,46 +580,14 @@ pub(crate) async fn intercept_apply_patch(
     }
 }
 
-fn extract_patch_environment_id(
-    patch_input: &str,
-    allow_environment_id: bool,
-) -> Result<(Option<String>, String), FunctionCallError> {
-    let Some(rest) = patch_input.strip_prefix("*** Begin Patch\n") else {
-        return Ok((None, patch_input.to_string()));
-    };
-
-    let Some(after_marker) = rest.strip_prefix(APPLY_PATCH_ENVIRONMENT_ID_MARKER) else {
-        return Ok((None, patch_input.to_string()));
-    };
-
-    let Some((environment_id, remaining_patch)) = after_marker.split_once('\n') else {
-        return Ok((None, patch_input.to_string()));
-    };
-
-    if !allow_environment_id {
-        return Err(FunctionCallError::RespondToModel(
-            "apply_patch environment selection is unavailable for this turn".to_string(),
-        ));
-    }
-
-    let environment_id = environment_id.trim();
-    if environment_id.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "apply_patch environment_id cannot be empty".to_string(),
-        ));
-    }
-
-    Ok((
-        Some(environment_id.to_string()),
-        format!("*** Begin Patch\n{remaining_patch}"),
-    ))
-}
-
 fn require_environment_id(
     parsed_environment_id: Option<&str>,
     allow_environment_id: bool,
 ) -> Result<Option<String>, FunctionCallError> {
     match parsed_environment_id {
+        Some(_) if !allow_environment_id => Err(FunctionCallError::RespondToModel(
+            "apply_patch environment selection is unavailable for this turn".to_string(),
+        )),
         Some(environment_id) => Ok(Some(environment_id.to_string())),
         None if allow_environment_id => Err(FunctionCallError::RespondToModel(
             "apply_patch environment_id is required when multiple environments are available"
