@@ -431,22 +431,23 @@ jobs:
 
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
-          resource_args=()
+          stage_runtime_args=(
+            "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
+            stage-runtime
+            "$stage_dir"
+            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex"
+            --codex-version "${GITHUB_REF_NAME}"
+            --platform-tag "$platform_tag"
+          )
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             # Keep bwrap in the runtime wheel so Linux sandbox fallback behavior
             # matches the standalone release bundle on hosts without system bwrap.
-            resource_args+=(
+            stage_runtime_args+=(
               --resource-binary
               "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/bwrap"
             )
           fi
-          python3 "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
-            stage-runtime \
-            "$stage_dir" \
-            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex" \
-            --codex-version "${GITHUB_REF_NAME}" \
-            --platform-tag "$platform_tag" \
-            "${resource_args[@]}"
+          python3 "${stage_runtime_args[@]}"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
