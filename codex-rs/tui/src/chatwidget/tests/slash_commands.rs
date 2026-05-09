@@ -66,12 +66,17 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     let mut preset = get_available_model(&chat, "gpt-5.4");
+    let expected_description = preset.service_tiers[0].description.clone();
     preset.service_tiers[0].name = "Fast".to_string();
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
 
     assert_eq!(
         chat.current_model_service_tier_commands(),
-        vec![fast_tier_command()]
+        vec![ServiceTierCommand {
+            id: ServiceTier::Fast.request_value().to_string(),
+            name: "fast".to_string(),
+            description: expected_description,
+        }]
     );
 }
 
