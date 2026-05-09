@@ -7779,10 +7779,23 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
     })
     .await;
     assert_eq!(3, responses.requests().len());
+    let next_event = timeout(Duration::from_millis(200), async {
+        loop {
+            let event = test.codex.next_event().await;
+            if !matches!(
+                event,
+                Ok(Event {
+                    msg: EventMsg::TokenCount(_),
+                    ..
+                })
+            ) {
+                return event;
+            }
+        }
+    })
+    .await;
     assert!(
-        timeout(Duration::from_millis(200), test.codex.next_event())
-            .await
-            .is_err(),
+        next_event.is_err(),
         "waiting for request_user_input should keep the turn open without emitting more events"
     );
     assert_eq!(

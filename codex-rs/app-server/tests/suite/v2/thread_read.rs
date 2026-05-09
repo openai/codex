@@ -956,6 +956,74 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_name_set_materializes_active_unmaterialized_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let rollout_path = thread.path.clone().expect("thread path");
+    assert!(!rollout_path.exists());
+
+    let new_name = "Active renamed thread";
+    let set_id = mcp
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: thread.id.clone(),
+            name: new_name.to_string(),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(set_resp)?;
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/name/updated"),
+    )
+    .await??;
+    let notification: ThreadNameUpdatedNotification =
+        serde_json::from_value(notification.params.expect("thread/name/updated params"))?;
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.thread_name.as_deref(), Some(new_name));
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(thread.name.as_deref(), Some(new_name));
+    assert!(
+        rollout_path.exists(),
+        "active rename should materialize initial session metadata"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

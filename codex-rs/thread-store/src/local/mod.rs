@@ -1,6 +1,5 @@
 mod apply_thread_metadata;
 mod archive_thread;
-mod create_thread;
 mod helpers;
 mod list_threads;
 mod live_writer;
@@ -297,17 +296,27 @@ impl ThreadStore for LocalThreadStore {
 #[cfg(test)]
 mod tests {
     use codex_protocol::ThreadId;
+    use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::GitInfoPatch;
+    use crate::LiveThread;
+    use crate::SortDirection;
     use crate::ThreadEventPersistenceMode;
+    use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
+    use crate::ThreadSortKey;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
@@ -431,7 +440,10 @@ mod tests {
         first_store
             .append_items(AppendThreadItemsParams {
                 thread_id,
-                items: vec![user_message_item("before resume")],
+                items: vec![
+                    session_meta_item(thread_id),
+                    user_message_item("before resume"),
+                ],
             })
             .await
             .expect("append initial item");
@@ -727,7 +739,7 @@ mod tests {
         store
             .append_items(AppendThreadItemsParams {
                 thread_id,
-                items: vec![user_message_item("path read")],
+                items: vec![session_meta_item(thread_id), user_message_item("path read")],
             })
             .await
             .expect("append item");
@@ -759,6 +771,241 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn live_thread_writes_single_session_meta_and_updates_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("backfill should be complete");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let mut params = create_thread_params(thread_id);
+        params.metadata.memory_mode = ThreadMemoryMode::Disabled;
+        params.dynamic_tools = vec![DynamicToolSpec {
+            namespace: Some("test".to_string()),
+            name: "tool".to_string(),
+            description: "tool description".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            defer_loading: true,
+        }];
+
+        let live_thread = LiveThread::create(store.clone(), params)
+            .await
+            .expect("create live thread");
+        live_thread
+            .append_items(&[user_message_item("Hello from LiveThread")])
+            .await
+            .expect("append item");
+        live_thread.flush().await.expect("flush thread");
+
+        let rollout_path = live_thread
+            .local_rollout_path()
+            .await
+            .expect("rollout path")
+            .expect("local rollout path");
+        assert_eq!(count_rollout_items(&rollout_path, "session_meta"), 1);
+        let thread = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect("read thread");
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.cli_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            thread.first_user_message.as_deref(),
+            Some("Hello from LiveThread")
+        );
+        let memory_mode = runtime
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("memory mode");
+        assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        let dynamic_tools = runtime
+            .get_dynamic_tools(thread_id)
+            .await
+            .expect("dynamic tools")
+            .expect("dynamic tools stored");
+        assert_eq!(dynamic_tools.len(), 1);
+        assert_eq!(dynamic_tools[0].name, "tool");
+    }
+
+    #[tokio::test]
+    async fn live_thread_writes_jsonl_format_readable_without_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let store = Arc::new(LocalThreadStore::new(
+            test_config(home.path()),
+            /*state_db*/ None,
+        ));
+        let thread_id = ThreadId::default();
+        let message = "jsonl fallback read";
+
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        live_thread
+            .append_items(&[user_message_item(message)])
+            .await
+            .expect("append item");
+        live_thread.flush().await.expect("flush thread");
+
+        let rollout_path = live_thread
+            .local_rollout_path()
+            .await
+            .expect("rollout path")
+            .expect("local rollout path");
+        let lines = std::fs::read_to_string(rollout_path)
+            .expect("read rollout")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("jsonl item"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["type"], "session_meta");
+        assert_eq!(lines[0]["payload"]["id"], thread_id.to_string());
+        assert_eq!(lines[0]["payload"]["originator"], "test_originator");
+        assert_eq!(
+            lines[0]["payload"]["cli_version"],
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(lines[0]["payload"]["source"], "exec");
+        assert_eq!(lines[0]["payload"]["model_provider"], "test-provider");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line["type"] == "session_meta")
+                .count(),
+            1
+        );
+        assert_eq!(lines[1]["type"], "event_msg");
+        assert_eq!(lines[1]["payload"]["type"], "user_message");
+        assert_eq!(lines[1]["payload"]["message"], message);
+
+        let read_thread = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ true,
+            )
+            .await
+            .expect("read thread");
+        assert_eq!(read_thread.thread_id, thread_id);
+        assert_eq!(read_thread.cli_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(read_thread.first_user_message.as_deref(), Some(message));
+        assert!(
+            read_thread
+                .history
+                .expect("history")
+                .items
+                .iter()
+                .any(|item| matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::UserMessage(event))
+                        if event.message == message
+                ))
+        );
+
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: vec![SessionSource::Exec],
+                model_providers: None,
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                use_state_db_only: false,
+            })
+            .await
+            .expect("list threads");
+        let listed_thread = page
+            .items
+            .iter()
+            .find(|thread| thread.thread_id == thread_id)
+            .expect("listed thread");
+        assert_eq!(listed_thread.cli_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(listed_thread.first_user_message.as_deref(), Some(message));
+    }
+
+    #[tokio::test]
+    async fn live_thread_git_update_is_readable_without_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let store = Arc::new(LocalThreadStore::new(
+            test_config(home.path()),
+            /*state_db*/ None,
+        ));
+        let thread_id = ThreadId::default();
+
+        let live_thread = LiveThread::create(store, create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        live_thread
+            .flush()
+            .await
+            .expect("materialize initial metadata");
+        live_thread
+            .update_metadata(
+                ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        sha: Some(Some("abcdef".to_string())),
+                        branch: Some(Some("main".to_string())),
+                        origin_url: Some(Some("https://example.com/repo.git".to_string())),
+                    }),
+                    ..Default::default()
+                },
+                /*include_archived*/ false,
+            )
+            .await
+            .expect("update git metadata");
+
+        let thread = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect("read thread");
+        let git_info = thread.git_info.expect("git info");
+        assert_eq!(
+            git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
+            Some("abcdef")
+        );
+        assert_eq!(git_info.branch.as_deref(), Some("main"));
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://example.com/repo.git")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_shutdown_without_items_keeps_rollout_deferred() {
+        let home = TempDir::new().expect("temp dir");
+        let store = Arc::new(LocalThreadStore::new(
+            test_config(home.path()),
+            /*state_db*/ None,
+        ));
+        let thread_id = ThreadId::default();
+
+        let live_thread = LiveThread::create(store, create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = live_thread
+            .local_rollout_path()
+            .await
+            .expect("rollout path")
+            .expect("local rollout path");
+        live_thread.shutdown().await.expect("shutdown thread");
+
+        assert!(!rollout_path.exists());
+    }
+
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         CreateThreadParams {
             thread_id,
@@ -788,6 +1035,38 @@ mod tests {
             local_images: Vec::new(),
             text_elements: Vec::new(),
         }))
+    }
+
+    fn session_meta_item(thread_id: ThreadId) -> RolloutItem {
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                timestamp: "2026-01-27T12:34:56Z".to_string(),
+                cwd: std::env::current_dir().expect("cwd"),
+                originator: "test_originator".to_string(),
+                cli_version: "test_version".to_string(),
+                source: SessionSource::Exec,
+                thread_source: None,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: Some("test-provider".to_string()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        })
+    }
+
+    fn count_rollout_items(path: &std::path::Path, item_type: &str) -> usize {
+        std::fs::read_to_string(path)
+            .expect("read rollout")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("jsonl item"))
+            .filter(|item| item["type"] == item_type)
+            .count()
     }
 
     async fn assert_rollout_contains_message(path: &std::path::Path, expected: &str) {

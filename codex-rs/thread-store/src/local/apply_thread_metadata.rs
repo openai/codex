@@ -523,6 +523,17 @@ mod tests {
             .await
             .expect("read thread name");
         assert_eq!(name.as_deref(), Some(""));
+
+        store
+            .apply_thread_metadata(ApplyThreadMetadataParams {
+                thread_id,
+                update: ThreadMetadataUpdate {
+                    git_info: Some(None),
+                    ..Default::default()
+                },
+            })
+            .await
+            .expect("git metadata is represented by appended JSONL without sqlite");
     }
 
     #[tokio::test]

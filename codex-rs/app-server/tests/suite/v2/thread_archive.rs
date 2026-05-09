@@ -3,7 +3,6 @@ use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -33,7 +32,8 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_archive_requires_materialized_rollout() -> Result<()> {
+async fn thread_archive_materializes_initial_metadata_for_unmaterialized_live_thread() -> Result<()>
+{
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -69,61 +69,6 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         "thread id should not be discoverable before rollout materialization"
     );
 
-    // Archive should fail before the rollout is materialized.
-    let archive_id = mcp
-        .send_thread_archive_request(ThreadArchiveParams {
-            thread_id: thread.id.clone(),
-        })
-        .await?;
-    let archive_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(archive_id)),
-    )
-    .await??;
-    assert!(
-        archive_err
-            .error
-            .message
-            .contains("no rollout found for thread id"),
-        "unexpected archive error: {}",
-        archive_err.error.message
-    );
-
-    // Materialize rollout via a real user turn and confirm archive succeeds.
-    let turn_start_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "materialize".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_start_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_start_response)?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    assert!(
-        rollout_path.exists(),
-        "expected rollout path {} to exist after first user message",
-        rollout_path.display()
-    );
-
-    let discovered_path =
-        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
-            .await?
-            .expect("expected rollout path for thread id to exist after materialization");
-    assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
-
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
@@ -147,14 +92,14 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     )?;
     assert_eq!(archived_notification.thread_id, thread.id);
 
-    // Verify file moved.
+    // Archiving provides a persistence barrier, so the initial metadata rollout is materialized
+    // directly in the archive location.
     let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
-    // The archived file keeps the original filename (rollout-...-<id>.jsonl).
     let archived_rollout_path =
         archived_directory.join(rollout_path.file_name().expect("rollout file name"));
     assert!(
         !rollout_path.exists(),
-        "expected rollout path {} to be moved",
+        "expected rollout path {} to remain absent",
         rollout_path.display()
     );
     assert!(
@@ -647,11 +592,4 @@ request_max_retries = 0
 stream_max_retries = 0
 "#
     )
-}
-
-fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result<()> {
-    let actual = actual.canonicalize()?;
-    let expected = expected.canonicalize()?;
-    assert_eq!(actual, expected);
-    Ok(())
 }

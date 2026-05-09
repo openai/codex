@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use codex_core::EventPersistenceMode;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
@@ -12,7 +11,9 @@ use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
-use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::StateDbHandle;
 use codex_state::StateRuntime;
@@ -180,22 +181,29 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         .await?;
     let thread_id = ThreadId::new();
     let thread_name = "named thread";
-    let recorder = RolloutRecorder::new(
-        &config,
-        RolloutRecorderParams::Create {
-            conversation_id: thread_id,
-            forked_from_id: None,
-            source: SessionSource::Exec,
-            originator: "test_originator".to_string(),
-            thread_source: None,
-            base_instructions: BaseInstructions::default(),
-            dynamic_tools: Vec::new(),
-            event_persistence_mode: EventPersistenceMode::Limited,
-        },
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await?;
+    let recorder = RolloutRecorder::new(&config, RolloutRecorderParams::new(thread_id)).await?;
+    recorder
+        .record_items(&[RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                cwd: home.path().to_path_buf(),
+                originator: "test".to_string(),
+                cli_version: "test".to_string(),
+                source: SessionSource::Exec,
+                thread_source: None,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: Some("test-provider".to_string()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        })])
+        .await?;
     recorder.persist().await?;
     recorder.flush().await?;
 

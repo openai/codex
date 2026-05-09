@@ -1,6 +1,9 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -225,6 +228,11 @@ async fn read_thread_from_rollout_path(
             thread.model_provider = model_provider;
         }
     }
+    if store.state_db().await.is_none()
+        && let Ok(Some(git_info)) = latest_session_meta_git(path.as_path(), thread.thread_id).await
+    {
+        thread.git_info = Some(git_info);
+    }
     if let Ok(Some(title)) =
         find_thread_name_by_id(store.config.codex_home.as_path(), &thread.thread_id).await
     {
@@ -344,15 +352,68 @@ async fn stored_thread_from_session_meta(
     store: &LocalThreadStore,
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {
-    let meta_line = read_session_meta_line(path.as_path())
+    let first_meta_line = read_session_meta_line(path.as_path())
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to read thread {}: {err}", path.display()),
         })?;
+    let latest_git = if store.state_db().await.is_none() {
+        latest_session_meta_git(path.as_path(), first_meta_line.meta.id).await?
+    } else {
+        None
+    };
     let archived = rollout_path_is_archived(store.config.codex_home.as_path(), path.as_path());
-    Ok(stored_thread_from_meta_line(
-        store, meta_line, path, archived,
-    ))
+    let mut thread = stored_thread_from_meta_line(store, first_meta_line, path, archived);
+    if let Some(git_info) = latest_git {
+        thread.git_info = Some(git_info);
+    }
+    Ok(thread)
+}
+
+async fn latest_session_meta_git(
+    path: &std::path::Path,
+    thread_id: codex_protocol::ThreadId,
+) -> ThreadStoreResult<Option<GitInfo>> {
+    use tokio::io::AsyncBufReadExt;
+
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to read session metadata {}: {err}", path.display()),
+        })?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut latest_git = None;
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to read session metadata {}: {err}", path.display()),
+        })?
+    {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_value::<RolloutLine>(value) else {
+            continue;
+        };
+        let RolloutItem::SessionMeta(meta_line) = rollout_line.item else {
+            continue;
+        };
+        if meta_line.meta.id == thread_id
+            && let Some(git_info) = meta_line.git
+        {
+            latest_git = Some(git_info);
+        }
+    }
+    Ok(latest_git)
 }
 
 fn stored_thread_from_meta_line(

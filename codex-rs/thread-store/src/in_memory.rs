@@ -229,8 +229,8 @@ pub struct InMemoryThreadStoreCalls {
     pub read_thread: usize,
     pub read_thread_by_rollout_path: usize,
     pub list_threads: usize,
-    pub update_thread_metadata: usize,
     pub apply_thread_metadata: usize,
+    pub update_thread_metadata: usize,
     pub archive_thread: usize,
     pub unarchive_thread: usize,
 }
@@ -479,9 +479,7 @@ fn stored_thread_from_state(
     let git_info = update
         .and_then(|update| update.git_info.clone())
         .unwrap_or(git_info);
-    let rollout_path = state
-        .metadata_updates
-        .get(&thread_id)
+    let rollout_path = update
         .and_then(|update| update.rollout_path.clone())
         .or_else(|| {
             state

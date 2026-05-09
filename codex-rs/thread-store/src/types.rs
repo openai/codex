@@ -141,6 +141,33 @@ pub struct ThreadMetadataUpdate {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
+impl ThreadMetadataUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.rollout_path.is_none()
+            && self.preview.is_none()
+            && self.name.is_none()
+            && self.model_provider.is_none()
+            && self.model.is_none()
+            && self.reasoning_effort.is_none()
+            && self.created_at.is_none()
+            && self.updated_at.is_none()
+            && self.source.is_none()
+            && self.thread_source.is_none()
+            && self.agent_nickname.is_none()
+            && self.agent_role.is_none()
+            && self.agent_path.is_none()
+            && self.cwd.is_none()
+            && self.cli_version.is_none()
+            && self.approval_mode.is_none()
+            && self.sandbox_policy.is_none()
+            && self.token_usage.is_none()
+            && self.first_user_message.is_none()
+            && self.git_info.is_none()
+            && self.memory_mode.is_none()
+            && self.dynamic_tools.is_none()
+    }
+}
+
 /// Parameters for applying metadata inferred by the live thread layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplyThreadMetadataParams {

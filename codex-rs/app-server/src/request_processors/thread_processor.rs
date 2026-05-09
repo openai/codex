@@ -726,6 +726,7 @@ impl ThreadRequestProcessor {
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
+            conversation.ensure_rollout_materialized().await;
             info!("thread {thread_id} was active; shutting down");
             match wait_for_thread_shutdown(&conversation).await {
                 ThreadShutdownResult::Complete => {}
@@ -1279,6 +1280,7 @@ impl ThreadRequestProcessor {
         }
 
         let mut archive_thread_ids = Vec::new();
+        let mut prepared_parent_for_archive = false;
         match self
             .thread_store
             .read_thread(StoreReadThreadParams {
@@ -1293,7 +1295,29 @@ impl ThreadRequestProcessor {
                     archive_thread_ids.push(thread_id);
                 }
             }
-            Err(err) => return Err(thread_store_archive_error("archive", err)),
+            Err(err) => {
+                if self.thread_manager.get_thread(thread_id).await.is_err() {
+                    return Err(thread_store_archive_error("archive", err));
+                }
+                self.prepare_thread_for_archive(thread_id).await;
+                prepared_parent_for_archive = true;
+                match self
+                    .thread_store
+                    .read_thread(StoreReadThreadParams {
+                        thread_id,
+                        include_archived: false,
+                        include_history: false,
+                    })
+                    .await
+                {
+                    Ok(thread) => {
+                        if thread.archived_at.is_none() {
+                            archive_thread_ids.push(thread_id);
+                        }
+                    }
+                    Err(err) => return Err(thread_store_archive_error("archive", err)),
+                }
+            }
         }
         for descendant_thread_id in thread_ids.into_iter().skip(1) {
             match self
@@ -1311,9 +1335,38 @@ impl ThreadRequestProcessor {
                     }
                 }
                 Err(err) => {
-                    warn!(
-                        "failed to read spawned descendant thread {descendant_thread_id} while archiving {thread_id}: {err}"
-                    );
+                    if self
+                        .thread_manager
+                        .get_thread(descendant_thread_id)
+                        .await
+                        .is_ok()
+                    {
+                        self.prepare_thread_for_archive(descendant_thread_id).await;
+                        match self
+                            .thread_store
+                            .read_thread(StoreReadThreadParams {
+                                thread_id: descendant_thread_id,
+                                include_archived: true,
+                                include_history: false,
+                            })
+                            .await
+                        {
+                            Ok(thread) => {
+                                if thread.archived_at.is_none() {
+                                    archive_thread_ids.push(descendant_thread_id);
+                                }
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "failed to read live spawned descendant thread {descendant_thread_id} while archiving {thread_id}: {err}"
+                                );
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "failed to read spawned descendant thread {descendant_thread_id} while archiving {thread_id}: {err}"
+                        );
+                    }
                 }
             }
         }
@@ -1324,7 +1377,9 @@ impl ThreadRequestProcessor {
             return Ok((ThreadArchiveResponse {}, archived_thread_ids));
         };
 
-        self.prepare_thread_for_archive(*parent_thread_id).await;
+        if !prepared_parent_for_archive {
+            self.prepare_thread_for_archive(*parent_thread_id).await;
+        }
         match self
             .thread_store
             .archive_thread(StoreArchiveThreadParams {
@@ -1413,17 +1468,25 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        self.thread_store
-            .update_thread_metadata(StoreUpdateThreadMetadataParams {
-                thread_id,
-                patch: StoreThreadMetadataPatch {
-                    name: Some(name.clone()),
-                    ..Default::default()
-                },
-                include_archived: false,
-            })
-            .await
-            .map_err(|err| thread_store_write_error("set thread name", err))?;
+        let patch = StoreThreadMetadataPatch {
+            name: Some(name.clone()),
+            ..Default::default()
+        };
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            thread
+                .update_thread_metadata(patch, /*include_archived*/ false)
+                .await
+                .map_err(|err| thread_store_write_error("set thread name", err))?;
+        } else {
+            self.thread_store
+                .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                    thread_id,
+                    patch,
+                    include_archived: false,
+                })
+                .await
+                .map_err(|err| thread_store_write_error("set thread name", err))?;
+        }
 
         Ok((
             ThreadSetNameResponse {},
