@@ -391,6 +391,7 @@ fn append_matcher_groups(
                     timeout_sec,
                     r#async,
                     status_message,
+                    visibility_hint,
                 } => {
                     if r#async {
                         warnings.push(format!(
@@ -412,6 +413,7 @@ fn append_matcher_groups(
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
+                        visibility_hint,
                     };
                     let current_hash =
                         command_hook_hash(event_name, matcher, &group, normalized_handler);
@@ -455,6 +457,7 @@ fn append_matcher_groups(
                             command,
                             timeout_sec,
                             status_message,
+                            visibility_hint,
                             source_path: source.path.clone(),
                             source: source.source,
                             display_order: *display_order,
@@ -611,6 +614,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                visibility_hint: Default::default(),
             }],
         }
     }
@@ -642,6 +646,7 @@ mod tests {
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
                 status_message: None,
+                visibility_hint: Default::default(),
                 source_path: source_path.clone(),
                 source: hook_source(),
                 display_order: 0,
@@ -677,6 +682,7 @@ mod tests {
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
                 status_message: None,
+                visibility_hint: Default::default(),
                 source_path: source_path.clone(),
                 source: hook_source(),
                 display_order: 0,
@@ -756,6 +762,7 @@ mod tests {
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: Default::default(),
                     }],
                 }],
                 ..Default::default()

@@ -1608,6 +1608,7 @@ pub(super) fn hook_run(
         display_order: 0,
         status,
         status_message: Some(status_message.to_string()),
+        visibility_hint: Default::default(),
         started_at: 1,
         completed_at: matches!(
             status,

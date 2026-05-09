@@ -1518,6 +1518,14 @@ pub enum HookRunStatus {
     Stopped,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookVisibilityHint {
+    #[default]
+    Default,
+    Hidden,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookOutputEntryKind {
@@ -1549,6 +1557,8 @@ pub struct HookRunSummary {
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
+    #[serde(default)]
+    pub visibility_hint: HookVisibilityHint,
     #[ts(type = "number")]
     pub started_at: i64,
     #[ts(type = "number | null")]

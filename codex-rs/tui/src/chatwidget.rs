@@ -4073,6 +4073,9 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, run: codex_app_server_protocol::HookRunSummary) {
+        if history_cell::hook_run_is_hidden(&run) {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         self.flush_completed_hook_output();
         match self.active_hook_cell.as_mut() {
@@ -4092,6 +4095,9 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, completed: codex_app_server_protocol::HookRunSummary) {
+        if history_cell::hook_run_is_hidden(&completed) {
+            return;
+        }
         let completed_existing_run = self
             .active_hook_cell
             .as_mut()

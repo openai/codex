@@ -724,6 +724,7 @@ mod tests {
             display_order: 0,
             status,
             status_message: None,
+            visibility_hint: Default::default(),
             started_at: 10,
             completed_at: Some(37),
             duration_ms: Some(27),

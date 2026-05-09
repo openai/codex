@@ -88,6 +88,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -170,6 +171,73 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 }
 
 #[test]
+fn preview_runs_preserve_configured_visibility_hint() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_dir =
+        AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+    let managed_hooks = managed_hooks_for_current_platform(
+        managed_dir,
+        HookEventsToml {
+            user_prompt_submit: vec![MatcherGroup {
+                matcher: None,
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "python3 /tmp/managed.py".to_string(),
+                    timeout_sec: Some(10),
+                    r#async: false,
+                    status_message: Some("checking".to_string()),
+                    visibility_hint: codex_protocol::protocol::HookVisibilityHint::Hidden,
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+    let preview = engine.preview_user_prompt_submit(
+        &crate::events::user_prompt_submit::UserPromptSubmitRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            prompt: "hello".to_string(),
+        },
+    );
+
+    assert_eq!(preview.len(), 1);
+    assert_eq!(
+        preview[0].visibility_hint,
+        codex_protocol::protocol::HookVisibilityHint::Hidden
+    );
+}
+
+#[test]
 fn unknown_requirement_source_hooks_stay_managed() {
     let temp = tempdir().expect("create temp dir");
     let managed_dir =
@@ -185,6 +253,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -247,6 +316,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -466,6 +536,7 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -677,6 +748,7 @@ print(json.dumps({
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -785,6 +857,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()

@@ -18,12 +18,13 @@ fn hooks_file_deserializes_existing_json_shape() {
       {
         "matcher": "^Bash$",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 /tmp/pre.py",
-            "timeout": 10,
-            "statusMessage": "checking"
-          }
+              {
+                "type": "command",
+                "command": "python3 /tmp/pre.py",
+                "timeout": 10,
+                "statusMessage": "checking",
+                "visibilityHint": "hidden"
+              }
         ]
       }
     ]
@@ -43,6 +44,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
+                        visibility_hint: codex_protocol::protocol::HookVisibilityHint::Hidden,
                     }],
                 }],
                 ..Default::default()
@@ -77,6 +79,7 @@ statusMessage = "checking"
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: Default::default(),
                 }],
             }],
             ..Default::default()
@@ -113,6 +116,7 @@ command = "python3 /tmp/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: Default::default(),
                     }],
                 }],
                 ..Default::default()
@@ -157,6 +161,7 @@ command = "python3 /enterprise/place/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: Default::default(),
                     }],
                 }],
                 ..Default::default()

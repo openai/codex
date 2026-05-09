@@ -2206,6 +2206,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                visibility_hint: Default::default(),
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -2229,6 +2230,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                visibility_hint: Default::default(),
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),
@@ -2350,6 +2352,55 @@ async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
     );
     expire_quiet_hook_linger(&mut chat);
     assert_eq!(active_hook_blob(&chat), "<empty>\n");
+}
+
+#[tokio::test]
+async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let mut hidden_running = hook_started_run(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        Some("injecting background context"),
+    );
+    hidden_running.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_started(&mut chat, hidden_running);
+
+    let mut hidden_context_only = hook_completed_run(
+        "post-tool-use:0:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        vec![codex_app_server_protocol::HookOutputEntry {
+            kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+            text: "time is 12:34".to_string(),
+        }],
+    );
+    hidden_context_only.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_completed(&mut chat, hidden_context_only);
+
+    let quiet_snapshot = hook_live_and_history_snapshot(&chat, "hidden background hook", "");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let mut hidden_failed = hook_completed_run(
+        "post-tool-use:1:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Failed,
+        vec![codex_app_server_protocol::HookOutputEntry {
+            kind: codex_app_server_protocol::HookOutputEntryKind::Error,
+            text: "hook exited with code 7".to_string(),
+        }],
+    );
+    hidden_failed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_completed(&mut chat, hidden_failed);
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "hidden_hook_background_and_failure_snapshot",
+        format!("{quiet_snapshot}\n\nvisible history:\n{rendered}")
+    );
 }
 
 #[tokio::test]
@@ -2826,6 +2877,7 @@ fn hook_run_summary(
         display_order: 0,
         status,
         status_message: status_message.map(str::to_string),
+        visibility_hint: Default::default(),
         started_at: 1,
         completed_at: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(2),
         duration_ms: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(1),

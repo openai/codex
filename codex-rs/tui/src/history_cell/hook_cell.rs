@@ -22,6 +22,7 @@ use codex_app_server_protocol::HookOutputEntry;
 use codex_app_server_protocol::HookOutputEntryKind;
 use codex_app_server_protocol::HookRunStatus;
 use codex_app_server_protocol::HookRunSummary;
+use codex_app_server_protocol::HookVisibilityHint;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
@@ -684,6 +685,19 @@ fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
 }
 
+/// Returns true when a hook marked as background has no user-relevant consequence to render.
+pub(crate) fn hook_run_is_hidden(run: &HookRunSummary) -> bool {
+    run.visibility_hint == HookVisibilityHint::Hidden
+        && match run.status {
+            HookRunStatus::Running => true,
+            HookRunStatus::Completed => run
+                .entries
+                .iter()
+                .all(|entry| entry.kind == HookOutputEntryKind::Context),
+            HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => false,
+        }
+}
+
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {
     match status {
         HookRunStatus::Completed => {
@@ -814,6 +828,7 @@ mod tests {
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),
+            visibility_hint: Default::default(),
             started_at: 1,
             completed_at: None,
             duration_ms: None,

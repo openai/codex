@@ -971,6 +971,14 @@
                 "command"
               ],
               "type": "string"
+            },
+            "visibilityHint": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookVisibilityHint"
+                }
+              ],
+              "default": "default"
             }
           },
           "required": [
@@ -1019,6 +1027,13 @@
         }
       },
       "type": "object"
+    },
+    "HookVisibilityHint": {
+      "enum": [
+        "default",
+        "hidden"
+      ],
+      "type": "string"
     },
     "HooksToml": {
       "properties": {
