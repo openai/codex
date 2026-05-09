@@ -12,6 +12,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
+use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -135,7 +136,7 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         let otel = turn_ctx.session_telemetry.clone();
-        let otel_tn = &tool_ctx.tool_name;
+        let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
@@ -175,7 +176,7 @@ impl ToolOrchestrator {
                     already_approved = true;
                 } else {
                     otel.tool_decision(
-                        otel_tn,
+                        &otel_tn,
                         otel_ci,
                         &ReviewDecision::Approved,
                         ToolDecisionSource::Config,
@@ -398,6 +399,7 @@ impl ToolOrchestrator {
         if evaluate_permission_request_hooks
             && let Some(permission_request) = tool.permission_request_payload(req)
         {
+            let tool_name = flat_tool_name(&tool_ctx.tool_name);
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
@@ -409,7 +411,7 @@ impl ToolOrchestrator {
                 Some(PermissionRequestDecision::Allow) => {
                     let decision = ReviewDecision::Approved;
                     otel.tool_decision(
-                        &tool_ctx.tool_name,
+                        tool_name.as_ref(),
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
@@ -419,7 +421,7 @@ impl ToolOrchestrator {
                 Some(PermissionRequestDecision::Deny { message }) => {
                     let decision = ReviewDecision::Denied;
                     otel.tool_decision(
-                        &tool_ctx.tool_name,
+                        tool_name.as_ref(),
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
@@ -436,8 +438,9 @@ impl ToolOrchestrator {
             ToolDecisionSource::User
         };
         let decision = tool.start_approval_async(req, approval_ctx).await;
+        let tool_name = flat_tool_name(&tool_ctx.tool_name);
         otel.tool_decision(
-            &tool_ctx.tool_name,
+            tool_name.as_ref(),
             &tool_ctx.call_id,
             &decision,
             otel_source,

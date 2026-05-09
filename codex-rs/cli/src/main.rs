@@ -3,6 +3,9 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
+use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
+use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -469,6 +472,9 @@ struct ExecServerCommand {
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
+    /// Manage the local app-server daemon.
+    Daemon(AppServerDaemonCommand),
+
     /// Proxy stdio bytes to the running app-server control socket.
     Proxy(AppServerProxyCommand),
 
@@ -484,10 +490,51 @@ enum AppServerSubcommand {
 }
 
 #[derive(Debug, Args)]
+struct AppServerDaemonCommand {
+    #[command(subcommand)]
+    subcommand: AppServerDaemonSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AppServerDaemonSubcommand {
+    /// Install durable local app-server management for SSH-driven use.
+    Bootstrap(AppServerBootstrapCommand),
+
+    /// Start the local app server daemon if it is not already running.
+    Start,
+
+    /// Restart the local app server daemon.
+    Restart,
+
+    /// Enable remote_control for future starts and a currently running managed daemon.
+    EnableRemoteControl,
+
+    /// Disable remote_control for future starts and a currently running managed daemon.
+    DisableRemoteControl,
+
+    /// Stop the local app server daemon.
+    Stop,
+
+    /// Print local CLI and running app-server versions as JSON.
+    Version,
+
+    /// [internal] Run the detached pid-backed standalone updater loop.
+    #[clap(hide = true)]
+    PidUpdateLoop,
+}
+
+#[derive(Debug, Args)]
 struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct AppServerBootstrapCommand {
+    /// Launch the managed app-server with remote_control enabled.
+    #[arg(long = "remote-control")]
+    remote_control: bool,
 }
 
 #[derive(Debug, Args)]
@@ -875,6 +922,41 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     )
                     .await?;
                 }
+                Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
+                    AppServerDaemonSubcommand::Start => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                    }
+                    AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
+                        let output =
+                            codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
+                                remote_control_enabled: bootstrap_cli.remote_control,
+                            })
+                            .await?;
+                        println!("{}", serde_json::to_string(&output)?);
+                    }
+                    AppServerDaemonSubcommand::Restart => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::EnableRemoteControl => {
+                        print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
+                            .await?;
+                    }
+                    AppServerDaemonSubcommand::DisableRemoteControl => {
+                        print_app_server_remote_control_output(
+                            AppServerRemoteControlMode::Disabled,
+                        )
+                        .await?;
+                    }
+                    AppServerDaemonSubcommand::Stop => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                    }
+                    AppServerDaemonSubcommand::Version => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
+                    }
+                    AppServerDaemonSubcommand::PidUpdateLoop => {
+                        codex_app_server_daemon::run_pid_update_loop().await?;
+                    }
+                },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
@@ -1547,6 +1629,20 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
         None => "app-server",
+        Some(AppServerSubcommand::Daemon(daemon)) => match daemon.subcommand {
+            AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
+            AppServerDaemonSubcommand::Start => "app-server daemon start",
+            AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::EnableRemoteControl => {
+                "app-server daemon enable-remote-control"
+            }
+            AppServerDaemonSubcommand::DisableRemoteControl => {
+                "app-server daemon disable-remote-control"
+            }
+            AppServerDaemonSubcommand::Stop => "app-server daemon stop",
+            AppServerDaemonSubcommand::Version => "app-server daemon version",
+            AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
+        },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
@@ -1555,6 +1651,20 @@ fn reject_remote_mode_for_app_server_subcommand(
         }
     };
     reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+}
+
+async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
+    let output = codex_app_server_daemon::run(command).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+async fn print_app_server_remote_control_output(
+    mode: AppServerRemoteControlMode,
+) -> anyhow::Result<()> {
+    let output = codex_app_server_daemon::set_remote_control(mode).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
 }
 
 fn read_remote_auth_token_from_env_var_with<F>(
@@ -2525,6 +2635,70 @@ mod tests {
     }
 
     #[test]
+    fn app_server_daemon_subcommands_parse() {
+        assert!(matches!(
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "bootstrap",
+                    "--remote-control"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
+                    remote_control: true
+                })
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "start"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Start
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Restart
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "enable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::EnableRemoteControl
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "disable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::DisableRemoteControl
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "stop"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Stop
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "version"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Version
+            }))
+        ));
+    }
+
+    #[test]
     fn app_server_proxy_sock_path_parses() {
         let app_server =
             app_server_from_args(["codex", "app-server", "proxy", "--sock", "codex.sock"].as_ref());
@@ -2550,6 +2724,20 @@ mod tests {
         )
         .expect_err("app-server proxy should reject --remote-auth-token-env");
         assert!(err.to_string().contains("app-server proxy"));
+    }
+
+    #[test]
+    fn reject_remote_auth_token_env_for_app_server_version() {
+        let subcommand = AppServerSubcommand::Daemon(AppServerDaemonCommand {
+            subcommand: AppServerDaemonSubcommand::Version,
+        });
+        let err = reject_remote_mode_for_app_server_subcommand(
+            /*remote*/ None,
+            Some("CODEX_REMOTE_AUTH_TOKEN"),
+            Some(&subcommand),
+        )
+        .expect_err("app-server daemon version should reject --remote-auth-token-env");
+        assert!(err.to_string().contains("app-server daemon version"));
     }
 
     #[test]

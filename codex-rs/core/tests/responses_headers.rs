@@ -109,6 +109,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
 
@@ -236,6 +237,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
 
@@ -352,6 +354,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
 

@@ -15,12 +15,12 @@ pub(crate) fn default_thread_environment_selections(
     cwd: &AbsolutePathBuf,
 ) -> Vec<TurnEnvironmentSelection> {
     environment_manager
-        .default_environment_id()
+        .default_environment_ids()
+        .into_iter()
         .map(|environment_id| TurnEnvironmentSelection {
-            environment_id: environment_id.to_string(),
+            environment_id,
             cwd: cwd.clone(),
         })
-        .into_iter()
         .collect()
 }
 
@@ -85,6 +85,7 @@ pub(crate) fn resolve_environment_selections(
 #[cfg(test)]
 mod tests {
     use codex_exec_server::ExecServerRuntimePaths;
+    use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -115,6 +116,38 @@ mod tests {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd,
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn toml_default_thread_environment_selections_include_local_and_remote() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp_dir.path().join("environments.toml"),
+            r#"
+[[environments]]
+id = "remote"
+url = "ws://127.0.0.1:8765"
+"#,
+        )
+        .expect("write environments.toml");
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let manager = EnvironmentManager::from_codex_home(temp_dir.path(), test_runtime_paths())
+            .await
+            .expect("environment manager");
+
+        assert_eq!(
+            default_thread_environment_selections(&manager, &cwd),
+            vec![
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: cwd.clone(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd,
+                },
+            ]
         );
     }
 

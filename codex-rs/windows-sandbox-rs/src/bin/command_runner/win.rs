@@ -7,8 +7,9 @@
 //! accepts stdin/terminate frames, and emits a final exit frame. The legacy restricted‑token
 //! path spawns the child directly and does not use this runner.
 
-#![cfg(target_os = "windows")]
 #![allow(unsafe_op_in_unsafe_fn)]
+
+mod cwd_junction;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -40,6 +41,7 @@ use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_frame;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
@@ -48,6 +50,7 @@ use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
@@ -66,17 +69,13 @@ use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
 use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
+use windows_sys::Win32::System::Threading::OpenMutexW;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-#[path = "cwd_junction.rs"]
-mod cwd_junction;
-
-#[allow(dead_code)]
-#[path = "../read_acl_mutex.rs"]
-mod read_acl_mutex;
-
+const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
 struct IpcSpawnedProcess {
@@ -196,9 +195,25 @@ fn read_spawn_request(reader: &mut File) -> Result<SpawnRequest> {
     }
 }
 
+fn read_acl_mutex_exists() -> Result<bool> {
+    let name = to_wide(OsStr::new(READ_ACL_MUTEX_NAME));
+    let handle = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, 0, name.as_ptr()) };
+    if handle == 0 {
+        let err = unsafe { GetLastError() };
+        if err == ERROR_FILE_NOT_FOUND {
+            return Ok(false);
+        }
+        return Err(anyhow::anyhow!("OpenMutexW failed: {err}"));
+    }
+    unsafe {
+        CloseHandle(handle);
+    }
+    Ok(true)
+}
+
 /// Pick an effective CWD, using a junction if the ACL helper is active.
 fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
-    let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
+    let use_junction = match read_acl_mutex_exists() {
         Ok(exists) => exists,
         Err(err) => {
             log_note(

@@ -149,6 +149,20 @@ fn skips_workspace_local_bwrap_in_joined_search_path() {
     );
 }
 
+#[test]
+fn root_cwd_does_not_hide_system_bwrap_candidates() {
+    let temp_dir = tempdir().expect("temp dir");
+    let bin_dir = temp_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let expected_bwrap = write_named_fake_bwrap_in(&bin_dir);
+    let search_path = std::env::join_paths([bin_dir]).expect("join search path");
+
+    assert_eq!(
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), Path::new("/")),
+        Some(expected_bwrap)
+    );
+}
+
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     write_fake_bwrap_in(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),

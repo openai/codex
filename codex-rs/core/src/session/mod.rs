@@ -14,6 +14,7 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -112,6 +113,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -282,8 +284,6 @@ use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills_watcher::SkillsWatcher;
-use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::PendingRequestPermissions;
@@ -392,7 +392,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -412,6 +411,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -455,7 +455,6 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager,
-            skills_watcher,
             conversation_history,
             session_source,
             thread_source,
@@ -471,6 +470,7 @@ impl Codex {
             environment_selections,
             analytics_events_client,
             thread_store,
+            attestation_provider,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -650,12 +650,12 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
-            skills_watcher,
             agent_control,
             environment_manager,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
+            attestation_provider,
         )
         .await
         .map_err(|e| {
@@ -782,6 +782,11 @@ impl Codex {
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         let state = self.session.state.lock().await;
         state.session_configuration.thread_config_snapshot()
+    }
+
+    pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        let state = self.session.state.lock().await;
+        state.session_configuration.environments.clone()
     }
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
@@ -1015,29 +1020,6 @@ impl Session {
 
     pub(crate) fn set_out_of_band_elicitation_pause_state(&self, paused: bool) {
         self.out_of_band_elicitation_paused.send_replace(paused);
-    }
-
-    fn start_skills_watcher_listener(self: &Arc<Self>) {
-        let mut rx = self.services.skills_watcher.subscribe();
-        let weak_sess = Arc::downgrade(self);
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
-                        let Some(sess) = weak_sess.upgrade() else {
-                            break;
-                        };
-                        let event = Event {
-                            id: sess.next_internal_sub_id(),
-                            msg: EventMsg::SkillsUpdateAvailable,
-                        };
-                        sess.send_event_raw(event).await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-        });
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {

@@ -699,67 +699,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_recreates_legacy_logs_db_when_log_version_changes() {
-        let codex_home = unique_temp_dir();
-        tokio::fs::create_dir_all(&codex_home)
-            .await
-            .expect("create codex home");
-        let legacy_logs_path = codex_home.join("logs_1.sqlite");
-        let pool = SqlitePool::connect_with(
-            SqliteConnectOptions::new()
-                .filename(&legacy_logs_path)
-                .create_if_missing(true),
-        )
-        .await
-        .expect("open legacy logs db");
-        LOGS_MIGRATOR
-            .run(&pool)
-            .await
-            .expect("apply legacy logs schema");
-        sqlx::query(
-            "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, module_path, file, line, thread_id, process_uuid, estimated_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(1_i64)
-        .bind(0_i64)
-        .bind("INFO")
-        .bind("cli")
-        .bind("legacy-log-row")
-        .bind("mod")
-        .bind("main.rs")
-        .bind(7_i64)
-        .bind("thread-1")
-        .bind("proc-1")
-        .bind(16_i64)
-        .execute(&pool)
-        .await
-        .expect("insert legacy log row");
-        pool.close().await;
-        drop(pool);
-
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
-
-        assert!(
-            !legacy_logs_path.exists(),
-            "legacy logs db should be removed when the version changes"
-        );
-        assert!(
-            logs_db_path(codex_home.as_path()).exists(),
-            "current logs db should be recreated during init"
-        );
-        assert!(
-            runtime
-                .query_logs(&LogQuery::default())
-                .await
-                .expect("query recreated logs db")
-                .is_empty()
-        );
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
     async fn init_configures_logs_db_with_incremental_auto_vacuum() {
         let codex_home = unique_temp_dir();
         let _runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())

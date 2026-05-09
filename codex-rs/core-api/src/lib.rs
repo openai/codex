@@ -44,7 +44,6 @@ pub use codex_core::resolve_installation_id;
 pub use codex_core::skills::SkillsManager;
 pub use codex_core::thread_store_from_config;
 pub use codex_exec_server::EnvironmentManager;
-pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 pub use codex_features::Feature;
 pub use codex_features::Features;
