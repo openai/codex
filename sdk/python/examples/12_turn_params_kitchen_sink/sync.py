@@ -16,11 +16,13 @@ from _bootstrap import (
 ensure_local_sdk_src()
 
 from codex_app_server import (
-    AskForApproval,
     Codex,
+    TextInput,
+)
+from codex_app_server.types import (
+    AskForApproval,
     Personality,
     ReasoningSummary,
-    TextInput,
 )
 
 OUTPUT_SCHEMA = {

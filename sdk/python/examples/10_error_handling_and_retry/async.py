@@ -24,9 +24,9 @@ from codex_app_server import (
     JsonRpcError,
     ServerBusyError,
     TextInput,
-    TurnStatus,
     is_retryable_error,
 )
+from codex_app_server.types import TurnStatus
 
 ResultT = TypeVar("ResultT")
 

@@ -15,7 +15,6 @@ from codex_app_server import (
     AsyncThread,
     TurnHandle,
     AsyncTurnHandle,
-    InitializeResponse,
     Input,
     InputItem,
     TextInput,
@@ -23,14 +22,18 @@ from codex_app_server import (
     LocalImageInput,
     SkillInput,
     MentionInput,
+)
+from codex_app_server.types import (
+    InitializeResponse,
+    ThreadItem,
+    ThreadTokenUsage,
     TurnStatus,
 )
-from codex_app_server.generated.v2_all import ThreadItem, ThreadTokenUsage
 ```
 
 - Version: `codex_app_server.__version__`
 - Requires Python >= 3.10
-- Canonical generated app-server models live in `codex_app_server.generated.v2_all`
+- Public app-server value and event types live in `codex_app_server.types`
 
 ## Codex (sync)
 
@@ -124,7 +127,7 @@ object with:
 phase-less assistant message item.
 
 Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
-`interrupt()`) or the canonical generated `Turn` from `TurnHandle.run()`.
+`interrupt()`) or the public `Turn` model from `TurnHandle.run()`.
 
 ## TurnHandle / AsyncTurnHandle
 
@@ -133,7 +136,7 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 - `steer(input: Input) -> TurnSteerResponse`
 - `interrupt() -> TurnInterruptResponse`
 - `stream() -> Iterator[Notification]`
-- `run() -> codex_app_server.generated.v2_all.Turn`
+- `run() -> codex_app_server.types.Turn`
 
 Behavior notes:
 
@@ -145,7 +148,7 @@ Behavior notes:
 - `steer(input: Input) -> Awaitable[TurnSteerResponse]`
 - `interrupt() -> Awaitable[TurnInterruptResponse]`
 - `stream() -> AsyncIterator[Notification]`
-- `run() -> Awaitable[codex_app_server.generated.v2_all.Turn]`
+- `run() -> Awaitable[codex_app_server.types.Turn]`
 
 Behavior notes:
 
@@ -165,16 +168,15 @@ InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
 ```
 
-## Generated Models
+## Public Types
 
-The SDK wrappers return and accept canonical generated app-server models wherever possible:
+The SDK wrappers return and accept public app-server models wherever possible:
 
 ```python
-from codex_app_server.generated.v2_all import (
+from codex_app_server.types import (
     AskForApproval,
     ThreadReadResponse,
     Turn,
-    TurnStartParams,
     TurnStatus,
 )
 ```

@@ -12,13 +12,15 @@ ensure_local_sdk_src()
 import asyncio
 
 from codex_app_server import (
-    AskForApproval,
     AsyncCodex,
+    TextInput,
+)
+from codex_app_server.types import (
+    AskForApproval,
     Personality,
     ReasoningEffort,
     ReasoningSummary,
     SandboxPolicy,
-    TextInput,
 )
 
 REASONING_RANK = {

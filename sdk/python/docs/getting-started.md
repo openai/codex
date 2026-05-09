@@ -95,12 +95,13 @@ with Codex() as codex:
     print(result.final_response)
 ```
 
-## 6) Generated models
+## 6) Public app-server types
 
-The convenience wrappers live at the package root, but the canonical app-server models live under:
+The convenience wrappers live at the package root. Public app-server value and
+event types live under:
 
 ```python
-from codex_app_server.generated.v2_all import Turn, TurnStatus, ThreadReadResponse
+from codex_app_server.types import ThreadReadResponse, Turn, TurnStatus
 ```
 
 ## 7) Next stops

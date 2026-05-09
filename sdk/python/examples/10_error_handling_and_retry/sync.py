@@ -19,9 +19,9 @@ from codex_app_server import (
     JsonRpcError,
     ServerBusyError,
     TextInput,
-    TurnStatus,
     retry_on_overload,
 )
+from codex_app_server.types import TurnStatus
 
 with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})

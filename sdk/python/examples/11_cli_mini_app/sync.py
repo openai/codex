@@ -12,6 +12,8 @@ ensure_local_sdk_src()
 from codex_app_server import (
     Codex,
     TextInput,
+)
+from codex_app_server.types import (
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
 )
