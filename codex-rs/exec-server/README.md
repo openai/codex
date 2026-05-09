@@ -21,7 +21,7 @@ the wire.
 
 The CLI entrypoint supports:
 
-- `ws://IP:PORT` (default)
+- `ws://IP:PORT` (default bind address; the listener advertises `ws://IP:PORT/ws`)
 - `--remote URL --executor-id ID [--name NAME]`
 
 Remote mode registers the local exec-server with the executor registry,
