@@ -5,7 +5,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from pathlib import Path
 
-DISTRIBUTION_NAME = "openai-codex-app-server-sdk"
+DISTRIBUTION_NAME = "openai-codex"
 UNKNOWN_VERSION = "0+unknown"
 
 

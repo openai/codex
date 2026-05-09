@@ -16,7 +16,7 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from codex_app_server import AsyncCodex, TextInput
+from openai_codex import AsyncCodex, TextInput
 
 
 async def main() -> None:

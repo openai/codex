@@ -9,11 +9,11 @@ from _bootstrap import assistant_text_from_turn, ensure_local_sdk_src, find_turn
 
 ensure_local_sdk_src()
 
-from codex_app_server import (
+from openai_codex import (
     Codex,
     TextInput,
 )
-from codex_app_server.types import (
+from openai_codex.types import (
     AskForApproval,
     Personality,
     ReasoningEffort,

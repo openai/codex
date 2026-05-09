@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "openai-codex-cli-bin"
-SDK_PACKAGE_NAME = "openai-codex-app-server-sdk"
+SDK_PACKAGE_NAME = "openai-codex"
 REPO_SLUG = "openai/codex"
 
 

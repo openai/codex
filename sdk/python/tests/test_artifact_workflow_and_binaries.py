@@ -172,12 +172,12 @@ def test_examples_readme_points_to_runtime_version_source_of_truth() -> None:
 def test_runtime_distribution_name_is_consistent() -> None:
     script = _load_update_script_module()
     runtime_setup = _load_runtime_setup_module()
-    from codex_app_server import client as client_module
-    from codex_app_server import _version
+    from openai_codex import client as client_module
+    from openai_codex import _version
 
-    assert script.SDK_DISTRIBUTION_NAME == "openai-codex-app-server-sdk"
-    assert runtime_setup.SDK_PACKAGE_NAME == "openai-codex-app-server-sdk"
-    assert _version.DISTRIBUTION_NAME == "openai-codex-app-server-sdk"
+    assert script.SDK_DISTRIBUTION_NAME == "openai-codex"
+    assert runtime_setup.SDK_PACKAGE_NAME == "openai-codex"
+    assert _version.DISTRIBUTION_NAME == "openai-codex"
     assert script.RUNTIME_DISTRIBUTION_NAME == "openai-codex-cli-bin"
     assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
     assert client_module.RUNTIME_PKG_NAME == "openai-codex-cli-bin"
@@ -457,18 +457,18 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     )
 
     pyproject = (staged / "pyproject.toml").read_text()
-    assert 'name = "openai-codex-app-server-sdk"' in pyproject
+    assert 'name = "openai-codex"' in pyproject
     assert 'version = "0.116.0a1"' in pyproject
     assert '"openai-codex-cli-bin==0.116.0a1"' in pyproject
     assert (
         '__version__ = "0.116.0a1"'
-        not in (staged / "src" / "codex_app_server" / "__init__.py").read_text()
+        not in (staged / "src" / "openai_codex" / "__init__.py").read_text()
     )
     assert (
         'client_version: str = "0.116.0a1"'
-        not in (staged / "src" / "codex_app_server" / "client.py").read_text()
+        not in (staged / "src" / "openai_codex" / "client.py").read_text()
     )
-    assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
+    assert not any((staged / "src" / "openai_codex").glob("bin/**"))
 
 
 def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
@@ -637,7 +637,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
     tmp_path: Path,
 ) -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
     fake_binary.write_text("")
@@ -652,7 +652,7 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(
 
 
 def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     explicit_binary = tmp_path / (
         "custom-codex.exe" if client_module.os.name == "nt" else "custom-codex"
@@ -670,7 +670,7 @@ def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
 
 
 def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(
@@ -684,7 +684,7 @@ def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
 
 
 def test_broken_runtime_package_does_not_fall_back() -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(

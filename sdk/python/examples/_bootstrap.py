@@ -35,7 +35,7 @@ def ensure_local_sdk_src() -> Path:
     """Add sdk/python/src to sys.path so examples run without installing the package."""
     sdk_python_dir = _SDK_PYTHON_DIR
     src_dir = sdk_python_dir / "src"
-    package_dir = src_dir / "codex_app_server"
+    package_dir = src_dir / "openai_codex"
     if not package_dir.exists():
         raise RuntimeError(f"Could not locate local SDK package at {package_dir}")
 
@@ -49,7 +49,7 @@ def ensure_local_sdk_src() -> Path:
 
 def runtime_config():
     """Return an example-friendly AppServerConfig for repo-source SDK usage."""
-    from codex_app_server import AppServerConfig
+    from openai_codex import AppServerConfig
 
     ensure_runtime_package_installed(sys.executable, _SDK_PYTHON_DIR)
     return AppServerConfig()

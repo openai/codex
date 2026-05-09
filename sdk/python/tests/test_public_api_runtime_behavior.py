@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import codex_app_server.api as public_api_module
-from codex_app_server.client import AppServerClient
-from codex_app_server.generated.v2_all import (
+import openai_codex.api as public_api_module
+from openai_codex.client import AppServerClient
+from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
     ItemCompletedNotification,
     MessagePhase,
@@ -17,8 +17,8 @@ from codex_app_server.generated.v2_all import (
     TurnCompletedNotification,
     TurnStatus,
 )
-from codex_app_server.models import InitializeResponse, Notification
-from codex_app_server.api import (
+from openai_codex.models import InitializeResponse, Notification
+from openai_codex.api import (
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,

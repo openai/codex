@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, get_args, get_origin
 
-SDK_DISTRIBUTION_NAME = "openai-codex-app-server-sdk"
+SDK_DISTRIBUTION_NAME = "openai-codex"
 RUNTIME_DISTRIBUTION_NAME = "openai-codex-cli-bin"
 
 
@@ -250,7 +250,7 @@ def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -
 def stage_python_sdk_package(staging_dir: Path, codex_version: str) -> Path:
     package_version = normalize_codex_version(codex_version)
     _copy_package_tree(sdk_root(), staging_dir)
-    sdk_bin_dir = staging_dir / "src" / "codex_app_server" / "bin"
+    sdk_bin_dir = staging_dir / "src" / "openai_codex" / "bin"
     if sdk_bin_dir.exists():
         shutil.rmtree(sdk_bin_dir)
 
@@ -572,7 +572,7 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
 
 def generate_v2_all(schema_dir: Path) -> None:
     """Regenerate the Pydantic v2 protocol model module from runtime schemas."""
-    out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
+    out_path = sdk_root() / "src" / "openai_codex" / "generated" / "v2_all.py"
     out_dir = out_path.parent
     old_package_dir = out_dir / "v2_all"
     if old_package_dir.exists():
@@ -624,7 +624,7 @@ def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
     )
     one_of = server_notifications.get("oneOf", [])
     generated_source = (
-        sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
+        sdk_root() / "src" / "openai_codex" / "generated" / "v2_all.py"
     ).read_text()
 
     specs: list[tuple[str, str]] = []
@@ -702,7 +702,7 @@ def generate_notification_registry(schema_dir: Path) -> None:
     out = (
         sdk_root()
         / "src"
-        / "codex_app_server"
+        / "openai_codex"
         / "generated"
         / "notification_registry.py"
     )
@@ -834,7 +834,7 @@ def _load_public_fields(
 ) -> list[PublicFieldSpec]:
     """Load generated model fields used to render the ergonomic public methods."""
     exclude = exclude or set()
-    if module_name == "codex_app_server.generated.v2_all":
+    if module_name == "openai_codex.generated.v2_all":
         module = _load_generated_v2_all_module()
     else:
         module = importlib.import_module(module_name)
@@ -861,9 +861,9 @@ def _load_public_fields(
 
 def _load_generated_v2_all_module() -> types.ModuleType:
     """Import the freshly generated v2_all module without importing package init."""
-    module_name = "_codex_app_server_generated_v2_all_for_artifacts"
+    module_name = "_openai_codex_generated_v2_all_for_artifacts"
     sys.modules.pop(module_name, None)
-    module_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
+    module_path = sdk_root() / "src" / "openai_codex" / "generated" / "v2_all.py"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Failed to load generated module from {module_path}")
@@ -1084,7 +1084,7 @@ def _render_async_thread_block(
 def generate_public_api_flat_methods() -> None:
     """Regenerate the public convenience methods from generated protocol models."""
     src_dir = sdk_root() / "src"
-    public_api_path = src_dir / "codex_app_server" / "api.py"
+    public_api_path = src_dir / "openai_codex" / "api.py"
     if not public_api_path.exists():
         # PR2 can run codegen before the ergonomic public API layer is added.
         return
@@ -1093,25 +1093,25 @@ def generate_public_api_flat_methods() -> None:
         sys.path.insert(0, src_dir_str)
 
     thread_start_fields = _load_public_fields(
-        "codex_app_server.generated.v2_all",
+        "openai_codex.generated.v2_all",
         "ThreadStartParams",
     )
     thread_list_fields = _load_public_fields(
-        "codex_app_server.generated.v2_all",
+        "openai_codex.generated.v2_all",
         "ThreadListParams",
     )
     thread_resume_fields = _load_public_fields(
-        "codex_app_server.generated.v2_all",
+        "openai_codex.generated.v2_all",
         "ThreadResumeParams",
         exclude={"thread_id"},
     )
     thread_fork_fields = _load_public_fields(
-        "codex_app_server.generated.v2_all",
+        "openai_codex.generated.v2_all",
         "ThreadForkParams",
         exclude={"thread_id"},
     )
     turn_start_fields = _load_public_fields(
-        "codex_app_server.generated.v2_all",
+        "openai_codex.generated.v2_all",
         "TurnStartParams",
         exclude={"thread_id", "input"},
     )

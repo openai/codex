@@ -4,12 +4,12 @@ import asyncio
 import time
 from types import SimpleNamespace
 
-from codex_app_server.async_client import AsyncAppServerClient
-from codex_app_server.generated.v2_all import (
+from openai_codex.async_client import AsyncAppServerClient
+from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
     TurnCompletedNotification,
 )
-from codex_app_server.models import Notification, UnknownNotification
+from openai_codex.models import Notification, UnknownNotification
 
 
 def test_async_client_allows_concurrent_transport_calls() -> None:

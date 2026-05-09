@@ -5,8 +5,8 @@ Each example folder contains runnable versions:
 - `sync.py` (public sync surface: `Codex`)
 - `async.py` (public async surface: `AsyncCodex`)
 
-All examples intentionally use only public SDK exports from `codex_app_server`
-and `codex_app_server.types`.
+All examples intentionally use only public SDK exports from `openai_codex`
+and `openai_codex.types`.
 
 ## Prerequisites
 

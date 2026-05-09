@@ -6,9 +6,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-import codex_app_server
-import codex_app_server.types as public_types
-from codex_app_server import (
+import openai_codex
+import openai_codex.types as public_types
+from openai_codex import (
     AppServerConfig,
     AsyncCodex,
     AsyncThread,
@@ -16,7 +16,7 @@ from codex_app_server import (
     RunResult,
     Thread,
 )
-from codex_app_server.types import InitializeResponse
+from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
     "__version__",
@@ -122,32 +122,32 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text())
 
-    assert codex_app_server.__version__ == pyproject["project"]["version"]
-    assert AppServerConfig().client_version == codex_app_server.__version__
+    assert openai_codex.__version__ == pyproject["project"]["version"]
+    assert AppServerConfig().client_version == openai_codex.__version__
 
 
 def test_package_includes_py_typed_marker() -> None:
     """The wheel should advertise that inline type information is available."""
-    marker = resources.files("codex_app_server").joinpath("py.typed")
+    marker = resources.files("openai_codex").joinpath("py.typed")
     assert marker.is_file()
 
 
 def test_package_root_exports_only_public_api() -> None:
     """The package root should expose the supported SDK surface, not internals."""
-    assert codex_app_server.__all__ == EXPECTED_ROOT_EXPORTS
+    assert openai_codex.__all__ == EXPECTED_ROOT_EXPORTS
     assert {
-        name: hasattr(codex_app_server, name) for name in EXPECTED_ROOT_EXPORTS
+        name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS
     } == {name: True for name in EXPECTED_ROOT_EXPORTS}
     assert {
-        "AppServerClient": hasattr(codex_app_server, "AppServerClient"),
-        "AsyncAppServerClient": hasattr(codex_app_server, "AsyncAppServerClient"),
-        "InitializeResponse": hasattr(codex_app_server, "InitializeResponse"),
-        "ThreadStartParams": hasattr(codex_app_server, "ThreadStartParams"),
-        "TurnStartParams": hasattr(codex_app_server, "TurnStartParams"),
+        "AppServerClient": hasattr(openai_codex, "AppServerClient"),
+        "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
+        "InitializeResponse": hasattr(openai_codex, "InitializeResponse"),
+        "ThreadStartParams": hasattr(openai_codex, "ThreadStartParams"),
+        "TurnStartParams": hasattr(openai_codex, "TurnStartParams"),
         "TurnCompletedNotification": hasattr(
-            codex_app_server, "TurnCompletedNotification"
+            openai_codex, "TurnCompletedNotification"
         ),
-        "TurnStatus": hasattr(codex_app_server, "TurnStatus"),
+        "TurnStatus": hasattr(openai_codex, "TurnStatus"),
     } == {
         "AppServerClient": False,
         "AsyncAppServerClient": False,
@@ -162,7 +162,7 @@ def test_package_root_exports_only_public_api() -> None:
 def test_package_star_import_matches_public_api() -> None:
     """Star imports should follow the same explicit public API list."""
     namespace: dict[str, object] = {}
-    exec("from codex_app_server import *", namespace)
+    exec("from openai_codex import *", namespace)
 
     exported = set(namespace) - {"__builtins__"}
     assert exported == set(EXPECTED_ROOT_EXPORTS)
@@ -179,7 +179,7 @@ def test_types_module_exports_curated_public_types() -> None:
 def test_types_star_import_matches_public_types() -> None:
     """Star imports from the type module should match its explicit export list."""
     namespace: dict[str, object] = {}
-    exec("from codex_app_server.types import *", namespace)
+    exec("from openai_codex.types import *", namespace)
 
     exported = set(namespace) - {"__builtins__"}
     assert exported == set(EXPECTED_TYPES_EXPORTS)
@@ -189,11 +189,11 @@ def test_examples_use_public_import_surfaces() -> None:
     """Examples should teach users the public root and type-module imports only."""
     examples_root = Path(__file__).resolve().parents[1] / "examples"
     private_import_markers = [
-        "codex_app_server.api",
-        "codex_app_server.client",
-        "codex_app_server.generated",
-        "codex_app_server.models",
-        "codex_app_server.retry",
+        "openai_codex.api",
+        "openai_codex.client",
+        "openai_codex.generated",
+        "openai_codex.models",
+        "openai_codex.retry",
     ]
 
     offenders = {

@@ -17,11 +17,11 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from codex_app_server import (
+from openai_codex import (
     AsyncCodex,
     TextInput,
 )
-from codex_app_server.types import (
+from openai_codex.types import (
     AskForApproval,
     Personality,
     ReasoningSummary,

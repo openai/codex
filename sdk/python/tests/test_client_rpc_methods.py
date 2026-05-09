@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_app_server.client import AppServerClient, _params_dict
-from codex_app_server.generated.notification_registry import notification_turn_id
-from codex_app_server.generated.v2_all import (
+from openai_codex.client import AppServerClient, _params_dict
+from openai_codex.generated.notification_registry import notification_turn_id
+from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
     ApprovalsReviewer,
     ThreadListParams,
@@ -14,7 +14,7 @@ from codex_app_server.generated.v2_all import (
     TurnCompletedNotification,
     WarningNotification,
 )
-from codex_app_server.models import Notification, UnknownNotification
+from openai_codex.models import Notification, UnknownNotification
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,7 +45,7 @@ def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
 
 
 def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
-    source = (ROOT / "src" / "codex_app_server" / "generated" / "v2_all.py").read_text()
+    source = (ROOT / "src" / "openai_codex" / "generated" / "v2_all.py").read_text()
     assert source.count("class PlanType(") == 1
 
 

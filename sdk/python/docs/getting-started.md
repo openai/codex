@@ -24,7 +24,7 @@ Requirements:
 ## 2) Run your first turn (sync)
 
 ```python
-from codex_app_server import Codex
+from openai_codex import Codex
 
 with Codex() as codex:
     server = codex.metadata.serverInfo
@@ -50,7 +50,7 @@ What happened:
 ## 3) Continue the same thread (multi-turn)
 
 ```python
-from codex_app_server import Codex
+from openai_codex import Codex
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
@@ -69,7 +69,7 @@ initializes lazily, and context entry makes startup/shutdown explicit.
 
 ```python
 import asyncio
-from codex_app_server import AsyncCodex
+from openai_codex import AsyncCodex
 
 
 async def main() -> None:
@@ -85,7 +85,7 @@ asyncio.run(main())
 ## 5) Resume an existing thread
 
 ```python
-from codex_app_server import Codex
+from openai_codex import Codex
 
 THREAD_ID = "thr_123"  # replace with a real id
 
@@ -101,7 +101,7 @@ The convenience wrappers live at the package root. Public app-server value and
 event types live under:
 
 ```python
-from codex_app_server.types import ThreadReadResponse, Turn, TurnStatus
+from openai_codex.types import ThreadReadResponse, Turn, TurnStatus
 ```
 
 ## 7) Next stops

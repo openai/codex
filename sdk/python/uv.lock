@@ -281,7 +281,7 @@ wheels = [
 ]
 
 [[package]]
-name = "openai-codex-app-server-sdk"
+name = "openai-codex"
 version = "0.131.0a4"
 source = { editable = "." }
 dependencies = [
