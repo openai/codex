@@ -3745,7 +3745,7 @@ pub(crate) fn thread_from_stored_thread(
         id: thread_id.clone(),
         session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         ephemeral: false,
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -3787,7 +3787,7 @@ fn summary_from_stored_thread(
     ConversationSummary {
         conversation_id: thread.thread_id,
         path,
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         // Preserve millisecond precision from the thread store so thread/list cursors
         // round-trip the same ordering key used by pagination queries.
         timestamp: Some(
@@ -3818,6 +3818,7 @@ fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
     first_user_message: Option<String>,
+    preview: Option<String>,
     timestamp: String,
     updated_at: String,
     model_provider: String,
@@ -3831,7 +3832,7 @@ fn summary_from_state_db_metadata(
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 ) -> ConversationSummary {
-    let preview = first_user_message.unwrap_or_default();
+    let preview = preview.or(first_user_message).unwrap_or_default();
     let source = serde_json::from_str(&source)
         .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
@@ -3865,6 +3866,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
         metadata.id,
         metadata.rollout_path.clone(),
         metadata.first_user_message.clone(),
+        metadata.preview.clone(),
         metadata
             .created_at
             .to_rfc3339_opts(SecondsFormat::Secs, true),

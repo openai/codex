@@ -110,7 +110,11 @@ pub(super) fn stored_thread_from_rollout_item(
         item.git_origin_url.clone(),
     );
     let source = item.source.unwrap_or(SessionSource::Unknown);
-    let preview = item.first_user_message.clone().unwrap_or_default();
+    let preview = item
+        .preview
+        .clone()
+        .or_else(|| item.first_user_message.clone())
+        .unwrap_or_default();
 
     Some(StoredThread {
         thread_id,

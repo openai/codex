@@ -2182,7 +2182,7 @@ mod tests {
 
         assert_eq!(response.thread.id, thread_id.to_string());
         assert_eq!(response.thread.path, None);
-        assert_eq!(response.thread.preview, "before rollback");
+        assert_eq!(response.thread.preview, "fallback preview");
         assert_eq!(response.thread.name.as_deref(), Some("Rollback thread"));
         assert_eq!(response.thread.status, ThreadStatus::NotLoaded);
         assert_eq!(response.thread.turns.len(), 1);
