@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import textwrap
 import unittest
+from os import environ
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -13,7 +14,7 @@ import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
-    def test_non_windows_consumer_selectors_track_resolved_crate_version(self) -> None:
+    def test_consumer_selectors_track_resolved_crate_version(self) -> None:
         build_bazel = (
             rusty_v8_bazel.ROOT / "third_party" / "v8" / "BUILD.bazel"
         ).read_text()
@@ -21,9 +22,11 @@ class RustyV8BazelTest(unittest.TestCase):
 
         for selector in [
             "aarch64_apple_darwin_bazel",
+            "aarch64_pc_windows_msvc",
             "aarch64_unknown_linux_gnu_bazel",
             "aarch64_unknown_linux_musl_release_base",
             "x86_64_apple_darwin_bazel",
+            "x86_64_pc_windows_msvc",
             "x86_64_unknown_linux_gnu_bazel",
             "x86_64_unknown_linux_musl_release",
         ]:
@@ -34,9 +37,11 @@ class RustyV8BazelTest(unittest.TestCase):
 
         for selector in [
             "aarch64_apple_darwin",
+            "aarch64_pc_windows_msvc",
             "aarch64_unknown_linux_gnu",
             "aarch64_unknown_linux_musl",
             "x86_64_apple_darwin",
+            "x86_64_pc_windows_msvc",
             "x86_64_unknown_linux_gnu",
             "x86_64_unknown_linux_musl",
         ]:
@@ -78,6 +83,16 @@ class RustyV8BazelTest(unittest.TestCase):
                 ["rusty-v8-upstream-libcxx", "v8-release-compat"]
             ),
         )
+
+    def test_bazel_remote_args_include_buildbuddy_header_when_present(self) -> None:
+        with patch.dict(environ, {"BUILDBUDDY_API_KEY": "token"}, clear=False):
+            self.assertEqual(
+                ["--remote_header=x-buildbuddy-api-key=token"],
+                rusty_v8_bazel.bazel_remote_args(),
+            )
+
+        with patch.dict(environ, {}, clear=True):
+            self.assertEqual([], rusty_v8_bazel.bazel_remote_args())
 
     def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(self) -> None:
         self.assertEqual(

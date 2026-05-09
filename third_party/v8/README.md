@@ -32,9 +32,8 @@ python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
 ```
 
 The commands default to the single `rusty_v8_*` `http_file` version still
-present in `MODULE.bazel` and validate every matching entry. During the source
-build rollout, that asset version can lag the resolved Rust crate version.
-CI runs the check command to block checksum drift.
+present in `MODULE.bazel` and validate every matching entry. CI runs the check
+command to block checksum drift.
 
 The consumer-facing selectors are:
 

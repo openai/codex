@@ -30,43 +30,13 @@ config_setting(
 )
 
 alias(
-    name = "v8_146_4_0_x86_64_apple_darwin",
-    actual = "@rusty_v8_146_4_0_x86_64_apple_darwin_archive//file",
+    name = "v8_147_4_0_x86_64_pc_windows_msvc",
+    actual = "@rusty_v8_147_4_0_x86_64_pc_windows_msvc_archive//file",
 )
 
 alias(
-    name = "v8_146_4_0_aarch64_apple_darwin",
-    actual = "@rusty_v8_146_4_0_aarch64_apple_darwin_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_x86_64_unknown_linux_gnu",
-    actual = "@rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_aarch64_unknown_linux_gnu",
-    actual = "@rusty_v8_146_4_0_aarch64_unknown_linux_gnu_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_x86_64_unknown_linux_musl",
-    actual = "@rusty_v8_146_4_0_x86_64_unknown_linux_musl_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_aarch64_unknown_linux_musl",
-    actual = "@rusty_v8_146_4_0_aarch64_unknown_linux_musl_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_x86_64_pc_windows_msvc",
-    actual = "@rusty_v8_146_4_0_x86_64_pc_windows_msvc_archive//file",
-)
-
-alias(
-    name = "v8_146_4_0_aarch64_pc_windows_msvc",
-    actual = "@rusty_v8_146_4_0_aarch64_pc_windows_msvc_archive//file",
+    name = "v8_147_4_0_aarch64_pc_windows_msvc",
+    actual = "@rusty_v8_147_4_0_aarch64_pc_windows_msvc_archive//file",
 )
 
 alias(
@@ -103,26 +73,6 @@ filegroup(
 )
 
 alias(
-    name = "src_binding_release_x86_64_unknown_linux_musl",
-    actual = "@rusty_v8_146_4_0_x86_64_unknown_linux_musl_binding//file",
-)
-
-alias(
-    name = "src_binding_release_aarch64_unknown_linux_musl",
-    actual = "@rusty_v8_146_4_0_aarch64_unknown_linux_musl_binding//file",
-)
-
-filegroup(
-    name = "src_binding_release_x86_64_pc_windows_msvc",
-    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_pc_windows_msvc"],
-)
-
-filegroup(
-    name = "src_binding_release_aarch64_pc_windows_msvc",
-    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_pc_windows_msvc"],
-)
-
-alias(
     name = "src_binding_release_x86_64_pc_windows_gnullvm",
     # `rusty_v8` does not publish a Windows GNU binding file. The generated
     # binding only describes this V8 release's C++ API surface, so reuse the
@@ -141,12 +91,12 @@ alias(
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_147_4_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_146_4_0_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_146_4_0_aarch64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_147_4_0_aarch64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_147_4_0_aarch64_unknown_linux_gnu_bazel",
         ":platform_aarch64_unknown_linux_musl": ":v8_147_4_0_aarch64_unknown_linux_musl_release_base",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_147_4_0_x86_64_apple_darwin_bazel",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_146_4_0_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_146_4_0_x86_64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_147_4_0_x86_64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_147_4_0_x86_64_unknown_linux_gnu_bazel",
         ":platform_x86_64_unknown_linux_musl": ":v8_147_4_0_x86_64_unknown_linux_musl_release",
         "//conditions:default": ":v8_147_4_0_x86_64_unknown_linux_gnu_bazel",
@@ -158,12 +108,12 @@ alias(
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu_147_4_0_release",
         ":platform_aarch64_unknown_linux_musl": ":src_binding_release_aarch64_unknown_linux_musl_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
         ":platform_x86_64_unknown_linux_musl": ":src_binding_release_x86_64_unknown_linux_musl_147_4_0_release",
         "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
@@ -543,16 +493,16 @@ filegroup(
 filegroup(
     name = "rusty_v8_release_pair_x86_64_pc_windows_msvc",
     srcs = [
-        ":v8_146_4_0_x86_64_pc_windows_msvc",
-        ":src_binding_release_x86_64_pc_windows_msvc",
+        ":v8_147_4_0_x86_64_pc_windows_msvc",
+        ":src_binding_release_x86_64_pc_windows_msvc_147_4_0_release",
     ],
 )
 
 filegroup(
     name = "rusty_v8_release_pair_aarch64_pc_windows_msvc",
     srcs = [
-        ":v8_146_4_0_aarch64_pc_windows_msvc",
-        ":src_binding_release_aarch64_pc_windows_msvc",
+        ":v8_147_4_0_aarch64_pc_windows_msvc",
+        ":src_binding_release_aarch64_pc_windows_msvc_147_4_0_release",
     ],
 )
 

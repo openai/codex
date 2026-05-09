@@ -194,6 +194,8 @@ jobs:
 
       - name: Stage release pair
         env:
+          BAZEL_CONFIG: ${{ matrix.bazel_config }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
@@ -206,6 +208,7 @@ jobs:
             --target "${TARGET}"
             --compilation-mode opt
             --output-dir "dist/${TARGET}"
+            --bazel-config "${BAZEL_CONFIG}"
           )
           if [[ "${SANDBOX}" == "true" ]]; then
             stage_args+=(--sandbox)
