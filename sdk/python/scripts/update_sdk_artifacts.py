@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.metadata
 import json
 import platform
 import re
@@ -33,19 +34,12 @@ def python_runtime_root() -> Path:
     return repo_root() / "sdk" / "python-runtime"
 
 
-def schema_bundle_path() -> Path:
-    return (
-        repo_root()
-        / "codex-rs"
-        / "app-server-protocol"
-        / "schema"
-        / "json"
-        / "codex_app_server_protocol.v2.schemas.json"
-    )
+def sdk_pyproject_path() -> Path:
+    return sdk_root() / "pyproject.toml"
 
 
-def schema_root_dir() -> Path:
-    return repo_root() / "codex-rs" / "app-server-protocol" / "schema" / "json"
+def schema_bundle_path(schema_dir: Path) -> Path:
+    return schema_dir / "codex_app_server_protocol.v2.schemas.json"
 
 
 def _is_windows() -> bool:
@@ -79,12 +73,63 @@ def run_python_module(module: str, args: list[str], cwd: Path) -> None:
 def current_sdk_version() -> str:
     match = re.search(
         r'^version = "([^"]+)"$',
-        (sdk_root() / "pyproject.toml").read_text(),
+        sdk_pyproject_path().read_text(),
         flags=re.MULTILINE,
     )
     if match is None:
         raise RuntimeError("Could not determine Python SDK version from pyproject.toml")
     return match.group(1)
+
+
+def pinned_runtime_version() -> str:
+    pyproject_text = sdk_pyproject_path().read_text()
+    match = re.search(r"(?ms)^dependencies = \[(.*?)\]$", pyproject_text)
+    if match is None:
+        raise RuntimeError(
+            "Could not find dependencies array in sdk/python/pyproject.toml"
+        )
+
+    pins = re.findall(
+        rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==([^"]+)"',
+        match.group(1),
+    )
+    if len(pins) != 1:
+        raise RuntimeError(
+            f"Expected exactly one {RUNTIME_DISTRIBUTION_NAME} dependency pin "
+            "in sdk/python/pyproject.toml"
+        )
+    return normalize_codex_version(pins[0])
+
+
+def pinned_runtime_codex_path() -> Path:
+    expected_version = pinned_runtime_version()
+    try:
+        installed_version = importlib.metadata.version(RUNTIME_DISTRIBUTION_NAME)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError(
+            f"Install {RUNTIME_DISTRIBUTION_NAME}=={expected_version} before "
+            "generating Python SDK types."
+        ) from exc
+
+    normalized_installed_version = normalize_codex_version(installed_version)
+    if normalized_installed_version != expected_version:
+        raise RuntimeError(
+            f"Expected {RUNTIME_DISTRIBUTION_NAME}=={expected_version}, "
+            f"but found {installed_version}."
+        )
+
+    try:
+        from codex_cli_bin import bundled_codex_path
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Installed {RUNTIME_DISTRIBUTION_NAME} package does not expose "
+            "bundled_codex_path."
+        ) from exc
+
+    codex_path = bundled_codex_path()
+    if not codex_path.exists():
+        raise RuntimeError(f"Pinned Codex runtime binary not found at {codex_path}.")
+    return codex_path
 
 
 def normalize_codex_version(version: str) -> str:
@@ -488,8 +533,26 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
         _annotate_schema(child, base)
 
 
-def _normalized_schema_bundle_text() -> str:
-    schema = json.loads(schema_bundle_path().read_text())
+def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
+    codex_path = pinned_runtime_codex_path()
+    if schema_dir.exists():
+        shutil.rmtree(schema_dir)
+    schema_dir.mkdir(parents=True)
+    run(
+        [
+            str(codex_path),
+            "app-server",
+            "generate-json-schema",
+            "--out",
+            str(schema_dir),
+        ],
+        cwd=sdk_root(),
+    )
+    return schema_dir
+
+
+def _normalized_schema_bundle_text(schema_dir: Path) -> str:
+    schema = json.loads(schema_bundle_path(schema_dir).read_text())
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
         for definition in definitions.values():
@@ -501,7 +564,7 @@ def _normalized_schema_bundle_text() -> str:
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
-def generate_v2_all() -> None:
+def generate_v2_all(schema_dir: Path) -> None:
     out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
     out_dir = out_path.parent
     old_package_dir = out_dir / "v2_all"
@@ -509,8 +572,8 @@ def generate_v2_all() -> None:
         shutil.rmtree(old_package_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
-        normalized_bundle = Path(td) / schema_bundle_path().name
-        normalized_bundle.write_text(_normalized_schema_bundle_text())
+        normalized_bundle = Path(td) / schema_bundle_path(schema_dir).name
+        normalized_bundle.write_text(_normalized_schema_bundle_text(schema_dir))
         run_python_module(
             "datamodel_code_generator",
             [
@@ -547,9 +610,9 @@ def generate_v2_all() -> None:
     _normalize_generated_timestamps(out_path)
 
 
-def _notification_specs() -> list[tuple[str, str]]:
+def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
     server_notifications = json.loads(
-        (schema_root_dir() / "ServerNotification.json").read_text()
+        (schema_dir / "ServerNotification.json").read_text()
     )
     one_of = server_notifications.get("oneOf", [])
     generated_source = (
@@ -587,11 +650,12 @@ def _notification_specs() -> list[tuple[str, str]]:
 
 
 def _notification_turn_id_specs(
+    schema_dir: Path,
     specs: list[tuple[str, str]],
 ) -> tuple[list[str], list[str]]:
     """Classify generated notification payloads by where the turn id lives."""
     server_notifications = json.loads(
-        (schema_root_dir() / "ServerNotification.json").read_text()
+        (schema_dir / "ServerNotification.json").read_text()
     )
     definitions = server_notifications.get("definitions", {})
     if not isinstance(definitions, dict):
@@ -625,7 +689,7 @@ def _type_tuple_source(class_names: list[str]) -> str:
     return "(\n" + "".join(f"    {class_name},\n" for class_name in class_names) + ")"
 
 
-def generate_notification_registry() -> None:
+def generate_notification_registry(schema_dir: Path) -> None:
     """Regenerate notification models and routing metadata from generated schemas."""
     out = (
         sdk_root()
@@ -634,9 +698,12 @@ def generate_notification_registry() -> None:
         / "generated"
         / "notification_registry.py"
     )
-    specs = _notification_specs()
+    specs = _notification_specs(schema_dir)
     class_names = sorted({class_name for _, class_name in specs})
-    direct_turn_id_types, nested_turn_types = _notification_turn_id_specs(specs)
+    direct_turn_id_types, nested_turn_types = _notification_turn_id_specs(
+        schema_dir,
+        specs,
+    )
 
     lines = [
         "# Auto-generated by scripts/update_sdk_artifacts.py",
@@ -758,7 +825,10 @@ def _load_public_fields(
     module_name: str, class_name: str, *, exclude: set[str] | None = None
 ) -> list[PublicFieldSpec]:
     exclude = exclude or set()
-    module = importlib.import_module(module_name)
+    if module_name == "codex_app_server.generated.v2_all":
+        module = _load_generated_v2_all_module()
+    else:
+        module = importlib.import_module(module_name)
     model = getattr(module, class_name)
     fields: list[PublicFieldSpec] = []
     for name, field in model.model_fields.items():
@@ -778,6 +848,19 @@ def _load_public_fields(
             )
         )
     return fields
+
+
+def _load_generated_v2_all_module() -> types.ModuleType:
+    module_name = "_codex_app_server_generated_v2_all_for_artifacts"
+    sys.modules.pop(module_name, None)
+    module_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load generated module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
@@ -1054,13 +1137,20 @@ def generate_public_api_flat_methods() -> None:
         _render_async_thread_block(turn_start_fields),
     )
     public_api_path.write_text(source)
+    run_python_module("ruff", ["format", str(public_api_path)], cwd=sdk_root())
+
+
+def generate_types_from_schema_dir(schema_dir: Path) -> None:
+    # v2_all is the authoritative generated surface.
+    generate_v2_all(schema_dir)
+    generate_notification_registry(schema_dir)
+    generate_public_api_flat_methods()
 
 
 def generate_types() -> None:
-    # v2_all is the authoritative generated surface.
-    generate_v2_all()
-    generate_notification_registry()
-    generate_public_api_flat_methods()
+    with tempfile.TemporaryDirectory(prefix="codex-python-schema-") as td:
+        schema_dir = generate_schema_from_pinned_runtime(Path(td) / "schema")
+        generate_types_from_schema_dir(schema_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:

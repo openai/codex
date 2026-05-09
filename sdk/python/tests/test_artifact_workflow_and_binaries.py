@@ -52,7 +52,8 @@ def test_generate_types_wires_all_generation_steps() -> None:
         (
             node
             for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "generate_types"
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "generate_types_from_schema_dir"
         ),
         None,
     )
@@ -72,19 +73,17 @@ def test_generate_types_wires_all_generation_steps() -> None:
     ]
 
 
-def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
+def _load_runtime_schema_bundle(tmp_path: Path) -> dict:
     script = _load_update_script_module()
-    schema = json.loads(
-        (
-            ROOT.parent.parent
-            / "codex-rs"
-            / "app-server-protocol"
-            / "schema"
-            / "json"
-            / "codex_app_server_protocol.v2.schemas.json"
-        ).read_text()
-    )
+    schema_dir = script.generate_schema_from_pinned_runtime(tmp_path / "schema")
+    return json.loads(script.schema_bundle_path(schema_dir).read_text())
 
+
+def test_schema_normalization_only_flattens_string_literal_oneofs(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    schema = _load_runtime_schema_bundle(tmp_path)
     definitions = schema["definitions"]
     flattened = [
         name
@@ -94,27 +93,22 @@ def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
     ]
 
     assert flattened == [
-        "AuthMode",
-        "CommandExecOutputStream",
-        "ExperimentalFeatureStage",
-        "InputModality",
         "MessagePhase",
+        "TurnItemsView",
+        "PluginAvailability",
+        "AuthMode",
+        "InputModality",
+        "ExperimentalFeatureStage",
+        "CommandExecOutputStream",
+        "ProcessOutputStream",
     ]
 
 
-def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
+def test_python_codegen_schema_annotation_adds_stable_variant_titles(
+    tmp_path: Path,
+) -> None:
     script = _load_update_script_module()
-    schema = json.loads(
-        (
-            ROOT.parent.parent
-            / "codex-rs"
-            / "app-server-protocol"
-            / "schema"
-            / "json"
-            / "codex_app_server_protocol.v2.schemas.json"
-        ).read_text()
-    )
-
+    schema = _load_runtime_schema_bundle(tmp_path)
     script._annotate_schema(schema)
     definitions = schema["definitions"]
 
@@ -184,6 +178,25 @@ def test_runtime_distribution_name_is_consistent() -> None:
         "importlib.metadata.version('codex-cli-bin')"
         not in (ROOT / "_runtime_setup.py").read_text()
     )
+
+
+def test_source_sdk_package_pins_published_runtime() -> None:
+    """The source package metadata should pin the runtime wheel that ships schemas."""
+    script = _load_update_script_module()
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+    assert {
+        "sdk_version": pyproject["project"]["version"],
+        "runtime_pin": script.pinned_runtime_version(),
+        "dependencies": pyproject["project"]["dependencies"],
+    } == {
+        "sdk_version": "0.131.0a4",
+        "runtime_pin": "0.131.0a4",
+        "dependencies": [
+            "pydantic>=2.12",
+            "openai-codex-cli-bin==0.131.0a4",
+        ],
+    }
 
 
 def test_release_metadata_retries_without_invalid_auth(
@@ -422,9 +435,7 @@ def test_runtime_resource_binaries_are_included_by_wheel_config(
     pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
     assert {
         "include": pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["include"],
-        "helper": (
-            staged / "src" / "codex_cli_bin" / "bin" / "helper"
-        ).read_text(),
+        "helper": (staged / "src" / "codex_cli_bin" / "bin" / "helper").read_text(),
     } == {
         "include": ["src/codex_cli_bin/bin/**"],
         "helper": "fake helper\n",
