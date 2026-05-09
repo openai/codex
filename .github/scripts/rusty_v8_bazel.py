@@ -250,6 +250,22 @@ def stage_artifacts(
     print(staged_checksums)
 
 
+def upstream_release_pair_paths(source_root: Path, target: str) -> tuple[Path, Path]:
+    lib_name = "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
+    gn_out = source_root / "target" / target / "release" / "gn_out"
+    return gn_out / "obj" / lib_name, gn_out / "src_binding.rs"
+
+
+def stage_upstream_release_pair(
+    source_root: Path,
+    target: str,
+    output_dir: Path,
+    sandbox: bool = False,
+) -> None:
+    lib_path, binding_path = upstream_release_pair_paths(source_root, target)
+    stage_artifacts(target, lib_path, binding_path, output_dir, sandbox)
+
+
 def stage_release_pair(
     platform: str,
     target: str,
@@ -300,6 +316,14 @@ def parse_args() -> argparse.Namespace:
         choices=["fastbuild", "opt", "dbg"],
     )
 
+    stage_upstream_release_pair_parser = subparsers.add_parser(
+        "stage-upstream-release-pair"
+    )
+    stage_upstream_release_pair_parser.add_argument("--source-root", type=Path, required=True)
+    stage_upstream_release_pair_parser.add_argument("--target", required=True)
+    stage_upstream_release_pair_parser.add_argument("--output-dir", required=True)
+    stage_upstream_release_pair_parser.add_argument("--sandbox", action="store_true")
+
     subparsers.add_parser("resolved-v8-crate-version")
 
     check_module_bazel_parser = subparsers.add_parser("check-module-bazel")
@@ -332,6 +356,14 @@ def main() -> int:
             output_dir=Path(args.output_dir),
             compilation_mode=args.compilation_mode,
             bazel_configs=args.bazel_configs,
+            sandbox=args.sandbox,
+        )
+        return 0
+    if args.command == "stage-upstream-release-pair":
+        stage_upstream_release_pair(
+            source_root=args.source_root,
+            target=args.target,
+            output_dir=Path(args.output_dir),
             sandbox=args.sandbox,
         )
         return 0
