@@ -932,6 +932,8 @@ def _model_arg_lines(
     for field in fields:
         value = field.py_name
         if field.py_name == "approval_policy":
+            # TODO: Add a public approval callback API that lets callers return
+            # typed approval results, then honor caller-supplied policies.
             value = "_approval_policy_never(approval_policy)"
         lines.append(f"{indent}{field.wire_name}={value},")
     return lines

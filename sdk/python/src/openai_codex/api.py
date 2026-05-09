@@ -70,8 +70,8 @@ def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
 
 
 def _approval_policy_never(_approval_policy: AskForApproval | None) -> AskForApproval:
-    # TODO: Handle approval requests in the SDK before honoring caller-supplied
-    # policies.
+    # TODO: Add a public approval callback API that lets callers return typed
+    # approval results, then honor caller-supplied policies.
     return AskForApproval.never
 
 
