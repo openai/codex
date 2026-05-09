@@ -130,3 +130,43 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
     "windowsSandbox/setupCompleted": WindowsSandboxSetupCompletedNotification,
 }
+
+DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
+    AgentMessageDeltaNotification,
+    CommandExecutionOutputDeltaNotification,
+    ContextCompactedNotification,
+    ErrorNotification,
+    FileChangeOutputDeltaNotification,
+    FileChangePatchUpdatedNotification,
+    HookCompletedNotification,
+    HookStartedNotification,
+    ItemCompletedNotification,
+    ItemGuardianApprovalReviewCompletedNotification,
+    ItemGuardianApprovalReviewStartedNotification,
+    ItemStartedNotification,
+    McpToolCallProgressNotification,
+    ModelReroutedNotification,
+    ModelVerificationNotification,
+    PlanDeltaNotification,
+    ReasoningSummaryPartAddedNotification,
+    ReasoningSummaryTextDeltaNotification,
+    ReasoningTextDeltaNotification,
+    TerminalInteractionNotification,
+    ThreadGoalUpdatedNotification,
+    ThreadTokenUsageUpdatedNotification,
+    TurnDiffUpdatedNotification,
+    TurnPlanUpdatedNotification,
+)
+
+NESTED_TURN_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
+    TurnCompletedNotification,
+    TurnStartedNotification,
+)
+
+
+def notification_turn_id(payload: BaseModel) -> str | None:
+    if isinstance(payload, DIRECT_TURN_ID_NOTIFICATION_TYPES):
+        return payload.turn_id if isinstance(payload.turn_id, str) else None
+    if isinstance(payload, NESTED_TURN_NOTIFICATION_TYPES):
+        return payload.turn.id
+    return None

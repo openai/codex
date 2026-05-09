@@ -4,13 +4,17 @@ from pathlib import Path
 from typing import Any
 
 from codex_app_server.client import AppServerClient, _params_dict
+from codex_app_server.generated.notification_registry import notification_turn_id
 from codex_app_server.generated.v2_all import (
+    AgentMessageDeltaNotification,
     ApprovalsReviewer,
     ThreadListParams,
     ThreadResumeResponse,
     ThreadTokenUsageUpdatedNotification,
+    TurnCompletedNotification,
+    WarningNotification,
 )
-from codex_app_server.models import UnknownNotification
+from codex_app_server.models import Notification, UnknownNotification
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,6 +134,30 @@ def test_invalid_notification_payload_falls_back_to_unknown() -> None:
     assert isinstance(event.payload, UnknownNotification)
 
 
+def test_generated_notification_turn_id_handles_known_payload_shapes() -> None:
+    direct = AgentMessageDeltaNotification.model_validate(
+        {
+            "delta": "hello",
+            "itemId": "item-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+        }
+    )
+    nested = TurnCompletedNotification.model_validate(
+        {
+            "threadId": "thread-1",
+            "turn": {"id": "turn-2", "items": [], "status": "completed"},
+        }
+    )
+    unscoped = WarningNotification(message="heads up")
+
+    assert [
+        notification_turn_id(direct),
+        notification_turn_id(nested),
+        notification_turn_id(unscoped),
+    ] == ["turn-1", "turn-2", None]
+
+
 def test_turn_notification_router_demuxes_registered_turns() -> None:
     client = AppServerClient()
     client.register_turn_notifications("turn-1")
@@ -161,17 +189,126 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     first = client.next_turn_notification("turn-1")
     second = client.next_turn_notification("turn-2")
 
+    assert isinstance(first.payload, AgentMessageDeltaNotification)
+    assert isinstance(second.payload, AgentMessageDeltaNotification)
     assert [
-        (first.method, getattr(first.payload, "delta", None)),
-        (second.method, getattr(second.payload, "delta", None)),
+        (first.method, first.payload.delta),
+        (second.method, second.payload.delta),
     ] == [
         ("item/agentMessage/delta", "one"),
         ("item/agentMessage/delta", "two"),
     ]
 
 
+def test_turn_notification_router_preserves_per_turn_order_with_interleaved_events() -> (
+    None
+):
+    client = AppServerClient()
+    client.register_turn_notifications("turn-1")
+    client.register_turn_notifications("turn-2")
+
+    for notification in [
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "one-a",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        ),
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "two-a",
+                "itemId": "item-2",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        ),
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "one-b",
+                "itemId": "item-3",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        ),
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "two-b",
+                "itemId": "item-4",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        ),
+    ]:
+        client._router.route_notification(notification)
+
+    first_turn_events = [
+        client.next_turn_notification("turn-1"),
+        client.next_turn_notification("turn-1"),
+    ]
+    second_turn_events = [
+        client.next_turn_notification("turn-2"),
+        client.next_turn_notification("turn-2"),
+    ]
+
+    first_turn_deltas = [
+        event.payload.delta
+        for event in first_turn_events
+        if isinstance(event.payload, AgentMessageDeltaNotification)
+    ]
+    second_turn_deltas = [
+        event.payload.delta
+        for event in second_turn_events
+        if isinstance(event.payload, AgentMessageDeltaNotification)
+    ]
+    assert (first_turn_deltas, second_turn_deltas) == (
+        ["one-a", "one-b"],
+        ["two-a", "two-b"],
+    )
+
+
 def test_turn_notification_router_buffers_events_before_registration() -> None:
     client = AppServerClient()
+    client._router.route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "early",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        )
+    )
+
+    client.register_turn_notifications("turn-1")
+    event = client.next_turn_notification("turn-1")
+
+    assert isinstance(event.payload, AgentMessageDeltaNotification)
+    assert (event.method, event.payload.delta) == (
+        "item/agentMessage/delta",
+        "early",
+    )
+
+
+def test_turn_notification_router_clears_unregistered_turn_when_completed() -> None:
+    client = AppServerClient()
+    client._router.route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "early",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        )
+    )
     client._router.route_notification(
         client._coerce_notification(
             "turn/completed",
@@ -182,13 +319,28 @@ def test_turn_notification_router_buffers_events_before_registration() -> None:
         )
     )
 
-    client.register_turn_notifications("turn-1")
-    event = client.next_turn_notification("turn-1")
+    assert client._router._pending_turn_notifications == {}
 
-    assert (
-        event.method,
-        getattr(getattr(event.payload, "turn", None), "id", None),
-    ) == (
-        "turn/completed",
-        "turn-1",
+
+def test_turn_notification_router_routes_unknown_turn_notifications() -> None:
+    client = AppServerClient()
+    client.register_turn_notifications("turn-1")
+    client.register_turn_notifications("turn-2")
+
+    client._router.route_notification(
+        Notification(
+            method="unknown/direct",
+            payload=UnknownNotification(params={"turnId": "turn-1"}),
+        )
     )
+    client._router.route_notification(
+        Notification(
+            method="unknown/nested",
+            payload=UnknownNotification(params={"turn": {"id": "turn-2"}}),
+        )
+    )
+
+    first = client.next_turn_notification("turn-1")
+    second = client.next_turn_notification("turn-2")
+
+    assert [first.method, second.method] == ["unknown/direct", "unknown/nested"]

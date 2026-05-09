@@ -467,6 +467,48 @@ def test_thread_run_raises_on_failed_turn() -> None:
         Thread(client, "thread-1").run("hello")
 
 
+def test_stream_text_registers_and_consumes_turn_notifications() -> None:
+    client = AppServerClient()
+    notifications: deque[Notification] = deque(
+        [
+            _delta_notification(text="first"),
+            _delta_notification(text="second"),
+            _completed_notification(),
+        ]
+    )
+    calls: list[tuple[str, str]] = []
+    client.turn_start = lambda thread_id, input_items, *, params=None: SimpleNamespace(  # noqa: ARG005,E731
+        turn=SimpleNamespace(id="turn-1")
+    )
+
+    def fake_register(turn_id: str) -> None:
+        calls.append(("register", turn_id))
+
+    def fake_next(turn_id: str) -> Notification:
+        calls.append(("next", turn_id))
+        return notifications.popleft()
+
+    def fake_unregister(turn_id: str) -> None:
+        calls.append(("unregister", turn_id))
+
+    client.register_turn_notifications = fake_register  # type: ignore[method-assign]
+    client.next_turn_notification = fake_next  # type: ignore[method-assign]
+    client.unregister_turn_notifications = fake_unregister  # type: ignore[method-assign]
+
+    chunks = list(client.stream_text("thread-1", "hello"))
+
+    assert ([chunk.delta for chunk in chunks], calls) == (
+        ["first", "second"],
+        [
+            ("register", "turn-1"),
+            ("next", "turn-1"),
+            ("next", "turn-1"),
+            ("next", "turn-1"),
+            ("unregister", "turn-1"),
+        ],
+    )
+
+
 def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
     async def scenario() -> None:
         codex = AsyncCodex()

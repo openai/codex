@@ -427,6 +427,7 @@ class AppServerClient:
     ) -> Iterator[AgentMessageDeltaNotification]:
         started = self.turn_start(thread_id, text, params=params)
         turn_id = started.turn.id
+        self.register_turn_notifications(turn_id)
         try:
             while True:
                 notification = self.next_turn_notification(turn_id)

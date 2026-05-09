@@ -5,7 +5,8 @@ import threading
 from collections import deque
 
 from .errors import AppServerError, map_jsonrpc_error
-from .models import JsonValue, Notification
+from .generated.notification_registry import notification_turn_id
+from .models import JsonValue, Notification, UnknownNotification
 
 ResponseQueueItem = JsonValue | BaseException
 NotificationQueueItem = Notification | BaseException
@@ -117,6 +118,9 @@ class MessageRouter:
         with self._lock:
             turn_queue = self._turn_notifications.get(turn_id)
             if turn_queue is None:
+                if notification.method == "turn/completed":
+                    self._pending_turn_notifications.pop(turn_id, None)
+                    return
                 self._pending_turn_notifications.setdefault(turn_id, deque()).append(
                     notification
                 )
@@ -130,6 +134,7 @@ class MessageRouter:
             response_waiters = list(self._response_waiters.values())
             self._response_waiters.clear()
             turn_queues = list(self._turn_notifications.values())
+            self._pending_turn_notifications.clear()
         # Put the same transport failure into every queue so no SDK call blocks
         # forever waiting for a response that cannot arrive.
         for waiter in response_waiters:
@@ -140,11 +145,14 @@ class MessageRouter:
 
     def _notification_turn_id(self, notification: Notification) -> str | None:
         payload = notification.payload
-        turn_id = getattr(payload, "turn_id", None)
-        if isinstance(turn_id, str):
-            return turn_id
-        turn = getattr(payload, "turn", None)
-        nested_turn_id = getattr(turn, "id", None)
-        if isinstance(nested_turn_id, str):
-            return nested_turn_id
-        return None
+        if isinstance(payload, UnknownNotification):
+            raw_turn_id = payload.params.get("turnId")
+            if isinstance(raw_turn_id, str):
+                return raw_turn_id
+            raw_turn = payload.params.get("turn")
+            if isinstance(raw_turn, dict):
+                raw_nested_turn_id = raw_turn.get("id")
+                if isinstance(raw_nested_turn_id, str):
+                    return raw_nested_turn_id
+            return None
+        return notification_turn_id(payload)
