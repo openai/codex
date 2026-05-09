@@ -23,6 +23,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Run inside Alpine so dependency resolution exercises the pinned
+          # runtime wheel on the same Linux wheel family that CI installs.
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp/codex-python-sdk-home \
