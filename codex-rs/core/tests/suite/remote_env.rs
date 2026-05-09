@@ -269,7 +269,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
             "yield_time_ms": 1_000,
             "environment_id": REMOTE_ENVIRONMENT_ID,
         }),
-        Some(vec![local_selection, remote_selection]),
+        Some(vec![remote_selection, local_selection]),
     )
     .await?;
     assert!(
