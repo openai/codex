@@ -27,16 +27,21 @@ class RuntimeSetupError(RuntimeError):
 
 
 def pinned_runtime_version() -> str:
-    source_version = _source_tree_project_version()
-    if source_version is not None:
-        return _normalized_package_version(source_version)
+    source_pin = _source_tree_runtime_dependency_version()
+    if source_pin is not None:
+        return _normalized_package_version(source_pin)
 
     try:
-        return _normalized_package_version(importlib.metadata.version(SDK_PACKAGE_NAME))
+        installed_pin = _installed_sdk_runtime_dependency_version()
     except importlib.metadata.PackageNotFoundError as exc:
         raise RuntimeSetupError(
-            f"Unable to resolve {SDK_PACKAGE_NAME} version for runtime pinning."
+            f"Unable to resolve {SDK_PACKAGE_NAME} metadata for runtime pinning."
         ) from exc
+    if installed_pin is None:
+        raise RuntimeSetupError(
+            f"Unable to resolve {PACKAGE_NAME} dependency pin from {SDK_PACKAGE_NAME}."
+        )
+    return _normalized_package_version(installed_pin)
 
 
 def ensure_runtime_package_installed(
@@ -399,18 +404,28 @@ def _release_tag(version: str) -> str:
     return f"rust-v{_codex_release_version(version)}"
 
 
-def _source_tree_project_version() -> str | None:
+def _source_tree_runtime_dependency_version() -> str | None:
     pyproject_path = Path(__file__).resolve().parent / "pyproject.toml"
     if not pyproject_path.exists():
         return None
 
-    match = re.search(
-        r'(?m)^version = "([^"]+)"$',
-        pyproject_path.read_text(encoding="utf-8"),
-    )
+    match = re.search(_runtime_dependency_pin_pattern(), pyproject_path.read_text())
     if match is None:
         return None
     return match.group(1)
+
+
+def _installed_sdk_runtime_dependency_version() -> str | None:
+    requirements = importlib.metadata.requires(SDK_PACKAGE_NAME) or []
+    for requirement in requirements:
+        match = re.search(_runtime_dependency_pin_pattern(), requirement)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _runtime_dependency_pin_pattern() -> str:
+    return rf'{re.escape(PACKAGE_NAME)}\s*==\s*"?([^",;\s]+)"?'
 
 
 __all__ = [

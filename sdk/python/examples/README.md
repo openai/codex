@@ -28,7 +28,7 @@ will download the matching GitHub release artifact, stage a temporary local
 `openai-codex-cli-bin` package, install it into your active interpreter, and clean up
 the temporary files afterward.
 
-The pinned runtime version comes from the SDK package version.
+The pinned runtime version comes from the SDK package dependency.
 
 ## Run examples
 

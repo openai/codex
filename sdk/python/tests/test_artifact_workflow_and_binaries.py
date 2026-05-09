@@ -164,7 +164,7 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
 
 def test_examples_readme_points_to_runtime_version_source_of_truth() -> None:
     readme = (ROOT / "examples" / "README.md").read_text()
-    assert "The pinned runtime version comes from the SDK package version." in readme
+    assert "The pinned runtime version comes from the SDK package dependency." in readme
 
 
 def test_runtime_distribution_name_is_consistent() -> None:
@@ -211,12 +211,31 @@ def test_release_metadata_retries_without_invalid_auth(
     assert authorizations == ["Bearer invalid-token", None]
 
 
+def test_source_sdk_package_pins_published_runtime() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+    assert {
+        "sdk_version": pyproject["project"]["version"],
+        "dependencies": pyproject["project"]["dependencies"],
+    } == {
+        "sdk_version": "0.131.0a4",
+        "dependencies": [
+            "pydantic>=2.12",
+            "openai-codex-cli-bin==0.131.0a4",
+        ],
+    }
+
+
 def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> None:
     runtime_setup = _load_runtime_setup_module()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
     assert runtime_setup.pinned_runtime_version() == pyproject["project"]["version"]
+    assert (
+        f"{runtime_setup.PACKAGE_NAME}=={pyproject['project']['version']}"
+        in pyproject["project"]["dependencies"]
+    )
     assert (
         runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1")
         == "0.116.0a1"
