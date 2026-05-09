@@ -6,6 +6,8 @@ use crate::npm_registry;
 use crate::npm_registry::NpmPackageInfo;
 use crate::update_action;
 use crate::update_action::UpdateAction;
+use crate::update_action::UpdateActionStatus;
+use crate::update_action::UpdateBlocker;
 use crate::update_versions::extract_version_from_latest_tag;
 use crate::update_versions::is_newer;
 use crate::update_versions::is_source_build_version;
@@ -24,6 +26,18 @@ use crate::version::CODEX_CLI_VERSION;
 pub enum UpgradeNotice {
     Available(String),
     RemediationNeeded(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpgradeHistoryNotice {
+    Available {
+        latest_version: String,
+        update_action: Option<UpdateAction>,
+    },
+    BlockedWarning(UpdateBlocker),
+    NoOpUpdateWarning {
+        latest_version: String,
+    },
 }
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
@@ -52,15 +66,49 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     info.and_then(latest_upgrade_version)
 }
 
-pub fn get_upgrade_version_for_history(config: &Config) -> Option<String> {
+pub fn get_upgrade_notice_for_history(
+    config: &Config,
+    prompt_launch: bool,
+    action_status: UpdateActionStatus,
+) -> Option<UpgradeHistoryNotice> {
     let latest = get_upgrade_version(config)?;
     let version_file = version_filepath(config);
-    if let Ok(info) = read_version_info(&version_file)
-        && should_show_prompt_update_remediation(&info, &latest)
+    let info = read_version_info(&version_file).ok();
+
+    if info
+        .as_ref()
+        .is_some_and(|info| should_show_prompt_update_remediation(info, &latest))
     {
+        if prompt_launch
+            && info
+                .as_ref()
+                .and_then(|info| info.no_op_inline_notice_shown_version.as_deref())
+                != Some(latest.as_str())
+        {
+            if let Err(err) = record_no_op_inline_notice_shown(&version_file, &latest) {
+                tracing::warn!("Failed to persist no-op update inline notice state: {err}");
+            }
+            return Some(UpgradeHistoryNotice::NoOpUpdateWarning {
+                latest_version: latest,
+            });
+        }
         return None;
     }
-    Some(latest)
+
+    match action_status {
+        UpdateActionStatus::Ready(update_action) => Some(UpgradeHistoryNotice::Available {
+            latest_version: latest,
+            update_action: Some(update_action),
+        }),
+        UpdateActionStatus::Unavailable => Some(UpgradeHistoryNotice::Available {
+            latest_version: latest,
+            update_action: None,
+        }),
+        UpdateActionStatus::Blocked(blocker) if prompt_launch => {
+            Some(UpgradeHistoryNotice::BlockedWarning(blocker))
+        }
+        UpdateActionStatus::Blocked(_) => None,
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -74,6 +122,8 @@ struct VersionInfo {
     successful_prompt_update: Option<SuccessfulPromptUpdate>,
     #[serde(default)]
     suppressed_version: Option<String>,
+    #[serde(default)]
+    no_op_inline_notice_shown_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -144,7 +194,11 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
         successful_prompt_update: prev_info
             .as_ref()
             .and_then(|p| p.successful_prompt_update.clone()),
-        suppressed_version: prev_info.and_then(|p| p.suppressed_version),
+        suppressed_version: prev_info
+            .as_ref()
+            .and_then(|p| p.suppressed_version.clone()),
+        no_op_inline_notice_shown_version: prev_info
+            .and_then(|p| p.no_op_inline_notice_shown_version),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -222,6 +276,12 @@ pub fn record_successful_prompt_update_attempt(
     write_version_info_sync(version_file, &info)
 }
 
+fn record_no_op_inline_notice_shown(version_file: &Path, version: &str) -> anyhow::Result<()> {
+    let mut info = read_version_info(version_file)?;
+    info.no_op_inline_notice_shown_version = Some(version.to_string());
+    write_version_info_sync(version_file, &info)
+}
+
 /// Suppress future notices for the current latest version after we explain a
 /// likely no-op update once.
 pub async fn suppress_version_after_remediation(
@@ -283,6 +343,7 @@ mod tests {
             dismissed_version: None,
             successful_prompt_update: None,
             suppressed_version: None,
+            no_op_inline_notice_shown_version: None,
         }
     }
 
@@ -330,6 +391,29 @@ mod tests {
                 target_version: "9.9.9".to_string(),
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn no_op_inline_notice_marker_is_persisted_without_clearing_remediation() -> anyhow::Result<()>
+    {
+        let tempdir = tempfile::tempdir()?;
+        let version_file = tempdir.path().join(VERSION_FILENAME);
+        let mut info = version_info("9.9.9");
+        info.successful_prompt_update = Some(SuccessfulPromptUpdate {
+            from_version: CODEX_CLI_VERSION.to_string(),
+            target_version: "9.9.9".to_string(),
+        });
+        write_version_info_sync(&version_file, &info)?;
+
+        record_no_op_inline_notice_shown(&version_file, "9.9.9")?;
+
+        let info = read_version_info(&version_file)?;
+        assert_eq!(
+            info.no_op_inline_notice_shown_version.as_deref(),
+            Some("9.9.9")
+        );
+        assert!(should_show_prompt_update_remediation(&info, "9.9.9"));
         Ok(())
     }
 }

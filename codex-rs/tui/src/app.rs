@@ -40,6 +40,8 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateRemediationWarningHistoryCell;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
@@ -75,7 +77,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::PromptedUpdate;
 #[cfg(not(debug_assertions))]
-use crate::update_action::UpdateActionStatus;
+use crate::updates::UpgradeHistoryNotice;
 use crate::version::CODEX_CLI_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
@@ -865,16 +867,13 @@ See the Codex keymap documentation for supported actions and examples."
             )
         })?;
         #[cfg(not(debug_assertions))]
-        let upgrade_notice =
-            crate::updates::get_upgrade_version_for_history(&config).and_then(|latest_version| {
-                match crate::update_action::get_update_action_status() {
-                    UpdateActionStatus::Ready(update_action) => {
-                        Some((latest_version, Some(update_action)))
-                    }
-                    UpdateActionStatus::Unavailable => Some((latest_version, None)),
-                    UpdateActionStatus::Blocked(_) => None,
-                }
-            });
+        let upgrade_notice = crate::updates::get_upgrade_notice_for_history(
+            &config,
+            initial_prompt
+                .as_ref()
+                .is_some_and(|prompt| !prompt.is_empty()),
+            crate::update_action::get_update_action_status(),
+        );
 
         let mut app = Self {
             model_catalog,
@@ -979,16 +978,24 @@ See the Codex keymap documentation for supported actions and examples."
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         #[cfg(not(debug_assertions))]
-        let pre_loop_exit_reason = if let Some((latest_version, update_action)) = upgrade_notice {
+        let pre_loop_exit_reason = if let Some(upgrade_notice) = upgrade_notice {
+            let cell: Box<dyn HistoryCell> = match upgrade_notice {
+                UpgradeHistoryNotice::Available {
+                    latest_version,
+                    update_action,
+                } => Box::new(UpdateAvailableHistoryCell::new(
+                    latest_version,
+                    update_action,
+                )),
+                UpgradeHistoryNotice::BlockedWarning(blocker) => {
+                    Box::new(UpdateRemediationWarningHistoryCell::Blocked(blocker))
+                }
+                UpgradeHistoryNotice::NoOpUpdateWarning { latest_version } => {
+                    Box::new(UpdateRemediationWarningHistoryCell::NoOpUpdate { latest_version })
+                }
+            };
             let control = app
-                .handle_event(
-                    tui,
-                    &mut app_server,
-                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                        latest_version,
-                        update_action,
-                    ))),
-                )
+                .handle_event(tui, &mut app_server, AppEvent::InsertHistoryCell(cell))
                 .await?;
             match control {
                 AppRunControl::Continue => None,

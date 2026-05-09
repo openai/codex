@@ -1,5 +1,6 @@
 ---
 source: tui/src/update_prompt.rs
+assertion_line: 592
 expression: terminal.backend()
 ---
 
@@ -11,4 +12,6 @@ expression: terminal.backend()
     /prefix-b/lib/node_modules/@openai/codex
   Fix your shell PATH or remove the stale Codex install, then restart Codex.
 
-  Press enter to continue
+› 1. Help me fix this
+  2. Later
+  3. Don't remind me about this version

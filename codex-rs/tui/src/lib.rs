@@ -1101,8 +1101,9 @@ pub async fn run_main(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(unused_mut)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
@@ -1155,6 +1156,9 @@ async fn run_ratatui_app(
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
+                }
+                UpdatePromptOutcome::StartRepairSession(prompt) => {
+                    cli.prompt = Some(prompt);
                 }
             }
         }

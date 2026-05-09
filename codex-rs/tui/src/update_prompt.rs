@@ -35,6 +35,7 @@ use tokio_stream::StreamExt;
 pub(crate) enum UpdatePromptOutcome {
     Continue,
     RunUpdate(PromptedUpdate),
+    StartRepairSession(String),
 }
 
 pub(crate) async fn run_update_prompt_if_needed(
@@ -50,8 +51,13 @@ pub(crate) async fn run_update_prompt_if_needed(
             let update_action = match crate::update_action::get_update_action_status() {
                 UpdateActionStatus::Ready(update_action) => update_action,
                 UpdateActionStatus::Blocked(blocker) => {
-                    run_remediation_prompt(tui, RemediationPromptReason::Blocked(blocker)).await?;
-                    return Ok(UpdatePromptOutcome::Continue);
+                    return run_remediation_prompt(
+                        tui,
+                        config,
+                        latest_version,
+                        RemediationPromptReason::Blocked(blocker),
+                    )
+                    .await;
                 }
                 UpdateActionStatus::Unavailable => return Ok(UpdatePromptOutcome::Continue),
             };
@@ -60,17 +66,13 @@ pub(crate) async fn run_update_prompt_if_needed(
         UpgradeNotice::RemediationNeeded(latest_version) => {
             run_remediation_prompt(
                 tui,
+                config,
+                latest_version.clone(),
                 RemediationPromptReason::NoOpUpdate {
                     latest_version: latest_version.clone(),
                 },
             )
-            .await?;
-            if let Err(err) =
-                updates::suppress_version_after_remediation(config, &latest_version).await
-            {
-                tracing::error!("Failed to persist update remediation suppression: {err}");
-            }
-            Ok(UpdatePromptOutcome::Continue)
+            .await
         }
     }
 }
@@ -125,8 +127,13 @@ async fn run_standard_update_prompt(
     }
 }
 
-async fn run_remediation_prompt(tui: &mut Tui, reason: RemediationPromptReason) -> Result<()> {
-    let mut screen = RemediationPromptScreen::new(tui.frame_requester(), reason);
+async fn run_remediation_prompt(
+    tui: &mut Tui,
+    config: &Config,
+    latest_version: String,
+    reason: RemediationPromptReason,
+) -> Result<UpdatePromptOutcome> {
+    let mut screen = RemediationPromptScreen::new(tui.frame_requester(), reason.clone());
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     })?;
@@ -149,7 +156,18 @@ async fn run_remediation_prompt(tui: &mut Tui, reason: RemediationPromptReason) 
             break;
         }
     }
-    Ok(())
+    match screen.selection() {
+        Some(RemediationSelection::HelpMeFixThis) => Ok(UpdatePromptOutcome::StartRepairSession(
+            reason.repair_prompt(),
+        )),
+        Some(RemediationSelection::DontRemind) => {
+            if let Err(err) = updates::dismiss_version(config, &latest_version).await {
+                tracing::error!("Failed to persist update remediation dismissal: {err}");
+            }
+            Ok(UpdatePromptOutcome::Continue)
+        }
+        Some(RemediationSelection::Later) | None => Ok(UpdatePromptOutcome::Continue),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,12 +351,37 @@ impl RemediationPromptReason {
             ],
         }
     }
+
+    fn repair_prompt(&self) -> String {
+        match self {
+            Self::Blocked(UpdateBlocker::NpmGlobalRootMismatch {
+                running_package_root,
+                npm_package_root,
+            }) => format!(
+                "Help me fix my Codex install. Codex is currently running from {}, but `npm install -g @openai/codex@latest` would update {}. Please inspect my shell PATH and Codex installs, explain the safest fix, and ask before making any destructive changes.",
+                running_package_root.display(),
+                npm_package_root.display(),
+            ),
+            Self::NoOpUpdate { latest_version } => format!(
+                "Help me fix my Codex install. A previous update command completed, but this Codex executable is still running {} while {latest_version} is available. Please inspect my shell PATH and Codex installs, explain the safest fix, and ask before making any destructive changes.",
+                env!("CARGO_PKG_VERSION"),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemediationSelection {
+    HelpMeFixThis,
+    Later,
+    DontRemind,
 }
 
 struct RemediationPromptScreen {
     request_frame: FrameRequester,
     reason: RemediationPromptReason,
-    done: bool,
+    highlighted: RemediationSelection,
+    selection: Option<RemediationSelection>,
 }
 
 impl RemediationPromptScreen {
@@ -346,7 +389,8 @@ impl RemediationPromptScreen {
         Self {
             request_frame,
             reason,
-            done: false,
+            highlighted: RemediationSelection::HelpMeFixThis,
+            selection: None,
         }
     }
 
@@ -357,21 +401,38 @@ impl RemediationPromptScreen {
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
         {
-            self.finish();
+            self.select(RemediationSelection::Later);
             return;
         }
-        if matches!(key_event.code, KeyCode::Enter | KeyCode::Esc) {
-            self.finish();
+        match key_event.code {
+            KeyCode::Up | KeyCode::Char('k') => self.set_highlight(self.highlighted.prev()),
+            KeyCode::Down | KeyCode::Char('j') => self.set_highlight(self.highlighted.next()),
+            KeyCode::Char('1') => self.select(RemediationSelection::HelpMeFixThis),
+            KeyCode::Char('2') => self.select(RemediationSelection::Later),
+            KeyCode::Char('3') => self.select(RemediationSelection::DontRemind),
+            KeyCode::Enter => self.select(self.highlighted),
+            KeyCode::Esc => self.select(RemediationSelection::Later),
+            _ => {}
         }
     }
 
-    fn finish(&mut self) {
-        self.done = true;
+    fn set_highlight(&mut self, selection: RemediationSelection) {
+        self.highlighted = selection;
+        self.request_frame.schedule_frame();
+    }
+
+    fn select(&mut self, selection: RemediationSelection) {
+        self.highlighted = selection;
+        self.selection = Some(selection);
         self.request_frame.schedule_frame();
     }
 
     fn is_done(&self) -> bool {
-        self.done
+        self.selection.is_some()
+    }
+
+    fn selection(&self) -> Option<RemediationSelection> {
+        self.selection
     }
 }
 
@@ -392,17 +453,52 @@ impl WidgetRef for &RemediationPromptScreen {
             )));
         }
         column.push("");
-        column.push(
-            Line::from(vec![
-                "Press ".dim(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to continue".dim(),
-            ])
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
-        );
+        column.push(remediation_selection_line(
+            /*index*/ 0,
+            "Help me fix this",
+            self.highlighted == RemediationSelection::HelpMeFixThis,
+        ));
+        column.push(remediation_selection_line(
+            /*index*/ 1,
+            "Later",
+            self.highlighted == RemediationSelection::Later,
+        ));
+        column.push(remediation_selection_line(
+            /*index*/ 2,
+            "Don't remind me about this version",
+            self.highlighted == RemediationSelection::DontRemind,
+        ));
         column.render(area, buf);
+    }
+}
+
+fn remediation_selection_line(index: usize, label: &str, selected: bool) -> Line<'static> {
+    let line = if selected {
+        return Line::from(vec![
+            format!("› {}. ", index + 1).cyan(),
+            label.to_string().cyan(),
+        ]);
+    } else {
+        format!("  {}. {label}", index + 1)
+    };
+    Line::from(line)
+}
+
+impl RemediationSelection {
+    fn next(self) -> Self {
+        match self {
+            Self::HelpMeFixThis => Self::Later,
+            Self::Later => Self::DontRemind,
+            Self::DontRemind => Self::HelpMeFixThis,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::HelpMeFixThis => Self::DontRemind,
+            Self::Later => Self::HelpMeFixThis,
+            Self::DontRemind => Self::Later,
+        }
     }
 }
 
@@ -494,5 +590,24 @@ mod tests {
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update remediation prompt");
         insta::assert_snapshot!("update_remediation_prompt_modal", terminal.backend());
+    }
+
+    #[test]
+    fn remediation_prompt_help_selection_starts_repair_flow() {
+        let reason = RemediationPromptReason::Blocked(UpdateBlocker::NpmGlobalRootMismatch {
+            running_package_root: "/prefix-a/lib/node_modules/@openai/codex".into(),
+            npm_package_root: "/prefix-b/lib/node_modules/@openai/codex".into(),
+        });
+
+        assert!(
+            reason
+                .repair_prompt()
+                .contains("/prefix-a/lib/node_modules/@openai/codex")
+        );
+        assert!(
+            reason
+                .repair_prompt()
+                .contains("/prefix-b/lib/node_modules/@openai/codex")
+        );
     }
 }

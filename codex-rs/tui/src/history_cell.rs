@@ -41,6 +41,7 @@ use crate::text_formatting::truncate_text;
 use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
+use crate::update_action::UpdateBlocker;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -654,6 +655,40 @@ impl HistoryCell for PlainHistoryCell {
 pub(crate) struct UpdateAvailableHistoryCell {
     latest_version: String,
     update_action: Option<UpdateAction>,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Debug)]
+pub(crate) enum UpdateRemediationWarningHistoryCell {
+    Blocked(UpdateBlocker),
+    NoOpUpdate { latest_version: String },
+}
+
+impl HistoryCell for UpdateRemediationWarningHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.raw_lines()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        match self {
+            Self::Blocked(UpdateBlocker::NpmGlobalRootMismatch {
+                running_package_root,
+                npm_package_root,
+            }) => vec![Line::from(format!(
+                "Warning: Codex is running from {}, but npm would update {}.",
+                running_package_root.display(),
+                npm_package_root.display(),
+            ))],
+            Self::NoOpUpdate { latest_version } => vec![
+                Line::from(
+                    "Warning: The previous update completed, but this Codex executable did not change.",
+                ),
+                Line::from(format!(
+                    "Codex is still running {CODEX_CLI_VERSION} while {latest_version} is available."
+                )),
+            ],
+        }
+    }
 }
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
