@@ -23,7 +23,6 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
-use codex_config::version_for_toml;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -321,18 +320,13 @@ async fn returns_empty_when_all_layers_missing() {
     let user_layer = layers
         .get_user_layer()
         .expect("expected a user layer even when CODEX_HOME/config.toml does not exist");
-    assert_eq!(
-        &ConfigLayerEntry {
-            name: ConfigLayerSource::User {
-                file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
-            },
-            config: TomlValue::Table(toml::map::Map::new()),
-            raw_toml: None,
-            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
-            disabled_reason: None,
+    let expected_user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path()),
         },
-        user_layer,
+        TomlValue::Table(toml::map::Map::new()),
     );
+    assert_eq!(&expected_user_layer, user_layer);
     assert_eq!(
         user_layer.config,
         TomlValue::Table(toml::map::Map::new()),
@@ -1339,6 +1333,168 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_hooks()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let repo_child = repo_root.join("child");
+    let worktree_root = tmp.path().join("worktree");
+    let worktree_child = worktree_root.join("child");
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+
+    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(repo_child.join(".codex")).await?;
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(worktree_child.join(".codex")).await?;
+    tokio::fs::create_dir_all(&worktree_git_dir).await?;
+    tokio::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .await?;
+
+    tokio::fs::write(
+        repo_root.join(".codex/config.toml"),
+        r#"foo = "repo-root"
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo repo root hook"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        repo_child.join(".codex/config.toml"),
+        r#"foo = "repo-child"
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo repo child hook"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        worktree_root.join(".codex/config.toml"),
+        r#"foo = "worktree-root"
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo worktree root hook"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        worktree_child.join(".codex/config.toml"),
+        r#"foo = "worktree-child"
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo worktree child hook"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_child)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_child.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[1].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[0]
+            .config
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("worktree-child")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo repo child hook")
+    );
+    assert_eq!(
+        project_layers[1]
+            .config
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("worktree-root")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[1]),
+        Some("echo repo root hook")
+    );
+
+    Ok(())
+}
+
+fn project_hook_command(layer: &ConfigLayerEntry) -> Option<&str> {
+    layer
+        .config
+        .get("hooks")?
+        .get("PreToolUse")?
+        .as_array()?
+        .first()?
+        .get("hooks")?
+        .as_array()?
+        .first()?
+        .get("command")?
+        .as_str()
+}
+
+#[tokio::test]
 async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> std::io::Result<()>
 {
     let tmp = tempdir()?;
@@ -1489,18 +1645,13 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
-    assert_eq!(
-        vec![&ConfigLayerEntry {
-            name: ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
-            },
-            config: TomlValue::Table(toml::map::Map::new()),
-            raw_toml: None,
-            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
-            disabled_reason: None,
-        }],
-        project_layers
+    let expected_project_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
+        },
+        TomlValue::Table(toml::map::Map::new()),
     );
+    assert_eq!(vec![&expected_project_layer], project_layers);
 
     Ok(())
 }
@@ -1593,18 +1744,13 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         .collect();
 
     let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
-    assert_eq!(
-        vec![&ConfigLayerEntry {
-            name: ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
-            },
-            config: child_config.clone(),
-            raw_toml: None,
-            version: version_for_toml(&child_config),
-            disabled_reason: None,
-        }],
-        project_layers
+    let expected_project_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
+        },
+        child_config.clone(),
     );
+    assert_eq!(vec![&expected_project_layer], project_layers);
     assert_eq!(
         layers.effective_config().get("foo"),
         Some(&TomlValue::String("child".to_string()))
