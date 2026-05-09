@@ -10,12 +10,12 @@ This SDK surface is experimental. Turn streams are routed by turn ID so one clie
 from codex_app_server import (
     Codex,
     AsyncCodex,
-    AppServerConfig,
     RunResult,
     Thread,
     AsyncThread,
     TurnHandle,
     AsyncTurnHandle,
+    InitializeResponse,
     Input,
     InputItem,
     TextInput,
@@ -24,14 +24,13 @@ from codex_app_server import (
     SkillInput,
     MentionInput,
     TurnStatus,
-    retry_on_overload,
 )
+from codex_app_server.generated.v2_all import ThreadItem, ThreadTokenUsage
 ```
 
 - Version: `codex_app_server.__version__`
 - Requires Python >= 3.10
-- The package root `__all__` is the supported public import surface; generated
-  transport modules are shipped for runtime use but are not re-exported.
+- Canonical generated app-server models live in `codex_app_server.generated.v2_all`
 
 ## Codex (sync)
 
@@ -166,22 +165,19 @@ InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
 ```
 
-## Public Value Types
+## Generated Models
 
-The package root exports the ergonomic SDK plus selected value types used by
-public method signatures:
+The SDK wrappers return and accept canonical generated app-server models wherever possible:
 
 ```python
-from codex_app_server import (
+from codex_app_server.generated.v2_all import (
     AskForApproval,
-    ReasoningEffort,
-    SandboxPolicy,
+    ThreadReadResponse,
+    Turn,
+    TurnStartParams,
     TurnStatus,
 )
 ```
-
-Generated transport modules are shipped for SDK runtime use, but they are not
-the supported root API.
 
 ## Retry + errors
 

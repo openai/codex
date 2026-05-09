@@ -3,9 +3,8 @@
 Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
 
 The generated wire-model layer is sourced from the pinned `openai-codex-cli-bin`
-runtime package. The package root exports the supported ergonomic SDK surface
-plus selected public value types; generated transport modules are shipped for
-runtime use but are not the supported public API.
+runtime package and exposed as Pydantic models with snake_case Python fields
+that serialize back to the app-server’s camelCase wire format.
 
 ## Install
 
@@ -111,4 +110,4 @@ This supports the CI release flow:
 - Use context managers (`with Codex() as codex:`) to ensure shutdown.
 - Prefer `thread.run("...")` for the common case. Use `thread.turn(...)` when
   you need streaming, steering, or interrupt control.
-- For transient overload, import `retry_on_overload` from `codex_app_server`.
+- For transient overload, use `codex_app_server.retry.retry_on_overload`.
