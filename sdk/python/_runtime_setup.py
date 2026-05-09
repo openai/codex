@@ -27,6 +27,7 @@ class RuntimeSetupError(RuntimeError):
 
 
 def pinned_runtime_version() -> str:
+    """Return the exact runtime version pinned by the SDK package dependency."""
     source_pin = _source_tree_runtime_dependency_version()
     if source_pin is not None:
         return _normalized_package_version(source_pin)
@@ -405,6 +406,7 @@ def _release_tag(version: str) -> str:
 
 
 def _source_tree_runtime_dependency_version() -> str | None:
+    """Read the runtime dependency pin when the SDK is running from a checkout."""
     pyproject_path = Path(__file__).resolve().parent / "pyproject.toml"
     if not pyproject_path.exists():
         return None
@@ -416,6 +418,7 @@ def _source_tree_runtime_dependency_version() -> str | None:
 
 
 def _installed_sdk_runtime_dependency_version() -> str | None:
+    """Read the runtime dependency pin from installed package metadata."""
     requirements = importlib.metadata.requires(SDK_PACKAGE_NAME) or []
     for requirement in requirements:
         match = re.search(_runtime_dependency_pin_pattern(), requirement)
@@ -425,6 +428,7 @@ def _installed_sdk_runtime_dependency_version() -> str | None:
 
 
 def _runtime_dependency_pin_pattern() -> str:
+    """Match the exact runtime dependency pin in TOML and wheel metadata."""
     return rf'{re.escape(PACKAGE_NAME)}\s*==\s*"?([^",;\s]+)"?'
 
 

@@ -163,6 +163,7 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
 
 
 def test_examples_readme_points_to_runtime_version_source_of_truth() -> None:
+    """Document that examples should point at the dependency pin, not release lore."""
     readme = (ROOT / "examples" / "README.md").read_text()
     assert "The pinned runtime version comes from the SDK package dependency." in readme
 
@@ -212,6 +213,7 @@ def test_release_metadata_retries_without_invalid_auth(
 
 
 def test_source_sdk_package_pins_published_runtime() -> None:
+    """The source package metadata should pin the runtime wheel that ships schemas."""
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert {
@@ -227,6 +229,7 @@ def test_source_sdk_package_pins_published_runtime() -> None:
 
 
 def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> None:
+    """The SDK uses PEP 440 package pins and converts only when fetching releases."""
     runtime_setup = _load_runtime_setup_module()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
