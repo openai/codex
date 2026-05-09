@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,13 @@ RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 RELEASE_ARTIFACT_PROFILE = "release"
 SANDBOX_ARTIFACT_PROFILE = "ptrcomp_sandbox_release"
 ARTIFACT_BAZEL_CONFIGS = ["rusty-v8-upstream-libcxx"]
+
+
+def bazel_remote_args() -> list[str]:
+    buildbuddy_api_key = os.environ.get("BUILDBUDDY_API_KEY")
+    if not buildbuddy_api_key:
+        return []
+    return [f"--remote_header=x-buildbuddy-api-key={buildbuddy_api_key}"]
 
 
 def bazel_execroot() -> Path:
@@ -72,6 +80,7 @@ def bazel_output_files(
             compilation_mode,
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
+            *bazel_remote_args(),
             "--output=files",
             expression,
         ],
@@ -98,6 +107,7 @@ def bazel_build(
             compilation_mode,
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
+            *bazel_remote_args(),
             *labels,
         ],
         cwd=ROOT,
