@@ -35,10 +35,12 @@ def python_runtime_root() -> Path:
 
 
 def sdk_pyproject_path() -> Path:
+    """Return the SDK pyproject file that owns package pins and versions."""
     return sdk_root() / "pyproject.toml"
 
 
 def schema_bundle_path(schema_dir: Path) -> Path:
+    """Return the aggregate v2 schema bundle emitted by the runtime binary."""
     return schema_dir / "codex_app_server_protocol.v2.schemas.json"
 
 
@@ -82,6 +84,7 @@ def current_sdk_version() -> str:
 
 
 def pinned_runtime_version() -> str:
+    """Read the exact runtime package pin used for schema generation."""
     pyproject_text = sdk_pyproject_path().read_text()
     match = re.search(r"(?ms)^dependencies = \[(.*?)\]$", pyproject_text)
     if match is None:
@@ -102,6 +105,7 @@ def pinned_runtime_version() -> str:
 
 
 def pinned_runtime_codex_path() -> Path:
+    """Return the bundled Codex binary from the installed pinned runtime wheel."""
     expected_version = pinned_runtime_version()
     try:
         installed_version = importlib.metadata.version(RUNTIME_DISTRIBUTION_NAME)
@@ -534,6 +538,7 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
 
 
 def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
+    """Generate app-server schemas by invoking the installed pinned runtime binary."""
     codex_path = pinned_runtime_codex_path()
     if schema_dir.exists():
         shutil.rmtree(schema_dir)
@@ -552,6 +557,7 @@ def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
 
 
 def _normalized_schema_bundle_text(schema_dir: Path) -> str:
+    """Normalize the schema bundle before feeding it to the Python type generator."""
     schema = json.loads(schema_bundle_path(schema_dir).read_text())
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
@@ -565,6 +571,7 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
 
 
 def generate_v2_all(schema_dir: Path) -> None:
+    """Regenerate the Pydantic v2 protocol model module from runtime schemas."""
     out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
     out_dir = out_path.parent
     old_package_dir = out_dir / "v2_all"
@@ -611,6 +618,7 @@ def generate_v2_all(schema_dir: Path) -> None:
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
+    """Map each server notification method to its generated payload model class."""
     server_notifications = json.loads(
         (schema_dir / "ServerNotification.json").read_text()
     )
@@ -653,7 +661,7 @@ def _notification_turn_id_specs(
     schema_dir: Path,
     specs: list[tuple[str, str]],
 ) -> tuple[list[str], list[str]]:
-    """Classify generated notification payloads by where the turn id lives."""
+    """Classify notification payloads by where their turn id is carried."""
     server_notifications = json.loads(
         (schema_dir / "ServerNotification.json").read_text()
     )
@@ -690,7 +698,7 @@ def _type_tuple_source(class_names: list[str]) -> str:
 
 
 def generate_notification_registry(schema_dir: Path) -> None:
-    """Regenerate notification models and routing metadata from generated schemas."""
+    """Regenerate notification dispatch metadata from the runtime notification schema."""
     out = (
         sdk_root()
         / "src"
@@ -824,6 +832,7 @@ def _camel_to_snake(name: str) -> str:
 def _load_public_fields(
     module_name: str, class_name: str, *, exclude: set[str] | None = None
 ) -> list[PublicFieldSpec]:
+    """Load generated model fields used to render the ergonomic public methods."""
     exclude = exclude or set()
     if module_name == "codex_app_server.generated.v2_all":
         module = _load_generated_v2_all_module()
@@ -851,6 +860,7 @@ def _load_public_fields(
 
 
 def _load_generated_v2_all_module() -> types.ModuleType:
+    """Import the freshly generated v2_all module without importing package init."""
     module_name = "_codex_app_server_generated_v2_all_for_artifacts"
     sys.modules.pop(module_name, None)
     module_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
@@ -1072,6 +1082,7 @@ def _render_async_thread_block(
 
 
 def generate_public_api_flat_methods() -> None:
+    """Regenerate the public convenience methods from generated protocol models."""
     src_dir = sdk_root() / "src"
     public_api_path = src_dir / "codex_app_server" / "api.py"
     if not public_api_path.exists():
@@ -1141,6 +1152,7 @@ def generate_public_api_flat_methods() -> None:
 
 
 def generate_types_from_schema_dir(schema_dir: Path) -> None:
+    """Regenerate every SDK artifact derived from an existing schema directory."""
     # v2_all is the authoritative generated surface.
     generate_v2_all(schema_dir)
     generate_notification_registry(schema_dir)
@@ -1148,6 +1160,7 @@ def generate_types_from_schema_dir(schema_dir: Path) -> None:
 
 
 def generate_types() -> None:
+    """Generate schemas from the pinned runtime and then refresh SDK artifacts."""
     with tempfile.TemporaryDirectory(prefix="codex-python-schema-") as td:
         schema_dir = generate_schema_from_pinned_runtime(Path(td) / "schema")
         generate_types_from_schema_dir(schema_dir)

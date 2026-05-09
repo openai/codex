@@ -82,6 +82,7 @@ def _item_completed_notification(
     text: str = "final text",
     phase: MessagePhase | None = None,
 ) -> Notification:
+    """Build a realistic completed-item notification accepted by generated models."""
     item: dict[str, object] = {
         "id": "item-1",
         "text": text,
@@ -93,6 +94,7 @@ def _item_completed_notification(
         method="item/completed",
         payload=ItemCompletedNotification.model_validate(
             {
+                # The pinned runtime schema requires completion timestamps.
                 "completedAtMs": 1,
                 "item": item,
                 "threadId": thread_id,

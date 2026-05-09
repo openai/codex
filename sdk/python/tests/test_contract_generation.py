@@ -15,6 +15,7 @@ GENERATED_TARGETS = [
 
 
 def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | None:
+    """Capture one generated artifact so regeneration drift is easy to compare."""
     target = root / rel_path
     if not target.exists():
         return None
@@ -29,6 +30,7 @@ def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | N
 
 
 def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
+    """Capture all checked-in generated artifacts before and after regeneration."""
     return {
         str(rel_path): _snapshot_target(root, rel_path)
         for rel_path in GENERATED_TARGETS
@@ -36,6 +38,7 @@ def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
 
 
 def test_generated_files_are_up_to_date():
+    """Regenerating from the pinned runtime package should leave artifacts unchanged."""
     before = _snapshot_targets(ROOT)
 
     # Regenerate contract artifacts via the pinned runtime package, not a local

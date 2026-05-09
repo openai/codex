@@ -50,6 +50,7 @@ def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
 
 
 def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
+    """Generated response models should keep accepting the auto review enum value."""
     response = ThreadResumeResponse.model_validate(
         {
             "approvalPolicy": "on-request",
@@ -66,6 +67,7 @@ def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
                 "id": "thread-1",
                 "modelProvider": "openai",
                 "preview": "",
+                # The pinned runtime schema requires the session id on threads.
                 "sessionId": "session-1",
                 "source": "cli",
                 "status": {"type": "idle"},

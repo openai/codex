@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_update_script_module():
+    """Load the maintenance script as a module so tests exercise real helpers."""
     script_path = ROOT / "scripts" / "update_sdk_artifacts.py"
     spec = importlib.util.spec_from_file_location("update_sdk_artifacts", script_path)
     if spec is None or spec.loader is None:
@@ -27,6 +28,7 @@ def _load_update_script_module():
 
 
 def _load_runtime_setup_module():
+    """Load runtime setup without importing the SDK package under test."""
     runtime_setup_path = ROOT / "_runtime_setup.py"
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
@@ -40,11 +42,13 @@ def _load_runtime_setup_module():
 
 
 def test_generation_has_single_maintenance_entrypoint_script() -> None:
+    """Keep artifact workflows routed through one script instead of side entrypoints."""
     scripts = sorted(p.name for p in (ROOT / "scripts").glob("*.py"))
     assert scripts == ["update_sdk_artifacts.py"]
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
+    """The type generation command should refresh every schema-derived artifact."""
     source = (ROOT / "scripts" / "update_sdk_artifacts.py").read_text()
     tree = ast.parse(source)
 
@@ -74,6 +78,7 @@ def test_generate_types_wires_all_generation_steps() -> None:
 
 
 def _load_runtime_schema_bundle(tmp_path: Path) -> dict:
+    """Ask the pinned runtime package for a real schema bundle used by tests."""
     script = _load_update_script_module()
     schema_dir = script.generate_schema_from_pinned_runtime(tmp_path / "schema")
     return json.loads(script.schema_bundle_path(schema_dir).read_text())
@@ -82,6 +87,7 @@ def _load_runtime_schema_bundle(tmp_path: Path) -> dict:
 def test_schema_normalization_only_flattens_string_literal_oneofs(
     tmp_path: Path,
 ) -> None:
+    """Schema normalization should only flatten the enum-shaped oneOf variants."""
     script = _load_update_script_module()
     schema = _load_runtime_schema_bundle(tmp_path)
     definitions = schema["definitions"]
@@ -107,6 +113,7 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
 def test_python_codegen_schema_annotation_adds_stable_variant_titles(
     tmp_path: Path,
 ) -> None:
+    """Schema annotations should give generated protocol classes stable names."""
     script = _load_update_script_module()
     schema = _load_runtime_schema_bundle(tmp_path)
     script._annotate_schema(schema)
