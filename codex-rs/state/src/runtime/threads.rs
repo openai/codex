@@ -478,6 +478,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
         metadata: &crate::ThreadMetadata,
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let preview = metadata_preview(metadata);
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -539,7 +540,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
-        .bind(metadata.preview.as_deref().unwrap_or_default())
+        .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
@@ -680,6 +681,7 @@ WHERE id = ?
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let preview = metadata_preview(metadata);
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
@@ -770,7 +772,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
-        .bind(metadata.preview.as_deref().unwrap_or_default())
+        .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
@@ -1145,6 +1147,14 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
+    metadata
+        .preview
+        .as_deref()
+        .or(metadata.first_user_message.as_deref())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1677,6 +1687,7 @@ mod tests {
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         metadata.title = "original title".to_string();
         metadata.first_user_message = Some("first-user-message".to_string());
+        metadata.preview = None;
 
         runtime
             .upsert_thread(&metadata)
@@ -1701,7 +1712,7 @@ mod tests {
             persisted.first_user_message.as_deref(),
             Some("first-user-message")
         );
-        assert_eq!(persisted.preview.as_deref(), Some("hello"));
+        assert_eq!(persisted.preview.as_deref(), Some("first-user-message"));
     }
 
     #[tokio::test]
