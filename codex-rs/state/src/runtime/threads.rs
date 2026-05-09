@@ -830,6 +830,51 @@ ON CONFLICT(thread_id, position) DO NOTHING
         Ok(())
     }
 
+    /// Replace dynamic tools for a thread.
+    ///
+    /// Unlike [`Self::persist_dynamic_tools`], this is for explicit metadata updates where the
+    /// caller owns the full current tool list.
+    pub async fn replace_dynamic_tools(
+        &self,
+        thread_id: ThreadId,
+        tools: &[DynamicToolSpec],
+    ) -> anyhow::Result<()> {
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+            .bind(thread_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        for (idx, tool) in tools.iter().enumerate() {
+            let position = i64::try_from(idx).unwrap_or(i64::MAX);
+            let input_schema = serde_json::to_string(&tool.input_schema)?;
+            sqlx::query(
+                r#"
+INSERT INTO thread_dynamic_tools (
+    thread_id,
+    position,
+    namespace,
+    name,
+    description,
+    input_schema,
+    defer_loading
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(position)
+            .bind(tool.namespace.as_deref())
+            .bind(tool.name.as_str())
+            .bind(tool.description.as_str())
+            .bind(input_schema)
+            .bind(tool.defer_loading)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,

@@ -418,6 +418,7 @@ impl Session {
                                 thread_id,
                                 forked_from_id,
                                 source: session_source,
+                                originator: originator().value,
                                 thread_source: session_configuration.thread_source,
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),

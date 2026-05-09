@@ -170,6 +170,9 @@ pub(super) fn git_info_from_parts(
     branch: Option<String>,
     origin_url: Option<String>,
 ) -> Option<GitInfo> {
+    let sha = non_empty_string(sha);
+    let branch = non_empty_string(branch);
+    let origin_url = non_empty_string(origin_url);
     if sha.is_none() && branch.is_none() && origin_url.is_none() {
         return None;
     }
@@ -178,6 +181,10 @@ pub(super) fn git_info_from_parts(
         branch,
         repository_url: origin_url,
     })
+}
+
+pub(super) fn non_empty_string(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
 }
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {

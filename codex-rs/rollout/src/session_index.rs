@@ -103,9 +103,13 @@ pub async fn find_thread_names_by_ids(
         let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
             continue;
         };
-        let name = entry.thread_name.trim();
-        if !name.is_empty() && thread_ids.contains(&entry.id) {
-            names.insert(entry.id, name.to_string());
+        if thread_ids.contains(&entry.id) {
+            let name = entry.thread_name.trim();
+            if name.is_empty() {
+                names.remove(&entry.id);
+            } else {
+                names.insert(entry.id, name.to_string());
+            }
         }
     }
 

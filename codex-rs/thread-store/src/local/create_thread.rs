@@ -30,15 +30,16 @@ pub(super) async fn create_thread(
     let state_db_ctx = store.state_db().await;
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(
-            params.thread_id,
-            params.forked_from_id,
-            params.source,
-            params.thread_source,
-            params.base_instructions,
-            params.dynamic_tools,
-            event_persistence_mode(params.event_persistence_mode),
-        ),
+        RolloutRecorderParams::Create {
+            conversation_id: params.thread_id,
+            forked_from_id: params.forked_from_id,
+            source: params.source,
+            originator: params.originator,
+            thread_source: params.thread_source,
+            base_instructions: params.base_instructions,
+            dynamic_tools: params.dynamic_tools,
+            event_persistence_mode: event_persistence_mode(params.event_persistence_mode),
+        },
         state_db_ctx,
         /*state_builder*/ None,
     )

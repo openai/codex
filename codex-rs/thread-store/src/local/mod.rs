@@ -1,3 +1,4 @@
+mod apply_thread_metadata;
 mod archive_thread;
 mod create_thread;
 mod helpers;
@@ -19,8 +20,11 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
 
 use crate::AppendThreadItemsParams;
+use crate::ApplyThreadMetadataParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
@@ -41,6 +45,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    metadata_apply_semaphore: Arc<Semaphore>,
     state_db: Option<StateDbHandle>,
 }
 
@@ -80,6 +85,7 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            metadata_apply_semaphore: Arc::new(Semaphore::new(1)),
             state_db,
         }
     }
@@ -120,6 +126,19 @@ impl LocalThreadStore {
             .get(&thread_id)
             .cloned()
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    }
+
+    pub(super) async fn acquire_metadata_permit(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<OwnedSemaphorePermit> {
+        self.metadata_apply_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("metadata semaphore closed for thread {thread_id}: {err}"),
+            })
     }
 
     pub(super) async fn ensure_live_recorder_absent(
@@ -167,6 +186,13 @@ impl ThreadStore for LocalThreadStore {
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
         live_writer::append_items(self, params).await
+    }
+
+    async fn apply_thread_metadata(
+        &self,
+        params: ApplyThreadMetadataParams,
+    ) -> ThreadStoreResult<()> {
+        apply_thread_metadata::apply_thread_metadata(self, params).await
     }
 
     async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
@@ -738,6 +764,7 @@ mod tests {
             thread_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            originator: "test_originator".to_string(),
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),

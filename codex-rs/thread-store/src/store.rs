@@ -3,6 +3,7 @@ use codex_protocol::ThreadId;
 use std::any::Any;
 
 use crate::AppendThreadItemsParams;
+use crate::ApplyThreadMetadataParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ItemPage;
@@ -33,8 +34,21 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Reopens an existing thread for live appends.
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
 
-    /// Appends items to a live thread.
+    /// Appends canonical rollout items to a live thread.
+    ///
+    /// This is the raw history API. It does not infer or persist metadata by itself; callers that
+    /// need metadata correctness should go through [`crate::LiveThread`] or explicitly call
+    /// [`ThreadStore::apply_thread_metadata`] with metadata derived above the store.
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()>;
+
+    /// Applies metadata inferred from canonical live thread items.
+    ///
+    /// Raw item appends remain the canonical history API. Implementations must persist the
+    /// explicit metadata facts prepared by the live thread layer.
+    async fn apply_thread_metadata(
+        &self,
+        params: ApplyThreadMetadataParams,
+    ) -> ThreadStoreResult<()>;
 
     /// Materializes the thread if persistence is lazy, then persists all queued items.
     async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;

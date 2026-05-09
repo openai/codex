@@ -182,15 +182,16 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
     let thread_name = "named thread";
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(
-            thread_id,
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            /*thread_source*/ None,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
+        RolloutRecorderParams::Create {
+            conversation_id: thread_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            originator: "test_originator".to_string(),
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: EventPersistenceMode::Limited,
+        },
         /*state_db_ctx*/ None,
         /*state_builder*/ None,
     )

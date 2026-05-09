@@ -211,6 +211,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             thread_id,
             forked_from_id: Some(parent_thread_id),
             source: SessionSource::Cli,
+            originator: "test_originator".to_string(),
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),

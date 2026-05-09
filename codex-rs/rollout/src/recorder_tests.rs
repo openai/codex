@@ -365,15 +365,16 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     let thread_id = ThreadId::new();
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(
-            thread_id,
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            /*thread_source*/ None,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
+        RolloutRecorderParams::Create {
+            conversation_id: thread_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            originator: "test_originator".to_string(),
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: EventPersistenceMode::Limited,
+        },
         /*state_db_ctx*/ None,
         /*state_builder*/ None,
     )
@@ -446,15 +447,16 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
     let thread_id = ThreadId::new();
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(
-            thread_id,
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            /*thread_source*/ None,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
+        RolloutRecorderParams::Create {
+            conversation_id: thread_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            originator: "test_originator".to_string(),
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: EventPersistenceMode::Limited,
+        },
         /*state_db_ctx*/ None,
         /*state_builder*/ None,
     )
@@ -546,15 +548,16 @@ async fn metadata_irrelevant_events_coalesce_state_db_updated_at() -> std::io::R
     let thread_id = ThreadId::new();
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(
-            thread_id,
-            /*forked_from_id*/ None,
-            SessionSource::Cli,
-            /*thread_source*/ None,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
+        RolloutRecorderParams::Create {
+            conversation_id: thread_id,
+            forked_from_id: None,
+            source: SessionSource::Cli,
+            originator: "test_originator".to_string(),
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: EventPersistenceMode::Limited,
+        },
         Some(state_db.clone()),
         /*state_builder*/ None,
     )

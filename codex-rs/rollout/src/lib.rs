@@ -12,10 +12,6 @@ pub(crate) mod recorder;
 pub(crate) mod session_index;
 pub mod state_db;
 
-pub(crate) mod default_client {
-    pub use codex_login::default_client::*;
-}
-
 pub(crate) use codex_protocol::protocol;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
@@ -54,6 +50,8 @@ pub use list::rollout_date_parts;
 pub use metadata::builder_from_items;
 pub use policy::EventPersistenceMode;
 pub use policy::is_persisted_rollout_item;
+pub use policy::persisted_rollout_items;
+pub use policy::sanitize_rollout_item_for_persistence;
 pub use policy::should_persist_response_item_for_memories;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;

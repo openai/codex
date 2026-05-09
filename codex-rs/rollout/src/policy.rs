@@ -1,6 +1,7 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::truncate_middle_chars;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPersistenceMode {
@@ -20,6 +21,46 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode)
             true
         }
     }
+}
+
+const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
+
+pub fn sanitize_rollout_item_for_persistence(
+    item: RolloutItem,
+    mode: EventPersistenceMode,
+) -> RolloutItem {
+    if mode != EventPersistenceMode::Extended {
+        return item;
+    }
+
+    match item {
+        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
+            // Persist only a bounded aggregated summary of command output.
+            event.aggregated_output = truncate_middle_chars(
+                &event.aggregated_output,
+                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
+            );
+            // Drop unnecessary fields from rollout storage since aggregated_output is all we need.
+            event.stdout.clear();
+            event.stderr.clear();
+            event.formatted_output.clear();
+            RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
+        }
+        _ => item,
+    }
+}
+
+pub fn persisted_rollout_items(
+    items: &[RolloutItem],
+    mode: EventPersistenceMode,
+) -> Vec<RolloutItem> {
+    let mut filtered = Vec::new();
+    for item in items {
+        if is_persisted_rollout_item(item, mode) {
+            filtered.push(sanitize_rollout_item_for_persistence(item.clone(), mode));
+        }
+    }
+    filtered
 }
 
 /// Whether a `ResponseItem` should be persisted in rollout files.

@@ -15,6 +15,7 @@ use codex_state::ThreadMetadata;
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::non_empty_string;
 use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
@@ -109,20 +110,7 @@ pub(super) async fn read_thread_by_rollout_path(
         });
     }
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
-        let existing_git_info = thread.git_info.take();
-        let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
-            Some(info) => (
-                info.commit_hash.map(|sha| sha.0),
-                info.branch,
-                info.repository_url,
-            ),
-            None => (None, None, None),
-        };
-        thread.git_info = git_info_from_parts(
-            metadata.git_sha.or(fallback_sha),
-            metadata.git_branch.or(fallback_branch),
-            metadata.git_origin_url.or(fallback_origin_url),
-        );
+        thread.git_info = sqlite_git_info_with_rollout_fallback(&metadata, thread.git_info);
     }
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
@@ -273,7 +261,8 @@ async fn stored_thread_from_sqlite_metadata(
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()
-            .flatten(),
+            .flatten()
+            .and_then(|title| non_empty_string(Some(title))),
     };
     let session_meta = read_session_meta_line(metadata.rollout_path.as_path())
         .await
@@ -316,6 +305,38 @@ async fn stored_thread_from_sqlite_metadata(
         token_usage: None,
         first_user_message: metadata.first_user_message,
         history: None,
+    }
+}
+
+fn sqlite_git_info_with_rollout_fallback(
+    metadata: &ThreadMetadata,
+    rollout_git_info: Option<codex_protocol::protocol::GitInfo>,
+) -> Option<codex_protocol::protocol::GitInfo> {
+    let Some(rollout_git_info) = rollout_git_info else {
+        return git_info_from_parts(
+            metadata.git_sha.clone(),
+            metadata.git_branch.clone(),
+            metadata.git_origin_url.clone(),
+        );
+    };
+    git_info_from_parts(
+        sqlite_git_part(
+            metadata.git_sha.clone(),
+            rollout_git_info.commit_hash.map(|sha| sha.0),
+        ),
+        sqlite_git_part(metadata.git_branch.clone(), rollout_git_info.branch),
+        sqlite_git_part(
+            metadata.git_origin_url.clone(),
+            rollout_git_info.repository_url,
+        ),
+    )
+}
+
+fn sqlite_git_part(sqlite_value: Option<String>, rollout_value: Option<String>) -> Option<String> {
+    match sqlite_value.as_deref() {
+        Some("") => None,
+        Some(_) => sqlite_value,
+        None => rollout_value,
     }
 }
 
@@ -525,6 +546,48 @@ mod tests {
             git_info.repository_url.as_deref(),
             Some("https://example.com/repo.git")
         );
+    }
+
+    #[tokio::test]
+    async fn read_thread_by_rollout_path_respects_sqlite_git_clear() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(224);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let builder = ThreadMetadataBuilder::new(
+            thread_id,
+            active_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        runtime
+            .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
+            .await
+            .expect("state db upsert should succeed");
+        runtime
+            .update_thread_git_info(thread_id, Some(Some("")), Some(Some("")), Some(Some("")))
+            .await
+            .expect("state db git clear should succeed");
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                active_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        assert!(thread.git_info.is_none());
     }
 
     #[tokio::test]
@@ -762,6 +825,46 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.name, Some("Legacy title".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_thread_treats_legacy_empty_name_as_absent() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(225);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.first_user_message = Some("Hello from user".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+        codex_rollout::append_thread_name(home.path(), thread_id, "")
+            .await
+            .expect("append legacy empty thread name");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.name, None);
     }
 
     #[tokio::test]

@@ -266,6 +266,33 @@ async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn find_thread_names_by_ids_respects_empty_tombstone() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let id = ThreadId::new();
+    let lines = vec![
+        SessionIndexEntry {
+            id,
+            thread_name: "first".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        },
+        SessionIndexEntry {
+            id,
+            thread_name: String::new(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+        },
+    ];
+    write_index(&path, &lines)?;
+
+    let mut ids = HashSet::new();
+    ids.insert(id);
+
+    let found = find_thread_names_by_ids(temp.path(), &ids).await?;
+    assert!(found.is_empty());
+    Ok(())
+}
+
 #[test]
 fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
     let temp = TempDir::new()?;

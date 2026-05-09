@@ -49,6 +49,8 @@ pub struct CreateThreadParams {
     pub forked_from_id: Option<ThreadId>,
     /// Runtime source for the thread.
     pub source: SessionSource,
+    /// Product originator captured in the synthesized session metadata.
+    pub originator: String,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Base instructions persisted in session metadata.
@@ -85,6 +87,67 @@ pub struct AppendThreadItemsParams {
     pub thread_id: ThreadId,
     /// Items to append in order.
     pub items: Vec<RolloutItem>,
+}
+
+/// Metadata fields derived from canonical rollout items by a live thread metadata handler.
+///
+/// Each field is optional so callers can send only the metadata facts learned from a batch of
+/// accepted items. Nested `Option` fields distinguish omitted/no-op fields from explicit clears.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ThreadMetadataUpdate {
+    /// Local rollout path when the backing store is filesystem-based.
+    pub rollout_path: Option<PathBuf>,
+    /// Best available user-facing preview, usually the first user message.
+    pub preview: Option<String>,
+    /// Optional user-facing thread name/title.
+    pub name: Option<Option<String>>,
+    /// Model provider id associated with the thread.
+    pub model_provider: Option<String>,
+    /// Latest observed model, if known.
+    pub model: Option<Option<String>>,
+    /// Latest observed reasoning effort, if known.
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    /// Thread creation timestamp.
+    pub created_at: Option<DateTime<Utc>>,
+    /// Thread last-update timestamp.
+    pub updated_at: Option<DateTime<Utc>>,
+    /// Runtime source for the thread.
+    pub source: Option<SessionSource>,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<Option<ThreadSource>>,
+    /// Optional random nickname for thread-spawn sub-agents.
+    pub agent_nickname: Option<Option<String>>,
+    /// Optional role for thread-spawn sub-agents.
+    pub agent_role: Option<Option<String>>,
+    /// Optional canonical path for thread-spawn sub-agents.
+    pub agent_path: Option<Option<String>>,
+    /// Working directory captured for the thread.
+    pub cwd: Option<PathBuf>,
+    /// CLI version captured for the thread.
+    pub cli_version: Option<String>,
+    /// Approval mode captured for the thread.
+    pub approval_mode: Option<AskForApproval>,
+    /// Sandbox policy captured for the thread.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Last observed token usage.
+    pub token_usage: Option<Option<TokenUsage>>,
+    /// First user message observed for this thread, if any.
+    pub first_user_message: Option<Option<String>>,
+    /// Optional Git metadata captured for the thread.
+    pub git_info: Option<Option<GitInfo>>,
+    /// Explicit thread memory behavior.
+    pub memory_mode: Option<MemoryMode>,
+    /// Dynamic tools available to the thread.
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+}
+
+/// Parameters for applying metadata inferred by the live thread layer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApplyThreadMetadataParams {
+    /// Thread id to update.
+    pub thread_id: ThreadId,
+    /// Metadata facts to apply.
+    pub update: ThreadMetadataUpdate,
 }
 
 /// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.
@@ -243,7 +306,7 @@ pub struct StoredTurn {
     pub items: Vec<RolloutItem>,
     /// Amount of item detail included in `items`.
     pub items_view: StoredTurnItemsView,
-    /// Store-owned status for API layer projection.
+    /// Store-owned status used by API layer summaries.
     pub status: StoredTurnStatus,
     /// Error message when the turn failed.
     pub error: Option<StoredTurnError>,

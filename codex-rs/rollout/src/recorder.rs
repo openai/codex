@@ -51,7 +51,6 @@ use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_rollout_item;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
-use crate::default_client::originator;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
@@ -92,6 +91,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        originator: String,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -165,26 +165,6 @@ fn clone_io_error(err: &IoError) -> IoError {
 }
 
 impl RolloutRecorderParams {
-    pub fn new(
-        conversation_id: ThreadId,
-        forked_from_id: Option<ThreadId>,
-        source: SessionSource,
-        thread_source: Option<ThreadSource>,
-        base_instructions: BaseInstructions,
-        dynamic_tools: Vec<DynamicToolSpec>,
-        event_persistence_mode: EventPersistenceMode,
-    ) -> Self {
-        Self::Create {
-            conversation_id,
-            forked_from_id,
-            source,
-            thread_source,
-            base_instructions,
-            dynamic_tools,
-            event_persistence_mode,
-        }
-    }
-
     pub fn resume(path: PathBuf, event_persistence_mode: EventPersistenceMode) -> Self {
         Self::Resume {
             path,
@@ -674,6 +654,7 @@ impl RolloutRecorder {
                     conversation_id,
                     forked_from_id,
                     source,
+                    originator,
                     thread_source,
                     base_instructions,
                     dynamic_tools,
@@ -697,7 +678,7 @@ impl RolloutRecorder {
                         forked_from_id,
                         timestamp,
                         cwd: config.cwd().to_path_buf(),
-                        originator: originator().value,
+                        originator,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
                         agent_role: source.get_agent_role(),
