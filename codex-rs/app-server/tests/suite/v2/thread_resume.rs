@@ -628,49 +628,23 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         &config_path,
         config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "materialized thread",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
-
-    let turn_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "materialize this thread".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let _turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
 
     let goal_id = mcp
         .send_raw_request(
             "thread/goal/set",
             Some(json!({
-                "threadId": thread.id,
+                "threadId": thread_id,
                 "objective": "keep polishing",
                 "status": "active",
                 "tokenBudget": 40,
@@ -691,7 +665,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 
     let state_db =
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
-    let thread_id = ThreadId::from_string(&thread.id)?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
     let persisted_goal = state_db
         .get_thread_goal(thread_id)
         .await?
@@ -710,7 +684,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         .send_raw_request(
             "thread/goal/set",
             Some(json!({
-                "threadId": thread.id,
+                "threadId": thread_id.to_string(),
                 "objective": "keep polishing with clearer wording",
                 "status": "active",
                 "tokenBudget": 40,

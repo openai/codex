@@ -175,10 +175,7 @@ impl ThreadGoalRequestProcessor {
                     })
                     .map(|goal| (goal, previous_status))
             } else {
-                let previous_status = existing_goal
-                    .as_ref()
-                    .map(ExternalGoalPreviousStatus::from)
-                    .unwrap_or(ExternalGoalPreviousStatus::NewGoal);
+                let previous_status = ExternalGoalPreviousStatus::NewGoal;
                 state_db
                     .replace_thread_goal(
                         thread_id,
