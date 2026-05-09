@@ -94,16 +94,25 @@ enum TerminalMetricEmission {
 #[derive(Clone)]
 pub enum ExternalGoalPreviousStatus {
     NewGoal,
-    Existing {
-        goal_id: String,
-        status: codex_state::ThreadGoalStatus,
-        objective: String,
-    },
+    Existing(ExternalGoalPreviousGoal),
+}
+
+#[derive(Clone)]
+pub struct ExternalGoalPreviousGoal {
+    goal_id: String,
+    status: codex_state::ThreadGoalStatus,
+    objective: String,
 }
 
 impl From<&codex_state::ThreadGoal> for ExternalGoalPreviousStatus {
     fn from(goal: &codex_state::ThreadGoal) -> Self {
-        Self::Existing {
+        Self::Existing(ExternalGoalPreviousGoal::from(goal))
+    }
+}
+
+impl From<&codex_state::ThreadGoal> for ExternalGoalPreviousGoal {
+    fn from(goal: &codex_state::ThreadGoal) -> Self {
+        Self {
             goal_id: goal.goal_id.clone(),
             status: goal.status,
             objective: goal.objective.clone(),
@@ -622,24 +631,20 @@ impl Session {
         } = external_set;
         let previous_goal = match previous_status {
             ExternalGoalPreviousStatus::NewGoal => None,
-            ExternalGoalPreviousStatus::Existing {
-                goal_id,
-                status,
-                objective,
-            } => Some((goal_id, status, objective)),
+            ExternalGoalPreviousStatus::Existing(goal) => Some(goal),
         };
         let replaced_existing_goal = previous_goal
             .as_ref()
-            .is_some_and(|(goal_id, _, _)| goal_id != &goal.goal_id);
+            .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
         if previous_goal.is_none() || replaced_existing_goal {
             self.emit_goal_created_metric();
         }
         let objective_changed = previous_goal
             .as_ref()
-            .is_some_and(|(_, _, objective)| objective != &goal.objective);
+            .is_some_and(|previous_goal| previous_goal.objective != goal.objective);
         let previous_status = previous_goal
             .as_ref()
-            .and_then(|(_, status, _)| (!replaced_existing_goal).then_some(*status));
+            .and_then(|previous_goal| (!replaced_existing_goal).then_some(previous_goal.status));
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
         let goal_for_steering = objective_changed.then(|| protocol_goal_from_state(goal.clone()));
         let goal_id = goal.goal_id;
