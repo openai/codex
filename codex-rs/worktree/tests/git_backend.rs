@@ -251,6 +251,72 @@ fn move_tracked_transfers_tracked_state_and_leaves_untracked_files() -> anyhow::
 }
 
 #[test]
+fn failed_transfer_rolls_back_new_worktree_and_branch() -> anyhow::Result<()> {
+    let fixture = GitFixture::new_with_base_before_tracked_file()?;
+    fs::write(fixture.repo.path().join("tracked.txt"), "changed\n")?;
+
+    let err = codex_worktree::ensure_worktree(WorktreeRequest {
+        codex_home: fixture.codex_home.path().to_path_buf(),
+        source_cwd: fixture.repo.path().to_path_buf(),
+        branch: "rollback-created".to_string(),
+        base_ref: Some("HEAD~1".to_string()),
+        dirty_policy: DirtyPolicy::CopyTracked,
+    })
+    .expect_err("tracked patch should not apply against an older base");
+
+    assert!(
+        err.to_string()
+            .contains("failed to apply unstaged changes to worktree"),
+        "{err:#}"
+    );
+    assert!(
+        !fixture
+            .repo
+            .path()
+            .with_file_name(format!(
+                "{}.rollback-created",
+                fixture.repo.path().file_name().unwrap().to_string_lossy()
+            ))
+            .exists()
+    );
+    assert!(!branch_exists(fixture.repo.path(), "rollback-created")?);
+    assert_eq!(
+        git(fixture.repo.path(), &["status", "--short"])?,
+        " M tracked.txt"
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_transfer_preserves_preexisting_branch() -> anyhow::Result<()> {
+    let fixture = GitFixture::new_with_base_before_tracked_file()?;
+    run_git(fixture.repo.path(), &["branch", "keep-me", "HEAD~1"])?;
+    fs::write(fixture.repo.path().join("tracked.txt"), "changed\n")?;
+
+    codex_worktree::ensure_worktree(WorktreeRequest {
+        codex_home: fixture.codex_home.path().to_path_buf(),
+        source_cwd: fixture.repo.path().to_path_buf(),
+        branch: "keep-me".to_string(),
+        base_ref: /*base_ref*/ None,
+        dirty_policy: DirtyPolicy::CopyTracked,
+    })
+    .expect_err("tracked patch should not apply against the preexisting branch");
+
+    assert!(branch_exists(fixture.repo.path(), "keep-me")?);
+    assert!(
+        !fixture
+            .repo
+            .path()
+            .with_file_name(format!(
+                "{}.keep-me",
+                fixture.repo.path().file_name().unwrap().to_string_lossy()
+            ))
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
 fn creates_orphan_worktree_from_unborn_repo_without_base_ref() -> anyhow::Result<()> {
     let fixture = GitFixture::new_unborn()?;
     fs::write(fixture.repo.path().join("README.md"), "hello\n")?;
@@ -397,6 +463,19 @@ impl GitFixture {
         run_git(repo.path(), &["config", "user.name", "Codex"])?;
         Ok(Self { repo, codex_home })
     }
+
+    fn new_with_base_before_tracked_file() -> anyhow::Result<Self> {
+        let repo = TempDir::new()?;
+        let codex_home = TempDir::new()?;
+        run_git(repo.path(), &["init", "-b", "main"])?;
+        run_git(repo.path(), &["config", "user.email", "codex@example.com"])?;
+        run_git(repo.path(), &["config", "user.name", "Codex"])?;
+        run_git(repo.path(), &["commit", "--allow-empty", "-m", "base"])?;
+        fs::write(repo.path().join("tracked.txt"), "original\n")?;
+        run_git(repo.path(), &["add", "tracked.txt"])?;
+        run_git(repo.path(), &["commit", "-m", "add tracked file"])?;
+        Ok(Self { repo, codex_home })
+    }
 }
 
 fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
@@ -421,4 +500,17 @@ fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
         );
     }
     Ok(String::from_utf8(output.stdout)?.trim_end().to_string())
+}
+
+fn branch_exists(cwd: &Path, branch: &str) -> anyhow::Result<bool> {
+    let output = Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(cwd)
+        .output()?;
+    Ok(output.status.success())
 }

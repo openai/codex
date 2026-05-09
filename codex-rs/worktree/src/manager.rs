@@ -59,13 +59,14 @@ pub fn ensure_worktree(req: WorktreeRequest) -> Result<WorktreeResolution> {
     }
 
     let warnings = dirty::validate_dirty_policy_before_create(&repo.root, req.dirty_policy)?;
+    let branch_exists = branch_exists(&repo.root, &branch);
     let has_head = git::status(&repo.root, &["rev-parse", "--verify", "HEAD"]).is_ok();
     fs::create_dir_all(
         worktree_git_root
             .parent()
             .context("managed worktree path has no parent")?,
     )?;
-    if branch_exists(&repo.root, &branch) {
+    if branch_exists {
         git::status(
             &repo.root,
             &[
@@ -102,7 +103,23 @@ pub fn ensure_worktree(req: WorktreeRequest) -> Result<WorktreeResolution> {
         )?;
     }
 
-    dirty::apply_dirty_policy_after_create(&repo.root, &worktree_git_root, req.dirty_policy)?;
+    let prepared_transfer = match dirty::prepare_dirty_policy_after_create(
+        &repo.root,
+        &worktree_git_root,
+        req.dirty_policy,
+    ) {
+        Ok(prepared_transfer) => prepared_transfer,
+        Err(err) => {
+            return Err(rollback_failed_create(
+                &repo.root,
+                &worktree_git_root,
+                &branch,
+                /*delete_branch*/ !branch_exists,
+                err,
+            ));
+        }
+    };
+    dirty::finalize_dirty_policy_after_create(&repo.root, prepared_transfer)?;
     let dirty = dirty::dirty_state(&worktree_git_root)?;
     let head = git::stdout(&worktree_git_root, &["rev-parse", "HEAD"]).ok();
     let mut info = WorktreeInfo {
@@ -135,6 +152,33 @@ pub fn ensure_worktree(req: WorktreeRequest) -> Result<WorktreeResolution> {
             .map(|message| WorktreeWarning { message })
             .collect(),
     })
+}
+
+fn rollback_failed_create(
+    repo_root: &Path,
+    worktree_git_root: &Path,
+    branch: &str,
+    delete_branch: bool,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    let mut rollback_errors = Vec::new();
+    let worktree_arg = worktree_git_root.to_string_lossy();
+    if let Err(rollback_err) =
+        git::status(repo_root, &["worktree", "remove", "--force", &worktree_arg])
+    {
+        rollback_errors.push(rollback_err.to_string());
+    }
+    if delete_branch && let Err(rollback_err) = git::status(repo_root, &["branch", "-D", branch]) {
+        rollback_errors.push(rollback_err.to_string());
+    }
+    if rollback_errors.is_empty() {
+        err
+    } else {
+        anyhow::anyhow!(
+            "{err}; additionally failed to roll back newly-created worktree: {}",
+            rollback_errors.join("; ")
+        )
+    }
 }
 
 pub fn resolve_worktree(codex_home: &Path, cwd: &Path) -> Result<Option<WorktreeInfo>> {

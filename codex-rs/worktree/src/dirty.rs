@@ -28,6 +28,17 @@ struct TransferPlan {
     untracked_paths: Vec<PathBuf>,
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedDirtyTransfer {
+    move_plan: Option<MovePlan>,
+}
+
+#[derive(Debug)]
+struct MovePlan {
+    transfer: TransferPlan,
+    move_untracked: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirtyState {
@@ -82,48 +93,66 @@ pub fn validate_dirty_policy_before_create(
     }
 }
 
-pub fn apply_dirty_policy_after_create(
+pub(crate) fn prepare_dirty_policy_after_create(
     source_root: &Path,
     worktree_root: &Path,
     policy: DirtyPolicy,
-) -> Result<()> {
+) -> Result<PreparedDirtyTransfer> {
     let state = dirty_state(source_root)?;
     if !state.is_dirty() {
-        return Ok(());
+        return Ok(PreparedDirtyTransfer { move_plan: None });
     }
 
     match policy {
-        DirtyPolicy::Fail | DirtyPolicy::Ignore => Ok(()),
+        DirtyPolicy::Fail | DirtyPolicy::Ignore => Ok(PreparedDirtyTransfer { move_plan: None }),
         DirtyPolicy::CopyTracked => {
             let plan = TransferPlan::capture(source_root)?;
-            plan.apply_tracked_diff(worktree_root)
+            plan.apply_tracked_diff(worktree_root)?;
+            Ok(PreparedDirtyTransfer { move_plan: None })
         }
         DirtyPolicy::CopyAll => {
             let plan = TransferPlan::capture(source_root)?;
             plan.apply_tracked_diff(worktree_root)?;
             copy_untracked_files_at_paths(source_root, worktree_root, &plan.untracked_paths)?;
-            Ok(())
+            Ok(PreparedDirtyTransfer { move_plan: None })
         }
         DirtyPolicy::MoveTracked => {
             let plan = TransferPlan::capture(source_root)?;
             plan.apply_tracked_diff(worktree_root)?;
-            plan.clean_source_after_move(source_root, /*move_untracked*/ false)
-                .with_context(|| {
-                    "worktree already contains transferred changes, but failed to clean the source checkout after move"
-                })?;
-            Ok(())
+            Ok(PreparedDirtyTransfer {
+                move_plan: Some(MovePlan {
+                    transfer: plan,
+                    move_untracked: false,
+                }),
+            })
         }
         DirtyPolicy::MoveAll => {
             let plan = TransferPlan::capture(source_root)?;
             plan.apply_tracked_diff(worktree_root)?;
             copy_untracked_files_at_paths(source_root, worktree_root, &plan.untracked_paths)?;
-            plan.clean_source_after_move(source_root, /*move_untracked*/ true)
-                .with_context(|| {
-                    "worktree already contains transferred changes, but failed to clean the source checkout after move"
-                })?;
-            Ok(())
+            Ok(PreparedDirtyTransfer {
+                move_plan: Some(MovePlan {
+                    transfer: plan,
+                    move_untracked: true,
+                }),
+            })
         }
     }
+}
+
+pub(crate) fn finalize_dirty_policy_after_create(
+    source_root: &Path,
+    prepared: PreparedDirtyTransfer,
+) -> Result<()> {
+    let Some(move_plan) = prepared.move_plan else {
+        return Ok(());
+    };
+    move_plan
+        .transfer
+        .clean_source_after_move(source_root, move_plan.move_untracked)
+        .with_context(|| {
+            "worktree already contains transferred changes, but failed to clean the source checkout after move"
+        })
 }
 
 fn bail_for_dirty_source<T>() -> Result<T> {

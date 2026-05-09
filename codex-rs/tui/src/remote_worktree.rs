@@ -187,14 +187,30 @@ pub(crate) async fn ensure_worktree(
         .await?;
     }
 
-    apply_dirty_policy_after_create(
+    let prepared_transfer = match prepare_dirty_policy_after_create(
         runner,
         request_handle,
         &repo.root,
         &worktree_git_root,
         req.dirty_policy,
     )
-    .await?;
+    .await
+    {
+        Ok(prepared_transfer) => prepared_transfer,
+        Err(err) => {
+            return Err(rollback_failed_create(
+                runner,
+                &repo.root,
+                &worktree_git_root,
+                &branch,
+                /*delete_branch*/ !branch_exists,
+                err,
+            )
+            .await);
+        }
+    };
+    finalize_dirty_policy_after_create(runner, request_handle, &repo.root, prepared_transfer)
+        .await?;
     let dirty = dirty_state(runner, &worktree_git_root).await?;
     let head = git_stdout_result(runner, &worktree_git_root, &["rev-parse", "HEAD"])
         .await?
@@ -473,55 +489,123 @@ async fn validate_dirty_policy_before_create(
     }
 }
 
-async fn apply_dirty_policy_after_create(
+async fn prepare_dirty_policy_after_create(
     runner: &WorkspaceCommandRunner,
     request_handle: &AppServerRequestHandle,
     source_root: &Path,
     worktree_root: &Path,
     policy: DirtyPolicy,
-) -> Result<()> {
+) -> Result<PreparedRemoteDirtyTransfer> {
     let state = dirty_state(runner, source_root).await?;
     if !state.is_dirty() {
-        return Ok(());
+        return Ok(PreparedRemoteDirtyTransfer { move_plan: None });
     }
     let plan = RemoteTransferPlan::capture(runner, source_root).await?;
     match policy {
-        DirtyPolicy::Fail | DirtyPolicy::Ignore => Ok(()),
+        DirtyPolicy::Fail | DirtyPolicy::Ignore => {
+            Ok(PreparedRemoteDirtyTransfer { move_plan: None })
+        }
         DirtyPolicy::CopyTracked => {
             plan.apply_tracked_diff(runner, request_handle, worktree_root)
-                .await
+                .await?;
+            Ok(PreparedRemoteDirtyTransfer { move_plan: None })
         }
         DirtyPolicy::CopyAll => {
             plan.apply_tracked_diff(runner, request_handle, worktree_root)
                 .await?;
             plan.copy_untracked(request_handle, source_root, worktree_root)
-                .await
+                .await?;
+            Ok(PreparedRemoteDirtyTransfer { move_plan: None })
         }
         DirtyPolicy::MoveTracked => {
             plan.apply_tracked_diff(runner, request_handle, worktree_root)
                 .await?;
-            plan.clean_source_after_move(
-                runner,
-                request_handle,
-                source_root,
-                /*move_untracked*/ false,
-            )
-            .await
+            Ok(PreparedRemoteDirtyTransfer {
+                move_plan: Some(RemoteMovePlan {
+                    transfer: plan,
+                    move_untracked: false,
+                }),
+            })
         }
         DirtyPolicy::MoveAll => {
             plan.apply_tracked_diff(runner, request_handle, worktree_root)
                 .await?;
             plan.copy_untracked(request_handle, source_root, worktree_root)
                 .await?;
-            plan.clean_source_after_move(
-                runner,
-                request_handle,
-                source_root,
-                /*move_untracked*/ true,
-            )
-            .await
+            Ok(PreparedRemoteDirtyTransfer {
+                move_plan: Some(RemoteMovePlan {
+                    transfer: plan,
+                    move_untracked: true,
+                }),
+            })
         }
     }
+}
+
+async fn finalize_dirty_policy_after_create(
+    runner: &WorkspaceCommandRunner,
+    request_handle: &AppServerRequestHandle,
+    source_root: &Path,
+    prepared: PreparedRemoteDirtyTransfer,
+) -> Result<()> {
+    let Some(move_plan) = prepared.move_plan else {
+        return Ok(());
+    };
+    move_plan
+        .transfer
+        .clean_source_after_move(
+            runner,
+            request_handle,
+            source_root,
+            move_plan.move_untracked,
+        )
+        .await
+        .with_context(|| {
+            "worktree already contains transferred changes, but failed to clean the source checkout after move"
+        })
+}
+
+async fn rollback_failed_create(
+    runner: &WorkspaceCommandRunner,
+    repo_root: &Path,
+    worktree_git_root: &Path,
+    branch: &str,
+    delete_branch: bool,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    let mut rollback_errors = Vec::new();
+    let worktree_arg = worktree_git_root.to_string_lossy().to_string();
+    if let Err(rollback_err) = git_status(
+        runner,
+        repo_root,
+        &["worktree", "remove", "--force", &worktree_arg],
+    )
+    .await
+    {
+        rollback_errors.push(rollback_err.to_string());
+    }
+    if delete_branch
+        && let Err(rollback_err) = git_status(runner, repo_root, &["branch", "-D", branch]).await
+    {
+        rollback_errors.push(rollback_err.to_string());
+    }
+    if rollback_errors.is_empty() {
+        err
+    } else {
+        anyhow::anyhow!(
+            "{err}; additionally failed to roll back newly-created worktree: {}",
+            rollback_errors.join("; ")
+        )
+    }
+}
+
+struct PreparedRemoteDirtyTransfer {
+    move_plan: Option<RemoteMovePlan>,
+}
+
+struct RemoteMovePlan {
+    transfer: RemoteTransferPlan,
+    move_untracked: bool,
 }
 
 struct RemoteTransferPlan {
@@ -534,8 +618,14 @@ struct RemoteTransferPlan {
 impl RemoteTransferPlan {
     async fn capture(runner: &WorkspaceCommandRunner, source_root: &Path) -> Result<Self> {
         Ok(Self {
-            staged_diff: git_stdout(runner, source_root, &["diff", "--cached", "--binary"]).await?,
-            unstaged_diff: git_stdout(runner, source_root, &["diff", "--binary"]).await?,
+            staged_diff: git_stdout_raw_uncapped(
+                runner,
+                source_root,
+                &["diff", "--cached", "--binary"],
+            )
+            .await?,
+            unstaged_diff: git_stdout_raw_uncapped(runner, source_root, &["diff", "--binary"])
+                .await?,
             tracked_paths: tracked_paths(runner, source_root).await?,
             untracked_paths: untracked_paths(runner, source_root).await?,
         })
@@ -750,6 +840,23 @@ async fn git_stdout(runner: &WorkspaceCommandRunner, cwd: &Path, args: &[&str]) 
     Ok(output.stdout.trim_end().to_string())
 }
 
+async fn git_stdout_raw_uncapped(
+    runner: &WorkspaceCommandRunner,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<String> {
+    let argv = std::iter::once("git")
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>();
+    let output = runner
+        .run(WorkspaceCommand::new(argv).cwd(cwd).disable_output_cap())
+        .await?;
+    if !output.success() {
+        anyhow::bail!("git {} failed: {}", args.join(" "), output.stderr.trim());
+    }
+    Ok(output.stdout)
+}
+
 async fn git_stdout_result(
     runner: &WorkspaceCommandRunner,
     cwd: &Path,
@@ -865,4 +972,71 @@ async fn fs_remove(request_handle: &AppServerRequestHandle, path: &Path) -> Resu
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::path::PathBuf;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use pretty_assertions::assert_eq;
+
+    use super::git_stdout_raw_uncapped;
+    use crate::workspace_command::WorkspaceCommand;
+    use crate::workspace_command::WorkspaceCommandError;
+    use crate::workspace_command::WorkspaceCommandExecutor;
+    use crate::workspace_command::WorkspaceCommandOutput;
+    use crate::workspace_command::WorkspaceCommandRunner;
+
+    struct FakeRunner {
+        seen: Mutex<Vec<WorkspaceCommand>>,
+        output: WorkspaceCommandOutput,
+    }
+
+    impl WorkspaceCommandExecutor for FakeRunner {
+        fn run(
+            &self,
+            command: WorkspaceCommand,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<WorkspaceCommandOutput, WorkspaceCommandError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            self.seen.lock().expect("seen lock").push(command);
+            Box::pin(async move { Ok(self.output.clone()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_git_stdout_preserves_patch_newline_and_disables_output_cap() {
+        let fake_runner = Arc::new(FakeRunner {
+            seen: Mutex::new(Vec::new()),
+            output: WorkspaceCommandOutput {
+                exit_code: 0,
+                stdout: "diff --git a/file b/file\n".to_string(),
+                stderr: String::new(),
+            },
+        });
+        let runner: WorkspaceCommandRunner = fake_runner.clone();
+
+        let output = git_stdout_raw_uncapped(
+            &runner,
+            &PathBuf::from("/repo"),
+            &["diff", "--cached", "--binary"],
+        )
+        .await
+        .expect("raw git stdout");
+
+        assert_eq!(output, "diff --git a/file b/file\n");
+        let seen = fake_runner.seen.lock().expect("seen lock");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].argv, vec!["git", "diff", "--cached", "--binary"]);
+        assert_eq!(seen[0].cwd, Some(PathBuf::from("/repo")));
+        assert!(seen[0].disable_output_cap);
+    }
 }
