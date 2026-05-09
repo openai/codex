@@ -69,6 +69,12 @@ def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
     return raw, None
 
 
+def _approval_policy_never(_approval_policy: AskForApproval | None) -> AskForApproval:
+    # TODO: Handle approval requests in the SDK before honoring caller-supplied
+    # policies.
+    return AskForApproval.never
+
+
 class Codex:
     """Minimal typed SDK surface for app-server v2."""
 
@@ -157,7 +163,7 @@ class Codex:
         thread_source: ThreadSource | None = None,
     ) -> Thread:
         params = ThreadStartParams(
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -222,7 +228,7 @@ class Codex:
     ) -> Thread:
         params = ThreadResumeParams(
             thread_id=thread_id,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -256,7 +262,7 @@ class Codex:
     ) -> Thread:
         params = ThreadForkParams(
             thread_id=thread_id,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -359,7 +365,7 @@ class AsyncCodex:
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadStartParams(
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -426,7 +432,7 @@ class AsyncCodex:
         await self._ensure_initialized()
         params = ThreadResumeParams(
             thread_id=thread_id,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -461,7 +467,7 @@ class AsyncCodex:
         await self._ensure_initialized()
         params = ThreadForkParams(
             thread_id=thread_id,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             base_instructions=base_instructions,
             config=config,
@@ -515,7 +521,7 @@ class Thread:
     ) -> RunResult:
         turn = self.turn(
             _normalize_run_input(input),
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
             effort=effort,
@@ -552,7 +558,7 @@ class Thread:
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
             effort=effort,
@@ -600,7 +606,7 @@ class AsyncThread:
     ) -> RunResult:
         turn = await self.turn(
             _normalize_run_input(input),
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
             effort=effort,
@@ -638,7 +644,7 @@ class AsyncThread:
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
-            approval_policy=approval_policy,
+            approval_policy=_approval_policy_never(approval_policy),
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
             effort=effort,

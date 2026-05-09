@@ -615,6 +615,50 @@ def generate_v2_all(schema_dir: Path) -> None:
             cwd=sdk_root(),
         )
     _normalize_generated_timestamps(out_path)
+    _add_ask_for_approval_aliases(out_path)
+
+
+def _add_ask_for_approval_aliases(out_path: Path) -> None:
+    """Add ergonomic approval policy constants to the generated RootModel class."""
+    source = out_path.read_text()
+    source = source.replace(
+        "from typing import Annotated, Any, Literal",
+        "from typing import Annotated, Any, ClassVar, Literal",
+    )
+    if "AskForApproval.never =" in source:
+        out_path.write_text(source)
+        return
+
+    needle = """class AskForApproval(RootModel[AskForApprovalValue | GranularAskForApproval]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: AskForApprovalValue | GranularAskForApproval
+
+
+"""
+    replacement = """class AskForApproval(RootModel[AskForApprovalValue | GranularAskForApproval]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: AskForApprovalValue | GranularAskForApproval
+    untrusted: ClassVar[AskForApproval]
+    on_failure: ClassVar[AskForApproval]
+    on_request: ClassVar[AskForApproval]
+    never: ClassVar[AskForApproval]
+
+
+AskForApproval.untrusted = AskForApproval(root=AskForApprovalValue.untrusted)
+AskForApproval.on_failure = AskForApproval(root=AskForApprovalValue.on_failure)
+AskForApproval.on_request = AskForApproval(root=AskForApprovalValue.on_request)
+AskForApproval.never = AskForApproval(root=AskForApprovalValue.never)
+
+
+"""
+    updated, count = source.replace(needle, replacement, 1), source.count(needle)
+    if count != 1:
+        raise RuntimeError("Could not add AskForApproval aliases to generated types")
+    out_path.write_text(updated)
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
@@ -884,7 +928,13 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
 def _model_arg_lines(
     fields: list[PublicFieldSpec], *, indent: str = "            "
 ) -> list[str]:
-    return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
+    lines: list[str] = []
+    for field in fields:
+        value = field.py_name
+        if field.py_name == "approval_policy":
+            value = "_approval_policy_never(approval_policy)"
+        lines.append(f"{indent}{field.wire_name}={value},")
+    return lines
 
 
 def _replace_generated_block(source: str, block_name: str, body: str) -> str:

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, RootModel
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 from enum import Enum
 
 
@@ -248,6 +248,16 @@ class AskForApproval(RootModel[AskForApprovalValue | GranularAskForApproval]):
         populate_by_name=True,
     )
     root: AskForApprovalValue | GranularAskForApproval
+    untrusted: ClassVar[AskForApproval]
+    on_failure: ClassVar[AskForApproval]
+    on_request: ClassVar[AskForApproval]
+    never: ClassVar[AskForApproval]
+
+
+AskForApproval.untrusted = AskForApproval(root=AskForApprovalValue.untrusted)
+AskForApproval.on_failure = AskForApproval(root=AskForApprovalValue.on_failure)
+AskForApproval.on_request = AskForApproval(root=AskForApprovalValue.on_request)
+AskForApproval.never = AskForApproval(root=AskForApprovalValue.never)
 
 
 class AuthMode(Enum):

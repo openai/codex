@@ -46,7 +46,7 @@ PROMPT = (
     "Analyze a safe rollout plan for enabling a feature flag in production. "
     "Return JSON matching the requested schema."
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
+APPROVAL_POLICY = AskForApproval.never
 
 
 async def main() -> None:

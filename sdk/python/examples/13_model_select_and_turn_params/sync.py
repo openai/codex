@@ -73,7 +73,7 @@ SANDBOX_POLICY = SandboxPolicy.model_validate(
         "access": {"type": "fullAccess"},
     }
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
+APPROVAL_POLICY = AskForApproval.never
 
 
 with Codex(config=runtime_config()) as codex:

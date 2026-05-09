@@ -3,6 +3,7 @@
 Public surface of `openai_codex` for app-server v2.
 
 This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
+Thread and turn starts currently send `AskForApproval.never` while SDK approval request handling is still pending.
 
 ## Package Entry
 
