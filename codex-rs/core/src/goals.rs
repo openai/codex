@@ -454,28 +454,20 @@ impl Session {
             TerminalMetricEmission::Emit,
         )
         .await?;
-        let mut replacing_goal = objective.is_some();
+        let mut replacing_goal = false;
         let previous_status;
         let goal = if let Some(objective) = objective.as_deref() {
             let existing_goal = state_db.get_thread_goal(self.conversation_id).await?;
             previous_status = existing_goal.as_ref().map(|goal| goal.status);
-            let same_nonterminal_goal = existing_goal.as_ref().is_some_and(|goal| {
-                goal.objective == objective
-                    && goal.status != codex_state::ThreadGoalStatus::Complete
-            });
-            if same_nonterminal_goal {
-                replacing_goal = false;
+            if let Some(existing_goal) = existing_goal.as_ref() {
                 state_db
                     .update_thread_goal(
                         self.conversation_id,
                         codex_state::ThreadGoalUpdate {
-                            status: status
-                                .map(state_goal_status_from_protocol)
-                                .or(Some(codex_state::ThreadGoalStatus::Active)),
+                            objective: Some(objective.to_string()),
+                            status: status.map(state_goal_status_from_protocol),
                             token_budget,
-                            expected_goal_id: existing_goal
-                                .as_ref()
-                                .map(|goal| goal.goal_id.clone()),
+                            expected_goal_id: Some(existing_goal.goal_id.clone()),
                         },
                     )
                     .await?
@@ -486,6 +478,7 @@ impl Session {
                         )
                     })?
             } else {
+                replacing_goal = true;
                 state_db
                     .replace_thread_goal(
                         self.conversation_id,
@@ -506,6 +499,7 @@ impl Session {
                 .update_thread_goal(
                     self.conversation_id,
                     codex_state::ThreadGoalUpdate {
+                        objective: None,
                         status,
                         token_budget,
                         expected_goal_id,

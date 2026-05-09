@@ -7982,6 +7982,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
+                objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
                 expected_goal_id: Some(goal_id),
