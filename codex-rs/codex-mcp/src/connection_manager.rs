@@ -7,6 +7,7 @@
 //! `codex-core`.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,16 +30,17 @@ use crate::rmcp_client::StartupOutcomeError;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::runtime::McpRuntimeEnvironment;
 use crate::runtime::emit_duration;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::qualify_tools;
+use crate::tools::normalize_tools_for_model;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
 use codex_config::Constrained;
-use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
@@ -65,12 +67,11 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::warn;
-use url::Url;
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
-    server_origins: HashMap<String, String>,
+    server_metadata: HashMap<String, McpServerMetadata>,
     host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -83,7 +84,7 @@ impl McpConnectionManager {
     ) -> Self {
         Self {
             clients: HashMap::new(),
-            server_origins: HashMap::new(),
+            server_metadata: HashMap::new(),
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
@@ -103,7 +104,7 @@ impl McpConnectionManager {
     pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
         self.startup_cancellation_token.cancel();
         let clients = std::mem::take(&mut self.clients);
-        self.server_origins.clear();
+        self.server_metadata.clear();
         async move {
             for client in clients.into_values() {
                 client.shutdown().await;
@@ -117,7 +118,27 @@ impl McpConnectionManager {
     }
 
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {
-        self.server_origins.get(server_name).map(String::as_str)
+        self.server_metadata
+            .get(server_name)
+            .and_then(|metadata| metadata.origin.as_ref())
+            .map(super::server::McpServerOrigin::as_str)
+    }
+
+    pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
+        self.server_metadata
+            .get(server_name)
+            .is_none_or(|metadata| metadata.pollutes_memory)
+    }
+
+    pub fn parallel_tool_call_server_names(&self) -> HashSet<String> {
+        self.server_metadata
+            .iter()
+            .filter_map(|(name, metadata)| {
+                metadata
+                    .supports_parallel_tool_calls
+                    .then_some(name.clone())
+            })
+            .collect()
     }
 
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
@@ -146,7 +167,7 @@ impl McpConnectionManager {
 
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub async fn new(
-        mcp_servers: &HashMap<String, McpServerConfig>,
+        mcp_servers: &HashMap<String, EffectiveMcpServer>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
@@ -163,7 +184,7 @@ impl McpConnectionManager {
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
-        let mut server_origins = HashMap::new();
+        let mut server_metadata = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
@@ -176,10 +197,11 @@ impl McpConnectionManager {
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
-        for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
-            if let Some(origin) = transport_origin(&cfg.transport) {
-                server_origins.insert(server_name.clone(), origin);
-            }
+        for (server_name, server) in mcp_servers
+            .into_iter()
+            .filter(|(_, server)| server.enabled())
+        {
+            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
@@ -198,13 +220,16 @@ impl McpConnectionManager {
             } else {
                 None
             };
-            let uses_env_bearer_token = match &cfg.transport {
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var,
-                    ..
-                } => bearer_token_env_var.is_some(),
-                McpServerTransportConfig::Stdio { .. } => false,
-            };
+            let uses_env_bearer_token =
+                server
+                    .configured_config()
+                    .is_some_and(|config| match &config.transport {
+                        McpServerTransportConfig::StreamableHttp {
+                            bearer_token_env_var,
+                            ..
+                        } => bearer_token_env_var.is_some(),
+                        McpServerTransportConfig::Stdio { .. } => false,
+                    });
             let runtime_auth_provider =
                 if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
                     codex_apps_auth_provider.clone()
@@ -213,7 +238,7 @@ impl McpConnectionManager {
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
-                cfg,
+                server,
                 store_mode,
                 cancel_token.clone(),
                 tx_event.clone(),
@@ -221,6 +246,7 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
+                codex_home.clone(),
                 runtime_auth_provider,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
@@ -260,7 +286,7 @@ impl McpConnectionManager {
         }
         let manager = Self {
             clients,
-            server_origins,
+            server_metadata,
             host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
@@ -337,10 +363,9 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Returns a single map that contains all tools. Each key is the
-    /// fully-qualified name for the tool.
+    /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all)]
-    pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
+    pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for managed_client in self.clients.values() {
             let Some(server_tools) = managed_client.listed_tools().await else {
@@ -348,15 +373,15 @@ impl McpConnectionManager {
             };
             tools.extend(server_tools);
         }
-        qualify_tools(tools)
+        normalize_tools_for_model(tools)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the
-    /// latest filtered tool map is returned directly to the caller. On
+    /// latest filtered tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
-    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<HashMap<String, ToolInfo>> {
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -399,7 +424,7 @@ impl McpConnectionManager {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 tool
             });
-        Ok(qualify_tools(tools))
+        Ok(normalize_tools_for_model(tools))
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -638,7 +663,7 @@ impl McpConnectionManager {
     pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
         all_tools
-            .into_values()
+            .into_iter()
             .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
@@ -672,16 +697,6 @@ async fn emit_update(
         .await
 }
 
-fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
-    match transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => {
-            let parsed = Url::parse(url).ok()?;
-            Some(parsed.origin().ascii_serialization())
-        }
-        McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
-    }
-}
-
 fn mcp_init_error_display(
     server_name: &str,
     entry: Option<&McpAuthStatusEntry>,
@@ -692,7 +707,7 @@ fn mcp_init_error_display(
         bearer_token_env_var,
         http_headers,
         ..
-    }) = &entry.map(|entry| &entry.config.transport)
+    }) = entry.and_then(|entry| entry.config.as_ref().map(|config| &config.transport))
         && url == "https://api.githubcopilot.com/mcp/"
         && bearer_token_env_var.is_none()
         && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
@@ -706,7 +721,11 @@ fn mcp_init_error_display(
         )
     } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {
-            Some(entry) => match entry.config.startup_timeout_sec {
+            Some(entry) => match entry
+                .config
+                .as_ref()
+                .and_then(|config| config.startup_timeout_sec)
+            {
                 Some(timeout) => timeout,
                 None => DEFAULT_STARTUP_TIMEOUT,
             },

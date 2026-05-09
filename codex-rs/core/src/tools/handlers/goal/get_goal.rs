@@ -3,9 +3,11 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
+use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 use super::CompletionBudgetReport;
 use super::format_goal_error;
@@ -18,6 +20,10 @@ impl ToolHandler for GetGoalHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(GET_GOAL_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_get_goal_tool())
     }
 
     fn kind(&self) -> ToolKind {

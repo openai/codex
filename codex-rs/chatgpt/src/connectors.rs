@@ -4,7 +4,8 @@ use std::time::Duration;
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 
 use codex_app_server_protocol::AppInfo;
-use codex_connectors::AllConnectorsCacheKey;
+use codex_connectors::ConnectorDirectoryCacheContext;
+use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::DirectoryListResponse;
 use codex_connectors::filter::filter_disallowed_connectors;
 use codex_connectors::merge::merge_connectors;
@@ -75,8 +76,8 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     }
 
     let auth = connector_auth(config).await.ok()?;
-    let cache_key = all_connectors_cache_key(config, &auth);
-    let connectors = codex_connectors::cached_all_connectors(&cache_key)?;
+    let cache_context = connector_directory_cache_context(config, &auth);
+    let connectors = codex_connectors::cached_directory_connectors(&cache_context)?;
     let connectors = merge_plugin_connectors(
         connectors,
         plugin_apps_for_config(config)
@@ -98,9 +99,9 @@ pub async fn list_all_connectors_with_options(
         return Ok(Vec::new());
     }
     let auth = connector_auth(config).await?;
-    let cache_key = all_connectors_cache_key(config, &auth);
+    let cache_context = connector_directory_cache_context(config, &auth);
     let connectors = codex_connectors::list_all_connectors_with_options(
-        cache_key,
+        cache_context,
         auth.is_workspace_account(),
         force_refetch,
         |path| async move {
@@ -126,12 +127,18 @@ pub async fn list_all_connectors_with_options(
     ))
 }
 
-fn all_connectors_cache_key(config: &Config, auth: &CodexAuth) -> AllConnectorsCacheKey {
-    AllConnectorsCacheKey::new(
-        config.chatgpt_base_url.clone(),
-        auth.get_account_id(),
-        auth.get_chatgpt_user_id(),
-        auth.is_workspace_account(),
+fn connector_directory_cache_context(
+    config: &Config,
+    auth: &CodexAuth,
+) -> ConnectorDirectoryCacheContext {
+    ConnectorDirectoryCacheContext::new(
+        config.codex_home.to_path_buf(),
+        ConnectorDirectoryCacheKey::new(
+            config.chatgpt_base_url.clone(),
+            auth.get_account_id(),
+            auth.get_chatgpt_user_id(),
+            auth.is_workspace_account(),
+        ),
     )
 }
 

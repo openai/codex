@@ -14,6 +14,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -233,7 +234,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             mode: NetworkApprovalMode::Deferred,
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
-                tool_name: ctx.tool_name.clone(),
+                tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
                 cwd: req.cwd.clone(),
                 sandbox_permissions: req.sandbox_permissions,

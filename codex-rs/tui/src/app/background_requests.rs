@@ -648,7 +648,6 @@ pub(super) async fn fetch_skills_list(
             params: SkillsListParams {
                 cwds: vec![cwd],
                 force_reload: true,
-                per_cwd_extra_user_roots: None,
             },
         })
         .await
@@ -666,6 +665,7 @@ pub(super) async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
+                marketplace_kinds: None,
             },
         })
         .await

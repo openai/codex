@@ -13,6 +13,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
@@ -23,6 +25,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
@@ -47,7 +50,10 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
+use std::fs;
+use std::path::Path;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
@@ -117,6 +123,107 @@ fn json_fragment(text: &str) -> String {
         .expect("serialize text to JSON")
         .trim_matches('"')
         .to_string()
+}
+
+fn read_hook_inputs(path: &Path) -> Vec<Value> {
+    let text = fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read hook input log {}: {err}", path.display()));
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|err| panic!("failed to parse hook input log line: {err}"))
+        })
+        .collect()
+}
+
+fn python_hook_command(script_path: &Path) -> String {
+    format!("python3 \"{}\"", script_path.display())
+}
+
+fn write_unsupported_blocking_pre_compact_hook(home: &Path) {
+    let script_path = home.join("pre_compact_block.py");
+    let log_path = home.join("pre_compact_block_log.jsonl");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{"decision": "block", "reason": "blocked by policy"}}))
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = json!({
+        "hooks": {
+            "PreCompact": [{
+                "matcher": "manual",
+                "hooks": [{
+                    "type": "command",
+                    "command": python_hook_command(&script_path),
+                    "statusMessage": "checking compact policy",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).expect("write pre compact hook script");
+    fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
+}
+
+fn write_matching_compact_hooks(home: &Path) {
+    let auto_script_path = home.join("pre_compact_auto.py");
+    let auto_log_path = home.join("pre_compact_auto_log.jsonl");
+    let manual_post_script_path = home.join("post_compact_manual.py");
+    let manual_post_log_path = home.join("post_compact_manual_log.jsonl");
+    let auto_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{auto_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        auto_log_path = auto_log_path.display(),
+    );
+    let manual_post_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{manual_post_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        manual_post_log_path = manual_post_log_path.display(),
+    );
+    let hooks = json!({
+        "hooks": {
+            "PreCompact": [{
+                "matcher": "auto",
+                "hooks": [{
+                    "type": "command",
+                    "command": python_hook_command(&auto_script_path),
+                }]
+            }],
+            "PostCompact": [{
+                "matcher": "manual",
+                "hooks": [{
+                    "type": "command",
+                    "command": python_hook_command(&manual_post_script_path),
+                }]
+            }]
+        }
+    });
+
+    fs::write(&auto_script_path, auto_script).expect("write auto pre compact hook script");
+    fs::write(&manual_post_script_path, manual_post_script)
+        .expect("write manual post compact hook script");
+    fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
 }
 
 fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
@@ -435,6 +542,145 @@ async fn summarize_context_three_requests_and_instructions() {
         saw_compacted_summary,
         "expected a Compacted entry containing the summarizer output"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_pre_compact_block_decision_does_not_block_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", /*total_tokens*/ 80),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![first_turn, compact_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_pre_build_hook(write_unsupported_blocking_pre_compact_hook)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            trust_discovered_hooks(config);
+            set_test_compact_prompt(config);
+        });
+    let test = builder.build(&server).await.expect("create conversation");
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello before blocked compact".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+
+    let completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::HookCompleted(completed)
+            if completed.run.event_name == HookEventName::PreCompact =>
+        {
+            Some(completed.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(completed.run.status, HookRunStatus::Failed);
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "unsupported PreCompact block output should not prevent the compact request"
+    );
+
+    let hook_inputs = read_hook_inputs(&test.codex_home_path().join("pre_compact_block_log.jsonl"));
+    assert_eq!(hook_inputs.len(), 1);
+    let input = &hook_inputs[0];
+    assert_eq!(input["hook_event_name"], "PreCompact");
+    assert_eq!(input["trigger"], "manual");
+    assert!(input.get("reason").is_none());
+    assert!(input.get("phase").is_none());
+    assert!(input.get("implementation").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", /*total_tokens*/ 80),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![first_turn, compact_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_pre_build_hook(write_matching_compact_hooks)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            trust_discovered_hooks(config);
+            set_test_compact_prompt(config);
+        });
+    let test = builder.build(&server).await.expect("create conversation");
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello before matched compact".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(request_log.requests().len(), 2);
+    assert!(
+        !test
+            .codex_home_path()
+            .join("pre_compact_auto_log.jsonl")
+            .exists(),
+        "auto matcher should not run for manual compaction"
+    );
+
+    let hook_inputs =
+        read_hook_inputs(&test.codex_home_path().join("post_compact_manual_log.jsonl"));
+    assert_eq!(hook_inputs.len(), 1);
+    let input = &hook_inputs[0];
+    assert_eq!(input["hook_event_name"], "PostCompact");
+    assert_eq!(input["trigger"], "manual");
+    assert!(input.get("compact_summary").is_none());
+    assert!(input.get("status").is_none());
+    assert!(input.get("error").is_none());
+    assert!(input.get("reason").is_none());
+    assert!(input.get("phase").is_none());
+    assert!(input.get("implementation").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

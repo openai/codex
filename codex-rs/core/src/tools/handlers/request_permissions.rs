@@ -6,9 +6,12 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::shell_spec::create_request_permissions_tool;
+use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub struct RequestPermissionsHandler;
 
@@ -17,6 +20,12 @@ impl ToolHandler for RequestPermissionsHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("request_permissions")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_request_permissions_tool(
+            request_permissions_tool_description(),
+        ))
     }
 
     fn kind(&self) -> ToolKind {

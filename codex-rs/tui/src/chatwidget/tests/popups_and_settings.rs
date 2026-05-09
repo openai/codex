@@ -70,6 +70,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         workspace_command_runner: None,
@@ -656,6 +657,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),
@@ -696,6 +701,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),

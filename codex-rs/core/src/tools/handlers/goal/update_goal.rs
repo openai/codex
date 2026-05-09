@@ -5,11 +5,13 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
+use crate::tools::handlers::goal_spec::create_update_goal_tool;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 use super::CompletionBudgetReport;
 use super::UpdateGoalArgs;
@@ -23,6 +25,10 @@ impl ToolHandler for UpdateGoalHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(UPDATE_GOAL_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_update_goal_tool())
     }
 
     fn kind(&self) -> ToolKind {

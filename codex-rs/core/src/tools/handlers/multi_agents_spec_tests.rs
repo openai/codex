@@ -33,7 +33,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
 #[test]
 fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
-        available_models: &[
+        available_models: vec![
             model_preset("visible", /*show_in_picker*/ true),
             model_preset("hidden", /*show_in_picker*/ false),
         ],
@@ -99,7 +99,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
 #[test]
 fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
-        available_models: &[],
+        available_models: Vec::new(),
         agent_type_description: "role help".to_string(),
         hide_agent_type_model_reasoning: false,
         include_usage_hint: true,

@@ -11,6 +11,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-transport",
+    "app-server-daemon",
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
@@ -30,7 +31,6 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
-    "device-key",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -133,6 +133,7 @@ codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
 codex-app-server-transport = { path = "app-server-transport" }
+codex-app-server-daemon = { path = "app-server-daemon" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -155,7 +156,6 @@ codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
-codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
@@ -321,7 +321,6 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
-p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
@@ -469,24 +468,21 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
-    "codex-memories-mcp",
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-utils-template",
     "codex-v8-poc",
 ]
 
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable debug info
 # across local dev builds.
-debug = 1
+debug = "limited"
 
 [profile.dev-small]
 inherits = "dev"
 opt-level = 0
-debug = 0
-strip = true
+debug = "none"
+strip = "symbols"
 
 [profile.release]
 lto = "fat"
@@ -498,8 +494,15 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+[profile.profiling]
+inherits = "release"
+debug = "full"
+lto = false
+strip = false
+
 [profile.ci-test]
-debug = 1         # Reduce debug symbol size
+# Reduce binary size to reduce disk pressure.
+debug = "limited"
 inherits = "test"
 opt-level = 0
 

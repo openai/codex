@@ -8,14 +8,15 @@ version.workspace = true
 [lib]
 name = "codex_windows_sandbox"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "codex-windows-sandbox-setup"
-path = "src/bin/setup_main.rs"
+path = "src/bin/setup_main/main.rs"
 
 [[bin]]
 name = "codex-command-runner"
-path = "src/bin/command_runner.rs"
+path = "src/bin/command_runner/main.rs"
 
 [lints]
 workspace = true
@@ -95,6 +96,3 @@ pretty_assertions = { workspace = true }
 
 [build-dependencies]
 winres = "0.1"
-
-[package.metadata.cargo-shear]
-ignored = ["codex-utils-pty", "tokio"]

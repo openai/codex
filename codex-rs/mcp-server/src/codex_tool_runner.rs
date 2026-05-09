@@ -222,6 +222,7 @@ async fn run_codex_tool_session_inner(
                         let approval_id = ev.effective_approval_id();
                         let ExecApprovalRequestEvent {
                             turn_id: _,
+                            started_at_ms: _,
                             command,
                             cwd,
                             call_id,
@@ -278,6 +279,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id: _,
+                        started_at_ms: _,
                         reason,
                         grant_root,
                         changes,

@@ -16,3 +16,6 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
 [lints]
 workspace = true
+
+[lib]
+doctest = false

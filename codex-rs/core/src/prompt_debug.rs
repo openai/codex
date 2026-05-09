@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthManager;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -17,9 +17,8 @@ use crate::resolve_installation_id;
 use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
+use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::ThreadManager;
-use crate::thread_manager::agent_graph_store_from_state_db;
-use crate::thread_manager::init_state_db_from_config;
 use crate::thread_manager::thread_store_from_config;
 
 /// Build the model-visible `input` list for a single debug turn.
@@ -27,6 +26,7 @@ use crate::thread_manager::thread_store_from_config;
 pub async fn build_prompt_input(
     mut config: Config,
     input: Vec<UserInput>,
+    state_db: Option<StateDbHandle>,
 ) -> CodexResult<Vec<ResponseItem>> {
     config.ephemeral = true;
 
@@ -38,22 +38,22 @@ pub async fn build_prompt_input(
         config.codex_linux_sandbox_exe.clone(),
     )?;
 
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .ok_or_else(|| std::io::Error::other("prompt debug requires state db"))?;
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
         SessionSource::Exec,
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await),
+        Arc::new(
+            EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
+                .await
+                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+        ),
         /*analytics_events_client*/ None,
-        state_db,
         thread_store,
-        agent_graph_store,
+        state_db.clone(),
         installation_id,
+        /*attestation_provider*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
 

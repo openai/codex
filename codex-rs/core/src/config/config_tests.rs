@@ -44,6 +44,9 @@ use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
+use codex_config::types::OtelConfig;
+use codex_config::types::OtelConfigToml;
+use codex_config::types::OtelExporterKind;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
@@ -2275,6 +2278,27 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     );
 }
 
+#[tokio::test]
+async fn legacy_remote_thread_store_endpoint_is_rejected() {
+    let cfg: ConfigToml =
+        toml::from_str(r#"experimental_thread_store_endpoint = "https://example.com""#)
+            .expect("legacy remote thread-store endpoint should still deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect_err("legacy remote thread-store endpoint should be rejected at load time");
+
+    assert!(
+        err.to_string()
+            .contains("experimental_thread_store_endpoint")
+    );
+    assert!(err.to_string().contains("no longer supported"));
+}
+
 #[test]
 fn profile_tui_rejects_unsupported_settings() {
     let err = toml::from_str::<ConfigToml>(
@@ -3360,7 +3384,6 @@ async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow:
         }))
         .build()
         .await?;
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
     let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -3368,11 +3391,8 @@ async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow:
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| (server.enabled, server.disabled_reason.clone())),
-        Some((true, None))
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
     );
 
     Ok(())
@@ -3399,7 +3419,6 @@ async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyh
         }))
         .build()
         .await?;
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
     let _ = config.features.enable(Feature::BuiltInMcp);
     let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -3407,11 +3426,8 @@ async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyh
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
-            .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| (server.enabled, server.disabled_reason.clone())),
-        Some((true, None))
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
     );
 
     Ok(())
@@ -4244,10 +4260,7 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4258,22 +4271,13 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
     assert_eq!(
-        mcp_config
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
+    );
+    assert!(
+        !mcp_config
             .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| &server.transport),
-        Some(&McpServerTransportConfig::Stdio {
-            command: "/tmp/codex".to_string(),
-            args: vec![
-                "builtin-mcp".to_string(),
-                "memories".to_string(),
-                "--codex-home".to_string(),
-                codex_home.path().display().to_string(),
-            ],
-            env: None,
-            env_vars: Vec::new(),
-            cwd: None,
-        })
+            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
     );
 
     Ok(())
@@ -4284,10 +4288,7 @@ async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io:
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4296,11 +4297,7 @@ async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io:
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-    );
+    assert!(mcp_config.builtin_mcp_servers.is_empty());
 
     Ok(())
 }
@@ -4316,10 +4313,7 @@ async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<(
             )]),
             ..ConfigToml::default()
         },
-        ConfigOverrides {
-            codex_self_exe: Some(PathBuf::from("/tmp/codex")),
-            ..ConfigOverrides::default()
-        },
+        ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
@@ -4329,13 +4323,15 @@ async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<(
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
 
-    assert!(matches!(
-        mcp_config
+    assert_eq!(
+        mcp_config.builtin_mcp_servers,
+        vec![codex_mcp::BuiltinMcpServer::Memories]
+    );
+    assert!(
+        !mcp_config
             .configured_mcp_servers
-            .get(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-            .map(|server| &server.transport),
-        Some(McpServerTransportConfig::Stdio { .. })
-    ));
+            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+    );
 
     Ok(())
 }
@@ -7056,7 +7052,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: false,
+            include_apply_patch_tool: true,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -7147,6 +7143,119 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
 }
 
 #[tokio::test]
+async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg = toml::from_str(
+        r#"
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
+    );
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([
+                ("alpha".to_string(), "one".to_string()),
+                ("beta".to_string(), "two".to_string()),
+            ]),
+        )])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_drops_invalid_otel_trace_metadata_entries() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg = toml::from_str(
+        r#"
+[otel]
+environment = "test"
+
+[otel.span_attributes]
+"" = "missing-key"
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two\ntoo"
+
+[otel.tracestate.bad]
+alpha = "one\ntwo"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.otel.environment, "test");
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
+    );
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([("alpha".to_string(), "one".to_string())]),
+        )])
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.span_attributes` config")
+                && warning.contains("configured span attribute key must not be empty")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.tracestate` config")
+                && warning.contains("invalid configured tracestate value for example.beta")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.tracestate` config")
+                && warning.contains("invalid configured tracestate value for bad.alpha")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
@@ -7178,6 +7287,54 @@ async fn legacy_fast_service_tier_override_uses_priority_request_value() -> std:
             ..Default::default()
         },
         fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_service_tier_accepts_arbitrary_string() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("experimental-tier-id".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some("experimental-tier-id".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_legacy_fast_service_tier_uses_priority_request_value() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("fast".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
     )
     .await?;
 
@@ -7315,7 +7472,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -7473,7 +7630,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -7616,7 +7773,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),

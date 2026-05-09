@@ -11,7 +11,6 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
-use codex_tools::ToolEnvironmentMode;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -522,6 +521,10 @@ impl Session {
             &per_turn_config.agent_roles,
         ));
 
+        let mut per_turn_config = per_turn_config;
+        per_turn_config.service_tier = per_turn_config
+            .service_tier
+            .filter(|service_tier| model_info.supports_service_tier(service_tier));
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),

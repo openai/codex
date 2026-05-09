@@ -407,6 +407,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     )
     .new_session()
 }
@@ -915,7 +916,7 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -981,7 +982,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1025,7 +1026,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         session: Arc::clone(&session),
         turn: Arc::clone(&turn),
         call_id: "probe-call".to_string(),
-        tool_name: "probe".to_string(),
+        tool_name: codex_tools::ToolName::plain("probe"),
     };
 
     orchestrator
@@ -1056,7 +1057,7 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1083,7 +1084,7 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let (session, rx, _codex_home) = make_session_with_config_and_rx(move |config| {
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1213,7 +1214,7 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 
 #[tokio::test]
 async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
-    let (session, _codex_home) = make_session_with_config(|config| {
+    let session = make_session_with_config(|config| {
         config
             .features
             .enable(Feature::CodexHooks)
@@ -1284,6 +1285,78 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable Codex hooks");
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home)?;
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    #[derive(serde::Serialize)]
+    struct NormalizedHookIdentity {
+        event_name: &'static str,
+        #[serde(flatten)]
+        group: codex_config::MatcherGroup,
+    }
+    let trusted_hash = {
+        let identity = NormalizedHookIdentity {
+            event_name: "session_start",
+            group: codex_config::MatcherGroup {
+                matcher: None,
+                hooks: vec![codex_config::HookHandlerConfig::Command {
+                    command: "python3 /tmp/user.py".to_string(),
+                    timeout_sec: Some(600),
+                    r#async: false,
+                    status_message: None,
+                }],
+            },
+        };
+        let identity = codex_config::TomlValue::try_from(identity)?;
+        codex_config::version_for_toml(&identity)
+    };
+    let hook_key = format!("{}:session_start:0:0", config_toml_path.display());
+    let trusted_user_config: codex_config::TomlValue = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "python3 /tmp/user.py",
+                }],
+            }],
+            "state": {
+                hook_key: {
+                    "trusted_hash": trusted_hash,
+                },
+            },
+        },
+    }))?;
+    std::fs::write(&config_toml_path, toml::to_string(&trusted_user_config)?)?;
+
+    let request = codex_hooks::SessionStartRequest {
+        session_id: session.conversation_id,
+        cwd: session.get_config().await.cwd.clone(),
+        transcript_path: None,
+        model: "gpt-5.2".to_string(),
+        permission_mode: "default".to_string(),
+        source: codex_hooks::SessionStartSource::Startup,
+    };
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+
+    let next_config = load_latest_config_for_session(&session).await;
+    session.refresh_runtime_config(next_config).await;
+
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_updates_effective_tool_suggest_config() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1303,6 +1376,62 @@ disabled_tools = [
     session.reload_user_config_layer().await;
 
     let config = session.get_config().await;
+    assert_eq!(
+        config.tool_suggest.disabled_tools,
+        vec![
+            ToolSuggestDisabledTool::connector("calendar"),
+            ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn refresh_runtime_config_updates_runtime_refreshable_fields_and_keeps_session_static_settings()
+ {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[apps.calendar]
+enabled = false
+destructive_enabled = false
+
+[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " calendar " },
+  { type = "plugin", id = "slack@openai-curated" },
+]
+"#,
+    )
+    .expect("write user config");
+
+    let original = session.get_config().await;
+    let mut next_config = load_latest_config_for_session(&session).await;
+    next_config.model = Some("gpt-5.4".to_string());
+    next_config.notify = Some(vec!["echo".to_string()]);
+
+    session.refresh_runtime_config(next_config).await;
+
+    let config = session.get_config().await;
+    let apps_toml = config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|table| table.get("apps"))
+        .cloned()
+        .expect("apps table");
+    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
+        .expect("deserialize apps config");
+    let app = apps
+        .apps
+        .get("calendar")
+        .expect("calendar app config exists");
+
+    assert!(!app.enabled);
+    assert_eq!(app.destructive_enabled, Some(false));
+    assert_eq!(config.model, original.model);
+    assert_eq!(config.notify, original.notify);
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
@@ -3052,13 +3181,15 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 fn turn_environments_for_tests(
     environment: &Arc<codex_exec_server::Environment>,
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
-) -> Vec<TurnEnvironment> {
-    vec![TurnEnvironment {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: Arc::clone(environment),
-        cwd: cwd.clone(),
-        shell: None,
-    }]
+) -> crate::environment_selection::ResolvedTurnEnvironments {
+    crate::environment_selection::ResolvedTurnEnvironments {
+        turn_environments: vec![TurnEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            environment: Arc::clone(environment),
+            cwd: cwd.clone(),
+            shell: None,
+        }],
+    }
 }
 
 #[tokio::test]
@@ -3597,17 +3728,12 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await;
 
@@ -3752,13 +3878,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id.into(),
@@ -3770,6 +3892,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -3804,7 +3927,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
+        turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -3838,18 +3961,24 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
 async fn make_session_with_config(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<(Arc<Session>, tempfile::TempDir)> {
-    let (session, _rx_event, codex_home) = make_session_with_config_and_rx(mutator).await?;
-    Ok((session, codex_home))
+) -> anyhow::Result<Arc<Session>> {
+    let (session, _rx_event) = make_session_with_config_and_rx(mutator).await?;
+    Ok(session)
+}
+
+async fn load_latest_config_for_session(session: &Session) -> Config {
+    let config = session.get_config().await;
+    ConfigBuilder::default()
+        .codex_home(config.codex_home.to_path_buf())
+        .fallback_cwd(Some(config.cwd.to_path_buf()))
+        .build()
+        .await
+        .expect("load latest config for session")
 }
 
 async fn make_session_with_config_and_rx(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<(
-    Arc<Session>,
-    async_channel::Receiver<Event>,
-    tempfile::TempDir,
-)> {
+) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     mutator(&mut config);
@@ -3935,21 +4064,16 @@ async fn make_session_with_config_and_rx(
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
-    Ok((session, rx_event, codex_home))
+    Ok((session, rx_event))
 }
 
 async fn make_session_with_history_source_and_agent_control_and_rx(
@@ -4042,17 +4166,19 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            Some(
+                codex_state::StateRuntime::init(
+                    config.sqlite_home.clone(),
+                    config.model_provider_id.clone(),
+                )
+                .await
+                .expect("state db should initialize"),
+            ),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
@@ -4779,7 +4905,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
@@ -4841,7 +4967,7 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
@@ -5301,10 +5427,44 @@ async fn make_session_and_context_with_auth_and_config_and_rx<F>(
 where
     F: FnOnce(&mut Config),
 {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    make_session_and_context_with_auth_config_home_and_rx(
+        auth,
+        dynamic_tools,
+        codex_home.path(),
+        configure_config,
+    )
+    .await
+}
+
+async fn make_session_and_context_with_auth_config_home_and_rx<F>(
+    auth: CodexAuth,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    codex_home: &Path,
+    configure_config: F,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+)
+where
+    F: FnOnce(&mut Config),
+{
     let (tx_event, rx_event) = async_channel::unbounded();
-    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
-    let mut config = build_test_config(codex_home.as_path()).await;
+    let mut config = build_test_config(codex_home).await;
     configure_config(&mut config);
+    let state_db = if config.features.enabled(Feature::Goals) {
+        Some(
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .expect("goal tests should initialize sqlite state db"),
+        )
+    } else {
+        None
+    };
     let config = Arc::new(config);
     let thread_id = ThreadId::default();
     let auth_manager = AuthManager::from_auth_for_testing(auth);
@@ -5391,12 +5551,6 @@ where
             .expect("create environment"),
     );
 
-    let state_db = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -5435,12 +5589,13 @@ where
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
-        state_db: Some(state_db.clone()),
+        state_db: state_db.clone(),
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             state_db,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id.into(),
@@ -5452,6 +5607,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -5486,7 +5642,7 @@ where
         model_info,
         &models_manager,
         /*network*/ None,
-        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
+        turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -5537,10 +5693,13 @@ async fn make_goal_session_and_context_with_rx() -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
+    tempfile::TempDir,
 ) {
-    let (session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let (session, turn_context, rx) = make_session_and_context_with_auth_config_home_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
+        codex_home.path(),
         |config| {
             config
                 .features
@@ -5550,14 +5709,14 @@ async fn make_goal_session_and_context_with_rx() -> (
     )
     .await;
     upsert_goal_test_thread(session.as_ref()).await;
-    (session, turn_context, rx)
+    (session, turn_context, rx, codex_home)
 }
 
 async fn upsert_goal_test_thread(session: &Session) {
     let config = session.get_config().await;
-    let state_db = goal_test_state_db(session)
-        .await
-        .expect("goal test state db should initialize");
+    let state_db = session
+        .state_db()
+        .expect("goal test session should have a state db");
     let mut builder = codex_state::ThreadMetadataBuilder::new(
         session.conversation_id,
         config
@@ -7422,7 +7581,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 
 #[tokio::test]
 async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7686,7 +7845,7 @@ async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHand
 
 #[tokio::test]
 async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
-    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7786,7 +7945,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_goal_mutation_accounts_active_turn_before_status_change() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7853,7 +8012,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -8520,7 +8679,7 @@ async fn sample_rollout(
 
 #[tokio::test]
 async fn create_goal_tool_rejects_existing_goal() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = CreateGoalHandler;
 
@@ -8582,7 +8741,7 @@ async fn create_goal_tool_rejects_existing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_rejects_pausing_goal() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;
@@ -8643,7 +8802,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_marks_goal_complete() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;
@@ -8750,7 +8909,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let tool_name = "shell";
     let call_id = "test-call".to_string();
 
-    let handler = ShellHandler;
+    let handler = ShellHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -8825,7 +8984,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = ExecCommandHandler;
+    let handler = ExecCommandHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

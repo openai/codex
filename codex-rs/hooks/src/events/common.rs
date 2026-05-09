@@ -103,7 +103,9 @@ pub(crate) fn matcher_pattern_for_event(
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
-        | HookEventName::SessionStart => matcher,
+        | HookEventName::SessionStart
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact => matcher,
         HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
@@ -266,6 +268,14 @@ mod tests {
         assert_eq!(
             matcher_pattern_for_event(HookEventName::SessionStart, Some("startup|resume")),
             Some("startup|resume")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PreCompact, Some("^auto$")),
+            Some("^auto$")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PostCompact, Some("manual|auto")),
+            Some("manual|auto")
         );
     }
 }

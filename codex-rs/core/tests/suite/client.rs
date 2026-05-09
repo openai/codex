@@ -5,8 +5,6 @@ use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
-use codex_core::agent_graph_store_from_state_db;
-use codex_core::init_state_db_from_config;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_features::Feature;
@@ -766,7 +764,9 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
     let request_session_id = request.header("session_id").expect("session_id header");
+    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
     let request_thread_id = request.header("thread_id").expect("thread_id header");
+    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -778,7 +778,12 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let thread_id_string = expected_thread_id.to_string();
 
     assert_eq!(request_session_id, expected_session_id.to_string());
+    assert_eq!(
+        request_session_id_hyphenated,
+        expected_session_id.to_string()
+    );
     assert_eq!(request_thread_id, thread_id_string.as_str());
+    assert_eq!(request_thread_id_hyphenated, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
     assert_eq!(
@@ -902,6 +907,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
@@ -1040,12 +1046,19 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_body = request.body_json();
 
     let request_session_id = request.header("session_id").expect("session_id header");
+    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
     let request_thread_id = request.header("thread_id").expect("thread_id header");
+    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
     assert_eq!(request_session_id, expected_session_id.to_string());
+    assert_eq!(
+        request_session_id_hyphenated,
+        expected_session_id.to_string()
+    );
     assert_eq!(request_thread_id, expected_thread_id.to_string());
+    assert_eq!(request_thread_id_hyphenated, expected_thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
@@ -1116,11 +1129,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Ok(None) => panic!("No CodexAuth found in codex_home"),
         Err(e) => panic!("Failed to load CodexAuth: {e}"),
     };
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .expect("client test requires state db");
-    let thread_store = thread_store_from_config(&config, state_db.clone());
-    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home)
         .await
         .expect("resolve installation id");
@@ -1130,10 +1138,10 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        state_db,
-        thread_store,
-        agent_graph_store,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
         installation_id,
+        /*attestation_provider*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config.clone())
@@ -1688,7 +1696,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("xhigh")
+        Some("medium")
     );
 
     Ok(())
@@ -1730,7 +1738,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("xhigh")
+        Some("medium")
     );
 
     Ok(())
@@ -2321,6 +2329,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
 

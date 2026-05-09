@@ -182,10 +182,7 @@ pub(super) async fn make_chatwidget_manual(
     };
     let current_collaboration_mode = base_mode;
     let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
-    let effective_service_tier = cfg
-        .service_tier
-        .as_deref()
-        .and_then(ServiceTier::from_request_value);
+    let effective_service_tier = cfg.service_tier.clone();
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -195,6 +192,7 @@ pub(super) async fn make_chatwidget_manual(
         raw_output_mode: cfg.tui_raw_output_mode,
         config: cfg,
         effective_service_tier,
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,
@@ -391,8 +389,12 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
-    let additional_speed_tiers = if supports_fast_mode {
-        vec![codex_protocol::openai_models::SPEED_TIER_FAST]
+    let service_tiers = if supports_fast_mode {
+        vec![json!({
+            "id": ServiceTier::Fast.request_value(),
+            "name": "fast",
+            "description": "Fastest inference with increased plan usage"
+        })]
     } else {
         Vec::new()
     };
@@ -406,7 +408,8 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "visibility": "list",
         "supported_in_api": true,
         "priority": priority,
-        "additional_speed_tiers": additional_speed_tiers,
+        "additional_speed_tiers": [],
+        "service_tiers": service_tiers,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
@@ -1439,6 +1442,7 @@ pub(super) fn plugins_test_summary(
     PluginSummary {
         id: id.to_string(),
         name: name.to_string(),
+        share_context: None,
         source: PluginSource::Local {
             path: plugins_test_absolute_path(&format!("plugins/{name}")),
         },
@@ -1504,6 +1508,7 @@ pub(super) fn plugins_test_detail(
     summary: PluginSummary,
     description: Option<&str>,
     skills: &[&str],
+    hooks: &[(codex_app_server_protocol::HookEventName, usize)],
     apps: &[(&str, bool)],
     mcp_servers: &[&str],
 ) -> PluginDetail {
@@ -1523,6 +1528,18 @@ pub(super) fn plugins_test_detail(
                     "skills/{name}/SKILL.md"
                 ))),
                 enabled: true,
+            })
+            .collect(),
+        hooks: hooks
+            .iter()
+            .enumerate()
+            .flat_map(|(event_index, (event_name, handler_count))| {
+                (0..*handler_count).map(move |handler_index| {
+                    codex_app_server_protocol::PluginHookSummary {
+                        key: format!("plugin:{event_index}:{handler_index}"),
+                        event_name: *event_name,
+                    }
+                })
             })
             .collect(),
         apps: apps
@@ -1676,6 +1693,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_app_server_protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_app_server_protocol::HookEventName::PreCompact => "PreCompact",
+        codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_app_server_protocol::HookEventName::Stop => "Stop",

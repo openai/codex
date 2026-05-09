@@ -367,9 +367,9 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        state_db: Option<state_db::StateDbHandle>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -467,7 +467,22 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_ctx = if config.ephemeral { None } else { state_db };
+        let state_db_fut = async {
+            if config.ephemeral {
+                None
+            } else if let Some(local_store) =
+                thread_store.as_any().downcast_ref::<LocalThreadStore>()
+            {
+                local_store.state_db().await
+            } else {
+                None
+            }
+        }
+        .instrument(info_span!(
+            "session_init.state_db",
+            otel.name = "session_init.state_db",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
@@ -491,8 +506,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (thread_persistence_result, (auth, mcp_servers, auth_statuses)) =
-            tokio::join!(thread_persistence_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -702,7 +717,7 @@ impl Session {
                 tx
             };
             let thread_name =
-                thread_title_from_state_db(state_db_ctx.as_ref(), &config.codex_home, thread_id)
+                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
                         "session_init.thread_name_lookup",
                         otel.name = "session_init.thread_name_lookup",
@@ -836,6 +851,7 @@ impl Session {
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
+                attestation_provider: attestation_provider.clone(),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     session_id,
@@ -847,6 +863,7 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
+                    attestation_provider,
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
@@ -918,11 +935,12 @@ impl Session {
 
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
-                .filter(|(_, server)| server.enabled && server.required)
+                .filter(|(_, server)| server.enabled() && server.required())
                 .map(|(name, _)| name.clone())
                 .collect();
             required_mcp_servers.sort();
-            let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+            let enabled_mcp_server_count =
+                mcp_servers.values().filter(|server| server.enabled()).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             let host_owned_codex_apps_enabled = config

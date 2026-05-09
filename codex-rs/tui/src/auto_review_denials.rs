@@ -88,6 +88,8 @@ mod tests {
             id: format!("review-{id}"),
             target_item_id: None,
             turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            completed_at_ms: Some(1),
             status: GuardianAssessmentStatus::Denied,
             risk_level: None,
             user_authorization: None,

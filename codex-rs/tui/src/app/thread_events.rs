@@ -465,6 +465,7 @@ mod tests {
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
                 item_id: item_id.to_string(),
+                started_at_ms: 0,
                 approval_id: approval_id.map(str::to_string),
                 reason: Some("needs approval".to_string()),
                 network_approval_context: None,

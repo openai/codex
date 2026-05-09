@@ -7,7 +7,6 @@ use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -33,7 +32,7 @@ pub enum ConfigEdit {
         effort: Option<ReasoningEffort>,
     },
     /// Update the service tier preference for future turns.
-    SetServiceTier { service_tier: Option<ServiceTier> },
+    SetServiceTier { service_tier: Option<String> },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
@@ -536,7 +535,9 @@ impl ConfigDocument {
             }),
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
                 &["service_tier"],
-                service_tier.map(|service_tier| value(service_tier.to_string())),
+                service_tier
+                    .as_ref()
+                    .map(|service_tier| value(service_tier.clone())),
             )),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
@@ -1114,7 +1115,7 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+    pub fn set_service_tier(mut self, service_tier: Option<String>) -> Self {
         self.edits.push(ConfigEdit::SetServiceTier { service_tier });
         self
     }

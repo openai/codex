@@ -5,6 +5,10 @@ use tokio::process::Command;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::events::compact::PostCompactRequest;
+use crate::events::compact::PreCompactOutcome;
+use crate::events::compact::PreCompactRequest;
+use crate::events::compact::StatelessHookOutcome;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -42,7 +46,6 @@ pub struct HookListOutcome {
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
-    after_tool_use: Vec<Hook>,
     engine: ClaudeHooksEngine,
 }
 
@@ -72,7 +75,6 @@ impl Hooks {
         );
         Self {
             after_agent,
-            after_tool_use: Vec::new(),
             engine,
         }
     }
@@ -84,7 +86,6 @@ impl Hooks {
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
-            HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
     }
 
@@ -152,6 +153,28 @@ impl Hooks {
 
     pub async fn run_post_tool_use(&self, request: PostToolUseRequest) -> PostToolUseOutcome {
         self.engine.run_post_tool_use(request).await
+    }
+
+    pub fn preview_pre_compact(
+        &self,
+        request: &PreCompactRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_pre_compact(request)
+    }
+
+    pub async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
+        self.engine.run_pre_compact(request).await
+    }
+
+    pub fn preview_post_compact(
+        &self,
+        request: &PostCompactRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_post_compact(request)
+    }
+
+    pub async fn run_post_compact(&self, request: PostCompactRequest) -> StatelessHookOutcome {
+        self.engine.run_post_compact(request).await
     }
 
     pub fn preview_user_prompt_submit(

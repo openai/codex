@@ -20,7 +20,6 @@ use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
 use codex_core_api::EnvironmentManager;
-use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
 use codex_core_api::Features;
@@ -52,11 +51,10 @@ use codex_core_api::TuiNotificationSettings;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
-use codex_core_api::agent_graph_store_from_state_db;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
-use codex_core_api::init_state_db_from_config;
+use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
 use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
@@ -106,6 +104,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     };
 
     let config = new_config(args.model, arg0_paths)?;
+    let state_db = init_state_db(&config).await;
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -113,13 +112,10 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let Some(state_db) = init_state_db_from_config(&config).await else {
-        bail!("thread manager sample requires state db");
-    };
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
-    let environment_manager =
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?,
+    );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
@@ -127,10 +123,10 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         SessionSource::Exec,
         environment_manager,
         /*analytics_events_client*/ None,
-        state_db,
         Arc::clone(&thread_store),
-        agent_graph_store,
+        state_db,
         installation_id,
+        /*attestation_provider*/ None,
     );
 
     let NewThread {

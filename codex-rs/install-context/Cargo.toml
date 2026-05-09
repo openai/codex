@@ -7,6 +7,7 @@ license.workspace = true
 [lib]
 name = "codex_install_context"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true

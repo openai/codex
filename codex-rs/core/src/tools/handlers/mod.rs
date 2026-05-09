@@ -64,12 +64,14 @@ pub use request_user_input::RequestUserInputHandler;
 pub use shell::ContainerExecHandler;
 pub use shell::LocalShellHandler;
 pub use shell::ShellCommandHandler;
+pub(crate) use shell::ShellCommandHandlerOptions;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use unavailable_tool::UnavailableToolHandler;
 pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::ExecCommandHandler;
+pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 
