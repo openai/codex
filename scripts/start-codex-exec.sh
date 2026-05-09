@@ -161,6 +161,7 @@ if [[ -z "${remote_exec_server_pid}" || -z "${listen_url}" || -z "${remote_repo_
 fi
 
 remote_exec_server_port="${listen_url##*:}"
+remote_exec_server_port="${remote_exec_server_port%%/*}"
 if [[ -z "${remote_exec_server_port}" || "${remote_exec_server_port}" == "${listen_url}" ]]; then
   echo "failed to parse remote exec server port from ${listen_url}" >&2
   exit 1
@@ -170,7 +171,7 @@ echo "Remote exec server: ${listen_url}"
 echo "Remote exec server log: ${remote_exec_server_log_path}"
 echo "Press Ctrl-C to stop the SSH tunnel and remote exec server."
 echo "Start codex via: "
-printf '  CODEX_EXEC_SERVER_URL=ws://127.0.0.1:%s codex -C %q\n' \
+printf '  CODEX_EXEC_SERVER_URL=ws://127.0.0.1:%s/ws codex -C %q\n' \
   "${local_exec_server_port}" \
   "${remote_repo_root}"
 
