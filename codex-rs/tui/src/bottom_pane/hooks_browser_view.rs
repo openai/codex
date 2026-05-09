@@ -10,6 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -29,6 +30,7 @@ use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
+use crate::style::accent_style;
 
 const EVENT_COLUMN_WIDTH: usize = 22;
 const COUNT_COLUMN_WIDTH: usize = 12;
@@ -279,28 +281,23 @@ impl HooksBrowserView {
         lines.push(Line::from(header));
         for (idx, row) in rows.into_iter().enumerate() {
             if self.state.selected_idx == Some(idx) {
+                let style = accent_style();
                 let mut row_line = vec![
                     Span::from(format!(
                         "{:<EVENT_COLUMN_WIDTH$}",
                         event_label(row.event_name)
                     ))
-                    .cyan()
-                    .bold(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed))
-                        .cyan()
-                        .bold(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active))
-                        .cyan()
-                        .bold(),
+                    .set_style(style),
+                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed)).set_style(style),
+                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active)).set_style(style),
                 ];
                 if show_review {
                     row_line.push(
                         Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review))
-                            .cyan()
-                            .bold(),
+                            .set_style(style),
                     );
                 }
-                row_line.push(Span::from(event_description(row.event_name)).cyan().bold());
+                row_line.push(Span::from(event_description(row.event_name)).set_style(style));
                 lines.push(Line::from(row_line));
             } else {
                 let mut row_line = vec![
@@ -383,7 +380,7 @@ impl HooksBrowserView {
                     line = line.dim();
                 }
                 if self.state.selected_idx == Some(idx) {
-                    line = line.cyan().bold();
+                    line = line.patch_style(accent_style());
                 }
                 line
             })
@@ -797,6 +794,7 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn render_lines(view: &HooksBrowserView, width: u16) -> String {
@@ -824,6 +822,14 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn render_buffer(view: &HooksBrowserView, width: u16) -> Buffer {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        buf
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -906,6 +912,26 @@ mod tests {
     fn renders_event_browser() {
         let view = view();
         assert_snapshot!("hooks_browser_events", render_lines(&view, /*width*/ 112));
+    }
+
+    #[test]
+    fn selected_event_rows_use_the_shared_accent_style() {
+        let view = view();
+        let buf = render_buffer(&view, /*width*/ 112);
+        let expected = accent_style();
+
+        let selected_cell = buf
+            .content
+            .iter()
+            .find(|cell| {
+                let style = cell.style();
+                cell.symbol() == "P"
+                    && style.fg == expected.fg
+                    && style.add_modifier.contains(Modifier::BOLD)
+            })
+            .expect("selected event row should use the shared accent style");
+
+        assert_eq!(selected_cell.style().fg, expected.fg);
     }
 
     #[test]
