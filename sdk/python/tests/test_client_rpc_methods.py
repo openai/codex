@@ -200,52 +200,57 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     ]
 
 
-def test_turn_notification_router_preserves_per_turn_order_with_interleaved_events() -> (
-    None
-):
+def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> None:
     client = AppServerClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
-    for notification in [
-        client._coerce_notification(
-            "item/agentMessage/delta",
-            {
+    messages: list[dict[str, object]] = [
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
                 "delta": "one-a",
                 "itemId": "item-1",
                 "threadId": "thread-1",
                 "turnId": "turn-1",
             },
-        ),
-        client._coerce_notification(
-            "item/agentMessage/delta",
-            {
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
                 "delta": "two-a",
                 "itemId": "item-2",
                 "threadId": "thread-1",
                 "turnId": "turn-2",
             },
-        ),
-        client._coerce_notification(
-            "item/agentMessage/delta",
-            {
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
                 "delta": "one-b",
                 "itemId": "item-3",
                 "threadId": "thread-1",
                 "turnId": "turn-1",
             },
-        ),
-        client._coerce_notification(
-            "item/agentMessage/delta",
-            {
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
                 "delta": "two-b",
                 "itemId": "item-4",
                 "threadId": "thread-1",
                 "turnId": "turn-2",
             },
-        ),
-    ]:
-        client._router.route_notification(notification)
+        },
+    ]
+
+    def fake_read_message() -> dict[str, object]:
+        if messages:
+            return messages.pop(0)
+        raise EOFError
+
+    client._read_message = fake_read_message  # type: ignore[method-assign]
+    client._reader_loop()
 
     first_turn_events = [
         client.next_turn_notification("turn-1"),
