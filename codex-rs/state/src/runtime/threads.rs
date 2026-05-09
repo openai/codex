@@ -734,7 +734,7 @@ ON CONFLICT(id) DO UPDATE SET
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
     title = excluded.title,
-    preview = excluded.preview,
+    preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
@@ -1530,6 +1530,39 @@ mod tests {
             persisted.git_origin_url.as_deref(),
             Some("git@example.com:openai/codex.git")
         );
+    }
+
+    #[tokio::test]
+    async fn upsert_thread_preserves_existing_preview_when_incoming_preview_is_empty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000459").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.first_user_message = None;
+        metadata.preview = Some("migrated goal preview".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let mut rollout_metadata = metadata.clone();
+        rollout_metadata.preview = None;
+
+        runtime
+            .upsert_thread(&rollout_metadata)
+            .await
+            .expect("rollout upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.preview.as_deref(), Some("migrated goal preview"));
     }
 
     #[tokio::test]
