@@ -73,7 +73,9 @@ use crate::token_usage::TokenUsage;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crate::update_action::UpdateAction;
+use crate::update_action::PromptedUpdate;
+#[cfg(not(debug_assertions))]
+use crate::update_action::UpdateActionStatus;
 use crate::version::CODEX_CLI_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
@@ -335,7 +337,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
-    pub update_action: Option<UpdateAction>,
+    pub update_action: Option<PromptedUpdate>,
     pub exit_reason: ExitReason,
 }
 
@@ -478,7 +480,7 @@ pub(crate) struct App {
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
-    pub(crate) pending_update_action: Option<UpdateAction>,
+    pub(crate) pending_update_action: Option<PromptedUpdate>,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
@@ -863,7 +865,16 @@ See the Codex keymap documentation for supported actions and examples."
             )
         })?;
         #[cfg(not(debug_assertions))]
-        let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let upgrade_notice =
+            crate::updates::get_upgrade_version_for_history(&config).and_then(|latest_version| {
+                match crate::update_action::get_update_action_status() {
+                    UpdateActionStatus::Ready(update_action) => {
+                        Some((latest_version, Some(update_action)))
+                    }
+                    UpdateActionStatus::Unavailable => Some((latest_version, None)),
+                    UpdateActionStatus::Blocked(_) => None,
+                }
+            });
 
         let mut app = Self {
             model_catalog,
@@ -968,14 +979,14 @@ See the Codex keymap documentation for supported actions and examples."
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         #[cfg(not(debug_assertions))]
-        let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
+        let pre_loop_exit_reason = if let Some((latest_version, update_action)) = upgrade_notice {
             let control = app
                 .handle_event(
                     tui,
                     &mut app_server,
                     AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                         latest_version,
-                        crate::update_action::get_update_action(),
+                        update_action,
                     ))),
                 )
                 .await?;
@@ -1078,7 +1089,7 @@ See the Codex keymap documentation for supported actions and examples."
             token_usage: app.token_usage(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
-            update_action: app.pending_update_action,
+            update_action: app.pending_update_action.clone(),
             exit_reason,
         })
     }

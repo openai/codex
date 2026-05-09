@@ -1,0 +1,14 @@
+---
+source: tui/src/update_prompt.rs
+expression: terminal.backend()
+---
+
+  ✨ Update needs attention
+
+  You are running Codex from:
+    /prefix-a/lib/node_modules/@openai/codex
+  but `npm install -g @openai/codex@latest` would update:
+    /prefix-b/lib/node_modules/@openai/codex
+  Fix your shell PATH or remove the stale Codex install, then restart Codex.
+
+  Press enter to continue

@@ -177,13 +177,20 @@ mod transcript_reflow;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
+pub use update_action::PromptedUpdate;
 pub use update_action::UpdateAction;
+pub use update_action::UpdateActionStatus;
+pub use update_action::UpdateBlocker;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;
+#[cfg(any(not(debug_assertions), test))]
+pub use update_action::get_update_action_status;
 mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[cfg(not(debug_assertions))]
+pub use updates::record_successful_prompt_update_attempt;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;

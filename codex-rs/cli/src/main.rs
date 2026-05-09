@@ -34,7 +34,10 @@ use codex_state::state_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
+use codex_tui::PromptedUpdate;
 use codex_tui::UpdateAction;
+#[cfg(not(debug_assertions))]
+use codex_tui::UpdateActionStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
@@ -618,13 +621,13 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         ExitReason::UserRequested => { /* normal exit */ }
     }
 
-    let update_action = exit_info.update_action;
+    let prompted_update = exit_info.update_action.clone();
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
     }
-    if let Some(action) = update_action {
-        run_update_action(action)?;
+    if let Some(prompted_update) = prompted_update {
+        run_prompted_update(prompted_update)?;
     }
     Ok(())
 }
@@ -672,6 +675,20 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_prompted_update(prompted_update: PromptedUpdate) -> anyhow::Result<()> {
+    run_update_action(prompted_update.action)?;
+    #[cfg(not(debug_assertions))]
+    {
+        if let Err(err) = codex_tui::record_successful_prompt_update_attempt(
+            &prompted_update.version_file,
+            &prompted_update.target_version,
+        ) {
+            tracing::warn!("Failed to record successful prompted update attempt: {err}");
+        }
+    }
+    Ok(())
+}
+
 fn run_update_command() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
@@ -682,12 +699,13 @@ fn run_update_command() -> anyhow::Result<()> {
 
     #[cfg(not(debug_assertions))]
     {
-        let Some(action) = codex_tui::get_update_action() else {
-            anyhow::bail!(
+        match codex_tui::get_update_action_status() {
+            UpdateActionStatus::Ready(action) => run_update_action(action),
+            UpdateActionStatus::Blocked(blocker) => anyhow::bail!("{blocker}"),
+            UpdateActionStatus::Unavailable => anyhow::bail!(
                 "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
-            );
-        };
-        run_update_action(action)
+            ),
+        }
     }
 }
 

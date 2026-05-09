@@ -2,6 +2,7 @@
 source: tui/src/update_prompt.rs
 expression: terminal.backend()
 ---
+
   ✨ Update available! 0.0.0 -> 9.9.9
 
   Release notes: https://github.com/openai/codex/releases/latest
