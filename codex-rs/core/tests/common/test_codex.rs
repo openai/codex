@@ -386,13 +386,13 @@ impl TestCodexBuilder {
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?;
-        let environment_manager = Arc::new(match exec_server_url {
+        let environment_manager = match exec_server_url {
             Some(exec_server_url) => {
                 codex_exec_server::EnvironmentManager::create_remote_aware_for_tests(
                     exec_server_url,
                     local_runtime_paths,
                 )
-                .await
+                .await?
             }
             None => {
                 codex_exec_server::EnvironmentManager::create_for_tests(
@@ -401,7 +401,8 @@ impl TestCodexBuilder {
                 )
                 .await
             }
-        });
+        };
+        let environment_manager = Arc::new(environment_manager);
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);

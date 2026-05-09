@@ -95,7 +95,7 @@ impl EnvironmentManager {
     pub async fn create_remote_aware_for_tests(
         exec_server_url: String,
         local_runtime_paths: ExecServerRuntimePaths,
-    ) -> Self {
+    ) -> Result<Self, ExecServerError> {
         let snapshot = EnvironmentProviderSnapshot {
             environments: vec![(
                 REMOTE_ENVIRONMENT_ID.to_string(),
@@ -105,7 +105,6 @@ impl EnvironmentManager {
             include_local: true,
         };
         Self::from_provider_snapshot(snapshot, local_runtime_paths)
-            .expect("remote-aware test provider should create valid environments")
     }
 
     /// Builds a manager from `CODEX_EXEC_SERVER_URL` and local runtime paths
@@ -503,12 +502,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_aware_test_manager_keeps_local_environment_addressable() {
+    async fn remote_aware_test_manager_keeps_local_environment_addressable()
+    -> Result<(), ExecServerError> {
         let manager = EnvironmentManager::create_remote_aware_for_tests(
             "ws://127.0.0.1:8765".to_string(),
             test_runtime_paths(),
         )
-        .await;
+        .await?;
 
         assert_eq!(
             manager.default_environment_id(),
@@ -526,6 +526,7 @@ mod tests {
                 .expect("local environment")
                 .is_remote()
         );
+        Ok(())
     }
 
     #[tokio::test]

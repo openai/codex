@@ -579,9 +579,9 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     let output = wait_for_function_call_output(&test, &response_mock, call_id).await?;
     assert_eq!(response_mock.requests().len(), 2);
-    let output_items = output
-        .get("output")
-        .and_then(Value::as_array)
+    let output_value = output.get("output").unwrap_or(&output);
+    let output_items = output_value
+        .as_array()
         .context("view_image output should be content items")?;
     assert_eq!(output_items.len(), 1);
     let image_url = output_items[0]
