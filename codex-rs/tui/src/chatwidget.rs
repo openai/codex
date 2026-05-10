@@ -1547,16 +1547,30 @@ impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
+            let scrollback_reflow = if controller.has_live_tail() {
+                crate::app_event::ConsolidationScrollbackReflow::Required
+            } else {
+                crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+            };
+            self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if let Some(cell) = cell {
-                self.add_boxed_history(cell);
-            }
+            let deferred_history_cell =
+                if scrollback_reflow == crate::app_event::ConsolidationScrollbackReflow::Required {
+                    cell
+                } else {
+                    if let Some(cell) = cell {
+                        self.add_boxed_history(cell);
+                    }
+                    None
+                };
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
             if let Some(source) = source {
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
+                    scrollback_reflow,
+                    deferred_history_cell,
                 });
             }
         }
@@ -2115,11 +2129,10 @@ impl ChatWidget {
             self.transcript.plan_delta_buffer.clear();
         }
         self.transcript.plan_delta_buffer.push_str(&delta);
-        // Before streaming plan content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.plan_stream_controller.is_none() {
+            // Before starting a plan stream, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
@@ -2132,6 +2145,7 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.run_catch_up_commit_tick();
         }
+        self.sync_active_stream_tail();
         self.request_redraw();
     }
 
@@ -2154,7 +2168,14 @@ impl ChatWidget {
         self.transcript.saw_plan_item_this_turn = true;
         let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
-                controller.finalize()
+                let had_live_tail = controller.has_live_tail();
+                self.clear_active_stream_tail();
+                let (cell, source) = controller.finalize();
+                if had_live_tail {
+                    (None, source)
+                } else {
+                    (cell, source)
+                }
             } else {
                 (None, None)
             };
@@ -2286,8 +2307,10 @@ impl ChatWidget {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take() {
+            let had_live_tail = controller.has_live_tail();
+            self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if let Some(cell) = cell {
+            if !had_live_tail && let Some(cell) = cell {
                 self.add_boxed_history(cell);
             }
             if let Some(source) = source {
@@ -2772,6 +2795,9 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
+        // Drop preview-only stream tail content on any termination path before
+        // failed-cell finalization, so transient tail cells are never persisted.
+        self.clear_active_stream_tail();
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Turn-scoped hook rows are transient live state; once the turn is over,
@@ -4093,6 +4119,7 @@ impl ChatWidget {
             self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
+        self.sync_active_stream_tail();
 
         if outcome.has_controller && outcome.all_idle {
             self.maybe_restore_status_indicator_after_stream_idle();
@@ -4137,11 +4164,10 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before starting an agent stream, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.transcript.needs_final_message_separator && self.transcript.had_work_activity {
@@ -4165,6 +4191,7 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.run_catch_up_commit_tick();
         }
+        self.sync_active_stream_tail();
         self.request_redraw();
     }
 
@@ -5322,10 +5349,68 @@ impl ChatWidget {
 
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_cell();
+            if !self.has_active_stream_tail() {
+                self.flush_active_cell();
+            }
             self.transcript.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
+    fn active_cell_is_stream_tail(&self) -> bool {
+        self.transcript.active_cell.as_ref().is_some_and(|cell| {
+            cell.as_any().is::<history_cell::StreamingAgentTailCell>()
+                || cell.as_any().is::<history_cell::StreamingPlanTailCell>()
+        })
+    }
+
+    fn has_active_stream_tail(&self) -> bool {
+        (self.stream_controller.is_some() || self.plan_stream_controller.is_some())
+            && self.active_cell_is_stream_tail()
+    }
+
+    fn sync_active_stream_tail(&mut self) {
+        if let Some(controller) = self.stream_controller.as_ref() {
+            let tail_lines = controller.current_tail_lines();
+            if tail_lines.is_empty() {
+                self.clear_active_stream_tail();
+                return;
+            }
+
+            self.bottom_pane.hide_status_indicator();
+            self.transcript.active_cell =
+                Some(Box::new(history_cell::StreamingAgentTailCell::new(
+                    tail_lines,
+                    controller.tail_starts_stream(),
+                )));
+            self.bump_active_cell_revision();
+            return;
+        }
+
+        if let Some(controller) = self.plan_stream_controller.as_ref() {
+            let tail_lines = controller.current_tail_display_lines();
+            if tail_lines.is_empty() {
+                self.clear_active_stream_tail();
+                return;
+            }
+
+            self.bottom_pane.hide_status_indicator();
+            self.transcript.active_cell = Some(Box::new(history_cell::StreamingPlanTailCell::new(
+                tail_lines,
+                !controller.tail_starts_stream(),
+            )));
+            self.bump_active_cell_revision();
+            return;
+        }
+
+        self.clear_active_stream_tail();
+    }
+
+    fn clear_active_stream_tail(&mut self) {
+        if self.active_cell_is_stream_tail() {
+            self.transcript.active_cell = None;
+            self.bump_active_cell_revision();
+        }
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -9723,6 +9808,7 @@ impl ChatWidget {
         if let Some(controller) = self.plan_stream_controller.as_mut() {
             controller.set_width(plan_stream_width);
         }
+        self.sync_active_stream_tail();
         if !had_rendered_width {
             self.request_redraw();
         }
@@ -9918,6 +10004,7 @@ impl ChatWidget {
             if let Some(controller) = self.plan_stream_controller.as_mut() {
                 controller.clear_queue();
             }
+            self.clear_active_stream_tail();
             self.request_redraw();
         }
     }

@@ -341,6 +341,9 @@ impl LocalProcessTerminator {
             .arg(self.pid.to_string())
             .arg("/T")
             .arg("/F")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
     }
 
