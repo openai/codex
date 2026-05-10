@@ -14,6 +14,7 @@ from .errors import (
     is_retryable_error,
 )
 from .api import (
+    ApprovalMode,
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
@@ -37,6 +38,7 @@ __all__ = [
     "AppServerConfig",
     "Codex",
     "AsyncCodex",
+    "ApprovalMode",
     "Thread",
     "AsyncThread",
     "TurnHandle",

@@ -743,13 +743,7 @@ def _type_tuple_source(class_names: list[str]) -> str:
 
 def generate_notification_registry(schema_dir: Path) -> None:
     """Regenerate notification dispatch metadata from the runtime notification schema."""
-    out = (
-        sdk_root()
-        / "src"
-        / "openai_codex"
-        / "generated"
-        / "notification_registry.py"
-    )
+    out = sdk_root() / "src" / "openai_codex" / "generated" / "notification_registry.py"
     specs = _notification_specs(schema_dir)
     class_names = sorted({class_name for _, class_name in specs})
     direct_turn_id_types, nested_turn_types = _notification_turn_id_specs(
@@ -925,17 +919,33 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
     return lines
 
 
+def _approval_mode_signature_lines() -> list[str]:
+    """Return the public approval mode kwarg emitted on start helpers."""
+    return ["        approval_mode: ApprovalMode = ApprovalMode.deny_all,"]
+
+
+def _approval_mode_assignment_line(*, indent: str = "        ") -> str:
+    """Return the local mapping from public mode to app-server params."""
+    return (
+        f"{indent}approval_policy, approvals_reviewer = "
+        "_approval_mode_settings(approval_mode)"
+    )
+
+
+def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]:
+    """Return app-server approval params derived from ApprovalMode."""
+    return [
+        f"{indent}approval_policy=approval_policy,",
+        f"{indent}approvals_reviewer=approvals_reviewer,",
+    ]
+
+
 def _model_arg_lines(
     fields: list[PublicFieldSpec], *, indent: str = "            "
 ) -> list[str]:
     lines: list[str] = []
     for field in fields:
-        value = field.py_name
-        if field.py_name == "approval_policy":
-            # TODO: Add a public approval callback API that lets callers return
-            # typed approval results, then honor caller-supplied policies.
-            value = "_approval_policy_never(approval_policy)"
-        lines.append(f"{indent}{field.wire_name}={value},")
+        lines.append(f"{indent}{field.wire_name}={field.py_name},")
     return lines
 
 
@@ -960,9 +970,12 @@ def _render_codex_block(
         "    def thread_start(",
         "        self,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> Thread:",
+        _approval_mode_assignment_line(),
         "        params = ThreadStartParams(",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
         "        )",
         "        started = self._client.thread_start(params)",
@@ -982,10 +995,13 @@ def _render_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> Thread:",
+        _approval_mode_assignment_line(),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(resume_fields),
         "        )",
         "        resumed = self._client.thread_resume(thread_id, params)",
@@ -995,10 +1011,13 @@ def _render_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> Thread:",
+        _approval_mode_assignment_line(),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(fork_fields),
         "        )",
         "        forked = self._client.thread_fork(thread_id, params)",
@@ -1024,10 +1043,13 @@ def _render_async_codex_block(
         "    async def thread_start(",
         "        self,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
+        _approval_mode_assignment_line(),
         "        params = ThreadStartParams(",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
         "        )",
         "        started = await self._client.thread_start(params)",
@@ -1048,11 +1070,14 @@ def _render_async_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
+        _approval_mode_assignment_line(),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(resume_fields),
         "        )",
         "        resumed = await self._client.thread_resume(thread_id, params)",
@@ -1062,11 +1087,14 @@ def _render_async_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
+        _approval_mode_assignment_line(),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(fork_fields),
         "        )",
         "        forked = await self._client.thread_fork(thread_id, params)",
@@ -1092,12 +1120,15 @@ def _render_thread_block(
         "        self,",
         "        input: Input,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> TurnHandle:",
         "        wire_input = _to_wire_input(input)",
+        _approval_mode_assignment_line(),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(turn_fields),
         "        )",
         "        turn = self._client.turn_start(self.id, wire_input, params=params)",
@@ -1114,13 +1145,16 @@ def _render_async_thread_block(
         "        self,",
         "        input: Input,",
         "        *,",
+        *_approval_mode_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> AsyncTurnHandle:",
         "        await self._codex._ensure_initialized()",
         "        wire_input = _to_wire_input(input)",
+        _approval_mode_assignment_line(),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",
+        *_approval_mode_model_arg_lines(),
         *_model_arg_lines(turn_fields),
         "        )",
         "        turn = await self._codex._client.turn_start(",
@@ -1144,9 +1178,11 @@ def generate_public_api_flat_methods() -> None:
     if src_dir_str not in sys.path:
         sys.path.insert(0, src_dir_str)
 
+    approval_fields = {"approval_policy", "approvals_reviewer"}
     thread_start_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "ThreadStartParams",
+        exclude=approval_fields,
     )
     thread_list_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
@@ -1155,17 +1191,17 @@ def generate_public_api_flat_methods() -> None:
     thread_resume_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "ThreadResumeParams",
-        exclude={"thread_id"},
+        exclude={"thread_id", *approval_fields},
     )
     thread_fork_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "ThreadForkParams",
-        exclude={"thread_id"},
+        exclude={"thread_id", *approval_fields},
     )
     turn_start_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "TurnStartParams",
-        exclude={"thread_id", "input"},
+        exclude={"thread_id", "input", *approval_fields},
     )
 
     source = public_api_path.read_text()

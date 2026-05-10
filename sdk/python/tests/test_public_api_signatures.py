@@ -10,6 +10,7 @@ import openai_codex
 import openai_codex.types as public_types
 from openai_codex import (
     AppServerConfig,
+    ApprovalMode,
     AsyncCodex,
     AsyncThread,
     Codex,
@@ -23,6 +24,7 @@ EXPECTED_ROOT_EXPORTS = [
     "AppServerConfig",
     "Codex",
     "AsyncCodex",
+    "ApprovalMode",
     "Thread",
     "AsyncThread",
     "TurnHandle",
@@ -117,6 +119,11 @@ def test_root_exports_run_result() -> None:
     assert RunResult.__name__ == "RunResult"
 
 
+def test_root_exports_approval_mode() -> None:
+    """The root package should expose the high-level approval mode enum."""
+    assert ApprovalMode.deny_all.value == "deny_all"
+
+
 def test_package_and_default_client_versions_follow_project_version() -> None:
     """The importable package version should stay aligned with pyproject metadata."""
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
@@ -135,18 +142,16 @@ def test_package_includes_py_typed_marker() -> None:
 def test_package_root_exports_only_public_api() -> None:
     """The package root should expose the supported SDK surface, not internals."""
     assert openai_codex.__all__ == EXPECTED_ROOT_EXPORTS
-    assert {
-        name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS
-    } == {name: True for name in EXPECTED_ROOT_EXPORTS}
+    assert {name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS} == {
+        name: True for name in EXPECTED_ROOT_EXPORTS
+    }
     assert {
         "AppServerClient": hasattr(openai_codex, "AppServerClient"),
         "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
         "InitializeResponse": hasattr(openai_codex, "InitializeResponse"),
         "ThreadStartParams": hasattr(openai_codex, "ThreadStartParams"),
         "TurnStartParams": hasattr(openai_codex, "TurnStartParams"),
-        "TurnCompletedNotification": hasattr(
-            openai_codex, "TurnCompletedNotification"
-        ),
+        "TurnCompletedNotification": hasattr(openai_codex, "TurnCompletedNotification"),
         "TurnStatus": hasattr(openai_codex, "TurnStatus"),
     } == {
         "AppServerClient": False,
@@ -210,8 +215,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
     """Generated convenience methods should expose typed Pythonic keyword names."""
     expected = {
         Codex.thread_start: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -239,8 +243,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "use_state_db_only",
         ],
         Codex.thread_resume: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -252,8 +255,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
         ],
         Codex.thread_fork: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -266,8 +268,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         Thread.turn: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
@@ -278,8 +279,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "summary",
         ],
         Thread.run: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
@@ -290,8 +290,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "summary",
         ],
         AsyncCodex.thread_start: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -319,8 +318,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "use_state_db_only",
         ],
         AsyncCodex.thread_resume: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -332,8 +330,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
         ],
         AsyncCodex.thread_fork: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "base_instructions",
             "config",
             "cwd",
@@ -346,8 +343,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         AsyncThread.turn: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
@@ -358,8 +354,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "summary",
         ],
         AsyncThread.run: [
-            "approval_policy",
-            "approvals_reviewer",
+            "approval_mode",
             "cwd",
             "effort",
             "model",
