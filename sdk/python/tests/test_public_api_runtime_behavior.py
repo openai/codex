@@ -261,6 +261,64 @@ def _approval_mode_turn_params(approval_mode: ApprovalMode) -> TurnStartParams:
     )
 
 
+class CapturingApprovalClient:
+    """Collect wrapper params at the app-server client boundary."""
+
+    def __init__(self) -> None:
+        self.params: list[Any] = []
+
+    def thread_start(self, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id="thread-1"))
+
+    def thread_resume(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+    def thread_fork(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=f"{thread_id}-fork"))
+
+    def turn_start(
+        self,
+        thread_id: str,
+        input: object,  # noqa: A002
+        *,
+        params: Any,
+    ) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(turn=SimpleNamespace(id=f"{thread_id}-turn"))
+
+
+class CapturingAsyncApprovalClient:
+    """Async mirror of CapturingApprovalClient for public async wrappers."""
+
+    def __init__(self) -> None:
+        self.params: list[Any] = []
+
+    async def thread_start(self, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id="thread-1"))
+
+    async def thread_resume(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+    async def thread_fork(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=f"{thread_id}-fork"))
+
+    async def turn_start(
+        self,
+        thread_id: str,
+        input: object,  # noqa: A002
+        *,
+        params: Any,
+    ) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(turn=SimpleNamespace(id=f"{thread_id}-turn"))
+
+
 def test_approval_modes_serialize_to_expected_start_params() -> None:
     """ApprovalMode should map to the app-server params sent for new work."""
     assert {
@@ -279,6 +337,59 @@ def test_unknown_approval_mode_is_rejected() -> None:
     """Invalid approval modes should fail before params are constructed."""
     with pytest.raises(ValueError, match="deny_all, auto_review"):
         public_api_module._approval_mode_settings("allow_all")  # type: ignore[arg-type]
+
+
+def test_approval_defaults_preserve_existing_sync_thread_settings() -> None:
+    """Only thread creation should write approval defaults unless callers override."""
+    client = CapturingApprovalClient()
+    codex = Codex.__new__(Codex)
+    codex._client = client
+
+    started = codex.thread_start(approval_mode=ApprovalMode.deny_all)
+    started.turn([])
+    codex.thread_resume("existing-thread")
+    codex.thread_fork("existing-thread")
+    started.turn([], approval_mode=ApprovalMode.auto_review)
+
+    assert _approval_settings(client.params) == [
+        {"approvalPolicy": "never"},
+        {},
+        {},
+        {},
+        {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+        },
+    ]
+
+
+def test_approval_defaults_preserve_existing_async_thread_settings() -> None:
+    """Async wrappers should follow the same approval override semantics."""
+
+    async def scenario() -> None:
+        client = CapturingAsyncApprovalClient()
+        codex = AsyncCodex()
+        codex._client = client  # type: ignore[assignment]
+        codex._initialized = True
+
+        started = await codex.thread_start(approval_mode=ApprovalMode.deny_all)
+        await started.turn([])
+        await codex.thread_resume("existing-thread")
+        await codex.thread_fork("existing-thread")
+        await started.turn([], approval_mode=ApprovalMode.auto_review)
+
+        assert _approval_settings(client.params) == [
+            {"approvalPolicy": "never"},
+            {},
+            {},
+            {},
+            {
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "auto_review",
+            },
+        ]
+
+    asyncio.run(scenario())
 
 
 def test_turn_streams_can_consume_multiple_turns_on_one_client() -> None:

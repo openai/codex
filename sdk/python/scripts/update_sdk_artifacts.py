@@ -881,16 +881,23 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
     return lines
 
 
-def _approval_mode_signature_lines() -> list[str]:
-    """Return the public approval mode kwarg emitted on start helpers."""
+def _approval_mode_start_signature_lines() -> list[str]:
+    """Return the approval mode kwarg for new threads."""
     return ["        approval_mode: ApprovalMode = ApprovalMode.auto_review,"]
 
 
-def _approval_mode_assignment_line(*, indent: str = "        ") -> str:
+def _approval_mode_override_signature_lines() -> list[str]:
+    """Return the optional approval mode kwarg for override-style helpers."""
+    return ["        approval_mode: ApprovalMode | None = None,"]
+
+
+def _approval_mode_assignment_line(
+    helper_name: str, *, indent: str = "        "
+) -> str:
     """Return the local mapping from public mode to app-server params."""
     return (
         f"{indent}approval_policy, approvals_reviewer = "
-        "_approval_mode_settings(approval_mode)"
+        f"{helper_name}(approval_mode)"
     )
 
 
@@ -929,10 +936,10 @@ def _render_codex_block(
         "    def thread_start(",
         "        self,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_start_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> Thread:",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_settings"),
         "        params = ThreadStartParams(",
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
@@ -954,10 +961,10 @@ def _render_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> Thread:",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -970,10 +977,10 @@ def _render_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> Thread:",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -1002,11 +1009,11 @@ def _render_async_codex_block(
         "    async def thread_start(",
         "        self,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_start_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_settings"),
         "        params = ThreadStartParams(",
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
@@ -1029,11 +1036,11 @@ def _render_async_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -1046,11 +1053,11 @@ def _render_async_codex_block(
         "        self,",
         "        thread_id: str,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -1079,11 +1086,11 @@ def _render_thread_block(
         "        self,",
         "        input: Input,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> TurnHandle:",
         "        wire_input = _to_wire_input(input)",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",
@@ -1104,12 +1111,12 @@ def _render_async_thread_block(
         "        self,",
         "        input: Input,",
         "        *,",
-        *_approval_mode_signature_lines(),
+        *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> AsyncTurnHandle:",
         "        await self._codex._ensure_initialized()",
         "        wire_input = _to_wire_input(input)",
-        _approval_mode_assignment_line(),
+        _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",

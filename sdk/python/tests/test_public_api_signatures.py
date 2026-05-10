@@ -383,15 +383,25 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         _assert_no_any_annotations(fn)
 
 
-def test_generated_public_methods_default_to_auto_review() -> None:
-    """Thread and turn starts should use auto-review unless callers opt out."""
+def test_new_thread_methods_default_to_auto_review() -> None:
+    """New threads should start with auto-review unless callers opt out."""
     funcs = [
         Codex.thread_start,
+        AsyncCodex.thread_start,
+    ]
+
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == {
+        fn: ApprovalMode.auto_review for fn in funcs
+    }
+
+
+def test_existing_thread_methods_default_to_preserving_approval_settings() -> None:
+    """Existing thread operations should not serialize approval overrides by default."""
+    funcs = [
         Codex.thread_resume,
         Codex.thread_fork,
         Thread.turn,
         Thread.run,
-        AsyncCodex.thread_start,
         AsyncCodex.thread_resume,
         AsyncCodex.thread_fork,
         AsyncThread.turn,
@@ -399,7 +409,7 @@ def test_generated_public_methods_default_to_auto_review() -> None:
     ]
 
     assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == {
-        fn: ApprovalMode.auto_review for fn in funcs
+        fn: None for fn in funcs
     }
 
 
