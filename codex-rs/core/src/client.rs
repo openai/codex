@@ -73,6 +73,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -740,8 +741,9 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.state.thread_id.to_string());
-        let service_tier =
-            service_tier.filter(|service_tier| model_info.supports_service_tier(service_tier));
+        let service_tier = service_tier
+            .map(|service_tier| ServiceTier::request_value_for(&service_tier).to_string())
+            .filter(|service_tier| model_info.supports_service_tier(service_tier));
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),

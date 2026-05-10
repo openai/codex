@@ -356,10 +356,31 @@ pub enum ServiceTier {
 }
 
 impl ServiceTier {
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Flex => "flex",
+        }
+    }
+
     pub const fn request_value(self) -> &'static str {
         match self {
             Self::Fast => "priority",
             Self::Flex => "flex",
+        }
+    }
+
+    pub fn config_value_for(value: &str) -> &str {
+        match Self::from_request_value(value) {
+            Some(service_tier) => service_tier.config_value(),
+            None => value,
+        }
+    }
+
+    pub fn request_value_for(value: &str) -> &str {
+        match Self::from_request_value(value) {
+            Some(service_tier) => service_tier.request_value(),
+            None => value,
         }
     }
 
@@ -676,6 +697,26 @@ mod tests {
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
         }
+    }
+
+    #[test]
+    fn service_tier_aliases_have_distinct_config_and_request_values() {
+        let values = ["fast", "priority", "flex", "experimental-tier-id"].map(|value| {
+            (
+                ServiceTier::config_value_for(value),
+                ServiceTier::request_value_for(value),
+            )
+        });
+
+        assert_eq!(
+            values,
+            [
+                ("fast", "priority"),
+                ("fast", "priority"),
+                ("flex", "flex"),
+                ("experimental-tier-id", "experimental-tier-id"),
+            ]
+        );
     }
 
     #[test]
