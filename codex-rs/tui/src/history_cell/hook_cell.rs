@@ -231,12 +231,16 @@ impl HookCell {
             status_message,
             status,
             entries,
+            visibility_hint,
             ..
         } = run;
         let existing = &mut self.runs[index];
         existing.event_name = event_name;
         existing.status_message = status_message;
-        existing.state = HookRunState::completed(status, entries);
+        existing.state = HookRunState::completed(
+            status,
+            visible_hook_output_entries(visibility_hint, entries),
+        );
         true
     }
 
@@ -253,13 +257,17 @@ impl HookCell {
             status_message,
             status,
             entries,
+            visibility_hint,
             ..
         } = run;
         self.runs.push(HookRunCell {
             id,
             event_name,
             status_message,
-            state: HookRunState::completed(status, entries),
+            state: HookRunState::completed(
+                status,
+                visible_hook_output_entries(visibility_hint, entries),
+            ),
         });
     }
 
@@ -693,9 +701,26 @@ pub(crate) fn hook_run_is_hidden(run: &HookRunSummary) -> bool {
             HookRunStatus::Completed => run
                 .entries
                 .iter()
-                .all(|entry| entry.kind == HookOutputEntryKind::Context),
+                .all(|entry| !hook_output_entry_is_visible(run.visibility_hint, entry.kind)),
             HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => false,
         }
+}
+
+fn visible_hook_output_entries(
+    visibility_hint: HookVisibilityHint,
+    entries: Vec<HookOutputEntry>,
+) -> Vec<HookOutputEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| hook_output_entry_is_visible(visibility_hint, entry.kind))
+        .collect()
+}
+
+fn hook_output_entry_is_visible(
+    visibility_hint: HookVisibilityHint,
+    kind: HookOutputEntryKind,
+) -> bool {
+    visibility_hint != HookVisibilityHint::Hidden || kind != HookOutputEntryKind::Context
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {

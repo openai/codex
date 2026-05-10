@@ -2381,14 +2381,38 @@ async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
     let quiet_snapshot = hook_live_and_history_snapshot(&chat, "hidden background hook", "");
     assert!(drain_insert_history(&mut rx).is_empty());
 
-    let mut hidden_failed = hook_completed_run(
+    let mut hidden_warning = hook_completed_run(
         "post-tool-use:1:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        vec![
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Warning,
+                text: "background hook warning".to_string(),
+            },
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                text: "verbose hidden context".to_string(),
+            },
+        ],
+    );
+    hidden_warning.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_completed(&mut chat, hidden_warning);
+
+    let mut hidden_failed = hook_completed_run(
+        "post-tool-use:2:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
         codex_app_server_protocol::HookRunStatus::Failed,
-        vec![codex_app_server_protocol::HookOutputEntry {
-            kind: codex_app_server_protocol::HookOutputEntryKind::Error,
-            text: "hook exited with code 7".to_string(),
-        }],
+        vec![
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                text: "verbose hidden context".to_string(),
+            },
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Error,
+                text: "hook exited with code 7".to_string(),
+            },
+        ],
     );
     hidden_failed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
     handle_hook_completed(&mut chat, hidden_failed);

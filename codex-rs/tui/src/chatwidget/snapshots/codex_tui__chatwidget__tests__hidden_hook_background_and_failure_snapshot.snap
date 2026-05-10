@@ -9,5 +9,8 @@ history:
 <empty>
 
 visible history:
+• PostToolUse hook (completed)
+  warning: background hook warning
+
 • PostToolUse hook (failed)
   error: hook exited with code 7
