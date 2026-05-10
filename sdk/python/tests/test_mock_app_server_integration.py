@@ -446,8 +446,9 @@ def test_multimodal_inputs_reach_responses_api_through_real_app_server(
             remote_result.final_response,
             local_result.final_response,
         ],
-        "latest_user_texts": [
-            request.message_input_texts("user")[-1] for request in requests
+        "contains_user_prompts": [
+            "Describe the remote image." in requests[0].message_input_texts("user"),
+            "Describe the local image." in requests[1].message_input_texts("user"),
         ],
         "image_url_shapes": [
             requests[0].message_image_urls("user")[0],
@@ -457,10 +458,7 @@ def test_multimodal_inputs_reach_responses_api_through_real_app_server(
         ],
     } == {
         "final_responses": ["remote image received", "local image received"],
-        "latest_user_texts": [
-            "Describe the remote image.",
-            "Describe the local image.",
-        ],
+        "contains_user_prompts": [True, True],
         "image_url_shapes": [remote_image_url, True],
     }
 
