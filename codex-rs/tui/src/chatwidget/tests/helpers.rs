@@ -286,7 +286,6 @@ pub(super) async fn make_chatwidget_manual(
         rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         queued_sends_paused_after_usage_limit: false,
-        paused_queued_send_edit: None,
         submit_pending_steers_after_interrupt: false,
         chat_keymap: crate::keymap::RuntimeKeymap::defaults().chat,
         queued_message_edit_hint_binding: Some(crate::key_hint::alt(KeyCode::Up)),

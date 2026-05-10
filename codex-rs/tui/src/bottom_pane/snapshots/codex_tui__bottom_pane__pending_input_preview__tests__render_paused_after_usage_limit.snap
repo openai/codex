@@ -3,13 +3,14 @@ source: tui/src/bottom_pane/pending_input_preview.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 48, height: 5 },
+    area: Rect { x: 0, y: 0, width: 48, height: 6 },
     content: [
         "• Queued sends paused after usage limit         ",
-        "  Press enter to review and resume queued sends ",
+        "  Press enter to resume queued sends            ",
         "                                                ",
         "• Queued inputs                                 ",
         "  ↳ Try again later                             ",
+        "    ⌥ + ↑ edit last queued message              ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -21,5 +22,7 @@ Buffer {
         x: 2, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 19, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

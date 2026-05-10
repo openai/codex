@@ -1509,22 +1509,6 @@ impl App {
             AppEvent::ResumeQueuedSends => {
                 self.chat_widget.resume_queued_sends();
             }
-            AppEvent::ReviewPausedQueuedSends => {
-                self.chat_widget.show_paused_queued_sends_review();
-            }
-            AppEvent::OpenPausedQueuedSendActions { kind, index } => {
-                self.chat_widget
-                    .show_paused_queued_send_actions(kind, index);
-            }
-            AppEvent::EditPausedQueuedSend { kind, index } => {
-                self.chat_widget.edit_paused_queued_send(kind, index);
-            }
-            AppEvent::DropPausedQueuedSend { kind, index } => {
-                self.chat_widget.drop_paused_queued_send(kind, index);
-            }
-            AppEvent::DropAllPausedQueuedSends => {
-                self.chat_widget.drop_all_paused_queued_sends();
-            }
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);

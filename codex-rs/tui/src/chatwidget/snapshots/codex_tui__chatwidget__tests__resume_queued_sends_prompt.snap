@@ -5,8 +5,7 @@ expression: popup
   Resume queued sends?
   Queued inputs were paused after a usage limit was reached.
 
-› 1. Keep paused               Leave queued sends paused until you review them later.
-  2. Review queued inputs      Edit or drop queued inputs before resuming.
-  3. Resume all queued inputs  Continue sending queued inputs.
+› 1. Keep paused          Leave queued sends paused until you review them later.
+  2. Resume queued sends  Continue sending queued inputs.
 
   Press enter to confirm or esc to go back

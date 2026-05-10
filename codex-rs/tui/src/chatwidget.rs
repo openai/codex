@@ -935,9 +935,6 @@ pub(crate) struct ChatWidget {
     // After a limit error, queued follow-up inputs must not resume without an
     // explicit user confirmation.
     queued_sends_paused_after_usage_limit: bool,
-    // While reviewing paused queued sends, Enter saves this composer edit back
-    // into the queue instead of sending it.
-    paused_queued_send_edit: Option<PausedQueuedSendEdit>,
     // When set, the next interrupt should resubmit all pending steers as one
     // fresh user turn instead of restoring them into the composer.
     submit_pending_steers_after_interrupt: bool,
@@ -1131,12 +1128,6 @@ impl From<UserMessage> for QueuedUserMessage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PausedQueuedSendEdit {
-    kind: crate::app_event::PausedQueuedInputKind,
-    index: usize,
-}
-
 impl Deref for QueuedUserMessage {
     type Target = UserMessage;
 
@@ -1183,7 +1174,6 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<QueuedUserMessage>,
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     queued_sends_paused_after_usage_limit: bool,
-    paused_queued_send_edit: Option<PausedQueuedSendEdit>,
     user_turn_pending_start: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
@@ -3338,7 +3328,6 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             queued_user_message_history_records: self.queued_user_message_history_records.clone(),
             queued_sends_paused_after_usage_limit: self.queued_sends_paused_after_usage_limit,
-            paused_queued_send_edit: self.paused_queued_send_edit,
             user_turn_pending_start: self.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
@@ -3416,7 +3405,6 @@ impl ChatWidget {
                 input_state.queued_user_message_history_records;
             self.queued_sends_paused_after_usage_limit =
                 input_state.queued_sends_paused_after_usage_limit;
-            self.paused_queued_send_edit = input_state.paused_queued_send_edit;
             self.queued_user_message_history_records.resize(
                 self.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
@@ -3439,7 +3427,6 @@ impl ChatWidget {
             self.queued_user_messages.clear();
             self.queued_user_message_history_records.clear();
             self.queued_sends_paused_after_usage_limit = false;
-            self.paused_queued_send_edit = None;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -5052,7 +5039,6 @@ impl ChatWidget {
             rejected_steer_history_records: VecDeque::new(),
             pending_steers: VecDeque::new(),
             queued_sends_paused_after_usage_limit: false,
-            paused_queued_send_edit: None,
             submit_pending_steers_after_interrupt: false,
             chat_keymap,
             queued_message_edit_hint_binding,
@@ -5327,9 +5313,6 @@ impl ChatWidget {
                             && user_message.local_images.is_empty()
                             && user_message.remote_image_urls.is_empty()
                         {
-                            return;
-                        }
-                        if self.save_paused_queued_send_edit(user_message.clone()) {
                             return;
                         }
                         let should_submit_now =
@@ -6910,7 +6893,6 @@ impl ChatWidget {
             pending_steers,
             rejected_steers,
             self.queued_sends_paused_after_usage_limit,
-            self.paused_queued_send_edit.is_some(),
         );
     }
 

@@ -1125,14 +1125,12 @@ impl BottomPane {
         pending_steers: Vec<String>,
         rejected_steers: Vec<String>,
         queued_sends_paused_after_usage_limit: bool,
-        editing_paused_queued_send: bool,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.rejected_steers = rejected_steers;
         self.pending_input_preview.queued_messages = queued;
         self.pending_input_preview
             .queued_sends_paused_after_usage_limit = queued_sends_paused_after_usage_limit;
-        self.pending_input_preview.editing_paused_queued_send = editing_paused_queued_send;
         self.request_redraw();
     }
 
@@ -2293,7 +2291,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*queued_sends_paused_after_usage_limit*/ false,
-            /*editing_paused_queued_send*/ false,
         );
 
         let width = 48;
@@ -2326,7 +2323,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*queued_sends_paused_after_usage_limit*/ false,
-            /*editing_paused_queued_send*/ false,
         );
         pane.hide_status_indicator();
 
@@ -2360,7 +2356,6 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*queued_sends_paused_after_usage_limit*/ false,
-            /*editing_paused_queued_send*/ false,
         );
 
         let width = 48;

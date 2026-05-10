@@ -123,12 +123,6 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PausedQueuedInputKind {
-    Steering,
-    FollowUp,
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -725,30 +719,6 @@ pub(crate) enum AppEvent {
 
     /// Resume queued follow-up sends after the user explicitly confirms intent.
     ResumeQueuedSends,
-
-    /// Open the review menu for queued inputs paused after a usage limit.
-    ReviewPausedQueuedSends,
-
-    /// Open the edit/drop menu for one paused queued input.
-    OpenPausedQueuedSendActions {
-        kind: PausedQueuedInputKind,
-        index: usize,
-    },
-
-    /// Restore one paused queued input into the composer for editing.
-    EditPausedQueuedSend {
-        kind: PausedQueuedInputKind,
-        index: usize,
-    },
-
-    /// Remove one paused queued input without sending it.
-    DropPausedQueuedSend {
-        kind: PausedQueuedInputKind,
-        index: usize,
-    },
-
-    /// Remove every paused queued input without sending them.
-    DropAllPausedQueuedSends,
 
     /// Update the Plan-mode-specific reasoning effort in memory.
     UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),

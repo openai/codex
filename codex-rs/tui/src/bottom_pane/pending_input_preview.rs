@@ -25,7 +25,6 @@ pub(crate) struct PendingInputPreview {
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
     pub queued_sends_paused_after_usage_limit: bool,
-    pub editing_paused_queued_send: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -40,7 +39,6 @@ impl PendingInputPreview {
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
             queued_sends_paused_after_usage_limit: false,
-            editing_paused_queued_send: false,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
         }
     }
@@ -96,12 +94,7 @@ impl PendingInputPreview {
                     .display_label()
                     .cyan()
                     .bold(),
-                if self.editing_paused_queued_send {
-                    " to save this queued input"
-                } else {
-                    " to review and resume queued sends"
-                }
-                .into(),
+                " to resume queued sends".into(),
             ]));
         }
 
@@ -200,8 +193,7 @@ impl PendingInputPreview {
             }
         }
 
-        if !self.queued_sends_paused_after_usage_limit
-            && !self.queued_messages.is_empty()
+        if !self.queued_messages.is_empty()
             && let Some(edit_binding) = self.edit_binding
         {
             lines.push(
@@ -416,19 +408,6 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_paused_after_usage_limit", format!("{buf:?}"));
-    }
-
-    #[test]
-    fn render_paused_edit_after_usage_limit() {
-        let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Try again later".to_string());
-        queue.queued_sends_paused_after_usage_limit = true;
-        queue.editing_paused_queued_send = true;
-        let width = 48;
-        let height = queue.desired_height(width);
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        queue.render(Rect::new(0, 0, width, height), &mut buf);
-        assert_snapshot!("render_paused_edit_after_usage_limit", format!("{buf:?}"));
     }
 
     #[test]
