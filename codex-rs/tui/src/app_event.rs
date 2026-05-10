@@ -331,7 +331,7 @@ pub(crate) enum AppEvent {
         result: Result<crate::pets::AmbientPet, String>,
     },
 
-    /// Result of loading the selected ambient pet after config persistence.
+    /// Result of loading the selected ambient pet before config persistence.
     PetSelectionLoaded {
         request_id: u64,
         pet_id: String,

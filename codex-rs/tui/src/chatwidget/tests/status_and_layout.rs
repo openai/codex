@@ -1362,17 +1362,15 @@ async fn ui_snapshots_small_heights_task_running() {
 
 #[tokio::test]
 #[serial]
-async fn ambient_pet_defaults_to_codex_and_anchors_to_composer_bottom() {
+async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     force_pet_image_support(&mut chat);
-    assert_eq!(
-        chat.ambient_pet
-            .as_ref()
-            .map(crate::pets::AmbientPet::selected_pet_id),
-        Some("codex"),
-    );
+    assert!(chat.ambient_pet.is_none());
+
+    crate::pets::write_test_pack(&chat.config.codex_home);
+    chat.set_tui_pet(Some("codex".to_string()));
 
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 20,

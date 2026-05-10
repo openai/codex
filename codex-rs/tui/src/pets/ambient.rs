@@ -153,42 +153,6 @@ impl AmbientPet {
         })
     }
 
-    pub(crate) fn load_with_fallback(
-        selected_pet: Option<&str>,
-        codex_home: &std::path::Path,
-        frame_requester: FrameRequester,
-        animations_enabled: bool,
-    ) -> Result<Self> {
-        match Self::load(
-            selected_pet,
-            codex_home,
-            frame_requester.clone(),
-            animations_enabled,
-        ) {
-            Ok(pet) => Ok(pet),
-            Err(err) if selected_pet.is_some() => {
-                tracing::warn!(
-                    error = %err,
-                    "failed to load configured ambient pet; falling back to default"
-                );
-                Self::load(
-                    /*selected_pet*/ None,
-                    codex_home,
-                    frame_requester,
-                    animations_enabled,
-                )
-                .map_err(|fallback_err| {
-                    tracing::warn!(error = %fallback_err, "failed to load default ambient pet");
-                    fallback_err
-                })
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to load ambient pet");
-                Err(err)
-            }
-        }
-    }
-
     pub(crate) fn set_notification(&mut self, kind: PetNotificationKind, body: Option<String>) {
         self.notification = Some(PetNotification::new(kind, body));
         self.animation_started_at = Instant::now();

@@ -58,7 +58,7 @@ impl Pet {
         }
 
         if let Some(builtin) = catalog::builtin_pet(value) {
-            return load_builtin_pet(builtin);
+            return load_builtin_pet(builtin, codex_home);
         }
 
         load_custom_pet(value, codex_home)
@@ -120,8 +120,9 @@ struct AnimationSpec {
     fallback: String,
 }
 
-fn load_builtin_pet(pet: catalog::BuiltinPet) -> Result<Pet> {
-    let spritesheet_path = catalog::builtin_spritesheet_path(pet.spritesheet_file);
+fn load_builtin_pet(pet: catalog::BuiltinPet, codex_home: Option<&Path>) -> Result<Pet> {
+    let codex_home = codex_home.context("CODEX_HOME is not available")?;
+    let spritesheet_path = super::builtin_spritesheet_path(codex_home, pet.spritesheet_file);
     if !spritesheet_path.exists() {
         bail!("missing spritesheet {}", spritesheet_path.display());
     }
@@ -506,17 +507,14 @@ mod tests {
             }"#,
         )
         .unwrap();
-        fs::copy(
-            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
-            dir.path().join("spritesheet.webp"),
-        )
-        .unwrap();
+        catalog::write_test_spritesheet(&dir.path().join("spritesheet.webp"));
         dir
     }
 
     #[test]
     fn load_builtin_pet_uses_app_catalog_storage() {
         let codex_home = tempfile::tempdir().unwrap();
+        super::super::asset_pack::write_test_pack(codex_home.path());
 
         let pet =
             Pet::load_with_codex_home("dewey", /*codex_home*/ Some(codex_home.path())).unwrap();
@@ -526,7 +524,7 @@ mod tests {
         assert_eq!(pet.description, "A tidy duck for calm workspace days.");
         assert_eq!(
             pet.spritesheet_path,
-            catalog::builtin_spritesheet_path("dewey-spritesheet-v3.webp")
+            super::super::builtin_spritesheet_path(codex_home.path(), "dewey-spritesheet-v4.webp")
         );
         assert_eq!(pet.frame_width, 192);
         assert_eq!(pet.frame_height, 208);

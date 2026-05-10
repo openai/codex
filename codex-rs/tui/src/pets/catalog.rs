@@ -1,8 +1,5 @@
 //! Built-in pet catalog ported from the Codex App avatar catalog.
 
-use std::path::Path;
-use std::path::PathBuf;
-
 pub(super) const DEFAULT_FRAME_WIDTH: u32 = 192;
 pub(super) const DEFAULT_FRAME_HEIGHT: u32 = 208;
 pub(super) const DEFAULT_FRAME_COLUMNS: u32 = 8;
@@ -23,49 +20,49 @@ pub(super) const BUILTIN_PETS: &[BuiltinPet] = &[
         id: "codex",
         display_name: "Codex",
         description: "The original Codex companion.",
-        spritesheet_file: "codex-spritesheet-v3.webp",
+        spritesheet_file: "codex-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "dewey",
         display_name: "Dewey",
         description: "A tidy duck for calm workspace days.",
-        spritesheet_file: "dewey-spritesheet-v3.webp",
+        spritesheet_file: "dewey-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "fireball",
         display_name: "Fireball",
         description: "Hot path energy for fast iteration.",
-        spritesheet_file: "fireball-spritesheet-v3.webp",
+        spritesheet_file: "fireball-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "rocky",
         display_name: "Rocky",
         description: "A steady rock when the diff gets large.",
-        spritesheet_file: "rocky-spritesheet-v3.webp",
+        spritesheet_file: "rocky-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "seedy",
         display_name: "Seedy",
         description: "Small green shoots for new ideas.",
-        spritesheet_file: "seedy-spritesheet-v3.webp",
+        spritesheet_file: "seedy-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "stacky",
         display_name: "Stacky",
         description: "A balanced stack for deep work.",
-        spritesheet_file: "stacky-spritesheet-v3.webp",
+        spritesheet_file: "stacky-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "bsod",
         display_name: "BSOD",
         description: "A tiny blue-screen gremlin.",
-        spritesheet_file: "bsod-spritesheet-v3.webp",
+        spritesheet_file: "bsod-spritesheet-v4.webp",
     },
     BuiltinPet {
         id: "null-signal",
         display_name: "Null Signal",
         description: "Quiet signal from the void.",
-        spritesheet_file: "null-signal-spritesheet-v3.webp",
+        spritesheet_file: "null-signal-spritesheet-v4.webp",
     },
 ];
 
@@ -73,30 +70,8 @@ pub(super) fn builtin_pet(id: &str) -> Option<BuiltinPet> {
     BUILTIN_PETS.iter().copied().find(|pet| pet.id == id)
 }
 
-pub(super) fn builtin_spritesheet_path(file: &str) -> PathBuf {
-    let cargo_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("pets")
-        .join("assets")
-        .join(file);
-    if cargo_path.is_file() {
-        return cargo_path;
-    }
-
-    if let Some(bazel_package) = option_env!("BAZEL_PACKAGE")
-        && let Ok(current_dir) = std::env::current_dir()
-    {
-        let package = bazel_package
-            .strip_prefix("codex-rs/")
-            .unwrap_or(bazel_package);
-        let bazel_path = current_dir
-            .join(package)
-            .join("pets")
-            .join("assets")
-            .join(file);
-        if bazel_path.is_file() {
-            return bazel_path;
-        }
-    }
-
-    cargo_path
+#[cfg(test)]
+pub(super) fn write_test_spritesheet(path: &std::path::Path) {
+    let image = image::RgbaImage::new(SPRITESHEET_WIDTH, SPRITESHEET_HEIGHT);
+    image.save(path).unwrap();
 }

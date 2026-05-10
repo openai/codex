@@ -9107,13 +9107,16 @@ impl ChatWidget {
         let frame_requester = self.frame_requester.clone();
         let tx = self.app_event_tx.clone();
         spawn_pet_load(move || {
-            let result = crate::pets::AmbientPet::load(
-                Some(&pet_id),
-                &codex_home,
-                frame_requester,
-                /*animations_enabled*/ false,
-            )
-            .map_err(|err| err.to_string());
+            let result = crate::pets::ensure_builtin_pack_for_pet(&pet_id, &codex_home)
+                .and_then(|()| {
+                    crate::pets::AmbientPet::load(
+                        Some(&pet_id),
+                        &codex_home,
+                        frame_requester,
+                        /*animations_enabled*/ false,
+                    )
+                })
+                .map_err(|err| err.to_string());
             tx.send(AppEvent::PetPreviewLoaded { request_id, result });
         });
     }
@@ -10853,12 +10856,13 @@ fn load_ambient_pet(
     config: &Config,
     frame_requester: FrameRequester,
 ) -> Option<crate::pets::AmbientPet> {
-    if config.tui_pet.as_deref() == Some(crate::pets::DISABLED_PET_ID) {
+    let selected_pet = config.tui_pet.as_deref()?;
+    if selected_pet == crate::pets::DISABLED_PET_ID {
         return None;
     }
 
-    crate::pets::AmbientPet::load_with_fallback(
-        config.tui_pet.as_deref(),
+    crate::pets::AmbientPet::load(
+        Some(selected_pet),
         &config.codex_home,
         frame_requester,
         config.animations,

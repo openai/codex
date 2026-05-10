@@ -387,40 +387,28 @@ impl App {
             AppEvent::PetSelected { pet_id } => {
                 let request_id = self.chat_widget.show_pet_selection_loading_popup();
                 tui.frame_requester().schedule_frame();
-                let edit = crate::legacy_core::config::edit::tui_pet_edit(&pet_id);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
-                    .apply()
-                    .await;
-                match apply_result {
-                    Ok(()) => {
-                        let codex_home = self.config.codex_home.clone();
-                        let frame_requester = tui.frame_requester();
-                        let animations_enabled = self.config.animations;
-                        let tx = self.app_event_tx.clone();
-                        std::mem::drop(tokio::task::spawn_blocking(move || {
-                            let result = crate::pets::AmbientPet::load_with_fallback(
+                let codex_home = self.config.codex_home.clone();
+                let frame_requester = tui.frame_requester();
+                let animations_enabled = self.config.animations;
+                let tx = self.app_event_tx.clone();
+                std::mem::drop(tokio::task::spawn_blocking(move || {
+                    let result = crate::pets::ensure_builtin_pack_for_pet(&pet_id, &codex_home)
+                        .and_then(|()| {
+                            crate::pets::AmbientPet::load(
                                 Some(&pet_id),
                                 &codex_home,
                                 frame_requester,
                                 animations_enabled,
                             )
-                            .map(Some)
-                            .map_err(|err| err.to_string());
-                            tx.send(AppEvent::PetSelectionLoaded {
-                                request_id,
-                                pet_id,
-                                result,
-                            });
-                        }));
-                    }
-                    Err(err) => {
-                        self.chat_widget
-                            .finish_pet_selection_loading_popup(request_id);
-                        self.chat_widget
-                            .add_error_message(format!("Failed to save pet selection: {err}"));
-                    }
-                }
+                        })
+                        .map(Some)
+                        .map_err(|err| err.to_string());
+                    tx.send(AppEvent::PetSelectionLoaded {
+                        request_id,
+                        pet_id,
+                        result,
+                    });
+                }));
             }
             AppEvent::PetDisabled => {
                 let edit =
@@ -461,9 +449,23 @@ impl App {
                 }
                 match result {
                     Ok(ambient_pet) => {
-                        self.config.tui_pet = Some(pet_id.clone());
-                        self.chat_widget
-                            .set_tui_pet_loaded(Some(pet_id), ambient_pet);
+                        let edit = crate::legacy_core::config::edit::tui_pet_edit(&pet_id);
+                        match ConfigEditsBuilder::new(&self.config.codex_home)
+                            .with_edits([edit])
+                            .apply()
+                            .await
+                        {
+                            Ok(()) => {
+                                self.config.tui_pet = Some(pet_id.clone());
+                                self.chat_widget
+                                    .set_tui_pet_loaded(Some(pet_id), ambient_pet);
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to save pet selection: {err}"
+                                ));
+                            }
+                        }
                     }
                     Err(err) => {
                         self.chat_widget

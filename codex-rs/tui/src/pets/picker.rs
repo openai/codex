@@ -35,7 +35,7 @@ pub(crate) fn build_pet_picker_params(
     codex_home: &Path,
     preview_state: PetPickerPreviewState,
 ) -> SelectionViewParams {
-    let current_pet = current_pet.unwrap_or(DEFAULT_PET_ID);
+    let preferred_pet = current_pet.unwrap_or(DEFAULT_PET_ID);
     let mut entries = available_pet_entries(codex_home);
     entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
     if let Some(disabled_idx) = entries
@@ -65,9 +65,13 @@ pub(crate) fn build_pet_picker_params(
         .into_iter()
         .enumerate()
         .map(|(idx, entry)| {
-            let is_current = current_pet == entry.selector
-                || entry.legacy_selector.as_deref() == Some(current_pet);
-            if is_current {
+            let is_current = current_pet.is_some_and(|current_pet| {
+                current_pet == entry.selector
+                    || entry.legacy_selector.as_deref() == Some(current_pet)
+            });
+            if preferred_pet == entry.selector
+                || entry.legacy_selector.as_deref() == Some(preferred_pet)
+            {
                 initial_selected_idx = Some(idx);
             }
             let pet_id = entry.selector.clone();
@@ -195,11 +199,7 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::copy(
-            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
-            pet_dir.join("spritesheet.webp"),
-        )
-        .unwrap();
+        catalog::write_test_spritesheet(&pet_dir.join("spritesheet.webp"));
     }
 
     fn write_legacy_avatar(dir: &Path, folder_name: &str, display_name: &str) {
@@ -216,11 +216,7 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::copy(
-            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
-            avatar_dir.join("spritesheet.webp"),
-        )
-        .unwrap();
+        catalog::write_test_spritesheet(&avatar_dir.join("spritesheet.webp"));
     }
 
     #[test]
@@ -261,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_defaults_to_codex_when_no_pet_is_configured() {
+    fn picker_preselects_codex_without_marking_it_current_when_no_pet_is_configured() {
         let codex_home = tempfile::tempdir().unwrap();
         let params = build_pet_picker_params(
             /*current_pet*/ None,
@@ -271,7 +267,7 @@ mod tests {
 
         assert_eq!(params.initial_selected_idx, Some(2));
         assert_eq!(params.items[2].name, "Codex");
-        assert!(params.items[2].is_current);
+        assert!(!params.items[2].is_current);
     }
 
     #[test]

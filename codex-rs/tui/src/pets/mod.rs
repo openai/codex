@@ -7,6 +7,7 @@
 use std::io::Write;
 
 mod ambient;
+mod asset_pack;
 mod catalog;
 mod frames;
 mod image_protocol;
@@ -20,6 +21,9 @@ use anyhow::Result;
 pub(crate) use ambient::AmbientPet;
 pub(crate) use ambient::AmbientPetDraw;
 pub(crate) use ambient::PetNotificationKind;
+pub(crate) use asset_pack::builtin_spritesheet_path;
+#[cfg(test)]
+pub(crate) use asset_pack::write_test_pack;
 #[cfg(test)]
 pub(crate) use image_protocol::ImageProtocol;
 pub(crate) use image_protocol::PetImageSupport;
@@ -33,6 +37,16 @@ pub(crate) use preview::PetPickerPreviewState;
 
 pub(crate) const DEFAULT_PET_ID: &str = "codex";
 pub(crate) const DISABLED_PET_ID: &str = "disabled";
+
+pub(crate) fn ensure_builtin_pack_for_pet(
+    pet_id: &str,
+    codex_home: &std::path::Path,
+) -> Result<()> {
+    if let Some(pet) = catalog::builtin_pet(pet_id) {
+        asset_pack::ensure_builtin_pet(codex_home, pet)?;
+    }
+    Ok(())
+}
 
 pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,
