@@ -953,7 +953,7 @@ impl McpServerElicitationOverlay {
                 .enumerate()
             {
                 let text = if self.request.is_high_risk && idx == 0 {
-                    format!("⚠ {line}")
+                    format!("⚠ Elevated Risk: {line}")
                 } else {
                     line.to_string()
                 };
