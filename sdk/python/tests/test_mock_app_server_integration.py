@@ -581,11 +581,13 @@ def test_approval_modes_preserve_real_app_server_state_without_override(
 ) -> None:
     """Resume, fork, and next turn should inherit approval settings unless overridden."""
     with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message("source seeded", response_id="turn-mode-0")
         harness.responses.enqueue_assistant_message("turn override", response_id="turn-mode-1")
         harness.responses.enqueue_assistant_message("turn inherited", response_id="turn-mode-2")
 
         with Codex(config=harness.app_server_config()) as codex:
             source = codex.thread_start(approval_mode=ApprovalMode.deny_all)
+            source_result = source.run("seed the source rollout")
             resumed = codex.thread_resume(source.id)
             forked = codex.thread_fork(source.id)
             explicit_fork = codex.thread_fork(
@@ -634,6 +636,7 @@ def test_approval_modes_preserve_real_app_server_state_without_override(
     assert {
         "policies": inherited_policies,
         "final_responses": [
+            source_result.final_response,
             first_result.final_response,
             second_result.final_response,
         ],
@@ -645,7 +648,7 @@ def test_approval_modes_preserve_real_app_server_state_without_override(
             "after_turn_override": AskForApprovalValue.never.value,
             "after_omitted_turn": AskForApprovalValue.never.value,
         },
-        "final_responses": ["turn override", "turn inherited"],
+        "final_responses": ["source seeded", "turn override", "turn inherited"],
     }
 
 
@@ -757,7 +760,10 @@ def test_models_and_compact_use_real_app_server_rpcs(tmp_path) -> None:
     """Model listing and compaction should go through real app-server methods."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_assistant_message("history", response_id="compact-history")
-        harness.responses.enqueue_compaction_summary("compact summary")
+        harness.responses.enqueue_assistant_message(
+            "compact summary",
+            response_id="compact-summary",
+        )
 
         with Codex(config=harness.app_server_config()) as codex:
             models = codex.models(include_hidden=True)
@@ -781,7 +787,7 @@ def test_models_and_compact_use_real_app_server_rpcs(tmp_path) -> None:
         "models_payload_has_data": True,
         "run_final_response": "history",
         "compact_response": {},
-        "request_kinds": ["responses", "compact"],
+        "request_kinds": ["responses", "responses"],
     }
 
 
