@@ -45,6 +45,33 @@ def test_generation_has_single_maintenance_entrypoint_script() -> None:
     assert scripts == ["update_sdk_artifacts.py"]
 
 
+def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
+    """The repo fmt command should work from Rust and Python SDK directories."""
+    justfile = ROOT.parents[1] / "justfile"
+    lines = justfile.read_text().splitlines()
+    fmt_index = lines.index("fmt:")
+    next_recipe_index = next(
+        index
+        for index in range(fmt_index + 1, len(lines))
+        if lines[index] and not lines[index].startswith((" ", "\t", "#"))
+    )
+    fmt_recipe = lines[fmt_index:next_recipe_index]
+
+    assert {
+        "working_directory": lines[0],
+        "previous_attribute": lines[fmt_index - 1],
+        "commands": [line.strip() for line in fmt_recipe[1:]],
+    } == {
+        "working_directory": 'set working-directory := "codex-rs"',
+        "previous_attribute": "# Format Rust and Python SDK code.",
+        "commands": [
+            "cargo fmt -- --config imports_granularity=Item 2>/dev/null",
+            "uv run --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
+            "uv run --project ../sdk/python --extra dev ruff format ../sdk/python",
+        ],
+    }
+
+
 def test_generate_types_wires_all_generation_steps() -> None:
     """The type generation command should refresh every schema-derived artifact."""
     source = (ROOT / "scripts" / "update_sdk_artifacts.py").read_text()
