@@ -14,6 +14,7 @@ pub use dirty::DirtyState;
 pub use dirty::dirty_state;
 pub use manager::ensure_worktree;
 pub use manager::list_worktrees;
+pub use manager::prune_stale_managed_worktree_dirs;
 pub use manager::remove_worktree;
 pub use manager::resolve_worktree;
 pub use manager::stale_managed_worktree_dirs;

@@ -346,6 +346,23 @@ pub fn stale_managed_worktree_dirs(codex_home: &Path) -> Result<Vec<PathBuf>> {
     Ok(stale)
 }
 
+pub fn prune_stale_managed_worktree_dirs(codex_home: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
+    let stale = stale_managed_worktree_dirs(codex_home)?;
+    if dry_run {
+        return Ok(stale);
+    }
+
+    for path in &stale {
+        fs::remove_dir_all(path).with_context(|| {
+            format!(
+                "failed to remove stale worktree directory {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(stale)
+}
+
 fn git_root_is_valid(path: &Path) -> bool {
     std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -689,6 +706,7 @@ fn parse_worktree_list(output: &str) -> Vec<GitWorktreeEntry> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn parse_worktree_list_preserves_branches() {
@@ -708,5 +726,28 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn prune_stale_managed_worktree_dirs_respects_dry_run() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let stale_path = paths::codex_worktrees_root(codex_home.path())
+            .join("repo-id")
+            .join("demo")
+            .join("codex.demo");
+        fs::create_dir_all(&stale_path)?;
+
+        assert_eq!(
+            prune_stale_managed_worktree_dirs(codex_home.path(), /*dry_run*/ true)?,
+            vec![stale_path.clone()]
+        );
+        assert!(stale_path.exists());
+
+        assert_eq!(
+            prune_stale_managed_worktree_dirs(codex_home.path(), /*dry_run*/ false)?,
+            vec![stale_path.clone()]
+        );
+        assert!(!stale_path.exists());
+        Ok(())
     }
 }

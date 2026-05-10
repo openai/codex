@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::time::Instant;
 
-use codex_worktree::DirtyPolicy;
-use codex_worktree::WorktreeInfo;
-use codex_worktree::WorktreeSource;
+use codex_app_server_protocol::WorktreeDirtyPolicy as DirtyPolicy;
+use codex_app_server_protocol::WorktreeDirtyState;
+use codex_app_server_protocol::WorktreeInfo;
+use codex_app_server_protocol::WorktreeSource;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -371,7 +372,7 @@ pub(crate) fn picker_params(entries: Vec<WorktreeInfo>, current_cwd: &Path) -> S
     items.extend(entries.into_iter().enumerate().map(|(idx, entry)| {
         let target = entry.branch.clone().unwrap_or_else(|| entry.name.clone());
         let source = source_label(entry.source);
-        let status = if entry.dirty.is_dirty() {
+        let status = if dirty_state_is_dirty(&entry.dirty) {
             "dirty"
         } else {
             "clean"
@@ -380,18 +381,15 @@ pub(crate) fn picker_params(entries: Vec<WorktreeInfo>, current_cwd: &Path) -> S
         if is_current {
             initial_selected_idx = Some(idx + 1);
         }
-        let description = format!("{status} · {source} · {}", entry.workspace_cwd.display());
+        let description = format!("{status} · {source} · {}", entry.workspace_cwd);
         let selected_description = if is_current {
             "Already in this worktree".to_string()
         } else {
-            format!("Fork this chat into {}", entry.workspace_cwd.display())
+            format!("Fork this chat into {}", entry.workspace_cwd)
         };
         let search_value = Some(format!(
             "{} {} {} {}",
-            target,
-            entry.name,
-            source,
-            entry.workspace_cwd.display()
+            target, entry.name, source, entry.workspace_cwd
         ));
         let target_for_action = target.clone();
         let actions: Vec<SelectionAction> = if is_current {
@@ -401,9 +399,10 @@ pub(crate) fn picker_params(entries: Vec<WorktreeInfo>, current_cwd: &Path) -> S
                 });
             })]
         } else {
+            let info_for_action = entry;
             vec![Box::new(move |tx| {
-                tx.send(AppEvent::SwitchToWorktree {
-                    target: target_for_action.clone(),
+                tx.send(AppEvent::SwitchToWorktreeInfo {
+                    info: info_for_action.clone(),
                 });
             })]
         };
@@ -595,31 +594,34 @@ fn paths_match(a: &Path, b: &Path) -> bool {
 }
 
 fn is_current_worktree(current_cwd: &Path, entry: &WorktreeInfo) -> bool {
-    if paths_match(current_cwd, &entry.workspace_cwd) {
+    let workspace_cwd = Path::new(&entry.workspace_cwd);
+    if paths_match(current_cwd, workspace_cwd) {
         return true;
     }
     let current_cwd = current_cwd
         .canonicalize()
         .unwrap_or_else(|_| current_cwd.to_path_buf());
-    let worktree_root = entry
-        .worktree_git_root
+    let worktree_git_root = Path::new(&entry.worktree_git_root);
+    let worktree_root = worktree_git_root
         .canonicalize()
-        .unwrap_or_else(|_| entry.worktree_git_root.clone());
+        .unwrap_or_else(|_| worktree_git_root.to_path_buf());
     current_cwd.starts_with(worktree_root)
+}
+
+fn dirty_state_is_dirty(dirty: &WorktreeDirtyState) -> bool {
+    dirty.has_staged_changes || dirty.has_unstaged_changes || dirty.has_untracked_files
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     use crate::app_event_sender::AppEventSender;
     use crate::bottom_pane::ListSelectionView;
     use crate::keymap::RuntimeKeymap;
     use crate::render::renderable::Renderable;
     use crate::tui::FrameRequester;
-    use codex_worktree::DirtyState;
-    use codex_worktree::WorktreeLocation;
+    use codex_app_server_protocol::WorktreeLocation;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -735,6 +737,27 @@ mod tests {
     }
 
     #[test]
+    fn existing_worktree_item_dispatches_selected_worktree_info() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let params = picker_params(
+            vec![sample_info(
+                "fcoury/worktrees",
+                WorktreeSource::Git,
+                /*dirty*/ false,
+            )],
+            Path::new("/repo/codex"),
+        );
+
+        (params.items[1].actions[0])(&tx);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SwitchToWorktreeInfo { info }) if info.branch.as_deref() == Some("fcoury/worktrees")
+        ));
+    }
+
+    #[test]
     fn worktree_loading_snapshot() {
         insta::assert_snapshot!(
             "worktree_loading",
@@ -831,7 +854,7 @@ mod tests {
     }
 
     fn sample_info(branch: &str, source: WorktreeSource, dirty: bool) -> WorktreeInfo {
-        let path = PathBuf::from(format!("/repo/codex.{}", branch.replace('/', "-")));
+        let path = format!("/repo/codex.{}", branch.replace('/', "-"));
         WorktreeInfo {
             id: "repo-id".to_string(),
             name: branch.to_string(),
@@ -844,15 +867,15 @@ mod tests {
             },
             repo_name: "codex".to_string(),
             repo_root: path.clone(),
-            common_git_dir: PathBuf::from("/repo/codex/.git"),
+            common_git_dir: "/repo/codex/.git".to_string(),
             worktree_git_root: path.clone(),
             workspace_cwd: path,
-            original_relative_cwd: PathBuf::new(),
+            original_relative_cwd: String::new(),
             branch: Some(branch.to_string()),
             head: Some("abcdef".to_string()),
             owner_thread_id: None,
-            metadata_path: PathBuf::from("/repo/codex/.git/codex-worktree.json"),
-            dirty: DirtyState {
+            metadata_path: "/repo/codex/.git/codex-worktree.json".to_string(),
+            dirty: WorktreeDirtyState {
                 has_staged_changes: false,
                 has_unstaged_changes: dirty,
                 has_untracked_files: false,

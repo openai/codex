@@ -4,25 +4,17 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorktreeCreateParams;
 use codex_app_server_protocol::WorktreeCreateResponse;
-use codex_app_server_protocol::WorktreeDirtyPolicy as ApiWorktreeDirtyPolicy;
-use codex_app_server_protocol::WorktreeDirtyState as ApiWorktreeDirtyState;
-use codex_app_server_protocol::WorktreeInfo as ApiWorktreeInfo;
+use codex_app_server_protocol::WorktreeDirtyPolicy;
+use codex_app_server_protocol::WorktreeDirtyState;
+use codex_app_server_protocol::WorktreeInfo;
 use codex_app_server_protocol::WorktreeInspectSourceParams;
 use codex_app_server_protocol::WorktreeInspectSourceResponse;
 use codex_app_server_protocol::WorktreeListParams;
 use codex_app_server_protocol::WorktreeListResponse;
-use codex_app_server_protocol::WorktreeLocation as ApiWorktreeLocation;
 use codex_app_server_protocol::WorktreeRemoveParams;
 use codex_app_server_protocol::WorktreeRemoveResponse;
-use codex_app_server_protocol::WorktreeSource as ApiWorktreeSource;
+use codex_app_server_protocol::WorktreeSource;
 use codex_protocol::ThreadId;
-use codex_worktree::DirtyPolicy;
-use codex_worktree::WorktreeInfo;
-use codex_worktree::WorktreeLocation;
-use codex_worktree::WorktreeRequest;
-use codex_worktree::WorktreeResolution;
-use codex_worktree::WorktreeSource;
-use codex_worktree::WorktreeWarning;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -43,6 +35,14 @@ enum WorktreeSwitchMode {
 enum WorktreeSessionTransition {
     Forked,
     Started,
+}
+
+pub(super) struct WorktreeSessionReadyArgs {
+    pub(super) info: WorktreeInfo,
+    pub(super) config: Config,
+    pub(super) forked: bool,
+    pub(super) warnings: Vec<String>,
+    pub(super) result: Result<AppServerStartedThread, String>,
 }
 
 impl WorktreeSessionTransition {
@@ -133,17 +133,17 @@ impl App {
         app_server: &AppServerSession,
         branch: String,
         base_ref: Option<String>,
-        dirty_policy: Option<DirtyPolicy>,
+        dirty_policy: Option<WorktreeDirtyPolicy>,
     ) {
         let dirty_policy = match dirty_policy {
             Some(policy) => policy,
             None => match self.source_worktree_dirty_state(app_server).await {
-                Ok(state) if state.is_dirty() => {
+                Ok(state) if dirty_state_is_dirty(&state) => {
                     let params = crate::worktree::dirty_policy_prompt_params(branch, base_ref);
                     self.chat_widget.show_selection_view(params);
                     return;
                 }
-                Ok(_) => DirtyPolicy::Fail,
+                Ok(_) => WorktreeDirtyPolicy::Fail,
                 Err(err) => {
                     self.chat_widget
                         .add_error_message(format!("Failed to inspect source checkout: {err}"));
@@ -155,13 +155,10 @@ impl App {
         self.show_worktree_creating_view(tui, branch.clone());
         self.spawn_worktree_create_request(
             app_server,
-            WorktreeRequest {
-                codex_home: self.config.codex_home.to_path_buf(),
-                source_cwd: self.session_workspace_cwd(app_server).to_path_buf(),
-                branch,
-                base_ref,
-                dirty_policy,
-            },
+            self.session_workspace_cwd(app_server).to_path_buf(),
+            branch,
+            base_ref,
+            dirty_policy,
         );
     }
 
@@ -170,29 +167,29 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         cwd: PathBuf,
-        result: Result<WorktreeResolution, String>,
+        result: Result<WorktreeCreateResponse, String>,
     ) {
         if cwd.as_path() != self.session_workspace_cwd(app_server) {
             return;
         }
-        let resolution = match result {
-            Ok(resolution) => resolution,
+        let response = match result {
+            Ok(response) => response,
             Err(err) => {
                 self.show_worktree_error("Failed to create worktree.".to_string(), err);
                 return;
             }
         };
-        let target = resolution
+        let target = response
             .info
             .branch
             .clone()
-            .unwrap_or_else(|| resolution.info.name.clone());
+            .unwrap_or_else(|| response.info.name.clone());
         self.show_worktree_switching_view(tui, target);
         self.switch_to_worktree_info(
             tui,
             app_server,
-            resolution.info,
-            resolution
+            response.info,
+            response
                 .warnings
                 .into_iter()
                 .map(|warning| warning.message)
@@ -201,20 +198,10 @@ impl App {
         .await;
     }
 
-    pub(super) fn begin_switch_to_worktree_target(&mut self, tui: &mut tui::Tui, target: String) {
-        self.show_worktree_switching_view(tui, target.clone());
-        self.defer_switch_to_worktree_target(target);
-    }
-
-    pub(super) fn current_worktree_selected(&mut self, target: String) {
-        self.chat_widget
-            .add_info_message(format!("Already in worktree {target}."), /*hint*/ None);
-    }
-
-    pub(super) async fn switch_to_worktree_target_after_loading(
+    pub(super) async fn begin_switch_to_worktree_target(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
+        app_server: &AppServerSession,
         target: String,
     ) {
         let entries = match self
@@ -234,6 +221,26 @@ impl App {
                 return;
             }
         };
+        self.begin_switch_to_worktree_info(tui, info);
+    }
+
+    pub(super) fn begin_switch_to_worktree_info(&mut self, tui: &mut tui::Tui, info: WorktreeInfo) {
+        let target = info.branch.clone().unwrap_or_else(|| info.name.clone());
+        self.show_worktree_switching_view(tui, target);
+        self.defer_switch_to_worktree_info(info);
+    }
+
+    pub(super) fn current_worktree_selected(&mut self, target: String) {
+        self.chat_widget
+            .add_info_message(format!("Already in worktree {target}."), /*hint*/ None);
+    }
+
+    pub(super) async fn switch_to_worktree_info_after_loading(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        info: WorktreeInfo,
+    ) {
         self.switch_to_worktree_info(tui, app_server, info, Vec::new())
             .await;
     }
@@ -249,10 +256,8 @@ impl App {
         {
             Ok(entries) => match crate::worktree::find_worktree(&entries, &target) {
                 Ok(info) => {
-                    self.chat_widget.add_info_message(
-                        info.workspace_cwd.display().to_string(),
-                        /*hint*/ None,
-                    );
+                    self.chat_widget
+                        .add_info_message(info.workspace_cwd.clone(), /*hint*/ None);
                 }
                 Err(err) => self.chat_widget.add_error_message(err),
             },
@@ -334,17 +339,13 @@ impl App {
                 },
             })
             .await?;
-        Ok(response
-            .data
-            .into_iter()
-            .map(worktree_info_from_api)
-            .collect())
+        Ok(response.data)
     }
 
     async fn source_worktree_dirty_state(
         &self,
         app_server: &AppServerSession,
-    ) -> anyhow::Result<codex_worktree::DirtyState> {
+    ) -> anyhow::Result<WorktreeDirtyState> {
         let response: WorktreeInspectSourceResponse = app_server
             .request_handle()
             .request_typed(ClientRequest::WorktreeInspectSource {
@@ -354,7 +355,7 @@ impl App {
                 },
             })
             .await?;
-        Ok(dirty_state_from_api(response.dirty))
+        Ok(response.dirty)
     }
 
     fn session_workspace_cwd<'a>(&'a self, app_server: &'a AppServerSession) -> &'a Path {
@@ -375,9 +376,12 @@ impl App {
     fn spawn_worktree_create_request(
         &self,
         app_server: &AppServerSession,
-        request: WorktreeRequest,
+        source_cwd: PathBuf,
+        branch: String,
+        base_ref: Option<String>,
+        dirty_policy: WorktreeDirtyPolicy,
     ) {
-        let cwd = request.source_cwd.clone();
+        let cwd = source_cwd.clone();
         let app_event_tx = self.app_event_tx.clone();
         let request_handle = app_server.request_handle();
         tokio::spawn(async move {
@@ -385,16 +389,14 @@ impl App {
                 .request_typed(ClientRequest::WorktreeCreate {
                     request_id: worktree_request_id("worktree-create"),
                     params: WorktreeCreateParams {
-                        cwd: Some(request.source_cwd.display().to_string()),
-                        branch: request.branch,
-                        base_ref: request.base_ref,
-                        dirty_policy: dirty_policy_to_api(request.dirty_policy),
+                        cwd: Some(source_cwd.display().to_string()),
+                        branch,
+                        base_ref,
+                        dirty_policy,
                     },
                 })
                 .await;
-            let result = result
-                .map(worktree_resolution_from_api)
-                .map_err(|err| err.to_string());
+            let result = result.map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::WorktreeCreated { cwd, result });
         });
     }
@@ -410,7 +412,7 @@ impl App {
             self.config.clone()
         } else {
             match self
-                .rebuild_config_for_cwd(info.workspace_cwd.clone())
+                .rebuild_config_for_cwd(PathBuf::from(info.workspace_cwd.clone()))
                 .await
             {
                 Ok(config) => config,
@@ -434,12 +436,15 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        info: WorktreeInfo,
-        config: Config,
-        forked: bool,
-        warnings: Vec<String>,
-        result: Result<AppServerStartedThread, String>,
+        args: WorktreeSessionReadyArgs,
     ) {
+        let WorktreeSessionReadyArgs {
+            info,
+            config,
+            forked,
+            warnings,
+            result,
+        } = args;
         match result {
             Ok(started) => {
                 self.shutdown_current_thread(app_server).await;
@@ -456,7 +461,9 @@ impl App {
                     );
                 } else {
                     if app_server.is_remote() {
-                        app_server.set_remote_cwd_override(Some(info.workspace_cwd.clone()));
+                        app_server.set_remote_cwd_override(Some(PathBuf::from(
+                            info.workspace_cwd.clone(),
+                        )));
                     }
                     let transition = if forked {
                         WorktreeSessionTransition::Forked
@@ -491,7 +498,7 @@ impl App {
     ) {
         let request_handle = app_server.request_handle();
         let remote_cwd_override = if app_server.is_remote() {
-            Some(info.workspace_cwd.clone())
+            Some(PathBuf::from(info.workspace_cwd.clone()))
         } else {
             app_server.remote_cwd_override().map(Path::to_path_buf)
         };
@@ -600,11 +607,11 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    fn defer_switch_to_worktree_target(&self, target: String) {
+    fn defer_switch_to_worktree_info(&self, info: WorktreeInfo) {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             tokio::time::sleep(WORKTREE_SWITCH_RENDER_DELAY).await;
-            app_event_tx.send(AppEvent::SwitchToWorktreeAfterLoading { target });
+            app_event_tx.send(AppEvent::SwitchToWorktreeAfterLoading { info });
         });
     }
 
@@ -658,75 +665,8 @@ fn worktree_request_id(prefix: &str) -> RequestId {
     RequestId::String(format!("{prefix}-{}", Uuid::new_v4()))
 }
 
-fn dirty_policy_to_api(value: DirtyPolicy) -> ApiWorktreeDirtyPolicy {
-    match value {
-        DirtyPolicy::Fail => ApiWorktreeDirtyPolicy::Fail,
-        DirtyPolicy::Ignore => ApiWorktreeDirtyPolicy::Ignore,
-        DirtyPolicy::CopyTracked => ApiWorktreeDirtyPolicy::CopyTracked,
-        DirtyPolicy::CopyAll => ApiWorktreeDirtyPolicy::CopyAll,
-        DirtyPolicy::MoveTracked => ApiWorktreeDirtyPolicy::MoveTracked,
-        DirtyPolicy::MoveAll => ApiWorktreeDirtyPolicy::MoveAll,
-    }
-}
-
-fn dirty_state_from_api(value: ApiWorktreeDirtyState) -> codex_worktree::DirtyState {
-    codex_worktree::DirtyState {
-        has_staged_changes: value.has_staged_changes,
-        has_unstaged_changes: value.has_unstaged_changes,
-        has_untracked_files: value.has_untracked_files,
-    }
-}
-
-fn worktree_info_from_api(value: ApiWorktreeInfo) -> WorktreeInfo {
-    WorktreeInfo {
-        id: value.id,
-        name: value.name,
-        slug: value.slug,
-        source: worktree_source_from_api(value.source),
-        location: worktree_location_from_api(value.location),
-        repo_name: value.repo_name,
-        repo_root: PathBuf::from(value.repo_root),
-        common_git_dir: PathBuf::from(value.common_git_dir),
-        worktree_git_root: PathBuf::from(value.worktree_git_root),
-        workspace_cwd: PathBuf::from(value.workspace_cwd),
-        original_relative_cwd: PathBuf::from(value.original_relative_cwd),
-        branch: value.branch,
-        head: value.head,
-        owner_thread_id: value.owner_thread_id,
-        metadata_path: PathBuf::from(value.metadata_path),
-        dirty: dirty_state_from_api(value.dirty),
-    }
-}
-
-fn worktree_source_from_api(value: ApiWorktreeSource) -> WorktreeSource {
-    match value {
-        ApiWorktreeSource::Cli => WorktreeSource::Cli,
-        ApiWorktreeSource::App => WorktreeSource::App,
-        ApiWorktreeSource::Legacy => WorktreeSource::Legacy,
-        ApiWorktreeSource::Git => WorktreeSource::Git,
-    }
-}
-
-fn worktree_location_from_api(value: ApiWorktreeLocation) -> WorktreeLocation {
-    match value {
-        ApiWorktreeLocation::Sibling => WorktreeLocation::Sibling,
-        ApiWorktreeLocation::CodexHome => WorktreeLocation::CodexHome,
-        ApiWorktreeLocation::External => WorktreeLocation::External,
-    }
-}
-
-fn worktree_resolution_from_api(value: WorktreeCreateResponse) -> WorktreeResolution {
-    WorktreeResolution {
-        reused: value.reused,
-        info: worktree_info_from_api(value.info),
-        warnings: value
-            .warnings
-            .into_iter()
-            .map(|warning| WorktreeWarning {
-                message: warning.message,
-            })
-            .collect(),
-    }
+fn dirty_state_is_dirty(dirty: &WorktreeDirtyState) -> bool {
+    dirty.has_staged_changes || dirty.has_unstaged_changes || dirty.has_untracked_files
 }
 
 fn worktree_session_message(
@@ -734,7 +674,7 @@ fn worktree_session_message(
     transition: WorktreeSessionTransition,
 ) -> (String, String) {
     let worktree_name = info.branch.as_deref().unwrap_or(info.name.as_str());
-    let state = if info.dirty.is_dirty() {
+    let state = if dirty_state_is_dirty(&info.dirty) {
         "dirty"
     } else {
         "clean"
@@ -746,7 +686,7 @@ fn worktree_session_message(
             transition.message_prefix(),
             info.repo_name
         ),
-        info.workspace_cwd.display().to_string(),
+        info.workspace_cwd.clone(),
     )
 }
 
@@ -754,11 +694,10 @@ fn worktree_session_message(
 mod tests {
     use super::*;
     use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::WorktreeLocation;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
-    use codex_worktree::DirtyState;
-    use codex_worktree::WorktreeLocation;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -918,16 +857,16 @@ mod tests {
             source,
             location: WorktreeLocation::Sibling,
             repo_name: "codex".to_string(),
-            repo_root: path.clone(),
-            common_git_dir: PathBuf::from("/repo/codex/.git"),
-            worktree_git_root: path.clone(),
-            workspace_cwd: path,
-            original_relative_cwd: PathBuf::new(),
+            repo_root: path.to_string_lossy().to_string(),
+            common_git_dir: "/repo/codex/.git".to_string(),
+            worktree_git_root: path.to_string_lossy().to_string(),
+            workspace_cwd: path.to_string_lossy().to_string(),
+            original_relative_cwd: String::new(),
             branch,
             head: Some("abcdef".to_string()),
             owner_thread_id: None,
-            metadata_path: PathBuf::from("/repo/codex/.git/codex-worktree.json"),
-            dirty: DirtyState {
+            metadata_path: "/repo/codex/.git/codex-worktree.json".to_string(),
+            dirty: WorktreeDirtyState {
                 has_staged_changes: false,
                 has_unstaged_changes: dirty,
                 has_untracked_files: false,

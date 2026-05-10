@@ -17,12 +17,15 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorktreeCreateParams;
 use codex_app_server_protocol::WorktreeCreateResponse;
 use codex_app_server_protocol::WorktreeDirtyPolicy as ApiWorktreeDirtyPolicy;
+use codex_app_server_protocol::WorktreeDirtyState;
+use codex_app_server_protocol::WorktreeInfo;
 use codex_app_server_protocol::WorktreeListParams;
 use codex_app_server_protocol::WorktreeListResponse;
 use codex_app_server_protocol::WorktreePruneParams;
 use codex_app_server_protocol::WorktreePruneResponse;
 use codex_app_server_protocol::WorktreeRemoveParams;
 use codex_app_server_protocol::WorktreeRemoveResponse;
+use codex_app_server_protocol::WorktreeSource;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -56,8 +59,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_cli::WorktreeDirtyCliArg;
-use codex_worktree::WorktreeInfo;
-use codex_worktree::WorktreeResolution;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -780,9 +781,9 @@ async fn resolve_worktree_options_for_shared_cli(
     remote: Option<&str>,
     remote_auth_token_env: Option<&str>,
     arg0_paths: Arg0DispatchPaths,
-) -> anyhow::Result<Option<WorktreeResolution>> {
+) -> anyhow::Result<()> {
     let Some(branch) = shared.worktree.take() else {
-        return Ok(None);
+        return Ok(());
     };
 
     if remote.is_some() || remote_auth_token_env.is_some() {
@@ -805,25 +806,14 @@ async fn resolve_worktree_options_for_shared_cli(
             },
         })
         .await?;
-    let resolution = WorktreeResolution {
-        reused: response.reused,
-        info: worktree_info_from_api(response.info)?,
-        warnings: response
-            .warnings
-            .into_iter()
-            .map(|warning| codex_worktree::WorktreeWarning {
-                message: warning.message,
-            })
-            .collect(),
-    };
-    shared.cwd = Some(resolution.info.workspace_cwd.clone());
+    shared.cwd = Some(PathBuf::from(response.info.workspace_cwd));
 
     #[allow(clippy::print_stderr)]
-    for warning in &resolution.warnings {
+    for warning in &response.warnings {
         eprintln!("warning: {}", warning.message);
     }
 
-    Ok(Some(resolution))
+    Ok(())
 }
 
 async fn run_worktree_command(
@@ -863,10 +853,15 @@ async fn run_worktree_command(
             print_worktree_list(entries, command.json)?;
         }
         WorktreeSubcommand::Path(command) => {
-            let entries =
-                cli_list_worktrees(&client, cwd.clone(), false, &mut next_request_id).await?;
+            let entries = cli_list_worktrees(
+                &client,
+                cwd.clone(),
+                /*all*/ false,
+                &mut next_request_id,
+            )
+            .await?;
             let entry = find_named_worktree(entries, &command.name)?;
-            println!("{}", entry.workspace_cwd.display());
+            println!("{}", entry.workspace_cwd);
         }
         WorktreeSubcommand::Remove(command) => {
             let result: WorktreeRemoveResponse = client
@@ -894,11 +889,7 @@ async fn run_worktree_command(
                     },
                 })
                 .await?;
-            let stale_paths = response
-                .paths
-                .into_iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
+            let stale_paths = response.paths;
             if command.json {
                 println!("{}", serde_json::to_string_pretty(&stale_paths)?);
             } else if stale_paths.is_empty() {
@@ -906,9 +897,9 @@ async fn run_worktree_command(
             } else {
                 for path in &stale_paths {
                     if command.dry_run {
-                        println!("would remove {}", path.display());
+                        println!("would remove {path}");
                     } else {
-                        println!("removed {}", path.display());
+                        println!("removed {path}");
                     }
                 }
             }
@@ -929,11 +920,7 @@ async fn cli_list_worktrees(
             params: WorktreeListParams { cwd, all },
         })
         .await?;
-    response
-        .data
-        .into_iter()
-        .map(worktree_info_from_api)
-        .collect()
+    Ok(response.data)
 }
 
 fn next_cli_request_id(next: &mut i64) -> RequestId {
@@ -1021,29 +1008,6 @@ async fn worktree_app_server_client(
     ))
 }
 
-fn worktree_info_from_api(
-    info: codex_app_server_protocol::WorktreeInfo,
-) -> anyhow::Result<WorktreeInfo> {
-    Ok(WorktreeInfo {
-        id: info.id,
-        name: info.name,
-        slug: info.slug,
-        source: serde_json::from_value(serde_json::to_value(info.source)?)?,
-        location: serde_json::from_value(serde_json::to_value(info.location)?)?,
-        repo_name: info.repo_name,
-        repo_root: PathBuf::from(info.repo_root),
-        common_git_dir: PathBuf::from(info.common_git_dir),
-        worktree_git_root: PathBuf::from(info.worktree_git_root),
-        workspace_cwd: PathBuf::from(info.workspace_cwd),
-        original_relative_cwd: PathBuf::from(info.original_relative_cwd),
-        branch: info.branch,
-        head: info.head,
-        owner_thread_id: info.owner_thread_id,
-        metadata_path: PathBuf::from(info.metadata_path),
-        dirty: serde_json::from_value(serde_json::to_value(info.dirty)?)?,
-    })
-}
-
 fn print_worktree_list(entries: Vec<WorktreeInfo>, json: bool) -> anyhow::Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -1052,7 +1016,7 @@ fn print_worktree_list(entries: Vec<WorktreeInfo>, json: bool) -> anyhow::Result
 
     let mut rows = Vec::new();
     for entry in &entries {
-        let status = if entry.dirty.is_dirty() {
+        let status = if dirty_state_is_dirty(&entry.dirty) {
             "dirty"
         } else {
             "clean"
@@ -1066,7 +1030,7 @@ fn print_worktree_list(entries: Vec<WorktreeInfo>, json: bool) -> anyhow::Result
                 .as_deref()
                 .unwrap_or("none")
                 .to_string(),
-            entry.workspace_cwd.display().to_string(),
+            entry.workspace_cwd.clone(),
         ]);
     }
     let headers = ["BRANCH", "STATUS", "SOURCE", "THREAD", "PATH"];
@@ -1107,11 +1071,15 @@ fn print_worktree_list(entries: Vec<WorktreeInfo>, json: bool) -> anyhow::Result
 
 fn worktree_source_label(entry: &WorktreeInfo) -> &'static str {
     match entry.source {
-        codex_worktree::WorktreeSource::Cli => "cli",
-        codex_worktree::WorktreeSource::App => "app",
-        codex_worktree::WorktreeSource::Legacy => "legacy",
-        codex_worktree::WorktreeSource::Git => "git",
+        WorktreeSource::Cli => "cli",
+        WorktreeSource::App => "app",
+        WorktreeSource::Legacy => "legacy",
+        WorktreeSource::Git => "git",
     }
+}
+
+fn dirty_state_is_dirty(dirty: &WorktreeDirtyState) -> bool {
+    dirty.has_staged_changes || dirty.has_unstaged_changes || dirty.has_untracked_files
 }
 
 fn find_named_worktree(entries: Vec<WorktreeInfo>, name: &str) -> anyhow::Result<WorktreeInfo> {

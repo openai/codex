@@ -213,15 +213,20 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::SwitchToWorktree { target } => {
-                self.begin_switch_to_worktree_target(tui, target);
+                self.begin_switch_to_worktree_target(tui, app_server, target)
+                    .await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SwitchToWorktreeInfo { info } => {
+                self.begin_switch_to_worktree_info(tui, info);
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::CurrentWorktreeSelected { target } => {
                 self.current_worktree_selected(target);
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::SwitchToWorktreeAfterLoading { target } => {
-                self.switch_to_worktree_target_after_loading(tui, app_server, target)
+            AppEvent::SwitchToWorktreeAfterLoading { info } => {
+                self.switch_to_worktree_info_after_loading(tui, app_server, info)
                     .await;
                 tui.frame_requester().schedule_frame();
             }
@@ -233,7 +238,15 @@ impl App {
                 result,
             } => {
                 self.on_worktree_session_ready(
-                    tui, app_server, info, config, forked, warnings, result,
+                    tui,
+                    app_server,
+                    super::worktree::WorktreeSessionReadyArgs {
+                        info,
+                        config,
+                        forked,
+                        warnings,
+                        result,
+                    },
                 )
                 .await;
                 tui.frame_requester().schedule_frame();

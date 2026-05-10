@@ -99,19 +99,11 @@ impl WorktreeRequestProcessor {
         &self,
         params: WorktreePruneParams,
     ) -> Result<WorktreePruneResponse, JSONRPCErrorError> {
-        let stale_paths =
-            codex_worktree::stale_managed_worktree_dirs(self.config_manager.codex_home())
-                .map_err(map_worktree_error)?;
-        if !params.dry_run {
-            for path in &stale_paths {
-                std::fs::remove_dir_all(path).map_err(|err| {
-                    map_worktree_error(anyhow::anyhow!(
-                        "failed to remove stale worktree directory {}: {err}",
-                        path.display()
-                    ))
-                })?;
-            }
-        }
+        let stale_paths = codex_worktree::prune_stale_managed_worktree_dirs(
+            self.config_manager.codex_home(),
+            params.dry_run,
+        )
+        .map_err(map_worktree_error)?;
         Ok(WorktreePruneResponse {
             paths: stale_paths
                 .into_iter()

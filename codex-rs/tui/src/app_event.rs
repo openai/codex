@@ -26,12 +26,14 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::WorktreeCreateResponse;
+use codex_app_server_protocol::WorktreeDirtyPolicy;
+use codex_app_server_protocol::WorktreeInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
-use codex_worktree::DirtyPolicy;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -209,18 +211,23 @@ pub(crate) enum AppEvent {
     CreateWorktreeAndSwitch {
         branch: String,
         base_ref: Option<String>,
-        dirty_policy: Option<DirtyPolicy>,
+        dirty_policy: Option<WorktreeDirtyPolicy>,
     },
 
     /// Result of creating or reusing a managed worktree.
     WorktreeCreated {
         cwd: PathBuf,
-        result: Result<codex_worktree::WorktreeResolution, String>,
+        result: Result<WorktreeCreateResponse, String>,
     },
 
     /// Switch the TUI into an existing worktree.
     SwitchToWorktree {
         target: String,
+    },
+
+    /// Switch the TUI into the selected existing worktree.
+    SwitchToWorktreeInfo {
+        info: WorktreeInfo,
     },
 
     /// A picker row for the current worktree was selected.
@@ -230,12 +237,12 @@ pub(crate) enum AppEvent {
 
     /// Continue switching into an existing worktree after the loading view has rendered.
     SwitchToWorktreeAfterLoading {
-        target: String,
+        info: WorktreeInfo,
     },
 
     /// Result of starting or forking a session in a worktree.
     WorktreeSessionReady {
-        info: codex_worktree::WorktreeInfo,
+        info: WorktreeInfo,
         config: Config,
         forked: bool,
         warnings: Vec<String>,
