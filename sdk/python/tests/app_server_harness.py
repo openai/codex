@@ -55,6 +55,29 @@ class CapturedResponsesRequest:
                         texts.append(text)
         return texts
 
+    def message_content_items(self, role: str) -> list[Json]:
+        """Return structured content items for message inputs matching one role."""
+        items: list[Json] = []
+        for item in self.input():
+            if item.get("type") != "message" or item.get("role") != role:
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            items.extend(part for part in content if isinstance(part, dict))
+        return items
+
+    def message_image_urls(self, role: str) -> list[str]:
+        """Return all input_image URLs for message inputs matching one role."""
+        urls: list[str] = []
+        for item in self.message_content_items(role):
+            if item.get("type") != "input_image":
+                continue
+            image_url = item.get("image_url")
+            if isinstance(image_url, str):
+                urls.append(image_url)
+        return urls
+
     def header(self, name: str) -> str | None:
         """Return a captured request header by case-insensitive name."""
         return self.headers.get(name.lower())
