@@ -8,6 +8,7 @@ from app_server_harness import (
     AppServerHarness,
     ev_assistant_message,
     ev_completed,
+    ev_completed_with_usage,
     ev_failed,
     ev_response_created,
     sse,
@@ -48,6 +49,74 @@ def test_sync_thread_run_uses_mock_responses(
         "request_model": "mock-model",
         "request_stream": True,
         "request_user_texts": ["hello"],
+    }
+
+
+def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
+    """Thread.run should pass overrides and collect app-server token usage."""
+    turn_cwd = tmp_path / "turn-cwd"
+    turn_cwd.mkdir()
+
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_sse(
+            sse(
+                [
+                    ev_response_created("run-overrides"),
+                    ev_assistant_message("msg-run-overrides", "overrides applied"),
+                    ev_completed_with_usage(
+                        "run-overrides",
+                        input_tokens=11,
+                        cached_input_tokens=3,
+                        output_tokens=7,
+                        reasoning_output_tokens=5,
+                        total_tokens=18,
+                    ),
+                ]
+            )
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            result = thread.run(
+                "use overrides",
+                cwd=str(turn_cwd),
+                model="mock-model-override",
+            )
+            read = thread.read()
+            request = harness.responses.single_request()
+
+    usage_payload = None
+    if result.usage is not None:
+        dumped_usage = result.usage.model_dump(by_alias=True, mode="json")
+        usage_payload = {
+            "last": dumped_usage["last"],
+            "total": dumped_usage["total"],
+        }
+    assert {
+        "final_response": result.final_response,
+        "request_model": request.body_json()["model"],
+        "thread_cwd": read.thread.cwd.root,
+        "usage": usage_payload,
+    } == {
+        "final_response": "overrides applied",
+        "request_model": "mock-model-override",
+        "thread_cwd": str(turn_cwd),
+        "usage": {
+            "last": {
+                "cachedInputTokens": 3,
+                "inputTokens": 11,
+                "outputTokens": 7,
+                "reasoningOutputTokens": 5,
+                "totalTokens": 18,
+            },
+            "total": {
+                "cachedInputTokens": 3,
+                "inputTokens": 11,
+                "outputTokens": 7,
+                "reasoningOutputTokens": 5,
+                "totalTokens": 18,
+            },
+        },
     }
 
 

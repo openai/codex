@@ -364,6 +364,33 @@ def ev_completed(response_id: str) -> Json:
     }
 
 
+def ev_completed_with_usage(
+    response_id: str,
+    *,
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+    reasoning_output_tokens: int,
+    total_tokens: int,
+) -> Json:
+    """Return `response.completed` with explicit token accounting."""
+    return {
+        "type": "response.completed",
+        "response": {
+            "id": response_id,
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {"cached_tokens": cached_input_tokens},
+                "output_tokens": output_tokens,
+                "output_tokens_details": {
+                    "reasoning_tokens": reasoning_output_tokens,
+                },
+                "total_tokens": total_tokens,
+            },
+        },
+    }
+
+
 def ev_assistant_message(item_id: str, text: str) -> Json:
     """Return a completed assistant message output item."""
     return {
