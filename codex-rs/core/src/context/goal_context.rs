@@ -1,3 +1,5 @@
+//! Hidden user-context fragment for runtime-owned goal steering prompts.
+
 use super::ContextualUserFragment;
 
 #[derive(Debug, Clone, PartialEq)]
