@@ -327,6 +327,50 @@ def test_sync_api_maps_approval_modes_for_started_work() -> None:
     ]
 
 
+def test_sync_api_rejects_unknown_approval_mode_before_rpc() -> None:
+    """Unknown approval modes should fail before building any client request."""
+    calls: list[str] = []
+
+    class FailOnRpcClient:
+        def thread_start(self, _params: object) -> SimpleNamespace:
+            calls.append("thread_start")
+            return SimpleNamespace(thread=SimpleNamespace(id="thread-started"))
+
+        def turn_start(
+            self,
+            _thread_id: str,
+            _wire_input: object,
+            *,
+            params: object | None = None,  # noqa: ARG002
+        ) -> SimpleNamespace:
+            calls.append("turn_start")
+            return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
+
+    client = FailOnRpcClient()
+    codex = object.__new__(Codex)
+    codex._client = client
+    errors: list[str] = []
+
+    for call in (
+        lambda: codex.thread_start(approval_mode="allow_all"),  # type: ignore[arg-type]
+        lambda: Thread(client, "thread-1").turn(  # type: ignore[arg-type]
+            TextInput("hello"),
+            approval_mode="allow_all",
+        ),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            call()
+        errors.append(str(exc_info.value))
+
+    assert (errors, calls) == (
+        [
+            "approval_mode must be one of: deny_all, auto_review",
+            "approval_mode must be one of: deny_all, auto_review",
+        ],
+        [],
+    )
+
+
 def test_async_api_maps_approval_modes_for_started_work() -> None:
     """Async start methods should serialize only supported approval modes."""
 
@@ -394,6 +438,55 @@ def test_async_api_maps_approval_modes_for_started_work() -> None:
             {"approvalPolicy": "on-request", "approvalsReviewer": "auto_review"},
             {"approvalPolicy": "on-request", "approvalsReviewer": "auto_review"},
         ]
+
+    asyncio.run(scenario())
+
+
+def test_async_api_rejects_unknown_approval_mode_before_rpc() -> None:
+    """Unknown async approval modes should fail before awaiting client calls."""
+
+    async def scenario() -> None:
+        """Exercise async validation without starting a real app-server process."""
+        calls: list[str] = []
+
+        class FailOnAsyncRpcClient:
+            async def thread_start(self, _params: object) -> SimpleNamespace:
+                calls.append("thread_start")
+                return SimpleNamespace(thread=SimpleNamespace(id="thread-started"))
+
+            async def turn_start(
+                self,
+                _thread_id: str,
+                _wire_input: object,
+                *,
+                params: object | None = None,  # noqa: ARG002
+            ) -> SimpleNamespace:
+                calls.append("turn_start")
+                return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
+
+        codex = AsyncCodex()
+        codex._client = FailOnAsyncRpcClient()
+        codex._initialized = True
+        errors: list[str] = []
+
+        for call in (
+            lambda: codex.thread_start(approval_mode="allow_all"),  # type: ignore[arg-type]
+            lambda: AsyncThread(codex, "thread-1").turn(  # type: ignore[arg-type]
+                TextInput("hello"),
+                approval_mode="allow_all",
+            ),
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                await call()
+            errors.append(str(exc_info.value))
+
+        assert (errors, calls) == (
+            [
+                "approval_mode must be one of: deny_all, auto_review",
+                "approval_mode must be one of: deny_all, auto_review",
+            ],
+            [],
+        )
 
     asyncio.run(scenario())
 

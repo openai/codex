@@ -121,7 +121,10 @@ def test_root_exports_run_result() -> None:
 
 def test_root_exports_approval_mode() -> None:
     """The root package should expose the high-level approval mode enum."""
-    assert ApprovalMode.deny_all.value == "deny_all"
+    assert [(mode.name, mode.value) for mode in ApprovalMode] == [
+        ("deny_all", "deny_all"),
+        ("auto_review", "auto_review"),
+    ]
 
 
 def test_package_and_default_client_versions_follow_project_version() -> None:
