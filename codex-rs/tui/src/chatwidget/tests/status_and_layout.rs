@@ -1367,7 +1367,9 @@ async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_test_ambient_pet(&mut chat);
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+        crate::pets::ImageProtocol::Kitty,
+    ));
     assert!(chat.ambient_pet.is_none());
 
     crate::pets::write_test_pack(&chat.config.codex_home);
