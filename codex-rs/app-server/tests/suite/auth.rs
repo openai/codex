@@ -15,6 +15,7 @@ use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -76,6 +77,27 @@ shell_snapshot = false
     )
 }
 
+fn create_config_toml_with_openai_base_url(
+    codex_home: &Path,
+    openai_base_url: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+openai_base_url = "{openai_base_url}/v1"
+
+[features]
+shell_snapshot = false
+"#
+        ),
+    )
+}
+
 fn create_config_toml_forced_login(codex_home: &Path, forced_method: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     let contents = format!(
@@ -103,6 +125,13 @@ async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) -> 
     let response: LoginAccountResponse = to_response(resp)?;
     assert_eq!(response, LoginAccountResponse::ApiKey {});
     Ok(())
+}
+
+async fn setup_valid_api_key_provider(codex_home: &Path) -> Result<MockServer> {
+    let model_server = MockServer::start().await;
+    create_config_toml_with_openai_base_url(codex_home, &model_server.uri())?;
+    mock_valid_api_key(&model_server).await;
+    Ok(model_server)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -134,7 +163,7 @@ async fn get_auth_status_no_auth() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let _model_server = setup_valid_api_key_provider(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -195,7 +224,7 @@ async fn get_auth_status_with_api_key_when_auth_not_required() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key_no_include_token() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let _model_server = setup_valid_api_key_provider(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -223,7 +252,7 @@ async fn get_auth_status_with_api_key_no_include_token() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key_refresh_requested() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let _model_server = setup_valid_api_key_provider(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -252,6 +281,17 @@ async fn get_auth_status_with_api_key_refresh_requested() -> Result<()> {
         }
     );
     Ok(())
+}
+
+async fn mock_valid_api_key(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": []
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
