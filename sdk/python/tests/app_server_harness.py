@@ -77,11 +77,19 @@ class MockSseResponse:
         return chunks
 
 
+@dataclass(frozen=True)
+class MockJsonResponse:
+    """One queued JSON response served by the mock Responses API."""
+
+    body: Json
+
+
 class MockResponsesServer:
     """Local HTTP server that records `/v1/responses` requests and returns SSE."""
 
     def __init__(self) -> None:
         self._responses: queue.Queue[MockSseResponse] = queue.Queue()
+        self._compact_responses: queue.Queue[MockJsonResponse] = queue.Queue()
         self._requests: list[CapturedResponsesRequest] = []
         self._requests_lock = threading.Lock()
         self._server = _ResponsesHttpServer(("127.0.0.1", 0), _ResponsesHandler, self)
@@ -136,6 +144,21 @@ class MockResponsesServer:
             )
         )
 
+    def enqueue_compaction_summary(self, summary: str) -> None:
+        """Queue a compact endpoint response with one synthetic compaction item."""
+        self._compact_responses.put(
+            MockJsonResponse(
+                body={
+                    "output": [
+                        {
+                            "type": "compaction",
+                            "encrypted_content": summary,
+                        }
+                    ]
+                }
+            )
+        )
+
     def requests(self) -> list[CapturedResponsesRequest]:
         """Return all recorded Responses API requests."""
         with self._requests_lock:
@@ -179,6 +202,10 @@ class MockResponsesServer:
     def _next_response(self) -> MockSseResponse:
         """Return the next queued SSE response or fail the HTTP request."""
         return self._responses.get_nowait()
+
+    def _next_compact_response(self) -> MockJsonResponse:
+        """Return the next queued compact JSON response or fail the HTTP request."""
+        return self._compact_responses.get_nowait()
 
 
 class AppServerHarness:
@@ -276,10 +303,21 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
         self.send_error(404, f"unexpected GET {self.path}")
 
     def do_POST(self) -> None:
-        """Serve queued SSE responses for `/v1/responses` requests."""
+        """Serve queued responses for `/v1/responses` and compact requests."""
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length)
         self.server.mock._record_request(self, body)
+
+        if self.path.endswith("/v1/responses/compact") or self.path.endswith(
+            "/responses/compact"
+        ):
+            try:
+                response = self.server.mock._next_compact_response()
+            except queue.Empty:
+                self.send_error(500, "no queued compact response")
+                return
+            self._send_json(response.body)
+            return
 
         if not (self.path.endswith("/v1/responses") or self.path.endswith("/responses")):
             self.send_error(404, f"unexpected POST {self.path}")

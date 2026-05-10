@@ -4,10 +4,13 @@ import asyncio
 from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any
 
+import pytest
+
 from app_server_harness import (
     AppServerHarness,
     ev_assistant_message,
     ev_completed,
+    ev_failed,
     ev_message_item_added,
     ev_output_text_delta,
     ev_response_created,
@@ -82,6 +85,26 @@ def _streaming_response(response_id: str, item_id: str, parts: list[str]) -> str
     )
 
 
+def _assistant_message_with_phase(
+    item_id: str,
+    text: str,
+    phase: MessagePhase,
+) -> dict[str, Any]:
+    """Build an assistant message event carrying app-server phase metadata."""
+    event = ev_assistant_message(item_id, text)
+    event["item"] = {**event["item"], "phase": phase.value}
+    return event
+
+
+def _request_kind(request_path: str) -> str:
+    """Classify captured mock-server request paths for compact assertions."""
+    if request_path.endswith("/responses/compact"):
+        return "compact"
+    if request_path.endswith("/responses"):
+        return "responses"
+    return request_path
+
+
 def test_sync_thread_run_uses_pinned_app_server_and_mock_responses(
     tmp_path,
 ) -> None:
@@ -141,6 +164,165 @@ def test_async_thread_run_uses_pinned_app_server_and_mock_responses(
             "agent_messages": ["Hello async."],
             "request_user_texts": ["async hello"],
         }
+
+    asyncio.run(scenario())
+
+
+def test_run_result_item_semantics_use_real_app_server(tmp_path) -> None:
+    """RunResult should reflect real item notifications, not synthetic client queues."""
+    cases = [
+        (
+            "last unknown phase wins",
+            sse(
+                [
+                    ev_response_created("items-last"),
+                    ev_assistant_message("msg-items-first", "First message"),
+                    ev_assistant_message("msg-items-second", "Second message"),
+                    ev_completed("items-last"),
+                ]
+            ),
+            "Second message",
+            ["First message", "Second message"],
+        ),
+        (
+            "empty last message is preserved",
+            sse(
+                [
+                    ev_response_created("items-empty"),
+                    ev_assistant_message("msg-items-nonempty", "First message"),
+                    ev_assistant_message("msg-items-empty", ""),
+                    ev_completed("items-empty"),
+                ]
+            ),
+            "",
+            ["First message", ""],
+        ),
+        (
+            "commentary only is not final",
+            sse(
+                [
+                    ev_response_created("items-commentary"),
+                    _assistant_message_with_phase(
+                        "msg-items-commentary",
+                        "Commentary",
+                        MessagePhase.commentary,
+                    ),
+                    ev_completed("items-commentary"),
+                ]
+            ),
+            None,
+            ["Commentary"],
+        ),
+    ]
+
+    with AppServerHarness(tmp_path) as harness:
+        for _, body, _, _ in cases:
+            harness.responses.enqueue_sse(body)
+
+        with Codex(config=harness.app_server_config()) as codex:
+            results = [
+                codex.thread_start().run(f"case: {name}") for name, _, _, _ in cases
+            ]
+
+    assert [
+        {
+            "final_response": result.final_response,
+            "agent_messages": _agent_message_texts_from_items(result.items),
+        }
+        for result in results
+    ] == [
+        {
+            "final_response": final_response,
+            "agent_messages": agent_messages,
+        }
+        for _, _, final_response, agent_messages in cases
+    ]
+
+
+def test_thread_run_raises_when_real_app_server_reports_failed_turn(tmp_path) -> None:
+    """Thread.run should surface the failed turn error emitted by app-server."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_sse(
+            sse(
+                [
+                    ev_response_created("failed-run"),
+                    ev_failed("failed-run", "boom from mock model"),
+                ]
+            )
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            with pytest.raises(RuntimeError, match="boom from mock model"):
+                thread.run("trigger failure")
+
+
+def test_async_run_result_item_semantics_use_real_app_server(tmp_path) -> None:
+    """Async RunResult should use the same real app-server notification mapping."""
+
+    async def scenario() -> None:
+        """Run multiple async result cases against one app-server process."""
+        cases = [
+            (
+                "last async unknown phase wins",
+                sse(
+                    [
+                        ev_response_created("async-items-last"),
+                        ev_assistant_message(
+                            "msg-async-items-first",
+                            "First async message",
+                        ),
+                        ev_assistant_message(
+                            "msg-async-items-second",
+                            "Second async message",
+                        ),
+                        ev_completed("async-items-last"),
+                    ]
+                ),
+                "Second async message",
+                ["First async message", "Second async message"],
+            ),
+            (
+                "async commentary only is not final",
+                sse(
+                    [
+                        ev_response_created("async-items-commentary"),
+                        _assistant_message_with_phase(
+                            "msg-async-items-commentary",
+                            "Async commentary",
+                            MessagePhase.commentary,
+                        ),
+                        ev_completed("async-items-commentary"),
+                    ]
+                ),
+                None,
+                ["Async commentary"],
+            ),
+        ]
+
+        with AppServerHarness(tmp_path) as harness:
+            for _, body, _, _ in cases:
+                harness.responses.enqueue_sse(body)
+
+            async with AsyncCodex(config=harness.app_server_config()) as codex:
+                results = [
+                    await (await codex.thread_start()).run(f"case: {name}")
+                    for name, _, _, _ in cases
+                ]
+
+        assert [
+            {
+                "final_response": result.final_response,
+                "agent_messages": _agent_message_texts_from_items(result.items),
+            }
+            for result in results
+        ] == [
+            {
+                "final_response": final_response,
+                "agent_messages": agent_messages,
+            }
+            for _, _, final_response, agent_messages in cases
+        ]
 
     asyncio.run(scenario())
 
@@ -228,6 +410,62 @@ def test_async_stream_routes_text_deltas_and_completion(tmp_path) -> None:
             "deltas": ["as", "ync"],
             "agent_messages": ["async"],
             "completed_statuses": [TurnStatus.completed],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_low_level_sync_stream_text_uses_real_turn_routing(tmp_path) -> None:
+    """AppServerClient.stream_text should stream through a real app-server turn."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_sse(
+            _streaming_response("low-sync-stream", "msg-low-sync-stream", ["fir", "st"])
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            chunks = list(codex._client.stream_text(thread.id, "low-level sync"))  # noqa: SLF001
+
+    assert [chunk.delta for chunk in chunks] == ["fir", "st"]
+
+
+def test_low_level_async_stream_text_allows_parallel_model_list(tmp_path) -> None:
+    """Async stream_text should yield without blocking another app-server request."""
+
+    async def scenario() -> None:
+        """Leave a stream open while another async request completes."""
+        with AppServerHarness(tmp_path) as harness:
+            harness.responses.enqueue_sse(
+                _streaming_response(
+                    "low-async-stream",
+                    "msg-low-async-stream",
+                    ["one", "two", "three"],
+                ),
+                delay_between_events_s=0.03,
+            )
+
+            async with AsyncCodex(config=harness.app_server_config()) as codex:
+                thread = await codex.thread_start()
+                stream = codex._client.stream_text(  # noqa: SLF001
+                    thread.id,
+                    "low-level async",
+                )
+                first = await anext(stream)
+                models_task = asyncio.create_task(codex.models())
+                models = await asyncio.wait_for(models_task, timeout=1.0)
+                remaining = [chunk.delta async for chunk in stream]
+
+        assert {
+            "first": first.delta,
+            "remaining": remaining,
+            "models_payload_has_data": isinstance(
+                models.model_dump(by_alias=True, mode="json").get("data"),
+                list,
+            ),
+        } == {
+            "first": "one",
+            "remaining": ["two", "three"],
+            "models_payload_has_data": True,
         }
 
     asyncio.run(scenario())
@@ -338,6 +576,79 @@ def test_interleaved_async_turn_streams_route_by_turn_id(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_approval_modes_preserve_real_app_server_state_without_override(
+    tmp_path,
+) -> None:
+    """Resume, fork, and next turn should inherit approval settings unless overridden."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message("turn override", response_id="turn-mode-1")
+        harness.responses.enqueue_assistant_message("turn inherited", response_id="turn-mode-2")
+
+        with Codex(config=harness.app_server_config()) as codex:
+            source = codex.thread_start(approval_mode=ApprovalMode.deny_all)
+            resumed = codex.thread_resume(source.id)
+            forked = codex.thread_fork(source.id)
+            explicit_fork = codex.thread_fork(
+                source.id,
+                approval_mode=ApprovalMode.auto_review,
+            )
+
+            turn_thread = codex.thread_start()
+            first_result = turn_thread.run(
+                "deny this and later turns",
+                approval_mode=ApprovalMode.deny_all,
+            )
+            after_turn_override = codex._client.thread_resume(  # noqa: SLF001
+                turn_thread.id,
+                ThreadResumeParams(thread_id=turn_thread.id),
+            )
+            second_result = turn_thread.run("inherit previous approval mode")
+            after_omitted_turn = codex._client.thread_resume(  # noqa: SLF001
+                turn_thread.id,
+                ThreadResumeParams(thread_id=turn_thread.id),
+            )
+
+            inherited_policies = {
+                "resumed": _response_approval_policy(
+                    codex._client.thread_resume(  # noqa: SLF001
+                        resumed.id,
+                        ThreadResumeParams(thread_id=resumed.id),
+                    )
+                ),
+                "forked": _response_approval_policy(
+                    codex._client.thread_resume(  # noqa: SLF001
+                        forked.id,
+                        ThreadResumeParams(thread_id=forked.id),
+                    )
+                ),
+                "explicit_fork": _response_approval_policy(
+                    codex._client.thread_resume(  # noqa: SLF001
+                        explicit_fork.id,
+                        ThreadResumeParams(thread_id=explicit_fork.id),
+                    )
+                ),
+                "after_turn_override": _response_approval_policy(after_turn_override),
+                "after_omitted_turn": _response_approval_policy(after_omitted_turn),
+            }
+
+    assert {
+        "policies": inherited_policies,
+        "final_responses": [
+            first_result.final_response,
+            second_result.final_response,
+        ],
+    } == {
+        "policies": {
+            "resumed": AskForApprovalValue.never.value,
+            "forked": AskForApprovalValue.never.value,
+            "explicit_fork": AskForApprovalValue.on_request.value,
+            "after_turn_override": AskForApprovalValue.never.value,
+            "after_omitted_turn": AskForApprovalValue.never.value,
+        },
+        "final_responses": ["turn override", "turn inherited"],
+    }
+
+
 def test_thread_run_approval_mode_persists_until_explicit_override(tmp_path) -> None:
     """Omitted run approval mode should not rewrite the thread's stored setting."""
     with AppServerHarness(tmp_path) as harness:
@@ -439,6 +750,38 @@ def test_thread_lifecycle_uses_real_app_server_without_model_mocking(tmp_path) -
     } == {
         "name": "sdk integration thread",
         "fork_parent": True,
+    }
+
+
+def test_models_and_compact_use_real_app_server_rpcs(tmp_path) -> None:
+    """Model listing and compaction should go through real app-server methods."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message("history", response_id="compact-history")
+        harness.responses.enqueue_compaction_summary("compact summary")
+
+        with Codex(config=harness.app_server_config()) as codex:
+            models = codex.models(include_hidden=True)
+            thread = codex.thread_start()
+            run_result = thread.run("create history")
+            compact_response = thread.compact()
+            requests = harness.responses.wait_for_requests(2)
+
+    assert {
+        "models_payload_has_data": isinstance(
+            models.model_dump(by_alias=True, mode="json").get("data"),
+            list,
+        ),
+        "run_final_response": run_result.final_response,
+        "compact_response": compact_response.model_dump(
+            by_alias=True,
+            mode="json",
+        ),
+        "request_kinds": [_request_kind(request.path) for request in requests],
+    } == {
+        "models_payload_has_data": True,
+        "run_final_response": "history",
+        "compact_response": {},
+        "request_kinds": ["responses", "compact"],
     }
 
 
