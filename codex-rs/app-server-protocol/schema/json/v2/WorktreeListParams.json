@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
+  "properties": {
+    "cwd": {
+      "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "WorktreeListParams",
+  "type": "object"
+}

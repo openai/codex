@@ -199,10 +199,6 @@ impl App {
                 self.open_worktree_base_ref_prompt(branch);
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::WorktreesLoaded { cwd, result } => {
-                self.on_worktrees_loaded(cwd, result);
-                tui.frame_requester().schedule_frame();
-            }
             AppEvent::CreateWorktreeAndSwitch {
                 branch,
                 base_ref,

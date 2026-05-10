@@ -28,12 +28,17 @@ use codex_app_server_client::RemoteAppServerConnectArgs;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_app_server_protocol::WorktreeCreateParams;
+use codex_app_server_protocol::WorktreeCreateResponse;
+use codex_app_server_protocol::WorktreeDirtyPolicy;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
@@ -55,6 +60,7 @@ use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::WorktreeDirtyCliArg;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
@@ -179,7 +185,6 @@ mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
-mod remote_worktree;
 mod worktree;
 mod worktree_labels;
 #[cfg(not(debug_assertions))]
@@ -698,6 +703,39 @@ fn latest_session_cwd_filter<'a>(
     }
 }
 
+async fn create_startup_worktree(
+    app_server: &AppServerSession,
+    cwd: Option<&Path>,
+    branch: String,
+    base_ref: Option<String>,
+    dirty_policy: WorktreeDirtyCliArg,
+) -> color_eyre::Result<WorktreeCreateResponse> {
+    app_server
+        .request_handle()
+        .request_typed(ClientRequest::WorktreeCreate {
+            request_id: RequestId::String(format!("startup-worktree-{}", Uuid::new_v4())),
+            params: WorktreeCreateParams {
+                cwd: cwd.map(|cwd| cwd.display().to_string()),
+                branch,
+                base_ref,
+                dirty_policy: worktree_dirty_policy_from_cli(dirty_policy),
+            },
+        })
+        .await
+        .map_err(color_eyre::eyre::Report::msg)
+}
+
+fn worktree_dirty_policy_from_cli(value: WorktreeDirtyCliArg) -> WorktreeDirtyPolicy {
+    match value {
+        WorktreeDirtyCliArg::Fail => WorktreeDirtyPolicy::Fail,
+        WorktreeDirtyCliArg::Ignore => WorktreeDirtyPolicy::Ignore,
+        WorktreeDirtyCliArg::CopyTracked => WorktreeDirtyPolicy::CopyTracked,
+        WorktreeDirtyCliArg::CopyAll => WorktreeDirtyPolicy::CopyAll,
+        WorktreeDirtyCliArg::MoveTracked => WorktreeDirtyPolicy::MoveTracked,
+        WorktreeDirtyCliArg::MoveAll => WorktreeDirtyPolicy::MoveAll,
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1089,11 +1127,11 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
-    remote_cwd_override: Option<PathBuf>,
+    mut remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -1174,6 +1212,51 @@ async fn run_ratatui_app(
             }
         },
     );
+
+    let startup_worktree_requested = cli.worktree.is_some();
+    let mut initial_config = initial_config;
+    if let Some(branch) = cli.worktree.take() {
+        let Some(startup_app_server) = app_server.as_mut() else {
+            unreachable!("app server should exist while resolving startup worktree");
+        };
+        let response = match create_startup_worktree(
+            startup_app_server,
+            if remote_mode {
+                remote_cwd_override.as_deref()
+            } else {
+                Some(initial_config.cwd.as_path())
+            },
+            branch,
+            cli.worktree_base.take(),
+            cli.worktree_dirty,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                shutdown_app_server_if_present(app_server.take()).await;
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
+        };
+        let worktree_cwd = PathBuf::from(response.info.workspace_cwd.clone());
+        if remote_mode {
+            remote_cwd_override = Some(worktree_cwd.clone());
+            startup_app_server.set_remote_cwd_override(Some(worktree_cwd));
+        } else {
+            initial_config = load_config_or_exit_with_fallback_cwd(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                cloud_requirements.clone(),
+                Some(worktree_cwd),
+            )
+            .await;
+        }
+        initial_config
+            .startup_warnings
+            .extend(response.warnings.into_iter().map(|warning| warning.message));
+    }
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
@@ -1391,7 +1474,7 @@ async fn run_ratatui_app(
     };
 
     let current_cwd = config.cwd.clone();
-    let allow_prompt = !remote_mode && cli.cwd.is_none();
+    let allow_prompt = !remote_mode && cli.cwd.is_none() && !startup_worktree_requested;
     let action_and_target_session_if_resume_or_fork = match &session_selection {
         resume_picker::SessionSelection::Resume(target_session) => {
             Some((CwdPromptAction::Resume, target_session))
@@ -1403,7 +1486,7 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_target_session_if_resume_or_fork {
         Some((action, target_session)) => {
-            if remote_mode {
+            if startup_worktree_requested || remote_mode {
                 Some(current_cwd.to_path_buf())
             } else {
                 match resolve_cwd_for_resume_or_fork(

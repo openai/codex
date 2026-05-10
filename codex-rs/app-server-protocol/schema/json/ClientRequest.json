@@ -4564,6 +4564,97 @@
         "mode"
       ],
       "type": "object"
+    },
+    "WorktreeCreateParams": {
+      "description": "Create or reuse a managed worktree from the repository containing \\`cwd\\`.",
+      "properties": {
+        "baseRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Repository-relative workspace cwd to use as the source checkout.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirtyPolicy": {
+          "$ref": "#/definitions/WorktreeDirtyPolicy"
+        }
+      },
+      "required": [
+        "branch",
+        "dirtyPolicy"
+      ],
+      "type": "object"
+    },
+    "WorktreeDirtyPolicy": {
+      "enum": [
+        "fail",
+        "ignore",
+        "copyTracked",
+        "copyAll",
+        "moveTracked",
+        "moveAll"
+      ],
+      "type": "string"
+    },
+    "WorktreeInspectSourceParams": {
+      "description": "Inspect dirty state for the repository containing \\`cwd\\`.",
+      "properties": {
+        "cwd": {
+          "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WorktreeListParams": {
+      "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
+      "properties": {
+        "cwd": {
+          "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WorktreeRemoveParams": {
+      "description": "Remove a managed worktree in the repository containing \\`cwd\\`.",
+      "properties": {
+        "cwd": {
+          "description": "Repository-relative workspace cwd to use when resolving \\`name_or_path\\`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deleteBranch": {
+          "type": "boolean"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "nameOrPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "nameOrPath"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -5576,6 +5667,102 @@
         "params"
       ],
       "title": "Fs/unwatchRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "worktree/list"
+          ],
+          "title": "Worktree/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Worktree/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "worktree/inspectSource"
+          ],
+          "title": "Worktree/inspectSourceRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeInspectSourceParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Worktree/inspectSourceRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "worktree/create"
+          ],
+          "title": "Worktree/createRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeCreateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Worktree/createRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "worktree/remove"
+          ],
+          "title": "Worktree/removeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeRemoveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Worktree/removeRequest",
       "type": "object"
     },
     {

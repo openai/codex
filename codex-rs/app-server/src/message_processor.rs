@@ -32,6 +32,7 @@ use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
+use crate::request_processors::WorktreeRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
@@ -175,6 +176,7 @@ pub(crate) struct MessageProcessor {
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
+    worktree_processor: WorktreeRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
 }
 
@@ -456,8 +458,9 @@ impl MessageProcessor {
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),
             Arc::clone(&config),
-            config_manager,
+            config_manager.clone(),
         );
+        let worktree_processor = WorktreeRequestProcessor::new(config_manager);
 
         Self {
             outgoing,
@@ -481,6 +484,7 @@ impl MessageProcessor {
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
+            worktree_processor,
             request_serialization_queues: RequestSerializationQueues::default(),
         }
     }
@@ -935,6 +939,26 @@ impl MessageProcessor {
             ClientRequest::FsUnwatch { params, .. } => self
                 .fs_processor
                 .unwatch(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorktreeList { params, .. } => self
+                .worktree_processor
+                .list(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorktreeInspectSource { params, .. } => self
+                .worktree_processor
+                .inspect_source(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorktreeCreate { params, .. } => self
+                .worktree_processor
+                .create(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorktreeRemove { params, .. } => self
+                .worktree_processor
+                .remove(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self

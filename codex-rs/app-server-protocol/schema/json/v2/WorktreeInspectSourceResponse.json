@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorktreeDirtyState": {
+      "properties": {
+        "hasStagedChanges": {
+          "type": "boolean"
+        },
+        "hasUnstagedChanges": {
+          "type": "boolean"
+        },
+        "hasUntrackedFiles": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hasStagedChanges",
+        "hasUnstagedChanges",
+        "hasUntrackedFiles"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Dirty-state response returned by \\`worktree/inspectSource\\`.",
+  "properties": {
+    "dirty": {
+      "$ref": "#/definitions/WorktreeDirtyState"
+    }
+  },
+  "required": [
+    "dirty"
+  ],
+  "title": "WorktreeInspectSourceResponse",
+  "type": "object"
+}

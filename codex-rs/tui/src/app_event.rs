@@ -205,12 +205,6 @@ pub(crate) enum AppEvent {
         branch: String,
     },
 
-    /// Result of loading worktrees for the managed worktree picker.
-    WorktreesLoaded {
-        cwd: PathBuf,
-        result: Result<Vec<codex_worktree::WorktreeInfo>, String>,
-    },
-
     /// Create or reuse a managed worktree and switch the TUI into it.
     CreateWorktreeAndSwitch {
         branch: String,

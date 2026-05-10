@@ -1150,6 +1150,13 @@ All filesystem paths in this section must be absolute.
 { "id": 45, "result": {} }
 ```
 
+### Worktrees
+
+- `worktree/list` - list Codex-managed worktrees for the repository containing `cwd`; omitted `cwd` uses the app server's effective cwd.
+- `worktree/inspectSource` - inspect staged, unstaged, and untracked dirty state for the repository containing `cwd`.
+- `worktree/create` - create or reuse a managed worktree from `cwd`, returning the resolved worktree plus any transfer warnings.
+- `worktree/remove` - remove a managed worktree resolved from `cwd` and `nameOrPath`, with optional `force` and `deleteBranch` behavior.
+
 ## Events
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.

@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorktreeDirtyState": {
+      "properties": {
+        "hasStagedChanges": {
+          "type": "boolean"
+        },
+        "hasUnstagedChanges": {
+          "type": "boolean"
+        },
+        "hasUntrackedFiles": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hasStagedChanges",
+        "hasUnstagedChanges",
+        "hasUntrackedFiles"
+      ],
+      "type": "object"
+    },
+    "WorktreeInfo": {
+      "description": "Server-native representation of a managed worktree.",
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commonGitDir": {
+          "type": "string"
+        },
+        "dirty": {
+          "$ref": "#/definitions/WorktreeDirtyState"
+        },
+        "head": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/definitions/WorktreeLocation"
+        },
+        "metadataPath": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "originalRelativeCwd": {
+          "type": "string"
+        },
+        "ownerThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repoName": {
+          "type": "string"
+        },
+        "repoRoot": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/WorktreeSource"
+        },
+        "workspaceCwd": {
+          "type": "string"
+        },
+        "worktreeGitRoot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commonGitDir",
+        "dirty",
+        "id",
+        "location",
+        "metadataPath",
+        "name",
+        "originalRelativeCwd",
+        "repoName",
+        "repoRoot",
+        "slug",
+        "source",
+        "workspaceCwd",
+        "worktreeGitRoot"
+      ],
+      "type": "object"
+    },
+    "WorktreeLocation": {
+      "enum": [
+        "sibling",
+        "codexHome",
+        "external"
+      ],
+      "type": "string"
+    },
+    "WorktreeSource": {
+      "enum": [
+        "cli",
+        "app",
+        "legacy",
+        "git"
+      ],
+      "type": "string"
+    },
+    "WorktreeWarning": {
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Result returned by \\`worktree/create\\`.",
+  "properties": {
+    "info": {
+      "$ref": "#/definitions/WorktreeInfo"
+    },
+    "reused": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/definitions/WorktreeWarning"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "info",
+    "reused",
+    "warnings"
+  ],
+  "title": "WorktreeCreateResponse",
+  "type": "object"
+}

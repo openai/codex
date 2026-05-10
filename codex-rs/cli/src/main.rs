@@ -760,14 +760,6 @@ async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Res
     }
 }
 
-fn resolve_worktree_options_for_tui(
-    cli: &mut TuiCli,
-    remote: Option<&str>,
-    remote_auth_token_env: Option<&str>,
-) -> anyhow::Result<Option<WorktreeResolution>> {
-    resolve_worktree_options_for_shared_cli(&mut cli.shared, remote, remote_auth_token_env)
-}
-
 fn resolve_worktree_options_for_shared_cli(
     shared: &mut SharedCliOptions,
     remote: Option<&str>,
@@ -1121,11 +1113,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            resolve_worktree_options_for_tui(
-                &mut interactive,
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-            )?;
             let exit_info = run_interactive_tui(
                 interactive,
                 root_remote.clone(),
@@ -1299,14 +1286,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 include_non_interactive,
                 config_overrides,
             );
-            resolve_worktree_options_for_tui(
-                &mut interactive,
-                remote.remote.as_deref().or(root_remote.as_deref()),
-                remote
-                    .remote_auth_token_env
-                    .as_deref()
-                    .or(root_remote_auth_token_env.as_deref()),
-            )?;
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),
@@ -1333,14 +1312,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
-            resolve_worktree_options_for_tui(
-                &mut interactive,
-                remote.remote.as_deref().or(root_remote.as_deref()),
-                remote
-                    .remote_auth_token_env
-                    .as_deref()
-                    .or(root_remote_auth_token_env.as_deref()),
-            )?;
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),

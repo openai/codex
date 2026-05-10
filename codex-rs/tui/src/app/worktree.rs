@@ -1,17 +1,32 @@
 //! App-layer handlers for the worktree TUI flow.
 
-use anyhow::Context;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WorktreeCreateParams;
+use codex_app_server_protocol::WorktreeCreateResponse;
+use codex_app_server_protocol::WorktreeDirtyPolicy as ApiWorktreeDirtyPolicy;
+use codex_app_server_protocol::WorktreeDirtyState as ApiWorktreeDirtyState;
+use codex_app_server_protocol::WorktreeInfo as ApiWorktreeInfo;
+use codex_app_server_protocol::WorktreeInspectSourceParams;
+use codex_app_server_protocol::WorktreeInspectSourceResponse;
+use codex_app_server_protocol::WorktreeListParams;
+use codex_app_server_protocol::WorktreeListResponse;
+use codex_app_server_protocol::WorktreeLocation as ApiWorktreeLocation;
+use codex_app_server_protocol::WorktreeRemoveParams;
+use codex_app_server_protocol::WorktreeRemoveResponse;
+use codex_app_server_protocol::WorktreeSource as ApiWorktreeSource;
 use codex_protocol::ThreadId;
 use codex_worktree::DirtyPolicy;
 use codex_worktree::WorktreeInfo;
-use codex_worktree::WorktreeListQuery;
-use codex_worktree::WorktreeRemoveRequest;
+use codex_worktree::WorktreeLocation;
 use codex_worktree::WorktreeRequest;
 use codex_worktree::WorktreeResolution;
 use codex_worktree::WorktreeSource;
+use codex_worktree::WorktreeWarning;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use uuid::Uuid;
 
 use super::*;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
@@ -50,15 +65,11 @@ impl App {
                 tui.frame_requester(),
                 self.config.animations,
             ));
-        if self.remote_app_server_url.is_some() {
-            let result = self
-                .list_current_repo_worktrees_remote(app_server)
-                .await
-                .map_err(|err| err.to_string());
-            self.on_worktrees_loaded(self.session_workspace_cwd(app_server).to_path_buf(), result);
-        } else {
-            self.fetch_worktrees_for_picker();
-        }
+        let result = self
+            .list_current_repo_worktrees_for_session(app_server)
+            .await
+            .map_err(|err| err.to_string());
+        self.on_worktrees_loaded(self.session_workspace_cwd(app_server).to_path_buf(), result);
     }
 
     pub(super) fn open_worktree_create_prompt(&mut self) {
@@ -291,35 +302,12 @@ impl App {
             return;
         }
 
-        let result = if self.remote_app_server_url.is_some() {
-            let Some(runner) = self.workspace_command_runner.clone() else {
-                self.chat_widget.add_error_message(
-                    "Remote worktree removal is unavailable because the workspace command runner is missing."
-                        .to_string(),
-                );
-                return;
-            };
-            crate::remote_worktree::remove_worktree(
-                &runner,
-                &app_server.request_handle(),
-                self.session_workspace_cwd(app_server),
-                &target,
-                force,
-                delete_branch,
-            )
-            .await
-        } else {
-            codex_worktree::remove_worktree(WorktreeRemoveRequest {
-                codex_home: self.config.codex_home.to_path_buf(),
-                source_cwd: Some(self.session_workspace_cwd(app_server).to_path_buf()),
-                name_or_path: target.clone(),
-                force,
-                delete_branch,
-            })
-        };
+        let result = self
+            .remove_worktree_via_app_server(app_server, target.clone(), force, delete_branch)
+            .await;
         match result {
             Ok(result) => {
-                let mut message = format!("Removed worktree {}", result.removed_path.display());
+                let mut message = format!("Removed worktree {}", result.removed_path);
                 if let Some(branch) = result.deleted_branch {
                     message.push_str(&format!(" and deleted branch {branch}"));
                 }
@@ -332,58 +320,40 @@ impl App {
         }
     }
 
-    fn list_current_repo_worktrees(&self) -> anyhow::Result<Vec<WorktreeInfo>> {
-        codex_worktree::list_worktrees(WorktreeListQuery {
-            codex_home: self.config.codex_home.to_path_buf(),
-            source_cwd: Some(self.config.cwd.to_path_buf()),
-            include_all_repos: false,
-        })
-    }
-
     async fn list_current_repo_worktrees_for_session(
         &self,
         app_server: &AppServerSession,
     ) -> anyhow::Result<Vec<WorktreeInfo>> {
-        if self.remote_app_server_url.is_some() {
-            self.list_current_repo_worktrees_remote(app_server).await
-        } else {
-            self.list_current_repo_worktrees()
-        }
-    }
-
-    async fn list_current_repo_worktrees_remote(
-        &self,
-        app_server: &AppServerSession,
-    ) -> anyhow::Result<Vec<WorktreeInfo>> {
-        let runner = self
-            .workspace_command_runner
-            .clone()
-            .context("remote worktree operations require a workspace command runner")?;
-        crate::remote_worktree::list_current_repo_worktrees(
-            &runner,
-            &app_server.request_handle(),
-            self.session_workspace_cwd(app_server),
-        )
-        .await
+        let response: WorktreeListResponse = app_server
+            .request_handle()
+            .request_typed(ClientRequest::WorktreeList {
+                request_id: worktree_request_id("worktree-list"),
+                params: WorktreeListParams {
+                    cwd: Some(self.session_workspace_cwd(app_server).display().to_string()),
+                },
+            })
+            .await?;
+        Ok(response
+            .data
+            .into_iter()
+            .map(worktree_info_from_api)
+            .collect())
     }
 
     async fn source_worktree_dirty_state(
         &self,
         app_server: &AppServerSession,
     ) -> anyhow::Result<codex_worktree::DirtyState> {
-        if self.remote_app_server_url.is_some() {
-            let runner = self
-                .workspace_command_runner
-                .clone()
-                .context("remote worktree operations require a workspace command runner")?;
-            crate::remote_worktree::source_dirty_state(
-                &runner,
-                self.session_workspace_cwd(app_server),
-            )
-            .await
-        } else {
-            codex_worktree::dirty_state(self.config.cwd.as_path())
-        }
+        let response: WorktreeInspectSourceResponse = app_server
+            .request_handle()
+            .request_typed(ClientRequest::WorktreeInspectSource {
+                request_id: worktree_request_id("worktree-inspect-source"),
+                params: WorktreeInspectSourceParams {
+                    cwd: Some(self.session_workspace_cwd(app_server).display().to_string()),
+                },
+            })
+            .await?;
+        Ok(dirty_state_from_api(response.dirty))
     }
 
     fn session_workspace_cwd<'a>(&'a self, app_server: &'a AppServerSession) -> &'a Path {
@@ -401,20 +371,6 @@ impl App {
         }
     }
 
-    fn fetch_worktrees_for_picker(&mut self) {
-        let query = WorktreeListQuery {
-            codex_home: self.config.codex_home.to_path_buf(),
-            source_cwd: Some(self.config.cwd.to_path_buf()),
-            include_all_repos: false,
-        };
-        let cwd = self.config.cwd.to_path_buf();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::task::spawn_blocking(move || {
-            let result = codex_worktree::list_worktrees(query).map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::WorktreesLoaded { cwd, result });
-        });
-    }
-
     fn spawn_worktree_create_request(
         &self,
         app_server: &AppServerSession,
@@ -422,31 +378,24 @@ impl App {
     ) {
         let cwd = request.source_cwd.clone();
         let app_event_tx = self.app_event_tx.clone();
-        if self.remote_app_server_url.is_some() {
-            let Some(runner) = self.workspace_command_runner.clone() else {
-                app_event_tx.send(AppEvent::WorktreeCreated {
-                    cwd,
-                    result: Err(
-                        "remote worktree operations require a workspace command runner".to_string(),
-                    ),
-                });
-                return;
-            };
-            let request_handle = app_server.request_handle();
-            tokio::spawn(async move {
-                let result =
-                    crate::remote_worktree::ensure_worktree(&runner, &request_handle, request)
-                        .await
-                        .map_err(|err| err.to_string());
-                app_event_tx.send(AppEvent::WorktreeCreated { cwd, result });
-            });
-        } else {
-            tokio::task::spawn_blocking(move || {
-                let result =
-                    codex_worktree::ensure_worktree(request).map_err(|err| err.to_string());
-                app_event_tx.send(AppEvent::WorktreeCreated { cwd, result });
-            });
-        }
+        let request_handle = app_server.request_handle();
+        tokio::spawn(async move {
+            let result: Result<WorktreeCreateResponse, _> = request_handle
+                .request_typed(ClientRequest::WorktreeCreate {
+                    request_id: worktree_request_id("worktree-create"),
+                    params: WorktreeCreateParams {
+                        cwd: Some(request.source_cwd.display().to_string()),
+                        branch: request.branch,
+                        base_ref: request.base_ref,
+                        dirty_policy: dirty_policy_to_api(request.dirty_policy),
+                    },
+                })
+                .await;
+            let result = result
+                .map(worktree_resolution_from_api)
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::WorktreeCreated { cwd, result });
+        });
     }
 
     async fn switch_to_worktree_info(
@@ -679,6 +628,103 @@ impl App {
         );
         self.file_search
             .update_search_dir(self.config.cwd.to_path_buf());
+    }
+
+    async fn remove_worktree_via_app_server(
+        &self,
+        app_server: &AppServerSession,
+        target: String,
+        force: bool,
+        delete_branch: bool,
+    ) -> anyhow::Result<WorktreeRemoveResponse> {
+        app_server
+            .request_handle()
+            .request_typed(ClientRequest::WorktreeRemove {
+                request_id: worktree_request_id("worktree-remove"),
+                params: WorktreeRemoveParams {
+                    cwd: Some(self.session_workspace_cwd(app_server).display().to_string()),
+                    name_or_path: target,
+                    force,
+                    delete_branch,
+                },
+            })
+            .await
+            .map_err(Into::into)
+    }
+}
+
+fn worktree_request_id(prefix: &str) -> RequestId {
+    RequestId::String(format!("{prefix}-{}", Uuid::new_v4()))
+}
+
+fn dirty_policy_to_api(value: DirtyPolicy) -> ApiWorktreeDirtyPolicy {
+    match value {
+        DirtyPolicy::Fail => ApiWorktreeDirtyPolicy::Fail,
+        DirtyPolicy::Ignore => ApiWorktreeDirtyPolicy::Ignore,
+        DirtyPolicy::CopyTracked => ApiWorktreeDirtyPolicy::CopyTracked,
+        DirtyPolicy::CopyAll => ApiWorktreeDirtyPolicy::CopyAll,
+        DirtyPolicy::MoveTracked => ApiWorktreeDirtyPolicy::MoveTracked,
+        DirtyPolicy::MoveAll => ApiWorktreeDirtyPolicy::MoveAll,
+    }
+}
+
+fn dirty_state_from_api(value: ApiWorktreeDirtyState) -> codex_worktree::DirtyState {
+    codex_worktree::DirtyState {
+        has_staged_changes: value.has_staged_changes,
+        has_unstaged_changes: value.has_unstaged_changes,
+        has_untracked_files: value.has_untracked_files,
+    }
+}
+
+fn worktree_info_from_api(value: ApiWorktreeInfo) -> WorktreeInfo {
+    WorktreeInfo {
+        id: value.id,
+        name: value.name,
+        slug: value.slug,
+        source: worktree_source_from_api(value.source),
+        location: worktree_location_from_api(value.location),
+        repo_name: value.repo_name,
+        repo_root: PathBuf::from(value.repo_root),
+        common_git_dir: PathBuf::from(value.common_git_dir),
+        worktree_git_root: PathBuf::from(value.worktree_git_root),
+        workspace_cwd: PathBuf::from(value.workspace_cwd),
+        original_relative_cwd: PathBuf::from(value.original_relative_cwd),
+        branch: value.branch,
+        head: value.head,
+        owner_thread_id: value.owner_thread_id,
+        metadata_path: PathBuf::from(value.metadata_path),
+        dirty: dirty_state_from_api(value.dirty),
+    }
+}
+
+fn worktree_source_from_api(value: ApiWorktreeSource) -> WorktreeSource {
+    match value {
+        ApiWorktreeSource::Cli => WorktreeSource::Cli,
+        ApiWorktreeSource::App => WorktreeSource::App,
+        ApiWorktreeSource::Legacy => WorktreeSource::Legacy,
+        ApiWorktreeSource::Git => WorktreeSource::Git,
+    }
+}
+
+fn worktree_location_from_api(value: ApiWorktreeLocation) -> WorktreeLocation {
+    match value {
+        ApiWorktreeLocation::Sibling => WorktreeLocation::Sibling,
+        ApiWorktreeLocation::CodexHome => WorktreeLocation::CodexHome,
+        ApiWorktreeLocation::External => WorktreeLocation::External,
+    }
+}
+
+fn worktree_resolution_from_api(value: WorktreeCreateResponse) -> WorktreeResolution {
+    WorktreeResolution {
+        reused: value.reused,
+        info: worktree_info_from_api(value.info),
+        warnings: value
+            .warnings
+            .into_iter()
+            .map(|warning| WorktreeWarning {
+                message: warning.message,
+            })
+            .collect(),
     }
 }
 

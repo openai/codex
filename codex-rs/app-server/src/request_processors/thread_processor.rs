@@ -1044,6 +1044,7 @@ impl ThreadRequestProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let codex_home = config.codex_home.to_path_buf();
 
         let NewThread {
             thread_id,
@@ -1147,6 +1148,11 @@ impl ThreadRequestProcessor {
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        bind_worktree_thread_best_effort(
+            codex_home.as_path(),
+            config_snapshot.cwd.as_path(),
+            &thread.id,
+        );
 
         let response = ThreadStartResponse {
             thread: thread.clone(),
@@ -2480,6 +2486,11 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
+                bind_worktree_thread_best_effort(
+                    self.config.codex_home.as_path(),
+                    session_configured.cwd.as_path(),
+                    &thread.id,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -3127,6 +3138,11 @@ impl ThreadRequestProcessor {
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        bind_worktree_thread_best_effort(
+            self.config.codex_home.as_path(),
+            session_configured.cwd.as_path(),
+            &thread.id,
+        );
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -3322,6 +3338,24 @@ impl ThreadRequestProcessor {
         }
 
         Ok((items, next_cursor))
+    }
+}
+
+fn bind_worktree_thread_best_effort(
+    codex_home: &std::path::Path,
+    cwd: &std::path::Path,
+    thread_id: &str,
+) {
+    match codex_worktree::resolve_worktree(codex_home, cwd) {
+        Ok(Some(_)) => {
+            if let Err(err) = codex_worktree::bind_thread(cwd, thread_id) {
+                tracing::warn!(?err, "failed to bind managed worktree to thread");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(?err, "failed to resolve managed worktree metadata");
+        }
     }
 }
 

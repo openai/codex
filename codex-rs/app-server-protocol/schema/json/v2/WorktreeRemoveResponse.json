@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Result returned by \\`worktree/remove\\`.",
+  "properties": {
+    "deletedBranch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "removedPath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "removedPath"
+  ],
+  "title": "WorktreeRemoveResponse",
+  "type": "object"
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Remove a managed worktree in the repository containing \\`cwd\\`.",
+  "properties": {
+    "cwd": {
+      "description": "Repository-relative workspace cwd to use when resolving \\`name_or_path\\`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deleteBranch": {
+      "type": "boolean"
+    },
+    "force": {
+      "type": "boolean"
+    },
+    "nameOrPath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nameOrPath"
+  ],
+  "title": "WorktreeRemoveParams",
+  "type": "object"
+}

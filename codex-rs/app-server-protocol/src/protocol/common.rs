@@ -710,6 +710,26 @@ client_request_definitions! {
         serialization: fs_watch_id(params.watch_id),
         response: v2::FsUnwatchResponse,
     },
+    WorktreeList => "worktree/list" {
+        params: v2::WorktreeListParams,
+        serialization: None,
+        response: v2::WorktreeListResponse,
+    },
+    WorktreeInspectSource => "worktree/inspectSource" {
+        params: v2::WorktreeInspectSourceParams,
+        serialization: None,
+        response: v2::WorktreeInspectSourceResponse,
+    },
+    WorktreeCreate => "worktree/create" {
+        params: v2::WorktreeCreateParams,
+        serialization: global("worktree"),
+        response: v2::WorktreeCreateResponse,
+    },
+    WorktreeRemove => "worktree/remove" {
+        params: v2::WorktreeRemoveParams,
+        serialization: global("worktree"),
+        response: v2::WorktreeRemoveResponse,
+    },
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
         serialization: global("config"),

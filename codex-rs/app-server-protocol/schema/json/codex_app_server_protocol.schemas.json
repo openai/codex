@@ -1201,6 +1201,102 @@
             },
             "method": {
               "enum": [
+                "worktree/list"
+              ],
+              "title": "Worktree/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorktreeListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Worktree/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "worktree/inspectSource"
+              ],
+              "title": "Worktree/inspectSourceRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorktreeInspectSourceParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Worktree/inspectSourceRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "worktree/create"
+              ],
+              "title": "Worktree/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorktreeCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Worktree/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "worktree/remove"
+              ],
+              "title": "Worktree/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorktreeRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Worktree/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/config/write"
               ],
               "title": "Skills/config/writeRequestMethod",
@@ -18651,6 +18747,306 @@
           "samplePaths"
         ],
         "title": "WindowsWorldWritableWarningNotification",
+        "type": "object"
+      },
+      "WorktreeCreateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Create or reuse a managed worktree from the repository containing \\`cwd\\`.",
+        "properties": {
+          "baseRef": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": "string"
+          },
+          "cwd": {
+            "description": "Repository-relative workspace cwd to use as the source checkout.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dirtyPolicy": {
+            "$ref": "#/definitions/v2/WorktreeDirtyPolicy"
+          }
+        },
+        "required": [
+          "branch",
+          "dirtyPolicy"
+        ],
+        "title": "WorktreeCreateParams",
+        "type": "object"
+      },
+      "WorktreeCreateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Result returned by \\`worktree/create\\`.",
+        "properties": {
+          "info": {
+            "$ref": "#/definitions/v2/WorktreeInfo"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/definitions/v2/WorktreeWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "info",
+          "reused",
+          "warnings"
+        ],
+        "title": "WorktreeCreateResponse",
+        "type": "object"
+      },
+      "WorktreeDirtyPolicy": {
+        "enum": [
+          "fail",
+          "ignore",
+          "copyTracked",
+          "copyAll",
+          "moveTracked",
+          "moveAll"
+        ],
+        "type": "string"
+      },
+      "WorktreeDirtyState": {
+        "properties": {
+          "hasStagedChanges": {
+            "type": "boolean"
+          },
+          "hasUnstagedChanges": {
+            "type": "boolean"
+          },
+          "hasUntrackedFiles": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hasStagedChanges",
+          "hasUnstagedChanges",
+          "hasUntrackedFiles"
+        ],
+        "type": "object"
+      },
+      "WorktreeInfo": {
+        "description": "Server-native representation of a managed worktree.",
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commonGitDir": {
+            "type": "string"
+          },
+          "dirty": {
+            "$ref": "#/definitions/v2/WorktreeDirtyState"
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/definitions/v2/WorktreeLocation"
+          },
+          "metadataPath": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "originalRelativeCwd": {
+            "type": "string"
+          },
+          "ownerThreadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repoName": {
+            "type": "string"
+          },
+          "repoRoot": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/WorktreeSource"
+          },
+          "workspaceCwd": {
+            "type": "string"
+          },
+          "worktreeGitRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commonGitDir",
+          "dirty",
+          "id",
+          "location",
+          "metadataPath",
+          "name",
+          "originalRelativeCwd",
+          "repoName",
+          "repoRoot",
+          "slug",
+          "source",
+          "workspaceCwd",
+          "worktreeGitRoot"
+        ],
+        "type": "object"
+      },
+      "WorktreeInspectSourceParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Inspect dirty state for the repository containing \\`cwd\\`.",
+        "properties": {
+          "cwd": {
+            "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "WorktreeInspectSourceParams",
+        "type": "object"
+      },
+      "WorktreeInspectSourceResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Dirty-state response returned by \\`worktree/inspectSource\\`.",
+        "properties": {
+          "dirty": {
+            "$ref": "#/definitions/v2/WorktreeDirtyState"
+          }
+        },
+        "required": [
+          "dirty"
+        ],
+        "title": "WorktreeInspectSourceResponse",
+        "type": "object"
+      },
+      "WorktreeListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
+        "properties": {
+          "cwd": {
+            "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "WorktreeListParams",
+        "type": "object"
+      },
+      "WorktreeListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Managed worktrees returned by \\`worktree/list\\`.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/WorktreeInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "WorktreeListResponse",
+        "type": "object"
+      },
+      "WorktreeLocation": {
+        "enum": [
+          "sibling",
+          "codexHome",
+          "external"
+        ],
+        "type": "string"
+      },
+      "WorktreeRemoveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Remove a managed worktree in the repository containing \\`cwd\\`.",
+        "properties": {
+          "cwd": {
+            "description": "Repository-relative workspace cwd to use when resolving \\`name_or_path\\`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleteBranch": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "nameOrPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nameOrPath"
+        ],
+        "title": "WorktreeRemoveParams",
+        "type": "object"
+      },
+      "WorktreeRemoveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Result returned by \\`worktree/remove\\`.",
+        "properties": {
+          "deletedBranch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "removedPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "removedPath"
+        ],
+        "title": "WorktreeRemoveResponse",
+        "type": "object"
+      },
+      "WorktreeSource": {
+        "enum": [
+          "cli",
+          "app",
+          "legacy",
+          "git"
+        ],
+        "type": "string"
+      },
+      "WorktreeWarning": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
         "type": "object"
       },
       "WriteStatus": {

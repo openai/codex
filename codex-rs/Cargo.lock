@@ -1896,6 +1896,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-pty",
+ "codex-worktree",
  "core_test_support",
  "flate2",
  "futures",

@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorktreeDirtyPolicy": {
+      "enum": [
+        "fail",
+        "ignore",
+        "copyTracked",
+        "copyAll",
+        "moveTracked",
+        "moveAll"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Create or reuse a managed worktree from the repository containing \\`cwd\\`.",
+  "properties": {
+    "baseRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch": {
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Repository-relative workspace cwd to use as the source checkout.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dirtyPolicy": {
+      "$ref": "#/definitions/WorktreeDirtyPolicy"
+    }
+  },
+  "required": [
+    "branch",
+    "dirtyPolicy"
+  ],
+  "title": "WorktreeCreateParams",
+  "type": "object"
+}
