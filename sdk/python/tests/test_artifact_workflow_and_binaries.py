@@ -56,12 +56,12 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
         if lines[index] and not lines[index].startswith((" ", "\t", "#"))
     )
     fmt_recipe = lines[fmt_index:next_recipe_index]
-
-    assert {
+    actual = {
         "working_directory": lines[0],
         "previous_attribute": lines[fmt_index - 1],
-        "commands": [line.strip() for line in fmt_recipe[1:]],
-    } == {
+        "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
+    }
+    expected = {
         "working_directory": 'set working-directory := "codex-rs"',
         "previous_attribute": "# Format Rust and Python SDK code.",
         "commands": [
@@ -70,6 +70,16 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
             "uv run --project ../sdk/python --extra dev ruff format ../sdk/python",
         ],
     }
+
+    assert actual == expected, (
+        "Python SDK lint/format recipe guard failed. `just fmt` should keep formatting "
+        "Rust and running Ruff for `../sdk/python` from the root justfile's default "
+        "`codex-rs` working directory, so it works from `codex/`, `codex-rs/`, and "
+        "`sdk/python/`. Fix the root `justfile` fmt recipe, then run `just fmt` from "
+        "the repo root or `sdk/python` to verify.\n"
+        f"Expected: {json.dumps(expected, indent=2)}\n"
+        f"Actual: {json.dumps(actual, indent=2)}"
+    )
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
