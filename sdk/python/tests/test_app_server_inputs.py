@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app_server_harness import AppServerHarness
-from openai_codex import Codex, ImageInput, LocalImageInput, TextInput
+from openai_codex import Codex, ImageInput, LocalImageInput, SkillInput, TextInput
 from app_server_helpers import TINY_PNG_BYTES
 
 
@@ -71,4 +71,56 @@ def test_local_image_input_reaches_responses_api(
         "final_response": "local image received",
         "contains_user_prompt": True,
         "image_url_is_png_data_url": True,
+    }
+
+
+def test_skill_input_injects_loaded_skill_body(tmp_path) -> None:
+    """SkillInput should inject the selected loaded skill into model input."""
+    skill_body = "Use the word cobalt."
+
+    with AppServerHarness(tmp_path) as harness:
+        skill_file = harness.workspace / ".agents" / "skills" / "demo" / "SKILL.md"
+        skill_file.parent.mkdir(parents=True)
+        skill_file.write_text(
+            f"---\nname: demo\ndescription: demo skill\n---\n\n{skill_body}\n"
+        )
+        skill_path = skill_file.resolve()
+        harness.responses.enqueue_assistant_message(
+            "skill received",
+            response_id="skill-input",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            result = codex.thread_start().run(
+                [
+                    TextInput("Use the selected skill."),
+                    SkillInput("demo", str(skill_path)),
+                ]
+            )
+            request = harness.responses.single_request()
+
+    skill_blocks = [
+        text
+        for text in request.message_input_texts("user")
+        if text.startswith("<skill>")
+    ]
+    assert {
+        "final_response": result.final_response,
+        "skill_blocks": [
+            {
+                "has_name": "<name>demo</name>" in text,
+                "has_path": f"<path>{skill_path}</path>" in text,
+                "has_body": skill_body in text,
+            }
+            for text in skill_blocks
+        ],
+    } == {
+        "final_response": "skill received",
+        "skill_blocks": [
+            {
+                "has_name": True,
+                "has_path": True,
+                "has_body": True,
+            }
+        ],
     }
