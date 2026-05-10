@@ -446,18 +446,18 @@ def test_multimodal_inputs_reach_responses_api_through_real_app_server(
             remote_result.final_response,
             local_result.final_response,
         ],
-        "first_user_texts": [
-            request.message_input_texts("user")[0] for request in requests
+        "latest_user_texts": [
+            request.message_input_texts("user")[-1] for request in requests
         ],
         "image_url_shapes": [
             requests[0].message_image_urls("user")[0],
-            requests[1].message_image_urls("user")[0].startswith(
+            requests[1].message_image_urls("user")[-1].startswith(
                 "data:image/png;base64,"
             ),
         ],
     } == {
         "final_responses": ["remote image received", "local image received"],
-        "first_user_texts": [
+        "latest_user_texts": [
             "Describe the remote image.",
             "Describe the local image.",
         ],
@@ -973,17 +973,22 @@ def test_thread_lifecycle_uses_real_app_server_without_model_mocking(tmp_path) -
 def test_archive_unarchive_round_trip_uses_real_app_server(tmp_path) -> None:
     """Archive helpers should use real app-server lifecycle RPCs."""
     with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message("materialized", response_id="archive-seed")
+
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
+            seeded = thread.run("materialize this thread before archive")
             archived = codex.thread_archive(thread.id)
             unarchived = codex.thread_unarchive(thread.id)
             read = unarchived.read()
 
     assert {
+        "seeded_response": seeded.final_response,
         "archive_response": archived.model_dump(by_alias=True, mode="json"),
         "unarchived_id": unarchived.id,
         "read_id": read.thread.id,
     } == {
+        "seeded_response": "materialized",
         "archive_response": {},
         "unarchived_id": thread.id,
         "read_id": thread.id,
