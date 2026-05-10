@@ -369,19 +369,28 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 
     let mut saw_source_backed_plan = false;
     let mut saw_stream_plan = false;
+    let mut rendered_plan = String::new();
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
-            saw_source_backed_plan |= cell.as_any().is::<history_cell::ProposedPlanCell>();
+            if cell.as_any().is::<history_cell::ProposedPlanCell>() {
+                saw_source_backed_plan = true;
+                rendered_plan = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            }
             saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
         }
     }
 
     assert!(saw_source_backed_plan, "expected source-backed plan insert");
     assert!(
+        rendered_plan.contains('│') || rendered_plan.contains('┌'),
+        "expected completed plan table to render as a boxed table, got: {rendered_plan:?}"
+    );
+    assert!(
         !saw_stream_plan,
         "live plan table tail should not be inserted provisionally"
     );
 }
+
 #[tokio::test]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

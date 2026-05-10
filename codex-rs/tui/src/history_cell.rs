@@ -22,6 +22,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::markdown::append_markdown_agent_with_cwd;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -3094,7 +3095,7 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(
+        append_markdown_agent_with_cwd(
             &self.plan_markdown,
             Some(wrap_width),
             Some(self.cwd.as_path()),
@@ -3776,6 +3777,57 @@ mod tests {
             ]
         );
         assert_unstyled_lines(&plan_lines);
+    }
+
+    #[test]
+    fn proposed_plan_cell_renders_markdown_table() {
+        let plan = new_proposed_plan(
+            "## Plan\n\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n".to_string(),
+            &test_cwd(),
+        );
+
+        let rendered = render_lines(&plan.display_lines(/*width*/ 80));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains('│') || line.contains('┌')),
+            "expected boxed table in proposed plan output: {rendered:?}"
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.trim() == "| Step | Owner |"),
+            "did not expect raw table header in rich proposed plan output: {rendered:?}"
+        );
+
+        let raw = render_lines(&plan.raw_lines());
+        assert!(
+            raw.iter().any(|line| line == "| Step | Owner |"),
+            "expected raw mode to preserve table markdown source: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn proposed_plan_cell_unwraps_markdown_fenced_table() {
+        let plan = new_proposed_plan(
+            "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"
+                .to_string(),
+            &test_cwd(),
+        );
+
+        let rendered = render_lines(&plan.display_lines(/*width*/ 80));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains('│') || line.contains('┌')),
+            "expected boxed table for markdown-fenced proposed plan output: {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.trim() == "```markdown"),
+            "did not expect markdown fence to render as code block: {rendered:?}"
+        );
     }
 
     #[test]
