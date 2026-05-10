@@ -535,11 +535,12 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             /*sandbox*/ None,
         )
         .await?;
-    let png = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    )?;
     test.fs()
-        .write_file(&image_path, png, /*sandbox*/ None)
+        .write_file(
+            &image_path,
+            png_bytes(1, 1, [255, 0, 0, 255])?,
+            /*sandbox*/ None,
+        )
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
