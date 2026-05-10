@@ -9,7 +9,7 @@ from openai_codex.generated.v2_all import (
     TurnCompletedNotification,
     TurnStatus,
 )
-from pinned_app_server_helpers import (
+from app_server_helpers import (
     agent_message_texts,
     next_async_delta,
     next_sync_delta,
@@ -48,7 +48,7 @@ def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
     }
 
 
-def test_turn_run_returns_completed_turn_from_pinned_app_server(tmp_path) -> None:
+def test_turn_run_returns_completed_turn(tmp_path) -> None:
     """TurnHandle.run should wait for the app-server completion notification."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_assistant_message("turn complete", response_id="turn-run-1")

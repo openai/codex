@@ -3,10 +3,10 @@ from __future__ import annotations
 from app_server_harness import AppServerHarness
 from openai_codex import Codex, TextInput
 from openai_codex.generated.v2_all import TurnStatus
-from pinned_app_server_helpers import agent_message_texts, streaming_response
+from app_server_helpers import agent_message_texts, streaming_response
 
 
-def test_turn_steer_adds_follow_up_input_through_pinned_app_server(tmp_path) -> None:
+def test_turn_steer_adds_follow_up_input(tmp_path) -> None:
     """Steering an active turn should create a follow-up Responses request."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(

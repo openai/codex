@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from app_server_harness import AppServerHarness
 from openai_codex import Codex, ImageInput, LocalImageInput, TextInput
-from pinned_app_server_helpers import TINY_PNG_BYTES
+from app_server_helpers import TINY_PNG_BYTES
 
 
-def test_remote_image_input_reaches_responses_api_through_pinned_app_server(
+def test_remote_image_input_reaches_responses_api(
     tmp_path,
 ) -> None:
     """Remote image inputs should survive the SDK and app-server boundary."""
@@ -38,7 +38,7 @@ def test_remote_image_input_reaches_responses_api_through_pinned_app_server(
     }
 
 
-def test_local_image_input_reaches_responses_api_through_pinned_app_server(
+def test_local_image_input_reaches_responses_api(
     tmp_path,
 ) -> None:
     """Local image inputs should become data URLs after crossing the app-server."""

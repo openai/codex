@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from app_server_harness import AppServerHarness
 from openai_codex import Codex
-from pinned_app_server_helpers import request_kind
+from app_server_helpers import request_kind
 
 
-def test_thread_set_name_and_read_use_pinned_app_server(tmp_path) -> None:
+def test_thread_set_name_and_read(tmp_path) -> None:
     """Thread naming should round-trip through app-server JSON-RPC."""
     with AppServerHarness(tmp_path) as harness:
         with Codex(config=harness.app_server_config()) as codex:
@@ -18,7 +18,7 @@ def test_thread_set_name_and_read_use_pinned_app_server(tmp_path) -> None:
     }
 
 
-def test_thread_fork_returns_distinct_thread_from_pinned_app_server(tmp_path) -> None:
+def test_thread_fork_returns_distinct_thread(tmp_path) -> None:
     """Thread fork should return a distinct thread for a persisted rollout."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_assistant_message("materialized", response_id="fork-seed")
@@ -62,7 +62,7 @@ def test_archive_unarchive_round_trip_uses_materialized_rollout(tmp_path) -> Non
     }
 
 
-def test_models_use_pinned_app_server_rpc(tmp_path) -> None:
+def test_models_rpc(tmp_path) -> None:
     """Model listing should go through the pinned app-server method."""
     with AppServerHarness(tmp_path) as harness:
         with Codex(config=harness.app_server_config()) as codex:
@@ -76,7 +76,7 @@ def test_models_use_pinned_app_server_rpc(tmp_path) -> None:
     } == {"models_payload_has_data": True}
 
 
-def test_compact_uses_pinned_app_server_rpc_and_mock_responses(tmp_path) -> None:
+def test_compact_rpc_hits_mock_responses(tmp_path) -> None:
     """Compaction should run through app-server and hit the mock Responses boundary."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_assistant_message("history", response_id="compact-history")

@@ -14,13 +14,13 @@ from app_server_harness import (
 )
 from openai_codex import AsyncCodex, Codex
 from openai_codex.generated.v2_all import MessagePhase
-from pinned_app_server_helpers import (
+from app_server_helpers import (
     agent_message_texts_from_items,
     assistant_message_with_phase,
 )
 
 
-def test_sync_thread_run_uses_pinned_app_server_and_mock_responses(
+def test_sync_thread_run_uses_mock_responses(
     tmp_path,
 ) -> None:
     """Drive Thread.run through the pinned app-server and inspect the HTTP request."""
@@ -51,7 +51,7 @@ def test_sync_thread_run_uses_pinned_app_server_and_mock_responses(
     }
 
 
-def test_async_thread_run_uses_pinned_app_server_and_mock_responses(
+def test_async_thread_run_uses_mock_responses(
     tmp_path,
 ) -> None:
     """Async Thread.run should exercise the same app-server boundary."""
