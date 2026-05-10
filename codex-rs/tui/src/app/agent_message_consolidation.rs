@@ -1,3 +1,12 @@
+//! Transcript consolidation for finalized streaming agent messages.
+//!
+//! During streaming, the chat widget emits transient `AgentMessageCell`s so it
+//! can animate stable lines into scrollback while keeping the active mutable
+//! tail in the bottom pane. Once the answer finishes, the app replaces that
+//! trailing run with a single source-backed `AgentMarkdownCell`. This makes the
+//! transcript the canonical owner of the raw markdown source used for future
+//! resize re-renders.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,6 +29,9 @@ impl App {
         scrollback_reflow: ConsolidationScrollbackReflow,
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
     ) -> Result<()> {
+        // Some finalize paths must preserve a last provisional stream cell long
+        // enough for queue ordering, then fold it into the canonical
+        // source-backed cell during consolidation.
         if let Some(cell) = deferred_history_cell {
             let cell: Arc<dyn HistoryCell> = cell.into();
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {

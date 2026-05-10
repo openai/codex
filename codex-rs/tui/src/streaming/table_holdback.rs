@@ -3,6 +3,11 @@
 //! Agent streams with markdown tables keep the active table as mutable tail so
 //! adding a row can reflow earlier table rows instead of committing a stale
 //! render to scrollback.
+//!
+//! The scanner is intentionally conservative: it only looks for enough
+//! structure to decide where the mutable tail should start. It does not try to
+//! validate an entire table or predict final layout. Rendering remains the job
+//! of the markdown renderer.
 
 use std::time::Instant;
 
@@ -26,6 +31,10 @@ pub(super) enum TableHoldbackState {
     Confirmed { table_start: usize },
 }
 
+/// Facts remembered about the previous committed source line.
+///
+/// The scanner only needs one-line lookbehind because a table is confirmed by
+/// a header row immediately followed by a delimiter row.
 #[derive(Clone, Copy)]
 struct PreviousLineState {
     source_start: usize,
@@ -34,6 +43,11 @@ struct PreviousLineState {
 }
 
 /// Incremental scanner for table holdback state on append-only source streams.
+///
+/// `push_source_chunk` must receive source in the same order it will be
+/// appended to the stream. The scanner stores byte offsets into that logical
+/// source buffer, so feeding chunks out of order would make later tail
+/// boundaries point at the wrong rendered region.
 pub(super) struct TableHoldbackScanner {
     source_offset: usize,
     fence_tracker: FenceTracker,
@@ -57,6 +71,13 @@ impl TableHoldbackScanner {
         *self = Self::new();
     }
 
+    /// Return the current holdback decision for the committed source prefix.
+    ///
+    /// `PendingHeader` means the newest non-blank line looks like a table
+    /// header but the delimiter row has not arrived yet, so callers should
+    /// optimistically keep that region mutable. `Confirmed` means the header
+    /// and delimiter pair has been seen and all subsequent body rows remain in
+    /// the live tail until finalization.
     pub(super) fn state(&self) -> TableHoldbackState {
         if let Some(table_start) = self.confirmed_table_start {
             TableHoldbackState::Confirmed { table_start }
@@ -67,6 +88,13 @@ impl TableHoldbackScanner {
         }
     }
 
+    /// Advance the scanner with newly committed source.
+    ///
+    /// Chunks are expected to contain only source that is now safe to commit
+    /// into `raw_source`, typically newline-terminated lines from the
+    /// streaming collector. Partial rows are intentionally excluded so the
+    /// scanner never treats an unfinished table row as a stable structural
+    /// signal.
     pub(super) fn push_source_chunk(&mut self, source_chunk: &str) {
         if source_chunk.is_empty() {
             return;
@@ -87,6 +115,7 @@ impl TableHoldbackScanner {
         );
     }
 
+    /// Fold one committed source line into the scanner state machine.
     fn push_line(&mut self, source_line: &str) {
         let line = source_line.strip_suffix('\n').unwrap_or(source_line);
         let source_start = self.source_offset;
@@ -132,6 +161,9 @@ impl TableHoldbackScanner {
 
 /// Strip blockquote prefixes and return the trimmed text if it contains
 /// pipe-table segments, or `None` otherwise.
+///
+/// Table holdback treats quoted tables as real tables, but it still requires a
+/// pipe-table shape after the quote markers are removed.
 fn table_candidate_text(line: &str) -> Option<&str> {
     let stripped = strip_blockquote_prefix(line).trim();
     parse_table_segments(stripped).map(|_| stripped)

@@ -90,8 +90,14 @@ struct StreamCore {
 }
 
 struct StablePrefixLenCache {
+    /// Byte offset of the candidate table/header start in `raw_source`.
     source_start: usize,
+    /// Width that produced `stable_prefix_len`.
     width: Option<usize>,
+    /// Rendered line count for `raw_source[..source_start]` at `width`.
+    ///
+    /// The streaming controller uses this to avoid repeatedly re-rendering the
+    /// same stable prefix while a live table tail is still mutating.
     stable_prefix_len: usize,
 }
 
@@ -111,8 +117,13 @@ impl StreamCore {
         }
     }
 
-    /// Push a delta; if it contains a newline, commit completed lines and enqueue newly-stable
-    /// lines. Returns `true` if new lines were enqueued.
+    /// Push a streaming delta and enqueue any newly-stable rendered lines.
+    ///
+    /// Only newline-terminated source is committed into `raw_source`. This is
+    /// important for tables because an unterminated partial row must stay out
+    /// of both the stable queue and the live tail until its structure is
+    /// unambiguous; otherwise the user can briefly see malformed columns that
+    /// immediately disappear on the next delta.
     fn push_delta(&mut self, delta: &str) -> bool {
         if !delta.is_empty() {
             self.state.has_seen_delta = true;
@@ -131,8 +142,13 @@ impl StreamCore {
         enqueued
     }
 
-    /// Drain the collector, re-render, and return lines not yet emitted.
-    /// Does NOT reset state - the caller must call `reset()` afterward.
+    /// Drain the collector, render the final source snapshot, and return lines not yet emitted.
+    ///
+    /// This intentionally re-renders from the full raw source instead of
+    /// trying to stitch together queued stable lines and the current tail. The
+    /// final render is the canonical transcript representation used for
+    /// consolidation, so callers that skip `reset()` can accidentally replay a
+    /// finished stream into the next answer.
     fn finalize_remaining(&mut self) -> Vec<Line<'static>> {
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
@@ -187,8 +203,11 @@ impl StreamCore {
 
     /// Lines that belong to the mutable tail, not yet queued for stable commit.
     ///
-    /// The tail starts at `enqueued_stable_len` -- everything from that offset to
-    /// the end of `rendered_lines` is displayed live in the active-cell slot.
+    /// The tail starts at `enqueued_stable_len`, so this returns the portion
+    /// of the current render snapshot that is still allowed to change without
+    /// violating scrollback ordering. If callers were to derive the tail from
+    /// `emitted_stable_len` instead, queued-but-not-yet-emitted lines could
+    /// reappear in the active cell and duplicate content on screen.
     #[inline]
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
@@ -204,6 +223,11 @@ impl StreamCore {
     ///
     /// Re-renders once at the new width and rebuilds queue state from the
     /// current emitted line count.
+    ///
+    /// Resize is the point where source-backed rendering matters most:
+    /// previously emitted prose must stay in scrollback order, while any live
+    /// table tail is free to reshape at the new width. This method preserves
+    /// that split without attempting byte-for-byte line remapping.
     fn set_width(&mut self, width: Option<usize>) {
         if self.width == width {
             return;
@@ -334,8 +358,11 @@ impl StreamCore {
         true
     }
 
-    /// Rebuild the stable queue from the current render snapshot. Used after `set_width()` where
-    /// the old queue is stale.
+    /// Rebuild the stable queue from the current render snapshot.
+    ///
+    /// This is used after `set_width()`, where any queued lines were computed
+    /// against the old width and can no longer be trusted to line up with the
+    /// current render.
     fn rebuild_stable_queue_from_render(&mut self) {
         let target_stable_len = self.compute_target_stable_len();
         self.state.clear_queue();
@@ -376,6 +403,11 @@ impl StreamCore {
         tail_budget
     }
 
+    /// Convert a raw-source boundary into the number of rendered tail lines.
+    ///
+    /// The important contract here is that the holdback scanner reasons in
+    /// byte offsets while the queue operates in rendered lines. This helper is
+    /// the only place where those coordinate systems are bridged.
     fn tail_budget_from_source_start(&mut self, source_start: usize) -> usize {
         if source_start == 0 {
             return self.rendered_lines.len();
@@ -385,6 +417,11 @@ impl StreamCore {
         self.rendered_lines.len().saturating_sub(stable_prefix_len)
     }
 
+    /// Render the stable prefix before `source_start` and return its line count.
+    ///
+    /// This value is cached because dense table streams can call into this path
+    /// for every committed line while the header/delimiter/body are still
+    /// arriving incrementally.
     fn stable_prefix_len_for_source_start(&mut self, source_start: usize) -> usize {
         if let Some(cache) = &self.stable_prefix_len_cache
             && cache.source_start == source_start

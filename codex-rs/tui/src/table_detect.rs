@@ -30,6 +30,11 @@
 ///
 /// Returns `None` if the line is empty or has no unescaped separator marker.
 /// Leading/trailing pipes are stripped before splitting.
+///
+/// This is intentionally a structural parser, not a renderer. It preserves
+/// escaped pipes inside the returned segments because callers only care about
+/// whether the line can participate in a table, not how the cell text should
+/// finally be displayed.
 pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -131,6 +136,10 @@ pub(crate) enum FenceKind {
 /// context with [`kind`](Self::kind).  The tracker handles leading-whitespace
 /// limits (>3 spaces → not a fence), blockquote prefix stripping, and
 /// backtick/tilde marker matching.
+///
+/// The tracker reports the fence context that applies to the current line
+/// before that line mutates the state. Callers rely on that when deciding
+/// whether the current raw line can open or continue a table.
 pub(crate) struct FenceTracker {
     state: Option<(char, usize, FenceKind)>,
 }
