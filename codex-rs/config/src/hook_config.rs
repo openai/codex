@@ -133,7 +133,11 @@ pub enum HookHandlerConfig {
         r#async: bool,
         #[serde(default, rename = "statusMessage")]
         status_message: Option<String>,
-        #[serde(default, rename = "visibilityHint")]
+        #[serde(
+            default,
+            rename = "visibilityHint",
+            skip_serializing_if = "HookVisibilityHint::is_default"
+        )]
         visibility_hint: HookVisibilityHint,
     },
     #[serde(rename = "prompt")]

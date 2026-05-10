@@ -413,7 +413,7 @@ fn append_matcher_groups(
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
-                        visibility_hint,
+                        visibility_hint: Default::default(),
                     };
                     let current_hash =
                         command_hook_hash(event_name, matcher, &group, normalized_handler);

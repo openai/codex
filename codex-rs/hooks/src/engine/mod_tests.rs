@@ -483,6 +483,60 @@ fn config_with_pre_tool_use_hook(command: &str) -> TomlValue {
     .expect("config TOML should deserialize")
 }
 
+#[test]
+fn presentation_only_visibility_changes_preserve_existing_hook_trust() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute path");
+    let hook_key = format!("{}:pre_tool_use:0:0", config_path.display());
+    let legacy_identity: TomlValue = serde_json::from_value(serde_json::json!({
+        "event_name": "pre_tool_use",
+        "hooks": [{
+            "type": "command",
+            "command": "python3 /tmp/user.py",
+            "timeout": 600,
+            "async": false,
+        }],
+    }))
+    .expect("legacy identity should deserialize");
+    let trusted_hash = codex_config::version_for_toml(&legacy_identity);
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User { file: config_path },
+            serde_json::from_value(serde_json::json!({
+                "hooks": {
+                    "state": {
+                        (hook_key): {
+                            "trusted_hash": trusted_hash,
+                        },
+                    },
+                    "PreToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": "python3 /tmp/user.py",
+                            "visibilityHint": "hidden",
+                        }],
+                    }],
+                },
+            }))
+            .expect("config TOML should deserialize"),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+
+    assert_eq!(discovered.hook_entries.len(), 1);
+    assert_eq!(discovered.hook_entries[0].current_hash, trusted_hash);
+    assert_eq!(
+        discovered.hook_entries[0].trust_status,
+        HookTrustStatus::Trusted
+    );
+}
+
 fn trusted_plugin_hook_stack(
     config_path: AbsolutePathBuf,
     plugin_hook_sources: &[PluginHookSource],

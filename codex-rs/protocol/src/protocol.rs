@@ -1526,6 +1526,12 @@ pub enum HookVisibilityHint {
     Hidden,
 }
 
+impl HookVisibilityHint {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Default
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookOutputEntryKind {
