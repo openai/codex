@@ -1,4 +1,10 @@
-//! Builds the /pets picker dialog for the TUI.
+//! Builds the `/pets` picker dialog for the TUI.
+//!
+//! The picker deliberately merges three sources into one list:
+//! built-in catalog pets, a synthetic "disable" entry, and user-managed custom
+//! pets. It does not load preview images itself; instead it emits selection
+//! change events so the surrounding chat widget can coordinate async asset
+//! downloads, preview loading, and final config persistence.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,6 +36,13 @@ struct PetPickerEntry {
     description: Option<String>,
 }
 
+/// Build the selection popup parameters for `/pets`.
+///
+/// The picker preselects `DEFAULT_PET_ID` when no pet is configured so the UI
+/// has a sensible starting point without implying that Codex is already the
+/// active ambient pet. Callers should treat the returned actions as the only
+/// supported mutation path; bypassing them would skip preview-loading and
+/// selection-specific event wiring.
 pub(crate) fn build_pet_picker_params(
     current_pet: Option<&str>,
     codex_home: &Path,

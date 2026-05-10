@@ -1,3 +1,15 @@
+//! Pet manifest loading and normalization.
+//!
+//! This module converts several user-facing selectors into one normalized
+//! in-memory `Pet`: built-in catalog ids, custom pet ids under CODEX_HOME,
+//! legacy avatar directories, and explicit filesystem paths used by tests or
+//! local iteration.
+//!
+//! The key invariant is that every returned `Pet` points at a local
+//! spritesheet path that already exists and has app-compatible dimensions.
+//! Asset acquisition is intentionally out of scope here; callers must ensure a
+//! built-in pet has been downloaded before asking the model layer to load it.
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::Component;
@@ -34,6 +46,12 @@ impl Animation {
     }
 }
 
+/// One named animation track for a pet spritesheet.
+///
+/// Tracks use sprite indices into the already-decoded frame grid plus a
+/// fallback animation name for one-shot sequences. Callers should not assume
+/// an animation loops just because it has multiple frames; `loop_start == None`
+/// means the final frame eventually hands off to `fallback`.
 #[derive(Debug, Clone)]
 pub struct Pet {
     pub id: String,
@@ -48,6 +66,13 @@ pub struct Pet {
 }
 
 impl Pet {
+    /// Load a pet selector into a concrete local pet definition.
+    ///
+    /// Selectors may name a built-in catalog pet, a custom pet id, a legacy
+    /// avatar id, or an explicit path. This method assumes any built-in asset
+    /// has already been materialized into CODEX_HOME; if callers skip the
+    /// asset-fetch step, they will get a missing-spritesheet error here on
+    /// first use.
     pub(super) fn load_with_codex_home(value: &str, codex_home: Option<&Path>) -> Result<Self> {
         if path_like(value) {
             return load_pet_path(value);
@@ -248,6 +273,12 @@ fn load_pet_manifest(
     })
 }
 
+/// Resolve a manifest-relative spritesheet path while keeping it inside the pet directory.
+///
+/// The manifest format intentionally supports only relative child paths.
+/// Allowing absolute or parent-traversing paths here would let one custom pet
+/// manifest reach outside its own directory and make cache/debug behavior
+/// depend on unrelated local files.
 fn resolve_spritesheet_path(pet_dir: &Path, spritesheet_path: &str) -> Result<PathBuf> {
     let path = Path::new(spritesheet_path);
     if path.is_absolute()

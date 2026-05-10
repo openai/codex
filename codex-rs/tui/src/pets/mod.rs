@@ -1,8 +1,17 @@
 //! Ambient terminal pets configured from the /pets slash command.
 //!
-//! The Codex app stores default pets as bundled spritesheet assets and custom pets under
-//! $CODEX_HOME/pets/<pet-id>/pet.json.
-//! This module keeps that package shape intact while rendering the selected pet inline in the TUI.
+//! The TUI treats built-in and custom pets differently on purpose:
+//! built-in pets are versioned application assets fetched on demand into a
+//! managed CODEX_HOME cache, while custom pets remain entirely user-owned data
+//! under `$CODEX_HOME/pets/<pet-id>/pet.json` or legacy avatar directories.
+//!
+//! This module owns the TUI-facing contracts around that split:
+//! resolving a selected pet id, preparing frames for terminal image protocols,
+//! rendering the ambient sprite and picker preview, and preserving enough
+//! metadata for `/pets` to behave like a first-class configuration surface.
+//! It does not own config persistence or popup orchestration; callers must
+//! ensure a built-in asset exists before loading it and must persist the final
+//! selection only after the load succeeds.
 
 use std::io::Write;
 
@@ -38,6 +47,13 @@ pub(crate) use preview::PetPickerPreviewState;
 pub(crate) const DEFAULT_PET_ID: &str = "codex";
 pub(crate) const DISABLED_PET_ID: &str = "disabled";
 
+/// Ensure that a selected built-in pet has a locally cached spritesheet.
+///
+/// Custom pets are intentionally a no-op here because their source of truth is
+/// already local. Callers should invoke this before loading a built-in pet for
+/// preview or selection; skipping it would make first-use preview and
+/// persistence failures depend on deeper image-loading errors instead of the
+/// asset-fetch boundary.
 pub(crate) fn ensure_builtin_pack_for_pet(
     pet_id: &str,
     codex_home: &std::path::Path,

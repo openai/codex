@@ -1,8 +1,15 @@
 //! Ambient terminal rendering for the Codex companion.
 //!
-//! Ambient pets reuse the same extracted image frames as the full-screen viewer. The surrounding
-//! TUI still owns the notification text and layout slot; the sprite itself is emitted through the
-//! terminal image protocol after ratatui finishes drawing the frame.
+//! Ambient pets reuse the same extracted image frames as the full-screen viewer
+//! but are rendered through a different ownership split: ratatui still owns the
+//! transcript/composer layout, while the sprite itself is emitted through the
+//! terminal image protocol after the frame draw completes.
+//!
+//! This module therefore owns two separate contracts:
+//! choosing which animation frame should be visible for the current semantic
+//! pet state, and translating that frame into a precise on-screen image request
+//! that does not overlap reserved bottom-pane space. It does not persist pet
+//! selection or decide when modal/popover UI should suppress the sprite.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -126,6 +133,13 @@ pub(crate) struct AmbientPet {
 }
 
 impl AmbientPet {
+    /// Load the active ambient pet and prepare its frame cache.
+    ///
+    /// This resolves the selected pet id, extracts per-frame PNGs into the OS
+    /// cache, and records the terminal protocol support snapshot used for later
+    /// draw requests. A caller that repeatedly recreates `AmbientPet` instead of
+    /// mutating one instance would lose animation timing continuity and pay the
+    /// frame-cache preparation cost more often than necessary.
     pub(crate) fn load(
         selected_pet: Option<&str>,
         codex_home: &std::path::Path,
@@ -189,6 +203,13 @@ impl AmbientPet {
         .delay
     }
 
+    /// Build an image draw request for the ambient pet anchored above the composer.
+    ///
+    /// Returning `None` means "do not render the sprite this frame", typically
+    /// because the terminal protocol is unavailable or the current layout cannot
+    /// fit the image without overlapping reserved UI. Callers should not try to
+    /// partially clip the image themselves; that would desynchronize the image
+    /// protocol output from the TUI's notion of cleared rows.
     pub(crate) fn draw_request(
         &self,
         area: Rect,
@@ -219,6 +240,11 @@ impl AmbientPet {
         })
     }
 
+    /// Build a centered preview draw request for the `/pets` picker side pane.
+    ///
+    /// The picker preview intentionally uses the first idle frame rather than
+    /// the live animation state so selection browsing stays stable and does not
+    /// require the full ambient animation lifecycle.
     pub(crate) fn preview_draw_request(&self, area: Rect) -> Option<AmbientPetDraw> {
         let protocol = self.support.protocol()?;
         let size = self.image_size();

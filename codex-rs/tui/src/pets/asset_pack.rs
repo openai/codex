@@ -1,3 +1,15 @@
+//! Built-in pet asset acquisition and cache ownership.
+//!
+//! Unlike custom pets, built-in pets are not checked into the TUI package as
+//! local spritesheets. The TUI resolves them from the public Codex pets CDN on
+//! first use, verifies that the downloaded file has the expected spritesheet
+//! geometry, and installs it into a versioned cache under CODEX_HOME.
+//!
+//! This module deliberately stops at "a validated spritesheet exists at this
+//! path". Higher layers remain responsible for deciding when downloads are
+//! allowed, when previews should block on them, and when a successfully loaded
+//! built-in pet is safe to persist to config.
+
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -22,6 +34,14 @@ pub(crate) fn builtin_spritesheet_path(codex_home: &Path, file: &str) -> PathBuf
     pack_dir(codex_home).join("assets").join(file)
 }
 
+/// Ensure that a built-in pet's spritesheet is present and structurally valid.
+///
+/// The cache key is the CDN-facing filename, so updating a built-in pet means
+/// publishing a new versioned filename rather than mutating an existing one in
+/// place. If a cached file is missing or invalid, this downloads a fresh copy,
+/// validates the decoded image dimensions, and installs it atomically. Callers
+/// should treat any error here as "the asset is unavailable", not as a partial
+/// install they can safely ignore.
 pub(crate) fn ensure_builtin_pet(codex_home: &Path, pet: catalog::BuiltinPet) -> Result<()> {
     let destination = builtin_spritesheet_path(codex_home, pet.spritesheet_file);
     if validate_cached_spritesheet(&destination).is_ok() {

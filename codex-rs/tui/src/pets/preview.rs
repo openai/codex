@@ -1,3 +1,11 @@
+//! Shared preview-state model for the `/pets` side pane.
+//!
+//! The preview pane is intentionally small and stateful: the selection popup
+//! renders it synchronously, while async preview loading updates this state
+//! from outside the widget tree. Keeping the state in a mutex-backed object lets
+//! the picker remember the last preview area for out-of-band image rendering
+//! without requiring the rest of the popup machinery to know about pet images.
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -17,6 +25,11 @@ pub(crate) struct PetPickerPreviewState {
 }
 
 impl PetPickerPreviewState {
+    /// Return a renderable wrapper for the picker side pane.
+    ///
+    /// The wrapper is cheap to clone and intentionally shares interior state
+    /// with the controller so selection-change callbacks can update the visible
+    /// loading/error/ready state without rebuilding the popup.
     pub(crate) fn renderable(&self) -> PetPickerPreviewRenderable {
         PetPickerPreviewRenderable {
             inner: Arc::clone(&self.inner),
