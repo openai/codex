@@ -1,7 +1,6 @@
 set working-directory := "codex-rs"
 set positional-arguments
 
-repo_root := justfile_directory()
 rust_min_stack := "8388608" # 8 MiB
 
 # Display help
@@ -32,11 +31,10 @@ app-server-test-client *args:
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
 # Format Rust and Python SDK code.
-[no-cd]
 fmt:
-    cargo fmt --manifest-path "{{ repo_root }}/codex-rs/Cargo.toml" --all -- --config imports_granularity=Item 2>/dev/null
-    uv run --project "{{ repo_root }}/sdk/python" --extra dev ruff check --fix --fix-only "{{ repo_root }}/sdk/python"
-    uv run --project "{{ repo_root }}/sdk/python" --extra dev ruff format "{{ repo_root }}/sdk/python"
+    cargo fmt -- --config imports_granularity=Item 2>/dev/null
+    uv run --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
+    uv run --project ../sdk/python --extra dev ruff format ../sdk/python
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty "$@"
