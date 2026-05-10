@@ -10,6 +10,7 @@ from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
+    AskForApprovalValue,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -81,10 +82,13 @@ def _approval_mode_settings(
     approval_mode: ApprovalMode,
 ) -> tuple[AskForApproval, ApprovalsReviewer | None]:
     """Map the public approval mode to generated app-server start params."""
-    if approval_mode == ApprovalMode.deny_all:
-        return AskForApproval.never, None
     if approval_mode == ApprovalMode.auto_review:
-        return AskForApproval.on_request, ApprovalsReviewer.auto_review
+        return (
+            AskForApproval(root=AskForApprovalValue.on_request),
+            ApprovalsReviewer.auto_review,
+        )
+    if approval_mode == ApprovalMode.deny_all:
+        return AskForApproval(root=AskForApprovalValue.never), None
 
     # TODO: Add a public approval result callback API before exposing more modes.
     supported = ", ".join(mode.value for mode in ApprovalMode)
@@ -162,7 +166,7 @@ class Codex:
     def thread_start(
         self,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -230,7 +234,7 @@ class Codex:
         self,
         thread_id: str,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -263,7 +267,7 @@ class Codex:
         self,
         thread_id: str,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -363,7 +367,7 @@ class AsyncCodex:
     async def thread_start(
         self,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -433,7 +437,7 @@ class AsyncCodex:
         self,
         thread_id: str,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -467,7 +471,7 @@ class AsyncCodex:
         self,
         thread_id: str,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -524,7 +528,7 @@ class Thread:
         self,
         input: RunInput,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -557,7 +561,7 @@ class Thread:
         self,
         input: Input,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -607,7 +611,7 @@ class AsyncThread:
         self,
         input: RunInput,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -640,7 +644,7 @@ class AsyncThread:
         self,
         input: Input,
         *,
-        approval_mode: ApprovalMode = ApprovalMode.deny_all,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,

@@ -97,6 +97,11 @@ def _keyword_only_names(fn: object) -> list[str]:
     ]
 
 
+def _keyword_default(fn: object, name: str) -> object:
+    """Return the default value for one keyword parameter on a public method."""
+    return inspect.signature(fn).parameters[name].default
+
+
 def _assert_no_any_annotations(fn: object) -> None:
     """Reject loose annotations on public wrapper methods."""
     signature = inspect.signature(fn)
@@ -376,6 +381,26 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             f"non snake_case kwargs in {fn}: {actual}"
         )
         _assert_no_any_annotations(fn)
+
+
+def test_generated_public_methods_default_to_auto_review() -> None:
+    """Thread and turn starts should use auto-review unless callers opt out."""
+    funcs = [
+        Codex.thread_start,
+        Codex.thread_resume,
+        Codex.thread_fork,
+        Thread.turn,
+        Thread.run,
+        AsyncCodex.thread_start,
+        AsyncCodex.thread_resume,
+        AsyncCodex.thread_fork,
+        AsyncThread.turn,
+        AsyncThread.run,
+    ]
+
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == {
+        fn: ApprovalMode.auto_review for fn in funcs
+    }
 
 
 def test_lifecycle_methods_are_codex_scoped() -> None:

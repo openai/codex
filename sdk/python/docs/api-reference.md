@@ -3,7 +3,7 @@
 Public surface of `openai_codex` for app-server v2.
 
 This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
-Thread and turn starts expose `approval_mode`. `ApprovalMode.deny_all` is the default and denies escalated permissions; `ApprovalMode.auto_review` routes escalated permission requests to auto-review.
+Thread and turn starts expose `approval_mode`. `ApprovalMode.auto_review` is the default; use `ApprovalMode.deny_all` to deny escalated permissions.
 
 ## Package Entry
 
@@ -47,10 +47,10 @@ Properties/methods:
 
 - `metadata -> InitializeResponse`
 - `close() -> None`
-- `thread_start(*, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
+- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> ThreadListResponse`
-- `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
-- `thread_fork(thread_id: str, *, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, sandbox=None) -> Thread`
+- `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
+- `thread_fork(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, sandbox=None) -> Thread`
 - `thread_archive(thread_id: str) -> ThreadArchiveResponse`
 - `thread_unarchive(thread_id: str) -> Thread`
 - `models(*, include_hidden: bool = False) -> ModelListResponse`
@@ -82,10 +82,10 @@ Properties/methods:
 
 - `metadata -> InitializeResponse`
 - `close() -> Awaitable[None]`
-- `thread_start(*, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
+- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> Awaitable[ThreadListResponse]`
-- `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
-- `thread_fork(thread_id: str, *, approval_mode=ApprovalMode.deny_all, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, sandbox=None) -> Awaitable[AsyncThread]`
+- `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
+- `thread_fork(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, sandbox=None) -> Awaitable[AsyncThread]`
 - `thread_archive(thread_id: str) -> Awaitable[ThreadArchiveResponse]`
 - `thread_unarchive(thread_id: str) -> Awaitable[AsyncThread]`
 - `models(*, include_hidden: bool = False) -> Awaitable[ModelListResponse]`
@@ -103,16 +103,16 @@ async with AsyncCodex() as codex:
 
 ### Thread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.deny_all, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> RunResult`
-- `turn(input: Input, *, approval_mode=ApprovalMode.deny_all, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
+- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> RunResult`
+- `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
 - `compact() -> ThreadCompactStartResponse`
 
 ### AsyncThread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.deny_all, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[RunResult]`
-- `turn(input: Input, *, approval_mode=ApprovalMode.deny_all, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
+- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[RunResult]`
+- `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
 - `compact() -> Awaitable[ThreadCompactStartResponse]`

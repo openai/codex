@@ -18,7 +18,6 @@ ensure_local_sdk_src()
 import asyncio
 
 from openai_codex import (
-    ApprovalMode,
     AsyncCodex,
     TextInput,
 )
@@ -46,18 +45,14 @@ PROMPT = (
     "Analyze a safe rollout plan for enabling a feature flag in production. "
     "Return JSON matching the requested schema."
 )
-APPROVAL_MODE = ApprovalMode.auto_review
 
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(
-            model="gpt-5.4", config={"model_reasoning_effort": "high"}
-        )
+        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
         turn = await thread.turn(
             TextInput(PROMPT),
-            approval_mode=APPROVAL_MODE,
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
             summary=SUMMARY,
@@ -69,16 +64,12 @@ async def main() -> None:
         try:
             structured = json.loads(structured_text)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}"
-            ) from exc
+            raise RuntimeError(f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}") from exc
 
         summary = structured.get("summary")
         actions = structured.get("actions")
-        if (
-            not isinstance(summary, str)
-            or not isinstance(actions, list)
-            or not all(isinstance(action, str) for action in actions)
+        if not isinstance(summary, str) or not isinstance(actions, list) or not all(
+            isinstance(action, str) for action in actions
         ):
             raise RuntimeError(
                 f"Expected structured output with string summary/actions, got: {structured!r}"
@@ -89,9 +80,7 @@ async def main() -> None:
         print("actions:")
         for action in actions:
             print("-", action)
-        print(
-            "Items:", 0 if persisted_turn is None else len(persisted_turn.items or [])
-        )
+        print("Items:", 0 if persisted_turn is None else len(persisted_turn.items or []))
 
 
 if __name__ == "__main__":

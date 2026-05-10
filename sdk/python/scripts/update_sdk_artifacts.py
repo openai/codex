@@ -615,50 +615,6 @@ def generate_v2_all(schema_dir: Path) -> None:
             cwd=sdk_root(),
         )
     _normalize_generated_timestamps(out_path)
-    _add_ask_for_approval_aliases(out_path)
-
-
-def _add_ask_for_approval_aliases(out_path: Path) -> None:
-    """Add ergonomic approval policy constants to the generated RootModel class."""
-    source = out_path.read_text()
-    source = source.replace(
-        "from typing import Annotated, Any, Literal",
-        "from typing import Annotated, Any, ClassVar, Literal",
-    )
-    if "AskForApproval.never =" in source:
-        out_path.write_text(source)
-        return
-
-    needle = """class AskForApproval(RootModel[AskForApprovalValue | GranularAskForApproval]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AskForApprovalValue | GranularAskForApproval
-
-
-"""
-    replacement = """class AskForApproval(RootModel[AskForApprovalValue | GranularAskForApproval]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AskForApprovalValue | GranularAskForApproval
-    untrusted: ClassVar[AskForApproval]
-    on_failure: ClassVar[AskForApproval]
-    on_request: ClassVar[AskForApproval]
-    never: ClassVar[AskForApproval]
-
-
-AskForApproval.untrusted = AskForApproval(root=AskForApprovalValue.untrusted)
-AskForApproval.on_failure = AskForApproval(root=AskForApprovalValue.on_failure)
-AskForApproval.on_request = AskForApproval(root=AskForApprovalValue.on_request)
-AskForApproval.never = AskForApproval(root=AskForApprovalValue.never)
-
-
-"""
-    updated, count = source.replace(needle, replacement, 1), source.count(needle)
-    if count != 1:
-        raise RuntimeError("Could not add AskForApproval aliases to generated types")
-    out_path.write_text(updated)
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
@@ -743,7 +699,13 @@ def _type_tuple_source(class_names: list[str]) -> str:
 
 def generate_notification_registry(schema_dir: Path) -> None:
     """Regenerate notification dispatch metadata from the runtime notification schema."""
-    out = sdk_root() / "src" / "openai_codex" / "generated" / "notification_registry.py"
+    out = (
+        sdk_root()
+        / "src"
+        / "openai_codex"
+        / "generated"
+        / "notification_registry.py"
+    )
     specs = _notification_specs(schema_dir)
     class_names = sorted({class_name for _, class_name in specs})
     direct_turn_id_types, nested_turn_types = _notification_turn_id_specs(
@@ -921,7 +883,7 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
 
 def _approval_mode_signature_lines() -> list[str]:
     """Return the public approval mode kwarg emitted on start helpers."""
-    return ["        approval_mode: ApprovalMode = ApprovalMode.deny_all,"]
+    return ["        approval_mode: ApprovalMode = ApprovalMode.auto_review,"]
 
 
 def _approval_mode_assignment_line(*, indent: str = "        ") -> str:
@@ -943,10 +905,7 @@ def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]
 def _model_arg_lines(
     fields: list[PublicFieldSpec], *, indent: str = "            "
 ) -> list[str]:
-    lines: list[str] = []
-    for field in fields:
-        lines.append(f"{indent}{field.wire_name}={field.py_name},")
-    return lines
+    return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
 
 
 def _replace_generated_block(source: str, block_name: str, body: str) -> str:
