@@ -3,6 +3,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -19,6 +20,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -61,6 +63,17 @@ async fn get_account_rate_limits_requires_auth() -> Result<()> {
 #[tokio::test]
 async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let model_server = MockServer::start().await;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &model_server.uri(),
+        &BTreeMap::new(),
+        /* auto_compact_limit */ 1024,
+        /* requires_openai_auth */ Some(true),
+        "mock_provider",
+        "compact",
+    )?;
+    mock_valid_api_key(&model_server).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -266,6 +279,17 @@ async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
 #[tokio::test]
 async fn send_add_credits_nudge_email_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let model_server = MockServer::start().await;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &model_server.uri(),
+        &BTreeMap::new(),
+        /* auto_compact_limit */ 1024,
+        /* requires_openai_auth */ Some(true),
+        "mock_provider",
+        "compact",
+    )?;
+    mock_valid_api_key(&model_server).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -448,6 +472,17 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
     assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     Ok(())
+}
+
+async fn mock_valid_api_key(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": []
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
 }
 
 fn write_chatgpt_base_url(codex_home: &Path, base_url: &str) -> std::io::Result<()> {
