@@ -370,20 +370,6 @@ impl ServiceTier {
         }
     }
 
-    pub fn config_value_for(value: &str) -> &str {
-        match Self::from_request_value(value) {
-            Some(service_tier) => service_tier.config_value(),
-            None => value,
-        }
-    }
-
-    pub fn request_value_for(value: &str) -> &str {
-        match Self::from_request_value(value) {
-            Some(service_tier) => service_tier.request_value(),
-            None => value,
-        }
-    }
-
     pub fn from_request_value(value: &str) -> Option<Self> {
         match value {
             "fast" | "priority" => Some(Self::Fast),
@@ -702,10 +688,10 @@ mod tests {
     #[test]
     fn service_tier_aliases_have_distinct_config_and_request_values() {
         let values = ["fast", "priority", "flex", "experimental-tier-id"].map(|value| {
-            (
-                ServiceTier::config_value_for(value),
-                ServiceTier::request_value_for(value),
-            )
+            match ServiceTier::from_request_value(value) {
+                Some(service_tier) => (service_tier.config_value(), service_tier.request_value()),
+                None => (value, value),
+            }
         });
 
         assert_eq!(

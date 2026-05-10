@@ -742,7 +742,12 @@ impl ModelClient {
         );
         let prompt_cache_key = Some(self.state.thread_id.to_string());
         let service_tier = service_tier
-            .map(|service_tier| ServiceTier::request_value_for(&service_tier).to_string())
+            .map(|configured_service_tier| {
+                match ServiceTier::from_request_value(&configured_service_tier) {
+                    Some(service_tier) => service_tier.request_value().to_string(),
+                    None => configured_service_tier,
+                }
+            })
             .filter(|service_tier| model_info.supports_service_tier(service_tier));
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),

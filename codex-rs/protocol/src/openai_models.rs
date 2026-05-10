@@ -489,7 +489,10 @@ impl ModelPreset {
 
 impl ModelInfo {
     pub fn supports_service_tier(&self, service_tier: &str) -> bool {
-        let service_tier = ServiceTier::request_value_for(service_tier);
+        let service_tier = match ServiceTier::from_request_value(service_tier) {
+            Some(service_tier) => service_tier.request_value(),
+            None => service_tier,
+        };
         self.service_tiers
             .iter()
             .any(|tier| tier.id == service_tier)
