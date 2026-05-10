@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Iterator, NoReturn
 
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
@@ -82,17 +82,25 @@ def _approval_mode_settings(
     approval_mode: ApprovalMode,
 ) -> tuple[AskForApproval, ApprovalsReviewer | None]:
     """Map the public approval mode to generated app-server start params."""
-    if approval_mode == ApprovalMode.auto_review:
-        return (
-            AskForApproval(root=AskForApprovalValue.on_request),
-            ApprovalsReviewer.auto_review,
-        )
-    if approval_mode == ApprovalMode.deny_all:
-        return AskForApproval(root=AskForApprovalValue.never), None
+    if not isinstance(approval_mode, ApprovalMode):
+        supported = ", ".join(mode.value for mode in ApprovalMode)
+        raise ValueError(f"approval_mode must be one of: {supported}")
 
-    # TODO: Add a public approval result callback API before exposing more modes.
-    supported = ", ".join(mode.value for mode in ApprovalMode)
-    raise ValueError(f"approval_mode must be one of: {supported}")
+    match approval_mode:
+        case ApprovalMode.auto_review:
+            return (
+                AskForApproval(root=AskForApprovalValue.on_request),
+                ApprovalsReviewer.auto_review,
+            )
+        case ApprovalMode.deny_all:
+            return AskForApproval(root=AskForApprovalValue.never), None
+        case _:
+            return _assert_never_approval_mode(approval_mode)
+
+
+def _assert_never_approval_mode(approval_mode: NoReturn) -> NoReturn:
+    """Make approval mode mapping exhaustive for static type checkers."""
+    raise AssertionError(f"Unhandled approval mode: {approval_mode!r}")
 
 
 class Codex:
