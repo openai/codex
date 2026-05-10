@@ -552,7 +552,7 @@ mod tests {
 
         assert_eq!(pet.id, "dewey");
         assert_eq!(pet.display_name, "Dewey");
-        assert_eq!(pet.description, "A tidy duck for calm workspace days.");
+        assert_eq!(pet.description, "A tidy duck for calm workspace days");
         assert_eq!(
             pet.spritesheet_path,
             super::super::builtin_spritesheet_path(codex_home.path(), "dewey-spritesheet-v4.webp")
