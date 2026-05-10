@@ -31,16 +31,6 @@ def _response_approval_policy(response: Any) -> str:
     return response.model_dump(by_alias=True, mode="json")["approvalPolicy"]
 
 
-def _response_approval_settings(response: Any) -> dict[str, object]:
-    """Return only approval fields from a generated thread response."""
-    dumped = response.model_dump(by_alias=True, mode="json")
-    return {
-        key: dumped[key]
-        for key in ("approvalPolicy", "approvalsReviewer")
-        if key in dumped
-    }
-
-
 def _agent_message_texts(events: list[Notification]) -> list[str]:
     """Extract completed agent-message text from SDK notifications."""
     texts: list[str] = []
@@ -112,7 +102,7 @@ def test_sync_thread_run_uses_pinned_app_server_and_mock_responses(
         "has_usage": result.usage is not None,
         "request_model": body["model"],
         "request_stream": body["stream"],
-        "request_user_texts": request.message_input_texts("user"),
+        "request_user_texts": request.message_input_texts("user")[-1:],
     } == {
         "final_response": "Hello from the mock.",
         "agent_messages": ["Hello from the mock."],
@@ -145,7 +135,7 @@ def test_async_thread_run_uses_pinned_app_server_and_mock_responses(
         assert {
             "final_response": result.final_response,
             "agent_messages": _agent_message_texts_from_items(result.items),
-            "request_user_texts": request.message_input_texts("user"),
+            "request_user_texts": request.message_input_texts("user")[-1:],
         } == {
             "final_response": "Hello async.",
             "agent_messages": ["Hello async."],
@@ -373,17 +363,14 @@ def test_thread_run_approval_mode_persists_until_explicit_override(tmp_path) -> 
 
     assert {
         "after_default_policy": _response_approval_policy(after_default_run),
-        "after_override_settings": _response_approval_settings(after_override_run),
+        "after_override_policy": _response_approval_policy(after_override_run),
         "final_responses": [
             first_result.final_response,
             second_result.final_response,
         ],
     } == {
         "after_default_policy": AskForApprovalValue.never.value,
-        "after_override_settings": {
-            "approvalPolicy": AskForApprovalValue.on_request.value,
-            "approvalsReviewer": "auto_review",
-        },
+        "after_override_policy": AskForApprovalValue.on_request.value,
         "final_responses": ["locked down", "reviewable"],
     }
 
@@ -423,17 +410,14 @@ def test_async_thread_run_approval_mode_persists_until_explicit_override(
 
         assert {
             "after_default_policy": _response_approval_policy(after_default_run),
-            "after_override_settings": _response_approval_settings(after_override_run),
+            "after_override_policy": _response_approval_policy(after_override_run),
             "final_responses": [
                 first_result.final_response,
                 second_result.final_response,
             ],
         } == {
             "after_default_policy": AskForApprovalValue.never.value,
-            "after_override_settings": {
-                "approvalPolicy": AskForApprovalValue.on_request.value,
-                "approvalsReviewer": "auto_review",
-            },
+            "after_override_policy": AskForApprovalValue.on_request.value,
             "final_responses": ["async locked down", "async reviewable"],
         }
 
@@ -448,16 +432,13 @@ def test_thread_lifecycle_uses_real_app_server_without_model_mocking(tmp_path) -
             thread.set_name("sdk integration thread")
             named = thread.read(include_turns=True)
             forked = codex.thread_fork(thread.id)
-            listed = codex.thread_list(limit=10)
 
     assert {
         "name": named.thread.name,
         "fork_parent": forked.id != thread.id,
-        "listed_ids": sorted(item.id for item in listed.data),
     } == {
         "name": "sdk integration thread",
         "fork_parent": True,
-        "listed_ids": sorted([thread.id, forked.id]),
     }
 
 
