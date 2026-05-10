@@ -961,6 +961,11 @@ impl MessageProcessor {
                 .remove(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::WorktreePrune { params, .. } => self
+                .worktree_processor
+                .prune(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
                 .config_processor
                 .model_provider_capabilities_read()

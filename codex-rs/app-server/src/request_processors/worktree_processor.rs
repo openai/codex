@@ -26,11 +26,15 @@ impl WorktreeRequestProcessor {
         &self,
         params: WorktreeListParams,
     ) -> Result<WorktreeListResponse, JSONRPCErrorError> {
-        let cwd = self.resolve_cwd(params.cwd).await?;
+        let source_cwd = if params.all {
+            None
+        } else {
+            Some(self.resolve_cwd(params.cwd).await?)
+        };
         let data = codex_worktree::list_worktrees(WorktreeListQuery {
             codex_home: self.config_manager.codex_home().to_path_buf(),
-            source_cwd: Some(cwd),
-            include_all_repos: false,
+            source_cwd,
+            include_all_repos: params.all,
         })
         .map_err(map_worktree_error)?
         .into_iter()
@@ -88,6 +92,31 @@ impl WorktreeRequestProcessor {
         Ok(WorktreeRemoveResponse {
             removed_path: result.removed_path.to_string_lossy().to_string(),
             deleted_branch: result.deleted_branch,
+        })
+    }
+
+    pub(crate) async fn prune(
+        &self,
+        params: WorktreePruneParams,
+    ) -> Result<WorktreePruneResponse, JSONRPCErrorError> {
+        let stale_paths =
+            codex_worktree::stale_managed_worktree_dirs(self.config_manager.codex_home())
+                .map_err(map_worktree_error)?;
+        if !params.dry_run {
+            for path in &stale_paths {
+                std::fs::remove_dir_all(path).map_err(|err| {
+                    map_worktree_error(anyhow::anyhow!(
+                        "failed to remove stale worktree directory {}: {err}",
+                        path.display()
+                    ))
+                })?;
+            }
+        }
+        Ok(WorktreePruneResponse {
+            paths: stale_paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
         })
     }
 

@@ -11,6 +11,9 @@ pub struct WorktreeListParams {
     /// Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    /// Include managed worktrees from every repository known to this app-server.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
 }
 
 /// Managed worktrees returned by \`worktree/list\`.
@@ -85,6 +88,23 @@ pub struct WorktreeRemoveParams {
 pub struct WorktreeRemoveResponse {
     pub removed_path: String,
     pub deleted_branch: Option<String>,
+}
+
+/// Remove stale managed worktree metadata from app-server storage.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorktreePruneParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
+/// Result returned by `worktree/prune`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorktreePruneResponse {
+    pub paths: Vec<String>,
 }
 
 /// Server-native representation of a managed worktree.

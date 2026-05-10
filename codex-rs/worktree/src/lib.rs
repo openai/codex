@@ -16,6 +16,7 @@ pub use manager::ensure_worktree;
 pub use manager::list_worktrees;
 pub use manager::remove_worktree;
 pub use manager::resolve_worktree;
+pub use manager::stale_managed_worktree_dirs;
 pub use metadata::WorktreeMetadata;
 pub use metadata::WorktreeThreadMetadata;
 pub use metadata::bind_thread;

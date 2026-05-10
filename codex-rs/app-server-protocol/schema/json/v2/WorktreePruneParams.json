@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Remove stale managed worktree metadata from app-server storage.",
+  "properties": {
+    "dryRun": {
+      "type": "boolean"
+    }
+  },
+  "title": "WorktreePruneParams",
+  "type": "object"
+}

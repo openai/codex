@@ -309,6 +309,51 @@ fn is_git_root(path: &Path) -> bool {
     path.join(".git").exists()
 }
 
+pub fn stale_managed_worktree_dirs(codex_home: &Path) -> Result<Vec<PathBuf>> {
+    let root = paths::codex_worktrees_root(codex_home);
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut stale = Vec::new();
+    for repo_dir in fs::read_dir(&root)? {
+        let repo_dir = repo_dir?;
+        if !repo_dir.file_type()?.is_dir() {
+            continue;
+        }
+        for slug_dir in fs::read_dir(repo_dir.path())? {
+            let slug_dir = slug_dir?;
+            if !slug_dir.file_type()?.is_dir() {
+                continue;
+            }
+            let mut has_repo_dir = false;
+            for repo_root in fs::read_dir(slug_dir.path())? {
+                let repo_root = repo_root?;
+                if !repo_root.file_type()?.is_dir() {
+                    continue;
+                }
+                has_repo_dir = true;
+                if !repo_root.path().join(".git").exists() || !git_root_is_valid(&repo_root.path())
+                {
+                    stale.push(repo_root.path());
+                }
+            }
+            if !has_repo_dir {
+                stale.push(slug_dir.path());
+            }
+        }
+    }
+    stale.sort();
+    Ok(stale)
+}
+
+fn git_root_is_valid(path: &Path) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(path)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 fn worktree_matches_repo(info: &WorktreeInfo, repo: &SourceRepo) -> bool {
     info.id == repo.id || paths_match(&info.common_git_dir, &repo.common_git_dir)
 }

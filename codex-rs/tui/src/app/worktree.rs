@@ -330,6 +330,7 @@ impl App {
                 request_id: worktree_request_id("worktree-list"),
                 params: WorktreeListParams {
                     cwd: Some(self.session_workspace_cwd(app_server).display().to_string()),
+                    all: false,
                 },
             })
             .await?;

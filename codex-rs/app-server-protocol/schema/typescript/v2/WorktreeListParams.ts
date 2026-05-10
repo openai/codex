@@ -9,4 +9,8 @@ export type WorktreeListParams = {
 /**
  * Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.
  */
-cwd?: string | null, };
+cwd?: string | null,
+/**
+ * Include managed worktrees from every repository known to this app-server.
+ */
+all?: boolean, };

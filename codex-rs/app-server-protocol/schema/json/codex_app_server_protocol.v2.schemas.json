@@ -2056,6 +2056,30 @@
             },
             "method": {
               "enum": [
+                "worktree/prune"
+              ],
+              "title": "Worktree/pruneRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorktreePruneParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Worktree/pruneRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/config/write"
               ],
               "title": "Skills/config/writeRequestMethod",
@@ -16832,6 +16856,10 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
       "properties": {
+        "all": {
+          "description": "Include managed worktrees from every repository known to this app-server.",
+          "type": "boolean"
+        },
         "cwd": {
           "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
           "type": [
@@ -16867,6 +16895,34 @@
         "external"
       ],
       "type": "string"
+    },
+    "WorktreePruneParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Remove stale managed worktree metadata from app-server storage.",
+      "properties": {
+        "dryRun": {
+          "type": "boolean"
+        }
+      },
+      "title": "WorktreePruneParams",
+      "type": "object"
+    },
+    "WorktreePruneResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Result returned by `worktree/prune`.",
+      "properties": {
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "title": "WorktreePruneResponse",
+      "type": "object"
     },
     "WorktreeRemoveParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

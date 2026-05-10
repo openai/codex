@@ -2,6 +2,10 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
   "properties": {
+    "all": {
+      "description": "Include managed worktrees from every repository known to this app-server.",
+      "type": "boolean"
+    },
     "cwd": {
       "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
       "type": [

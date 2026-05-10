@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
+codex-app-server-client = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
@@ -34,6 +35,7 @@ codex-core-plugins = { workspace = true }
 codex-exec = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-feedback = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-write = { workspace = true }

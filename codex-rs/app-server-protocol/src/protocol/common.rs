@@ -730,6 +730,11 @@ client_request_definitions! {
         serialization: global("worktree"),
         response: v2::WorktreeRemoveResponse,
     },
+    WorktreePrune => "worktree/prune" {
+        params: v2::WorktreePruneParams,
+        serialization: global("worktree"),
+        response: v2::WorktreePruneResponse,
+    },
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
         serialization: global("config"),

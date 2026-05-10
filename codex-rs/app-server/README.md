@@ -1152,10 +1152,11 @@ All filesystem paths in this section must be absolute.
 
 ### Worktrees
 
-- `worktree/list` - list Codex-managed worktrees for the repository containing `cwd`; omitted `cwd` uses the app server's effective cwd.
+- `worktree/list` - list Codex-managed worktrees for the repository containing `cwd`; omitted `cwd` uses the app server's effective cwd, and `all` returns worktrees from every repository.
 - `worktree/inspectSource` - inspect staged, unstaged, and untracked dirty state for the repository containing `cwd`.
 - `worktree/create` - create or reuse a managed worktree from `cwd`, returning the resolved worktree plus any transfer warnings.
 - `worktree/remove` - remove a managed worktree resolved from `cwd` and `nameOrPath`, with optional `force` and `deleteBranch` behavior.
+- `worktree/prune` - remove stale managed-worktree storage entries, or report them without mutation when `dryRun` is set.
 
 ## Events
 

@@ -462,6 +462,8 @@ export type { WorktreeInspectSourceResponse } from "./WorktreeInspectSourceRespo
 export type { WorktreeListParams } from "./WorktreeListParams";
 export type { WorktreeListResponse } from "./WorktreeListResponse";
 export type { WorktreeLocation } from "./WorktreeLocation";
+export type { WorktreePruneParams } from "./WorktreePruneParams";
+export type { WorktreePruneResponse } from "./WorktreePruneResponse";
 export type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 export type { WorktreeRemoveResponse } from "./WorktreeRemoveResponse";
 export type { WorktreeSource } from "./WorktreeSource";

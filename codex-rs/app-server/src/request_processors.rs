@@ -251,6 +251,8 @@ use codex_app_server_protocol::WorktreeInspectSourceResponse;
 use codex_app_server_protocol::WorktreeListParams;
 use codex_app_server_protocol::WorktreeListResponse;
 use codex_app_server_protocol::WorktreeLocation as ApiWorktreeLocation;
+use codex_app_server_protocol::WorktreePruneParams;
+use codex_app_server_protocol::WorktreePruneResponse;
 use codex_app_server_protocol::WorktreeRemoveParams;
 use codex_app_server_protocol::WorktreeRemoveResponse;
 use codex_app_server_protocol::WorktreeSource as ApiWorktreeSource;

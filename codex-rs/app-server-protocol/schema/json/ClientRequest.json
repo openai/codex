@@ -4621,12 +4621,25 @@
     "WorktreeListParams": {
       "description": "Request the managed worktrees associated with the repository containing \\`cwd\\`.",
       "properties": {
+        "all": {
+          "description": "Include managed worktrees from every repository known to this app-server.",
+          "type": "boolean"
+        },
         "cwd": {
           "description": "Repository-relative workspace cwd to inspect. Omitted uses app-server's effective cwd.",
           "type": [
             "string",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "WorktreePruneParams": {
+      "description": "Remove stale managed worktree metadata from app-server storage.",
+      "properties": {
+        "dryRun": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -5763,6 +5776,30 @@
         "params"
       ],
       "title": "Worktree/removeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "worktree/prune"
+          ],
+          "title": "Worktree/pruneRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreePruneParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Worktree/pruneRequest",
       "type": "object"
     },
     {
