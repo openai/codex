@@ -72,11 +72,8 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
     }
 
     assert actual == expected, (
-        "Python SDK lint/format recipe guard failed. `just fmt` should keep formatting "
-        "Rust and running Ruff for `../sdk/python` from the root justfile's default "
-        "`codex-rs` working directory, so it works from `codex/`, `codex-rs/`, and "
-        "`sdk/python/`. Fix the root `justfile` fmt recipe, then run `just fmt` from "
-        "the repo root or `sdk/python` to verify.\n"
+        "The root `just fmt` recipe must run Rust fmt and Python SDK Ruff. "
+        "Fix the `fmt` recipe in `justfile`, then run `just fmt`.\n"
         f"Expected: {json.dumps(expected, indent=2)}\n"
         f"Actual: {json.dumps(actual, indent=2)}"
     )
