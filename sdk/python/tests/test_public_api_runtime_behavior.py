@@ -487,6 +487,7 @@ def test_turn_run_returns_completed_turn_payload() -> None:
 
 
 def test_thread_run_accepts_string_input_and_returns_run_result() -> None:
+    """Sync Thread.run should preserve approval settings unless explicitly overridden."""
     client = AppServerClient()
     item_notification = _item_completed_notification(text="Hello.")
     usage_notification = _token_usage_notification()
@@ -518,7 +519,7 @@ def test_thread_run_accepts_string_input_and_returns_run_result() -> None:
     ) == (
         "thread-1",
         [{"type": "text", "text": "hello"}],
-        [{"approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}],
+        [{}],
         RunResult(
             final_response="Hello.",
             items=[item_notification.payload.item],
@@ -694,7 +695,7 @@ def test_stream_text_registers_and_consumes_turn_notifications() -> None:
 
 
 def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
-    """Async Thread.run should normalize string input and collect routed results."""
+    """Async Thread.run should preserve approvals while collecting routed results."""
 
     async def scenario() -> None:
         """Feed item, usage, and completion events through the async turn stream."""
@@ -740,7 +741,7 @@ def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
         ) == (
             "thread-1",
             [{"type": "text", "text": "hello"}],
-            [{"approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}],
+            [{}],
             RunResult(
                 final_response="Hello async.",
                 items=[item_notification.payload.item],
