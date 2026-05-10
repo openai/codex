@@ -13,10 +13,9 @@ use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
-use icy_sixel::BackgroundMode;
-use icy_sixel::PixelAspectRatio;
-use icy_sixel::SixelImage;
 use image::imageops::FilterType;
+
+use super::sixel;
 
 const ESC: &str = "\x1b";
 const ST: &str = "\x1b\\";
@@ -271,12 +270,7 @@ pub fn sixel_frame(frame_path: &Path, cache_dir: &Path, height_px: u16) -> Resul
         .max(1);
     let rgba = frame.resize(width, height, FilterType::Lanczos3).to_rgba8();
     let (width, height) = rgba.dimensions();
-    let sixel = SixelImage::try_from_rgba(rgba.into_raw(), width as usize, height as usize)
-        .map_err(anyhow::Error::from)?
-        .with_aspect_ratio(PixelAspectRatio::Square)
-        .with_background_mode(BackgroundMode::Transparent)
-        .encode()
-        .map_err(anyhow::Error::from)?;
+    let sixel = sixel::encode_rgba(&rgba.into_raw(), width, height)?;
 
     fs::write(&path, sixel).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
@@ -557,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn sixel_frame_encodes_with_rust_crate() {
+    fn sixel_frame_encodes_without_external_crate() {
         let dir = tempfile::tempdir().unwrap();
         let frame_path = dir.path().join("frame.png");
         let rgba = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
@@ -567,7 +561,9 @@ mod tests {
             sixel_frame(&frame_path, &dir.path().join("sixel"), /*height_px*/ 1).unwrap();
         let sixel = fs::read_to_string(sixel_path).unwrap();
 
-        assert!(sixel.starts_with("\x1bP"));
+        assert!(sixel.starts_with("\x1bPq\"1;1;1;1"));
+        assert!(sixel.contains("#224;2;100;0;0"));
+        assert!(sixel.contains("#224@"));
         assert!(sixel.ends_with("\x1b\\"));
     }
 

@@ -23,6 +23,7 @@ mod image_protocol;
 mod model;
 mod picker;
 mod preview;
+mod sixel;
 
 use anyhow::Context;
 use anyhow::Result;
