@@ -1,0 +1,25 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"{default_running_snapshot}\\n\\n{default_completed_snapshot}\\n\\nvisible history:\\n{rendered}\")"
+---
+default running hook
+live hooks:
+• Running PostToolUse hook: injecting background context
+history:
+<empty>
+
+default completed hook
+live hooks:
+<empty>
+history:
+<empty>
+
+visible history:
+• PostToolUse hook (completed)
+  warning: background hook warning
+
+• PostToolUse hook (failed)
+  error: hook exited with code 7
+
+• PostToolUse hook (completed)
+  hook context: verbose visible context

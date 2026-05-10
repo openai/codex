@@ -23,7 +23,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                 "command": "python3 /tmp/pre.py",
                 "timeout": 10,
                 "statusMessage": "checking",
-                "visibilityHint": "hidden"
+                "visibilityHint": "quiet"
               }
         ]
       }
@@ -44,7 +44,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
-                        visibility_hint: codex_protocol::protocol::HookVisibilityHint::Hidden,
+                        visibility_hint: codex_protocol::protocol::HookVisibilityHint::Quiet,
                     }],
                 }],
                 ..Default::default()

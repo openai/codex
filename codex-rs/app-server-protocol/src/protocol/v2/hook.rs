@@ -81,7 +81,7 @@ v2_enum_from_core!(
     #[derive(Default)]
     pub enum HookVisibilityHint from CoreHookVisibilityHint {
         #[default]
-        Default, Hidden
+        Default, Quiet, Verbose
     }
 );
 

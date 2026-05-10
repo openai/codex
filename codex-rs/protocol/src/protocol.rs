@@ -1523,7 +1523,8 @@ pub enum HookRunStatus {
 pub enum HookVisibilityHint {
     #[default]
     Default,
-    Hidden,
+    Quiet,
+    Verbose,
 }
 
 impl HookVisibilityHint {

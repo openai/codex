@@ -1560,7 +1560,7 @@ Use `hooks/list` to fetch discovered hooks for one or more `cwds`. Each result i
 
 Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
 
-Hook lifecycle notifications include each run's `visibilityHint`. Clients may use `"hidden"` to suppress routine background rendering while still surfacing runs that fail, block, stop, or otherwise produce user-relevant output.
+Hook lifecycle notifications include each run's `visibilityHint`. Clients may use `"default"` for concise foreground rendering, `"quiet"` to suppress transient background rows, and `"verbose"` to preserve the full hook stream.
 
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 

@@ -186,7 +186,7 @@ fn preview_runs_preserve_configured_visibility_hint() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
-                    visibility_hint: codex_protocol::protocol::HookVisibilityHint::Hidden,
+                    visibility_hint: codex_protocol::protocol::HookVisibilityHint::Quiet,
                 }],
             }],
             ..Default::default()
@@ -233,7 +233,7 @@ fn preview_runs_preserve_configured_visibility_hint() {
     assert_eq!(preview.len(), 1);
     assert_eq!(
         preview[0].visibility_hint,
-        codex_protocol::protocol::HookVisibilityHint::Hidden
+        codex_protocol::protocol::HookVisibilityHint::Quiet
     );
 }
 
@@ -514,7 +514,7 @@ fn presentation_only_visibility_changes_preserve_existing_hook_trust() {
                         "hooks": [{
                             "type": "command",
                             "command": "python3 /tmp/user.py",
-                            "visibilityHint": "hidden",
+                            "visibilityHint": "quiet",
                         }],
                     }],
                 },

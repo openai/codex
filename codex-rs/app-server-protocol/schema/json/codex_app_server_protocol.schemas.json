@@ -9832,7 +9832,8 @@
       "HookVisibilityHint": {
         "enum": [
           "default",
-          "hidden"
+          "quiet",
+          "verbose"
         ],
         "type": "string"
       },

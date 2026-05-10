@@ -4073,7 +4073,7 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, run: codex_app_server_protocol::HookRunSummary) {
-        if history_cell::hook_run_is_hidden(&run) {
+        if history_cell::hook_run_should_skip_render(&run) {
             return;
         }
         self.flush_answer_stream_with_separator();
@@ -4095,7 +4095,7 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, completed: codex_app_server_protocol::HookRunSummary) {
-        if history_cell::hook_run_is_hidden(&completed) {
+        if history_cell::hook_run_should_skip_render(&completed) {
             return;
         }
         let completed_existing_run = self

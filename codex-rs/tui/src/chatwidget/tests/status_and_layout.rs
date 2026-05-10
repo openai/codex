@@ -2355,18 +2355,20 @@ async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
 }
 
 #[tokio::test]
-async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
+async fn visibility_hints_balance_running_rows_with_context_suppression() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let mut hidden_running = hook_started_run(
+    let default_running = hook_started_run(
         "post-tool-use:0:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
         Some("injecting background context"),
     );
-    hidden_running.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
-    handle_hook_started(&mut chat, hidden_running);
+    handle_hook_started(&mut chat, default_running);
+    reveal_running_hooks(&mut chat);
+    let default_running_snapshot =
+        hook_live_and_history_snapshot(&chat, "default running hook", "");
 
-    let mut hidden_context_only = hook_completed_run(
+    let default_context_only = hook_completed_run(
         "post-tool-use:0:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
         codex_app_server_protocol::HookRunStatus::Completed,
@@ -2375,13 +2377,22 @@ async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
             text: "time is 12:34".to_string(),
         }],
     );
-    hidden_context_only.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
-    handle_hook_completed(&mut chat, hidden_context_only);
+    handle_hook_completed(&mut chat, default_context_only);
 
-    let quiet_snapshot = hook_live_and_history_snapshot(&chat, "hidden background hook", "");
+    expire_quiet_hook_linger(&mut chat);
+    let default_completed_snapshot =
+        hook_live_and_history_snapshot(&chat, "default completed hook", "");
     assert!(drain_insert_history(&mut rx).is_empty());
 
-    let mut hidden_warning = hook_completed_run(
+    let mut quiet_running = hook_started_run(
+        "post-tool-use:1:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        Some("quiet background context"),
+    );
+    quiet_running.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Quiet;
+    handle_hook_started(&mut chat, quiet_running);
+
+    let mut quiet_warning = hook_completed_run(
         "post-tool-use:1:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
         codex_app_server_protocol::HookRunStatus::Completed,
@@ -2396,10 +2407,10 @@ async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
             },
         ],
     );
-    hidden_warning.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
-    handle_hook_completed(&mut chat, hidden_warning);
+    quiet_warning.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Quiet;
+    handle_hook_completed(&mut chat, quiet_warning);
 
-    let mut hidden_failed = hook_completed_run(
+    let mut quiet_failed = hook_completed_run(
         "post-tool-use:2:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
         codex_app_server_protocol::HookRunStatus::Failed,
@@ -2414,16 +2425,30 @@ async fn hidden_hooks_skip_background_rendering_but_keep_failures_visible() {
             },
         ],
     );
-    hidden_failed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
-    handle_hook_completed(&mut chat, hidden_failed);
+    quiet_failed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Quiet;
+    handle_hook_completed(&mut chat, quiet_failed);
+
+    let mut verbose_completed = hook_completed_run(
+        "post-tool-use:3:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        vec![codex_app_server_protocol::HookOutputEntry {
+            kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+            text: "verbose visible context".to_string(),
+        }],
+    );
+    verbose_completed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Verbose;
+    handle_hook_completed(&mut chat, verbose_completed);
 
     let rendered = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(
-        "hidden_hook_background_and_failure_snapshot",
-        format!("{quiet_snapshot}\n\nvisible history:\n{rendered}")
+        "hook_visibility_hint_rendering_snapshot",
+        format!(
+            "{default_running_snapshot}\n\n{default_completed_snapshot}\n\nvisible history:\n{rendered}"
+        )
     );
 }
 
@@ -2811,7 +2836,7 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
 }
 
 #[tokio::test]
-async fn hook_completed_before_reveal_renders_completed_without_running_flash() {
+async fn default_hook_completed_before_reveal_omits_context_only_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     handle_hook_started(
@@ -2842,7 +2867,7 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(
-        "hook_completed_before_reveal_renders_completed_without_running_flash_snapshot",
+        "default_hook_completed_before_reveal_omits_context_only_completion_snapshot",
         format!("started hidden:\n{started_hidden_snapshot}\nhistory:\n{history}")
     );
 }

@@ -217,6 +217,8 @@ impl HookCell {
         let Some(index) = self.runs.iter().position(|existing| existing.id == run.id) else {
             return false;
         };
+        let mut run = run;
+        run.entries = visible_hook_output_entries(run.visibility_hint, run.entries);
         if hook_run_is_quiet_success(&run) {
             if !self.runs[index]
                 .state
@@ -231,16 +233,12 @@ impl HookCell {
             status_message,
             status,
             entries,
-            visibility_hint,
             ..
         } = run;
         let existing = &mut self.runs[index];
         existing.event_name = event_name;
         existing.status_message = status_message;
-        existing.state = HookRunState::completed(
-            status,
-            visible_hook_output_entries(visibility_hint, entries),
-        );
+        existing.state = HookRunState::completed(status, entries);
         true
     }
 
@@ -248,6 +246,8 @@ impl HookCell {
     ///
     /// This is used for replay/restoration paths where the final run summary is already known.
     pub(crate) fn add_completed_run(&mut self, run: HookRunSummary) {
+        let mut run = run;
+        run.entries = visible_hook_output_entries(run.visibility_hint, run.entries);
         if hook_run_is_quiet_success(&run) {
             return;
         }
@@ -257,17 +257,13 @@ impl HookCell {
             status_message,
             status,
             entries,
-            visibility_hint,
             ..
         } = run;
         self.runs.push(HookRunCell {
             id,
             event_name,
             status_message,
-            state: HookRunState::completed(
-                status,
-                visible_hook_output_entries(visibility_hint, entries),
-            ),
+            state: HookRunState::completed(status, entries),
         });
     }
 
@@ -693,9 +689,9 @@ fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
 }
 
-/// Returns true when a hook marked as background has no user-relevant consequence to render.
-pub(crate) fn hook_run_is_hidden(run: &HookRunSummary) -> bool {
-    run.visibility_hint == HookVisibilityHint::Hidden
+/// Returns true when a `quiet` hook has no user-relevant consequence to render at all.
+pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
+    run.visibility_hint == HookVisibilityHint::Quiet
         && match run.status {
             HookRunStatus::Running => true,
             HookRunStatus::Completed => run
@@ -716,11 +712,22 @@ fn visible_hook_output_entries(
         .collect()
 }
 
+/// `default` is concise, `quiet` is concise without transient running rows, and `verbose` preserves
+/// the complete hook stream.
+///
+/// `Context` is the presentation-only payload suppressed by the concise modes: it can remain
+/// available to the model without adding transcript noise for the user, while warnings, feedback,
+/// stops, and errors still surface normally.
 fn hook_output_entry_is_visible(
     visibility_hint: HookVisibilityHint,
     kind: HookOutputEntryKind,
 ) -> bool {
-    visibility_hint != HookVisibilityHint::Hidden || kind != HookOutputEntryKind::Context
+    match visibility_hint {
+        HookVisibilityHint::Default | HookVisibilityHint::Quiet => {
+            kind != HookOutputEntryKind::Context
+        }
+        HookVisibilityHint::Verbose => true,
+    }
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {

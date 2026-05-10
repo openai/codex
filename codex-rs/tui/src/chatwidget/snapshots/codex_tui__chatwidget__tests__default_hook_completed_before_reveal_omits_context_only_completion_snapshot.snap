@@ -5,5 +5,3 @@ expression: "format!(\"started hidden:\\n{started_hidden_snapshot}\\nhistory:\\n
 started hidden:
 
 history:
-• SessionStart hook (completed)
-  hook context: session context
