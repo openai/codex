@@ -19,13 +19,20 @@ def test_thread_set_name_and_read_use_pinned_app_server(tmp_path) -> None:
 
 
 def test_thread_fork_returns_distinct_thread_from_pinned_app_server(tmp_path) -> None:
-    """Thread fork should return a distinct thread from app-server."""
+    """Thread fork should return a distinct thread for a persisted rollout."""
     with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message("materialized", response_id="fork-seed")
+
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
+            seeded = thread.run("materialize this thread before fork")
             forked = codex.thread_fork(thread.id)
 
-    assert {"forked_is_distinct": forked.id != thread.id} == {
+    assert {
+        "seeded_response": seeded.final_response,
+        "forked_is_distinct": forked.id != thread.id,
+    } == {
+        "seeded_response": "materialized",
         "forked_is_distinct": True,
     }
 
