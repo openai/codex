@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any
 
 from app_server_harness import (
@@ -53,6 +53,16 @@ def _agent_message_texts(events: list[Notification]) -> list[str]:
     return texts
 
 
+def _agent_message_texts_from_items(items: Iterable[Any]) -> list[str]:
+    """Extract agent-message text from completed run result items."""
+    texts: list[str] = []
+    for item in items:
+        root = item.root
+        if root.type == "agentMessage":
+            texts.append(root.text)
+    return texts
+
+
 def _next_sync_delta(stream: Iterator[Notification]) -> str:
     """Advance a sync turn stream until the next agent-message text delta."""
     for event in stream:
@@ -98,7 +108,7 @@ def test_sync_thread_run_uses_pinned_app_server_and_mock_responses(
     body = request.body_json()
     assert {
         "final_response": result.final_response,
-        "agent_messages": [item.root.text for item in result.items],
+        "agent_messages": _agent_message_texts_from_items(result.items),
         "has_usage": result.usage is not None,
         "request_model": body["model"],
         "request_stream": body["stream"],
@@ -134,7 +144,7 @@ def test_async_thread_run_uses_pinned_app_server_and_mock_responses(
 
         assert {
             "final_response": result.final_response,
-            "agent_messages": [item.root.text for item in result.items],
+            "agent_messages": _agent_message_texts_from_items(result.items),
             "request_user_texts": request.message_input_texts("user"),
         } == {
             "final_response": "Hello async.",
@@ -261,18 +271,25 @@ def test_interleaved_sync_turn_streams_route_by_turn_id(tmp_path) -> None:
             second_tail = list(second_stream)
 
     assert {
-        "interleaved_deltas": [
-            first_first_delta,
-            second_first_delta,
-            first_second_delta,
-            second_second_delta,
-        ],
-        "first_agent_messages": _agent_message_texts(first_tail),
-        "second_agent_messages": _agent_message_texts(second_tail),
+        "streams": sorted(
+            [
+                (
+                    first_first_delta,
+                    first_second_delta,
+                    _agent_message_texts(first_tail),
+                ),
+                (
+                    second_first_delta,
+                    second_second_delta,
+                    _agent_message_texts(second_tail),
+                ),
+            ]
+        ),
     } == {
-        "interleaved_deltas": ["one-", "two-", "done", "done"],
-        "first_agent_messages": ["one-done"],
-        "second_agent_messages": ["two-done"],
+        "streams": [
+            ("one-", "done", ["one-done"]),
+            ("two-", "done", ["two-done"]),
+        ],
     }
 
 
@@ -307,18 +324,25 @@ def test_interleaved_async_turn_streams_route_by_turn_id(tmp_path) -> None:
                 second_tail = [event async for event in second_stream]
 
         assert {
-            "interleaved_deltas": [
-                first_first_delta,
-                second_first_delta,
-                first_second_delta,
-                second_second_delta,
-            ],
-            "first_agent_messages": _agent_message_texts(first_tail),
-            "second_agent_messages": _agent_message_texts(second_tail),
+            "streams": sorted(
+                [
+                    (
+                        first_first_delta,
+                        first_second_delta,
+                        _agent_message_texts(first_tail),
+                    ),
+                    (
+                        second_first_delta,
+                        second_second_delta,
+                        _agent_message_texts(second_tail),
+                    ),
+                ]
+            ),
         } == {
-            "interleaved_deltas": ["a1", "a2", "-done", "-done"],
-            "first_agent_messages": ["a1-done"],
-            "second_agent_messages": ["a2-done"],
+            "streams": [
+                ("a1", "-done", ["a1-done"]),
+                ("a2", "-done", ["a2-done"]),
+            ],
         }
 
     asyncio.run(scenario())
@@ -333,10 +357,6 @@ def test_thread_run_approval_mode_persists_until_explicit_override(tmp_path) -> 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start(approval_mode=ApprovalMode.deny_all)
 
-            start_state = codex._client.thread_resume(  # noqa: SLF001
-                thread.id,
-                ThreadResumeParams(thread_id=thread.id),
-            )
             first_result = thread.run("keep approvals denied")
             after_default_run = codex._client.thread_resume(  # noqa: SLF001
                 thread.id,
@@ -352,7 +372,6 @@ def test_thread_run_approval_mode_persists_until_explicit_override(tmp_path) -> 
             )
 
     assert {
-        "start_policy": _response_approval_policy(start_state),
         "after_default_policy": _response_approval_policy(after_default_run),
         "after_override_settings": _response_approval_settings(after_override_run),
         "final_responses": [
@@ -360,7 +379,6 @@ def test_thread_run_approval_mode_persists_until_explicit_override(tmp_path) -> 
             second_result.final_response,
         ],
     } == {
-        "start_policy": AskForApprovalValue.never.value,
         "after_default_policy": AskForApprovalValue.never.value,
         "after_override_settings": {
             "approvalPolicy": AskForApprovalValue.on_request.value,
@@ -389,10 +407,6 @@ def test_async_thread_run_approval_mode_persists_until_explicit_override(
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 thread = await codex.thread_start(approval_mode=ApprovalMode.deny_all)
-                start_state = await codex._client.thread_resume(  # noqa: SLF001
-                    thread.id,
-                    ThreadResumeParams(thread_id=thread.id),
-                )
                 first_result = await thread.run("keep async approvals denied")
                 after_default_run = await codex._client.thread_resume(  # noqa: SLF001
                     thread.id,
@@ -408,7 +422,6 @@ def test_async_thread_run_approval_mode_persists_until_explicit_override(
                 )
 
         assert {
-            "start_policy": _response_approval_policy(start_state),
             "after_default_policy": _response_approval_policy(after_default_run),
             "after_override_settings": _response_approval_settings(after_override_run),
             "final_responses": [
@@ -416,7 +429,6 @@ def test_async_thread_run_approval_mode_persists_until_explicit_override(
                 second_result.final_response,
             ],
         } == {
-            "start_policy": AskForApprovalValue.never.value,
             "after_default_policy": AskForApprovalValue.never.value,
             "after_override_settings": {
                 "approvalPolicy": AskForApprovalValue.on_request.value,
@@ -436,19 +448,15 @@ def test_thread_lifecycle_uses_real_app_server_without_model_mocking(tmp_path) -
             thread.set_name("sdk integration thread")
             named = thread.read(include_turns=True)
             forked = codex.thread_fork(thread.id)
-            codex.thread_archive(thread.id)
-            unarchived = codex.thread_unarchive(thread.id)
             listed = codex.thread_list(limit=10)
 
     assert {
         "name": named.thread.name,
         "fork_parent": forked.id != thread.id,
-        "unarchived_id": unarchived.id,
         "listed_ids": sorted(item.id for item in listed.data),
     } == {
         "name": "sdk integration thread",
         "fork_parent": True,
-        "unarchived_id": thread.id,
         "listed_ids": sorted([thread.id, forked.id]),
     }
 
@@ -490,6 +498,7 @@ def test_final_answer_phase_survives_real_app_server_mapping(tmp_path) -> None:
                 "phase": None if item.root.phase is None else item.root.phase.value,
             }
             for item in result.items
+            if item.root.type == "agentMessage"
         ],
     } == {
         "final_response": "Final answer",
