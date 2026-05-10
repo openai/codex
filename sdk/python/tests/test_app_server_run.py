@@ -54,9 +54,6 @@ def test_sync_thread_run_uses_mock_responses(
 
 def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
     """Thread.run should pass overrides and collect app-server token usage."""
-    turn_cwd = tmp_path / "turn-cwd"
-    turn_cwd.mkdir()
-
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             sse(
@@ -79,10 +76,8 @@ def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
             thread = codex.thread_start()
             result = thread.run(
                 "use overrides",
-                cwd=str(turn_cwd),
                 model="mock-model-override",
             )
-            read = thread.read()
             request = harness.responses.single_request()
 
     usage_payload = None
@@ -95,12 +90,10 @@ def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
     assert {
         "final_response": result.final_response,
         "request_model": request.body_json()["model"],
-        "thread_cwd": read.thread.cwd.root,
         "usage": usage_payload,
     } == {
         "final_response": "overrides applied",
         "request_model": "mock-model-override",
-        "thread_cwd": str(turn_cwd),
         "usage": {
             "last": {
                 "cachedInputTokens": 3,

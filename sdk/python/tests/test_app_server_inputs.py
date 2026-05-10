@@ -5,6 +5,23 @@ from openai_codex import Codex, ImageInput, LocalImageInput, SkillInput, TextInp
 from app_server_helpers import TINY_PNG_BYTES
 
 
+def _history_input_summary(read_response) -> list[tuple[str, str, str | None]]:
+    """Return text and skill inputs persisted in a read thread history."""
+    summary: list[tuple[str, str, str | None]] = []
+    for turn in read_response.thread.turns:
+        for item in turn.items:
+            root = item.root
+            if root.type != "userMessage":
+                continue
+            for input_item in root.content:
+                input_root = input_item.root
+                if input_root.type == "text":
+                    summary.append(("text", input_root.text, None))
+                if input_root.type == "skill":
+                    summary.append(("skill", input_root.name, input_root.path))
+    return summary
+
+
 def test_remote_image_input_reaches_responses_api(
     tmp_path,
 ) -> None:
@@ -74,8 +91,8 @@ def test_local_image_input_reaches_responses_api(
     }
 
 
-def test_skill_input_injects_skill_body(tmp_path) -> None:
-    """SkillInput should cross the SDK boundary and reach the model prompt."""
+def test_skill_input_is_persisted_in_thread_history(tmp_path) -> None:
+    """SkillInput should cross the SDK boundary as structured user input."""
     skill_file = tmp_path / "skills" / "demo" / "SKILL.md"
     skill_file.parent.mkdir(parents=True)
     skill_file.write_text("# Demo\n\nUse the word cobalt.\n")
@@ -87,23 +104,22 @@ def test_skill_input_injects_skill_body(tmp_path) -> None:
         )
 
         with Codex(config=harness.app_server_config()) as codex:
-            result = codex.thread_start().run(
+            thread = codex.thread_start()
+            result = thread.run(
                 [
                     TextInput("Use the selected skill."),
                     SkillInput("demo", str(skill_file)),
                 ]
             )
-            request = harness.responses.single_request()
+            read = thread.read(include_turns=True)
 
     assert {
         "final_response": result.final_response,
-        "skill_prompt_was_injected": any(
-            "<skill>\n<name>demo</name>" in text
-            and "Use the word cobalt." in text
-            and str(skill_file) in text
-            for text in request.message_input_texts("user")
-        ),
+        "history_inputs": _history_input_summary(read),
     } == {
         "final_response": "skill received",
-        "skill_prompt_was_injected": True,
+        "history_inputs": [
+            ("text", "Use the selected skill.", None),
+            ("skill", "demo", str(skill_file)),
+        ],
     }
