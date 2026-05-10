@@ -97,8 +97,10 @@ def bazel_build(
     labels: list[str],
     compilation_mode: str = "fastbuild",
     bazel_configs: list[str] | None = None,
+    download_toplevel: bool = False,
 ) -> None:
     bazel_configs = bazel_configs or []
+    download_args = ["--remote_download_toplevel"] if download_toplevel else []
     subprocess.run(
         [
             "bazel",
@@ -108,6 +110,7 @@ def bazel_build(
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
             *bazel_remote_args(),
+            *download_args,
             *labels,
         ],
         cwd=ROOT,
@@ -123,7 +126,13 @@ def ensure_bazel_output_files(
 ) -> list[Path]:
     # Bazel output paths can be reused across config flips, so existence alone
     # does not prove the files match the requested flags.
-    bazel_build(platform, labels, compilation_mode, bazel_configs)
+    bazel_build(
+        platform,
+        labels,
+        compilation_mode,
+        bazel_configs,
+        download_toplevel=True,
+    )
     outputs = bazel_output_files(platform, labels, compilation_mode, bazel_configs)
     missing = [str(path) for path in outputs if not path.exists()]
     if missing:

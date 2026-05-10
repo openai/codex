@@ -255,6 +255,7 @@ class RustyV8BazelTest(unittest.TestCase):
                 ["//third_party/v8:pair"],
                 "opt",
                 ["rusty-v8-upstream-libcxx"],
+                download_toplevel=True,
             )
             bazel_output_files.assert_called_once_with(
                 "macos_arm64",
