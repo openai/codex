@@ -4,10 +4,11 @@ use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
 
-fn force_pet_image_support(chat: &mut ChatWidget) {
+fn enable_test_ambient_pet(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
         crate::pets::ImageProtocol::Kitty,
     ));
+    chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
 
 /// Receiving a token usage update without usage clears the context indicator.
@@ -1366,7 +1367,7 @@ async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut chat);
+    enable_test_ambient_pet(&mut chat);
     assert!(chat.ambient_pet.is_none());
 
     crate::pets::write_test_pack(&chat.config.codex_home);
@@ -1406,7 +1407,7 @@ async fn ambient_pet_screen_bottom_anchor_uses_terminal_bottom() {
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut chat);
+    enable_test_ambient_pet(&mut chat);
 
     let terminal_area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
@@ -1438,7 +1439,7 @@ async fn ambient_pet_can_be_disabled() {
 #[serial]
 async fn ambient_pet_reserves_history_wrap_width() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut chat);
+    enable_test_ambient_pet(&mut chat);
 
     assert_eq!(chat.history_wrap_width(/*width*/ 80), 69);
 
@@ -1454,7 +1455,7 @@ async fn ambient_pet_reduces_stream_width_and_composer_text_width() {
 
     let (mut with_pet, _with_pet_rx, _with_pet_op_rx) =
         make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut with_pet);
+    enable_test_ambient_pet(&mut with_pet);
     with_pet.last_rendered_width.set(Some(80));
     let stream_width_with_pet = with_pet.current_stream_width(/*reserved_cols*/ 2);
 
@@ -1524,7 +1525,7 @@ async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() 
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut chat);
+    enable_test_ambient_pet(&mut chat);
 
     assert!(
         chat.ambient_pet_draw(
@@ -1551,12 +1552,12 @@ async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() 
 
 #[tokio::test]
 #[serial]
-async fn ambient_pet_uses_the_app_notification_labels() {
+async fn ambient_pet_hides_notification_text_overlay() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    force_pet_image_support(&mut chat);
+    enable_test_ambient_pet(&mut chat);
     for (kind, label) in [
         (crate::pets::PetNotificationKind::Running, "Running"),
         (crate::pets::PetNotificationKind::Waiting, "Needs input"),
@@ -1569,8 +1570,8 @@ async fn ambient_pet_uses_the_app_notification_labels() {
             .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw ambient pet notification");
         assert!(
-            normalized_backend_snapshot(terminal.backend()).contains(label),
-            "expected {label} notification to render"
+            !normalized_backend_snapshot(terminal.backend()).contains(label),
+            "did not expect {label} notification text to render"
         );
     }
 }

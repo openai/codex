@@ -4175,6 +4175,8 @@ async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
         .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
             crate::pets::ImageProtocol::Kitty,
         ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
     let width = app.chat_widget.history_wrap_width(/*width*/ 40);
     assert!(width < 40);
     let with_pet = app.render_transcript_lines_for_reflow(width);

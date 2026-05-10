@@ -30,6 +30,8 @@ use anyhow::Result;
 pub(crate) use ambient::AmbientPet;
 pub(crate) use ambient::AmbientPetDraw;
 pub(crate) use ambient::PetNotificationKind;
+#[cfg(test)]
+pub(crate) use ambient::test_ambient_pet;
 pub(crate) use asset_pack::builtin_spritesheet_path;
 #[cfg(test)]
 pub(crate) use asset_pack::write_test_pack;

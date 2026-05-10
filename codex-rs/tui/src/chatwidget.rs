@@ -757,13 +757,6 @@ pub(crate) struct ChatWidget {
     pet_selection_load_request_id: u64,
     #[cfg(test)]
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
-    // Semantic status used for terminal-title status rendering.
-    terminal_title_status_kind: TerminalTitleStatusKind,
-    // Previous status header to restore after a transient stream retry.
-    retry_status_header: Option<String>,
-    // Set when commentary output completes; once stream queues go idle we restore the status row.
-    pending_status_indicator_restore: bool,
-    suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
@@ -4897,10 +4890,6 @@ impl ChatWidget {
             pet_selection_load_request_id: 0,
             #[cfg(test)]
             pet_image_support_override: None,
-            terminal_title_status_kind: TerminalTitleStatusKind::Working,
-            retry_status_header: None,
-            pending_status_indicator_restore: false,
-            suppress_queue_autosend: false,
             thread_id: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
@@ -9186,6 +9175,17 @@ impl ChatWidget {
         if let Some(pet) = self.ambient_pet.as_mut() {
             pet.set_image_support_for_tests(support);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_test_ambient_pet_for_tests(&mut self, animations_enabled: bool) {
+        self.set_tui_pet_loaded(
+            Some("test".to_string()),
+            Some(crate::pets::test_ambient_pet(
+                self.frame_requester.clone(),
+                animations_enabled,
+            )),
+        );
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
