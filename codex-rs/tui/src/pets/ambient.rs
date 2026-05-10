@@ -245,26 +245,7 @@ impl AmbientPet {
     }
 
     pub(crate) fn render_overlay(&self, area: Rect, composer_bottom_y: u16, buf: &mut Buffer) {
-        let notification = self.visible_notification(Instant::now());
-        let size = self.support.protocol().map(|_| self.image_size());
-        let notification_height = notification.map_or(0, notification_height);
-        let image_columns = size.map_or(0, |size| size.columns);
-        let image_rows = size.map_or(0, |size| size.rows);
-        let required_height = image_rows.saturating_add(notification_height);
-        let sprite_bottom_y = composer_bottom_y.saturating_sub(composer_gap_rows());
-        if sprite_bottom_y < area.y.saturating_add(required_height) || area.width < image_columns {
-            return;
-        }
-
-        if let Some(notification) = notification {
-            let notification_width = notification_width(notification).min(area.width);
-            let x = area.x
-                + area
-                    .width
-                    .saturating_sub(notification_width.max(image_columns));
-            let y = sprite_bottom_y.saturating_sub(image_rows + notification_height);
-            render_notification(notification, x, y, buf);
-        }
+        let _ = (area, composer_bottom_y, buf);
     }
 
     fn visible_notification(&self, now: Instant) -> Option<&PetNotification> {
