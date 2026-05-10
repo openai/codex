@@ -538,7 +538,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     test.fs()
         .write_file(
             &image_path,
-            png_bytes(1, 1, [255, 0, 0, 255])?,
+            png_bytes(/*width*/ 1, /*height*/ 1, [255, 0, 0, 255])?,
             /*sandbox*/ None,
         )
         .await?;
