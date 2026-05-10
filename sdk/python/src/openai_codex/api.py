@@ -5,6 +5,23 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import AsyncIterator, Iterator, NoReturn
 
+from ._inputs import (
+    ImageInput as ImageInput,
+    Input,
+    InputItem as InputItem,
+    LocalImageInput as LocalImageInput,
+    MentionInput as MentionInput,
+    RunInput,
+    SkillInput as SkillInput,
+    TextInput as TextInput,
+    _normalize_run_input,
+    _to_wire_input,
+)
+from ._run import (
+    RunResult,
+    _collect_async_run_result,
+    _collect_run_result,
+)
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
@@ -30,8 +47,8 @@ from .generated.v2_all import (
     ThreadSortKey,
     ThreadSource,
     ThreadSourceKind,
-    ThreadStartSource,
     ThreadStartParams,
+    ThreadStartSource,
     Turn as AppServerTurn,
     TurnCompletedNotification,
     TurnInterruptResponse,
@@ -39,23 +56,6 @@ from .generated.v2_all import (
     TurnSteerResponse,
 )
 from .models import InitializeResponse, JsonObject, Notification, ServerInfo
-from ._inputs import (
-    ImageInput as ImageInput,
-    Input,
-    InputItem as InputItem,
-    LocalImageInput as LocalImageInput,
-    MentionInput as MentionInput,
-    RunInput,
-    SkillInput as SkillInput,
-    TextInput as TextInput,
-    _normalize_run_input,
-    _to_wire_input,
-)
-from ._run import (
-    RunResult,
-    _collect_async_run_result,
-    _collect_run_result,
-)
 
 
 def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
@@ -151,11 +151,7 @@ class Codex:
 
         normalized_server_name = (server_name or "").strip()
         normalized_server_version = (server_version or "").strip()
-        if (
-            not user_agent
-            or not normalized_server_name
-            or not normalized_server_version
-        ):
+        if not user_agent or not normalized_server_name or not normalized_server_version:
             raise RuntimeError(
                 "initialize response missing required metadata "
                 f"(user_agent={user_agent!r}, server_name={normalized_server_name!r}, server_version={normalized_server_version!r})"
@@ -262,9 +258,7 @@ class Codex:
         sandbox: SandboxMode | None = None,
         service_tier: str | None = None,
     ) -> Thread:
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -298,9 +292,7 @@ class Codex:
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
     ) -> Thread:
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -470,9 +462,7 @@ class AsyncCodex:
         service_tier: str | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -507,9 +497,7 @@ class AsyncCodex:
         thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -597,9 +585,7 @@ class Thread:
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
         wire_input = _to_wire_input(input)
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
@@ -683,9 +669,7 @@ class AsyncThread:
     ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
         wire_input = _to_wire_input(input)
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(
-            approval_mode
-        )
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
@@ -711,9 +695,7 @@ class AsyncThread:
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         await self._codex._ensure_initialized()
-        return await self._codex._client.thread_read(
-            self.id, include_turns=include_turns
-        )
+        return await self._codex._client.thread_read(self.id, include_turns=include_turns)
 
     async def set_name(self, name: str) -> ThreadSetNameResponse:
         await self._codex._ensure_initialized()
@@ -758,10 +740,7 @@ class TurnHandle:
         try:
             for event in stream:
                 payload = event.payload
-                if (
-                    isinstance(payload, TurnCompletedNotification)
-                    and payload.turn.id == self.id
-                ):
+                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
                     completed = payload
         finally:
             stream.close()
@@ -812,10 +791,7 @@ class AsyncTurnHandle:
         try:
             async for event in stream:
                 payload = event.payload
-                if (
-                    isinstance(payload, TurnCompletedNotification)
-                    and payload.turn.id == self.id
-                ):
+                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
                     completed = payload
         finally:
             await stream.aclose()

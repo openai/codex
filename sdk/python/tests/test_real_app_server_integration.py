@@ -539,7 +539,9 @@ def test_real_examples_run_and_assert(
         assert "actions:" in out
         assert "Items:" in out
     elif folder == "13_model_select_and_turn_params":
-        assert "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
+        assert (
+            "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
+        )
     elif folder == "14_turn_controls":
         assert "steer.result:" in out and "steer.final.status:" in out
         assert "interrupt.result:" in out and "interrupt.final.status:" in out

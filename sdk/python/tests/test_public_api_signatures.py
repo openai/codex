@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import importlib.resources as resources
 import inspect
-import tomllib
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 import openai_codex
 import openai_codex.types as public_types
 from openai_codex import (
-    AppServerConfig,
     ApprovalMode,
+    AppServerConfig,
     AsyncCodex,
     AsyncThread,
     Codex,
@@ -107,9 +108,7 @@ def _assert_no_any_annotations(fn: object) -> None:
     signature = inspect.signature(fn)
     for param in signature.parameters.values():
         if param.annotation is Any:
-            raise AssertionError(
-                f"{fn} has public parameter typed as Any: {param.name}"
-            )
+            raise AssertionError(f"{fn} has public parameter typed as Any: {param.name}")
     if signature.return_annotation is Any:
         raise AssertionError(f"{fn} has public return annotation typed as Any")
 
@@ -150,9 +149,9 @@ def test_package_includes_py_typed_marker() -> None:
 def test_package_root_exports_only_public_api() -> None:
     """The package root should expose the supported SDK surface, not internals."""
     assert openai_codex.__all__ == EXPECTED_ROOT_EXPORTS
-    assert {name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS} == {
-        name: True for name in EXPECTED_ROOT_EXPORTS
-    }
+    assert {name: hasattr(openai_codex, name) for name in EXPECTED_ROOT_EXPORTS} == dict.fromkeys(
+        EXPECTED_ROOT_EXPORTS, True
+    )
     assert {
         "AppServerClient": hasattr(openai_codex, "AppServerClient"),
         "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
@@ -184,9 +183,9 @@ def test_package_star_import_matches_public_api() -> None:
 def test_types_module_exports_curated_public_types() -> None:
     """The public type module should be the supported place for app-server models."""
     assert public_types.__all__ == EXPECTED_TYPES_EXPORTS
-    assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == {
-        name: True for name in EXPECTED_TYPES_EXPORTS
-    }
+    assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == dict.fromkeys(
+        EXPECTED_TYPES_EXPORTS, True
+    )
 
 
 def test_types_star_import_matches_public_types() -> None:
@@ -390,9 +389,9 @@ def test_new_thread_methods_default_to_auto_review() -> None:
         AsyncCodex.thread_start,
     ]
 
-    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == {
-        fn: ApprovalMode.auto_review for fn in funcs
-    }
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == dict.fromkeys(
+        funcs, ApprovalMode.auto_review
+    )
 
 
 def test_existing_thread_methods_default_to_preserving_approval_settings() -> None:
@@ -408,9 +407,7 @@ def test_existing_thread_methods_default_to_preserving_approval_settings() -> No
         AsyncThread.run,
     ]
 
-    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == {
-        fn: None for fn in funcs
-    }
+    assert {fn: _keyword_default(fn, "approval_mode") for fn in funcs} == dict.fromkeys(funcs)
 
 
 def test_lifecycle_methods_are_codex_scoped() -> None:
@@ -462,6 +459,4 @@ def test_initialize_metadata_requires_non_empty_information() -> None:
     except RuntimeError as exc:
         assert "missing required metadata" in str(exc)
     else:
-        raise AssertionError(
-            "expected RuntimeError when initialize metadata is missing"
-        )
+        raise AssertionError("expected RuntimeError when initialize metadata is missing")

@@ -302,7 +302,7 @@ requires-dist = [
     { name = "openai-codex-cli-bin", specifier = "==0.131.0a4" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.8" },
 ]
 provides-extras = ["dev"]
 

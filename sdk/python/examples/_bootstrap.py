@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
-import os
 import sys
 import tempfile
 import zlib
@@ -107,11 +106,15 @@ def temporary_sample_image_path() -> Iterator[Path]:
 def server_label(metadata: object) -> str:
     server = getattr(metadata, "serverInfo", None)
     server_name = ((getattr(server, "name", None) or "") if server is not None else "").strip()
-    server_version = ((getattr(server, "version", None) or "") if server is not None else "").strip()
+    server_version = (
+        (getattr(server, "version", None) or "") if server is not None else ""
+    ).strip()
     if server_name and server_version:
         return f"{server_name} {server_version}"
 
-    user_agent = ((getattr(metadata, "userAgent", None) or "") if metadata is not None else "").strip()
+    user_agent = (
+        (getattr(metadata, "userAgent", None) or "") if metadata is not None else ""
+    ).strip()
     return user_agent or "unknown"
 
 

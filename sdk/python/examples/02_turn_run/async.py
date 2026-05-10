@@ -21,7 +21,9 @@ from openai_codex import AsyncCodex, TextInput
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
+        thread = await codex.thread_start(
+            model="gpt-5.4", config={"model_reasoning_effort": "high"}
+        )
         turn = await thread.turn(TextInput("Give 3 bullets about SIMD."))
         result = await turn.run()
         persisted = await thread.read(include_turns=True)

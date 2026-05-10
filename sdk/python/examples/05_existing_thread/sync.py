@@ -5,7 +5,12 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import assistant_text_from_turn, ensure_local_sdk_src, find_turn_by_id, runtime_config
+from _bootstrap import (
+    assistant_text_from_turn,
+    ensure_local_sdk_src,
+    find_turn_by_id,
+    runtime_config,
+)
 
 ensure_local_sdk_src()
 

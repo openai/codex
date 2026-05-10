@@ -30,9 +30,12 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
-# format code
+# Format Rust and Python SDK code.
+[no-cd]
 fmt:
-    cargo fmt -- --config imports_granularity=Item 2>/dev/null
+    cd {{ justfile_directory() }}/codex-rs && cargo fmt -- --config imports_granularity=Item 2>/dev/null
+    cd {{ justfile_directory() }}/sdk/python && uv run --extra dev ruff check --fix --fix-only .
+    cd {{ justfile_directory() }}/sdk/python && uv run --extra dev ruff format .
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty "$@"

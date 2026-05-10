@@ -12,7 +12,6 @@ from typing import Any
 
 from openai_codex import AppServerConfig
 
-
 Json = dict[str, Any]
 
 

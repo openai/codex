@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 
 import openai_codex.api as public_api_module
-from openai_codex.generated.v2_all import TurnStartParams
-from openai_codex.models import InitializeResponse
 from openai_codex.api import (
     ApprovalMode,
     AsyncCodex,
     Codex,
 )
+from openai_codex.generated.v2_all import TurnStartParams
+from openai_codex.models import InitializeResponse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -129,9 +129,7 @@ def test_async_codex_initializes_only_once_under_concurrency() -> None:
 
 def _approval_mode_turn_params(approval_mode: ApprovalMode) -> TurnStartParams:
     """Build real generated turn params from one public approval mode."""
-    approval_policy, approvals_reviewer = public_api_module._approval_mode_settings(
-        approval_mode
-    )
+    approval_policy, approvals_reviewer = public_api_module._approval_mode_settings(approval_mode)
     return TurnStartParams(
         thread_id="thread-1",
         input=[],

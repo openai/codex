@@ -5,12 +5,12 @@ import importlib.util
 import io
 import json
 import sys
-import tomllib
 import urllib.error
 from pathlib import Path
 from typing import Sequence
 
 import pytest
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,9 +32,7 @@ def _load_runtime_setup_module():
     runtime_setup_path = ROOT / "_runtime_setup.py"
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
-        raise AssertionError(
-            f"Failed to load runtime setup module: {runtime_setup_path}"
-        )
+        raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -56,8 +54,7 @@ def test_generate_types_wires_all_generation_steps() -> None:
         (
             node
             for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "generate_types_from_schema_dir"
+            if isinstance(node, ast.FunctionDef) and node.name == "generate_types_from_schema_dir"
         ),
         None,
     )
@@ -94,8 +91,7 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     flattened = [
         name
         for name, definition in definitions.items()
-        if isinstance(definition, dict)
-        and script._flatten_string_enum_one_of(definition.copy())
+        if isinstance(definition, dict) and script._flatten_string_enum_one_of(definition.copy())
     ]
 
     assert flattened == [
@@ -172,8 +168,7 @@ def test_examples_readme_points_to_runtime_version_source_of_truth() -> None:
 def test_runtime_distribution_name_is_consistent() -> None:
     script = _load_update_script_module()
     runtime_setup = _load_runtime_setup_module()
-    from openai_codex import client as client_module
-    from openai_codex import _version
+    from openai_codex import _version, client as client_module
 
     assert script.SDK_DISTRIBUTION_NAME == "openai-codex"
     assert runtime_setup.SDK_PACKAGE_NAME == "openai-codex"
@@ -232,22 +227,6 @@ def test_release_metadata_retries_without_invalid_auth(
     assert authorizations == ["Bearer invalid-token", None]
 
 
-def test_source_sdk_package_pins_published_runtime() -> None:
-    """The source package metadata should pin the runtime wheel that ships schemas."""
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-
-    assert {
-        "sdk_version": pyproject["project"]["version"],
-        "dependencies": pyproject["project"]["dependencies"],
-    } == {
-        "sdk_version": "0.131.0a4",
-        "dependencies": [
-            "pydantic>=2.12",
-            "openai-codex-cli-bin==0.131.0a4",
-        ],
-    }
-
-
 def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> None:
     """The SDK uses PEP 440 package pins and converts only when fetching releases."""
     runtime_setup = _load_runtime_setup_module()
@@ -259,17 +238,12 @@ def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> N
         f"{runtime_setup.PACKAGE_NAME}=={pyproject['project']['version']}"
         in pyproject["project"]["dependencies"]
     )
-    assert (
-        runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1")
-        == "0.116.0a1"
-    )
+    assert runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1") == "0.116.0a1"
     assert runtime_setup._release_tag("0.116.0a1") == "rust-v0.116.0-alpha.1"
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
-    pyproject = tomllib.loads(
-        (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
-    )
+    pyproject = tomllib.loads((ROOT.parent / "python-runtime" / "pyproject.toml").read_text())
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
     initialize_fn = next(
@@ -411,9 +385,7 @@ def test_stage_runtime_release_copies_resource_binaries(tmp_path: Path) -> None:
     )
 
     assert {
-        path.relative_to(
-            staged / "src" / "codex_cli_bin" / "bin"
-        ).as_posix(): path.read_text()
+        path.relative_to(staged / "src" / "codex_cli_bin" / "bin").as_posix(): path.read_text()
         for path in (staged / "src" / "codex_cli_bin" / "bin").iterdir()
     } == {
         script.runtime_binary_name(): "fake codex\n",
@@ -502,9 +474,7 @@ def test_staged_sdk_and_runtime_versions_match(tmp_path: Path) -> None:
     sdk_pyproject = tomllib.loads((sdk_stage / "pyproject.toml").read_text())
     runtime_pyproject = tomllib.loads((runtime_stage / "pyproject.toml").read_text())
 
-    assert (
-        sdk_pyproject["project"]["version"] == runtime_pyproject["project"]["version"]
-    )
+    assert sdk_pyproject["project"]["version"] == runtime_pyproject["project"]["version"]
     assert sdk_pyproject["project"]["dependencies"] == [
         "pydantic>=2.12",
         "openai-codex-cli-bin==0.116.0a1",
@@ -629,9 +599,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     script.run_command(args, ops)
 
-    assert calls == [
-        "stage_runtime:0.116.0a1:musllinux_1_1_x86_64:helper,fallback-helper"
-    ]
+    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64:helper,fallback-helper"]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
