@@ -973,12 +973,7 @@
               "type": "string"
             },
             "visibilityHint": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/HookVisibilityHint"
-                }
-              ],
-              "default": "default"
+              "$ref": "#/definitions/HookVisibilityHint"
             }
           },
           "required": [
