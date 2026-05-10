@@ -5691,6 +5691,22 @@ mod tests {
     }
 
     #[test]
+    fn agent_markdown_cell_does_not_split_words_after_inline_markdown() {
+        let source = "This paragraph is intentionally long so you can inspect soft wrapping behavior while also checking inline formatting like **bold text**, *italic text*, ***bold italic text***, `inline code`, ~~strikethrough~~, a [link to example.com](https://example.com), and a literal path like [README.md](/Users/felipe.coury/code/codex.fcoury-worktrees/README.md) without introducing manual line breaks.\n";
+        let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
+
+        let lines = render_lines(&cell.display_lines(/*width*/ 190));
+        assert!(
+            lines[0].ends_with("inline code,"),
+            "expected wrapping to stop before 'strikethrough': {lines:?}",
+        );
+        assert!(
+            lines[1].starts_with("  strikethrough,"),
+            "expected the next line to resume with the full word: {lines:?}",
+        );
+    }
+
+    #[test]
     fn agent_markdown_cell_narrow_width_shows_prefix_only() {
         let source = "narrow width coverage\n";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());

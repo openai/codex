@@ -63,6 +63,24 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 }
 
 #[tokio::test]
+async fn service_tier_commands_lowercase_catalog_names() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    let expected_description = preset.service_tiers[0].description.clone();
+    preset.service_tiers[0].name = "Fast".to_string();
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+
+    assert_eq!(
+        chat.current_model_service_tier_commands(),
+        vec![ServiceTierCommand {
+            id: ServiceTier::Fast.request_value().to_string(),
+            name: "fast".to_string(),
+            description: expected_description,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -81,10 +99,10 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert!(chat.pending_steers.is_empty());
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert!(chat.input_queue.pending_steers.is_empty());
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "queued before compact turn start"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -98,9 +116,13 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
 
     queue_composer_text_with_tab(&mut chat, "/compact");
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().action,
+        chat.input_queue
+            .queued_user_messages
+            .front()
+            .unwrap()
+            .action,
         QueuedInputAction::ParseSlash
     );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -160,9 +182,13 @@ async fn queued_bang_shell_dispatches_after_active_turn() {
 
     queue_composer_text_with_tab(&mut chat, "!echo hi");
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().action,
+        chat.input_queue
+            .queued_user_messages
+            .front()
+            .unwrap()
+            .action,
         QueuedInputAction::RunShell
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -174,7 +200,7 @@ async fn queued_bang_shell_dispatches_after_active_turn() {
         other => panic!("expected queued shell command op, got {other:?}"),
     }
     assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -211,7 +237,7 @@ async fn queued_empty_bang_shell_reports_help_when_dequeued_and_drains_next_inpu
         ),
         other => panic!("expected queued message after empty shell command, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -230,7 +256,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         other => panic!("expected queued shell command op, got {other:?}"),
     }
     assert_eq!(next_add_to_history_event(&mut rx), "!echo hi");
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -250,7 +276,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         ),
         other => panic!("expected queued message after shell completion, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
@@ -263,7 +289,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
         popup.contains(expected_popup_text),
@@ -283,7 +309,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
         ),
         other => panic!("expected queued message after cancelling {command}, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -322,7 +348,7 @@ async fn queued_slash_menu_selection_drains_next_input() {
         ),
         other => panic!("expected queued message after permissions selection, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -337,7 +363,7 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Name thread"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
@@ -373,7 +399,7 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
         ),
         other => panic!("expected queued message after /rename, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -419,9 +445,9 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
     let input_state = chat.capture_thread_input_state().unwrap();
     assert!(input_state.user_turn_pending_start);
     chat.restore_thread_input_state(/*input_state*/ None);
-    assert!(!chat.user_turn_pending_start);
+    assert!(!chat.input_queue.user_turn_pending_start);
     chat.restore_thread_input_state(Some(input_state));
-    assert!(chat.user_turn_pending_start);
+    assert!(chat.input_queue.user_turn_pending_start);
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["second after rename"]
@@ -456,7 +482,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         ),
         other => panic!("expected second queued message after turn complete, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -481,7 +507,7 @@ async fn queued_unknown_slash_reports_error_when_dequeued() {
         rendered.contains("Unrecognized command '/does-not-exist'"),
         "expected delayed slash error, got {rendered:?}"
     );
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -728,7 +754,7 @@ async fn queued_goal_slash_command_emits_set_goal_event_after_thread_starts() {
     let command = "/goal improve benchmark coverage";
 
     submit_composer_text(&mut chat, command);
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     let thread_id = ThreadId::new();
@@ -1355,7 +1381,7 @@ async fn copy_shortcut_can_be_remapped() {
 #[tokio::test]
 async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.last_agent_markdown = Some("copy me".to_string());
+    chat.transcript.last_agent_markdown = Some("copy me".to_string());
 
     chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
@@ -1478,7 +1504,7 @@ async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
     complete_turn_with_message(&mut chat, "turn-1", Some("Still working"));
 
     assert_matches!(chat.pending_notification, None);
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
     assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
 }
 

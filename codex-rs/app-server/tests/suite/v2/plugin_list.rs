@@ -13,8 +13,7 @@ use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
-use codex_app_server_protocol::PluginSharePrincipal;
-use codex_app_server_protocol::PluginSharePrincipalType;
+use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::RequestId;
@@ -694,10 +693,11 @@ async fn plugin_list_returns_share_context_for_shared_local_plugin() -> Result<(
         .as_ref()
         .expect("expected share context");
     assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.discoverability, None);
     assert_eq!(share_context.share_url, None);
     assert_eq!(share_context.creator_account_user_id, None);
     assert_eq!(share_context.creator_name, None);
-    assert_eq!(share_context.share_targets, None);
+    assert_eq!(share_context.share_principals, None);
     Ok(())
 }
 
@@ -1680,12 +1680,15 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let shared_plugin_body = workspace_remote_plugin_page_body(
-        "plugins~Plugin_22222222222222222222222222222222",
-        "shared-linear",
-        "Shared Linear",
-        /*enabled*/ None,
-    );
+    let mut shared_plugin_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_22222222222222222222222222222222",
+            "shared-linear",
+            "Shared Linear",
+            /*enabled*/ None,
+        ))?;
+    shared_plugin_body["plugins"][0]["share_principals"] = serde_json::Value::Null;
+    let shared_plugin_body = serde_json::to_string(&shared_plugin_body)?;
     let workspace_installed_body = workspace_remote_plugin_page_body(
         "plugins~Plugin_22222222222222222222222222222222",
         "shared-linear",
@@ -1735,6 +1738,10 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         "plugins~Plugin_22222222222222222222222222222222"
     );
     assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Private)
+    );
+    assert_eq!(
         share_context.creator_account_user_id.as_deref(),
         Some("user-gavin__account-123")
     );
@@ -1743,14 +1750,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         share_context.share_url.as_deref(),
         Some("https://chatgpt.example/plugins/share/share-key-1")
     );
-    assert_eq!(
-        share_context.share_targets,
-        Some(vec![PluginSharePrincipal {
-            principal_type: PluginSharePrincipalType::User,
-            principal_id: "user-ada__account-123".to_string(),
-            name: "Ada".to_string(),
-        }])
-    );
+    assert_eq!(share_context.share_principals, None);
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
@@ -2275,6 +2275,7 @@ fn workspace_remote_plugin_page_body(
       "id": "{remote_plugin_id}",
       "name": "{plugin_name}",
       "scope": "WORKSPACE",
+      "discoverability": "PRIVATE",
       "creator_account_user_id": "user-gavin__account-123",
       "share_url": "https://chatgpt.example/plugins/share/share-key-1",
       "installation_policy": "AVAILABLE",

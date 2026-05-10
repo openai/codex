@@ -1,11 +1,13 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
 use crate::render::renderable::Renderable;
+use crate::style::accent_style;
 
 use super::SelectionItem;
 
@@ -92,10 +94,11 @@ fn tab_bar_lines(tabs: &[SelectionTab], active_idx: usize, width: u16) -> Vec<Li
 
 fn tab_unit(label: &str, active: bool) -> Vec<Span<'static>> {
     if active {
+        let style = accent_style();
         vec![
-            "[".cyan().bold(),
-            label.to_string().cyan().bold(),
-            "]".cyan().bold(),
+            "[".set_style(style),
+            label.to_string().set_style(style),
+            "]".set_style(style),
         ]
     } else {
         vec![label.to_string().dim()]

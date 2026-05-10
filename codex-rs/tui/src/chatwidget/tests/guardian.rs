@@ -608,9 +608,12 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         },
     });
 
-    assert_eq!(chat.current_status.header, "Reviewing approval request");
     assert_eq!(
-        chat.current_status.details,
+        chat.status_state.current_status.header,
+        "Reviewing approval request"
+    );
+    assert_eq!(
+        chat.status_state.current_status.details,
         Some("rm -rf '/tmp/guardian target 2'".to_string())
     );
 }

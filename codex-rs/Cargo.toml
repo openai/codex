@@ -49,6 +49,7 @@ members = [
     "external-agent-sessions",
     "keyring-store",
     "file-search",
+    "file-watcher",
     "linux-sandbox",
     "lmstudio",
     "login",
@@ -166,6 +167,7 @@ codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
+codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }

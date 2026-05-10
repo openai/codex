@@ -1713,6 +1713,9 @@ impl App {
             AppEvent::TrustHook { key, current_hash } => {
                 self.trust_hook(app_server, key, current_hash);
             }
+            AppEvent::TrustHooks { updates } => {
+                self.trust_hooks(app_server, updates);
+            }
             AppEvent::HookEnabledSet {
                 key,
                 enabled,

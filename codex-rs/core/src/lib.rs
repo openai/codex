@@ -35,7 +35,6 @@ mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
-pub mod file_watcher;
 mod flags;
 #[cfg(test)]
 mod git_info_tests;
@@ -194,7 +193,6 @@ pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
-pub use file_watcher::FileWatcherEvent;
 pub use installation_id::resolve_installation_id;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;

@@ -1000,9 +1000,9 @@ async fn streaming_final_answer_keeps_task_running_state() {
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -1059,7 +1059,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -1088,7 +1088,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
         "Please summarize the rest more briefly.",
     );
 
-    assert!(chat.pending_steers.is_empty());
+    assert!(chat.input_queue.pending_steers.is_empty());
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 }
@@ -1874,7 +1874,9 @@ async fn session_configured_clears_goal_status_footer() {
             usage: Some("40K / 50K".to_string())
         })
     );
-    chat.budget_limited_turn_ids.insert("turn-1".to_string());
+    chat.turn_lifecycle
+        .budget_limited_turn_ids
+        .insert("turn-1".to_string());
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
@@ -1898,7 +1900,7 @@ async fn session_configured_clears_goal_status_footer() {
     });
 
     assert_eq!(chat.current_goal_status_indicator, None);
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[tokio::test]
@@ -1927,7 +1929,7 @@ async fn thread_goal_update_for_other_thread_is_ignored() {
 
     assert_eq!(chat.current_goal_status_indicator, None);
     assert!(chat.current_goal_status.is_none());
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[test]
@@ -2584,7 +2586,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Some("checking command policy"),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let first_running_snapshot = hook_live_and_history_snapshot(&chat, "pre running", "");
 
@@ -2596,7 +2598,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Some("checking output policy"),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let second_running_snapshot = hook_live_and_history_snapshot(&chat, "post running", "");
 
@@ -2609,7 +2611,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Vec::new(),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     let older_completed_snapshot =
         hook_live_and_history_snapshot(&chat, "pre completed lingering", "");
     expire_quiet_hook_linger(&mut chat);
@@ -2625,7 +2627,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Vec::new(),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     assert!(chat.bottom_pane.status_indicator_visible());
     assert!(drain_insert_history(&mut rx).is_empty());
     let all_completed_lingering_snapshot =

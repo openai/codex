@@ -1000,7 +1000,7 @@ impl ChatWidget {
     }
 
     fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
-        if cmd != SlashCommand::Side || !self.is_review_mode {
+        if cmd != SlashCommand::Side || !self.review.is_review_mode {
             return true;
         }
 
