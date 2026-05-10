@@ -172,6 +172,17 @@ async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
         .await;
 }
 
+async fn mock_valid_api_key(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": []
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -1543,13 +1554,16 @@ async fn get_account_no_auth() -> Result<()> {
 #[tokio::test]
 async fn get_account_with_api_key() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let model_server = MockServer::start().await;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", model_server.uri())),
             ..Default::default()
         },
     )?;
+    mock_valid_api_key(&model_server).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
