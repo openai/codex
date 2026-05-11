@@ -412,6 +412,7 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            default_permissions: Some(":workspace".to_string()),
             ..Default::default()
         })
         .fallback_cwd(Some(cwd.path().to_path_buf()))

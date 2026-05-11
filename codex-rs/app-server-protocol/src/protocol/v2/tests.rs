@@ -3431,6 +3431,23 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn permission_profile_selection_params_uses_id_only_shape() {
+    let params: PermissionProfileSelectionParams = serde_json::from_value(json!({
+        "id": ":workspace"
+    }))
+    .expect("permission profile selection should deserialize");
+    assert_eq!(
+        params,
+        PermissionProfileSelectionParams {
+            id: ":workspace".to_string()
+        }
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(serialized, json!({ "id": ":workspace" }));
+}
+
+#[test]
 fn turn_start_params_round_trip_environments() {
     let cwd = test_absolute_path();
     let params: TurnStartParams = serde_json::from_value(json!({
