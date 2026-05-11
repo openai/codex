@@ -44,6 +44,7 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use url::Url;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -58,6 +59,7 @@ const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 struct CreateConfigTomlParams {
     forced_method: Option<String>,
     forced_workspace_id: Option<String>,
+    forced_workspace_ids: Option<Vec<String>>,
     requires_openai_auth: Option<bool>,
     base_url: Option<String>,
     model_provider_id: Option<String>,
@@ -76,6 +78,13 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
     };
     let forced_workspace_line = if let Some(ws) = params.forced_workspace_id {
         format!("forced_chatgpt_workspace_id = \"{ws}\"\n")
+    } else if let Some(workspaces) = params.forced_workspace_ids {
+        let workspaces = workspaces
+            .into_iter()
+            .map(|workspace_id| format!("\"{workspace_id}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("forced_chatgpt_workspace_id = [{workspaces}]\n")
     } else {
         String::new()
     };
@@ -1450,6 +1459,45 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     assert!(
         auth_url.contains("allowed_workspace_id=ws-forced"),
         "auth URL should include forced workspace"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
+async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_workspace_ids: Some(vec!["ws-forced-a".to_string(), "ws-forced-b".to_string()]),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let auth_url = Url::parse(&auth_url)?;
+    let allowed_workspace_ids = auth_url
+        .query_pairs()
+        .filter_map(|(key, value)| (key == "allowed_workspace_id").then(|| value.into_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        allowed_workspace_ids,
+        vec!["ws-forced-a,ws-forced-b".to_string()]
     );
     Ok(())
 }
