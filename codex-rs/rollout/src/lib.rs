@@ -10,6 +10,7 @@ pub(crate) mod metadata;
 pub(crate) mod policy;
 pub(crate) mod recorder;
 pub(crate) mod session_index;
+mod sqlite_metrics;
 pub mod state_db;
 
 pub(crate) mod default_client {
@@ -63,6 +64,7 @@ pub use session_index::find_thread_meta_by_name_str;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
 pub use state_db::StateDbHandle;
+pub use state_db::sqlite_telemetry_recorder;
 
 #[cfg(test)]
 mod tests;
