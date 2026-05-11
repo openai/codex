@@ -117,7 +117,7 @@ impl StateRuntime {
         let started = Instant::now();
         let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
         crate::telemetry::record_init_result(
-            None,
+            /*telemetry*/ None,
             DbKind::State,
             "ensure_backfill_state",
             started.elapsed(),
@@ -131,7 +131,7 @@ impl StateRuntime {
                 .await
                 .map_err(anyhow::Error::from);
         crate::telemetry::record_init_result(
-            None,
+            /*telemetry*/ None,
             DbKind::State,
             "post_init_query",
             started.elapsed(),
@@ -196,12 +196,18 @@ async fn open_sqlite(
         .connect_with(options)
         .await
         .map_err(anyhow::Error::from);
-    crate::telemetry::record_init_result(None, db, open_phase, started.elapsed(), &pool_result);
+    crate::telemetry::record_init_result(
+        /*telemetry*/ None,
+        db,
+        open_phase,
+        started.elapsed(),
+        &pool_result,
+    );
     let pool = pool_result?;
     let started = Instant::now();
     let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
     crate::telemetry::record_init_result(
-        None,
+        /*telemetry*/ None,
         db,
         migrate_phase,
         started.elapsed(),
