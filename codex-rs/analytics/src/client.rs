@@ -33,6 +33,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -172,9 +173,10 @@ impl AnalyticsEventsClient {
         &self,
         tracking: &GuardianReviewTrackContext,
         result: GuardianReviewAnalyticsResult,
+        completed_at_ms: u64,
     ) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
-            Box::new(tracking.event_params(result)),
+            Box::new(tracking.event_params(result, completed_at_ms)),
         )));
     }
 
@@ -345,6 +347,26 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::ServerResponse {
             completed_at_ms,
             response: Box::new(response),
+        });
+    }
+
+    pub fn track_effective_permissions_approval_response(
+        &self,
+        completed_at_ms: u64,
+        request_id: RequestId,
+        response: RequestPermissionsResponse,
+    ) {
+        self.record_fact(AnalyticsFact::EffectivePermissionsApprovalResponse {
+            completed_at_ms,
+            request_id,
+            response: Box::new(response),
+        });
+    }
+
+    pub fn track_server_request_aborted(&self, completed_at_ms: u64, request_id: RequestId) {
+        self.record_fact(AnalyticsFact::ServerRequestAborted {
+            completed_at_ms,
+            request_id,
         });
     }
 
