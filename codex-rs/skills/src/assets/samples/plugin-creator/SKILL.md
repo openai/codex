@@ -146,11 +146,12 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 - Keep marketplace `source.path` relative to repo root as `./plugins/<plugin-name>`.
 - When the workflow created or updated a marketplace-backed plugin, end the final user-facing
   response with these two Markdown links, in this order, and do not add any text after them:
-  - `[View this plugin](codex://plugins/view-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
-  - `[Share this plugin](codex://plugins/share-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
-- Replace both deeplink placeholders with the real absolute marketplace path and normalized plugin
-  name from the scaffolded plugin. URL-encode query parameter values when needed.
-- Do not emit the `View this plugin` or `Share this plugin` links when no marketplace entry was
+  - `[View <normalized plugin name>](codex://plugins/view-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
+  - `[Share <normalized plugin name>](codex://plugins/share-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
+- Replace the link-label placeholder and both deeplink placeholders with the real normalized plugin
+  name plus the real absolute marketplace path from the scaffolded plugin. URL-encode query
+  parameter values when needed.
+- Do not emit the `View <normalized plugin name>` or `Share <normalized plugin name>` links when no marketplace entry was
   created or updated.
 
 ## Reference to exact spec sample
