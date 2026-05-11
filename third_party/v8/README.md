@@ -23,6 +23,18 @@ Current pinned versions:
 - Rust crate: `v8 = =147.4.0`
 - Embedded upstream V8 source for Bazel-produced release builds: `14.7.173.20`
 
+## Updating to a new `v8` release
+
+Use this as the maintainer flow for a version bump:
+
+1. Bump the `v8` crate version and refresh `codex-rs/Cargo.lock`.
+2. Update the Bazel versioned inputs in `MODULE.bazel`, then refresh the
+   matching checksum manifest and generated checksums as described below.
+3. Publish a release-candidate PR and validate that `v8-canary` passes.
+4. If the canary is green, publish the release tag and release build.
+5. Once the release build completes, rerun the build on the candidate branch
+   and verify that the final artifact builds and tests pass.
+
 When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
 checked-in checksum manifest and `MODULE.bazel` in sync:
 
