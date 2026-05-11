@@ -8074,12 +8074,13 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
 
-    let previous_status = goal.status;
+    let previous_goal = goal.clone();
     let goal_id = goal.goal_id.clone();
     let updated_goal = state_db
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
+                objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
                 expected_goal_id: Some(goal_id),
@@ -8090,7 +8091,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
         external_set: ExternalGoalSet {
             goal: updated_goal,
-            previous_status: ExternalGoalPreviousStatus::Existing(previous_status),
+            previous_status: ExternalGoalPreviousStatus::from(&previous_goal),
         },
     })
     .await?;
@@ -8102,6 +8103,70 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
     assert_eq!(70, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+    let old_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+    let new_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Write a concise benchmark summary",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        external_set: ExternalGoalSet {
+            goal: new_goal,
+            previous_status: ExternalGoalPreviousStatus::from(&old_goal),
+        },
+    })
+    .await?;
+
+    let pending_input = sess.get_pending_input().await;
+    assert!(
+        pending_input.iter().any(|item| {
+            matches!(
+                item,
+                ResponseInputItem::Message { role, content, .. }
+                    if role == "user"
+                        && content.iter().any(|content| matches!(
+                            content,
+                            ContentItem::InputText { text }
+                                if text.starts_with("<goal_context>")
+                                    && text.trim_end().ends_with("</goal_context>")
+                                    && text.contains("The active thread goal objective was edited")
+                                    && text.contains("Write a concise benchmark summary")
+                        ))
+            )
+        }),
+        "expected objective-updated steering prompt in pending input: {pending_input:?}"
+    );
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 

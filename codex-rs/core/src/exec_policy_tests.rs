@@ -1145,6 +1145,29 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
 }
 
 #[test]
+fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
+    let command = vec!["echo".to_string(), "hello".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: &permission_profile_from_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                ),
+                file_system_sandbox_policy: &workspace_write_file_system_sandbox_policy(),
+                sandbox_cwd: Path::new("/tmp"),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
 fn managed_cwd_write_profile_is_not_read_only() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -1225,6 +1248,55 @@ async fn exec_approval_requirement_prompts_for_inline_additional_permissions_und
                 "touch".to_string(),
                 "requested-dir/requested-but-unused.txt".to_string(),
             ])),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_prompts_for_known_safe_escalation_under_on_request() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec!["echo".to_string(), "hello".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "echo".to_string(),
+                "hello".to_string(),
+            ])),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_rejects_known_safe_escalation_when_granular_sandbox_is_disabled()
+{
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec!["echo".to_string(), "hello".to_string()],
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
         },
     )
     .await;

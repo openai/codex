@@ -103,19 +103,7 @@ WHERE id = 1
     }
 
     async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
-VALUES (?, ?, NULL, NULL, ?)
-ON CONFLICT(id) DO NOTHING
-            "#,
-        )
-        .bind(1_i64)
-        .bind(crate::BackfillStatus::Pending.as_str())
-        .bind(Utc::now().timestamp())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(())
+        ensure_backfill_state_row_in_pool(self.pool.as_ref()).await
     }
 }
 

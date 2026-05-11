@@ -25,6 +25,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
 
+use super::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
@@ -188,7 +189,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
         .record_denial(turn_id);
     let GuardianRejectionCircuitBreakerAction::InterruptTurn {
         consecutive_denials,
-        total_denials,
+        recent_denials,
     } = action
     else {
         return;
@@ -203,7 +204,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
             turn.as_ref(),
             EventMsg::GuardianWarning(WarningEvent {
                 message: format!(
-                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {total_denials} total); interrupting the turn."
+                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn."
                 ),
             }),
         )

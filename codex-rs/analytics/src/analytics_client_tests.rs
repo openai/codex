@@ -69,15 +69,20 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::NonSteerableTurnKind;
+use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -1711,6 +1716,14 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
     ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
     reducer
         .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
+                "thread-1", "turn-1",
+            ))),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
                 ItemStartedNotification {
                     thread_id: "thread-1".to_string(),
@@ -2119,6 +2132,15 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         )
         .await;
     events.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
+                "thread-subagent",
+                "turn-subagent",
+            ))),
+            &mut events,
+        )
+        .await;
 
     reducer
         .ingest(
@@ -2993,6 +3015,17 @@ async fn turn_lifecycle_emits_turn_event() {
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));
+    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(0));
+    assert_eq!(payload["event_params"]["shell_command_count"], json!(0));
+    assert_eq!(payload["event_params"]["file_change_count"], json!(0));
+    assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(0));
+    assert_eq!(payload["event_params"]["dynamic_tool_call_count"], json!(0));
+    assert_eq!(
+        payload["event_params"]["subagent_tool_call_count"],
+        json!(0)
+    );
+    assert_eq!(payload["event_params"]["web_search_count"], json!(0));
+    assert_eq!(payload["event_params"]["image_generation_count"], json!(0));
     assert_eq!(payload["event_params"]["started_at"], json!(455));
     assert_eq!(payload["event_params"]["completed_at"], json!(456));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
@@ -3004,6 +3037,158 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+}
+
+#[tokio::test]
+async fn turn_event_counts_completed_tool_items() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    let completed_tool_items = vec![
+        sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
+        ThreadItem::FileChange {
+            id: "file-change-1".to_string(),
+            changes: Vec::new(),
+            status: PatchApplyStatus::Completed,
+        },
+        ThreadItem::McpToolCall {
+            id: "mcp-1".to_string(),
+            server: "server".to_string(),
+            tool: "search".to_string(),
+            status: McpToolCallStatus::Completed,
+            arguments: json!({}),
+            mcp_app_resource_uri: None,
+            result: None,
+            error: None,
+            duration_ms: Some(2),
+        },
+        ThreadItem::DynamicToolCall {
+            id: "dynamic-1".to_string(),
+            namespace: None,
+            tool: "render".to_string(),
+            arguments: json!({}),
+            status: DynamicToolCallStatus::Completed,
+            content_items: None,
+            success: Some(true),
+            duration_ms: Some(3),
+        },
+        ThreadItem::CollabAgentToolCall {
+            id: "collab-1".to_string(),
+            tool: CollabAgentTool::SpawnAgent,
+            status: CollabAgentToolCallStatus::Completed,
+            sender_thread_id: "thread-2".to_string(),
+            receiver_thread_ids: vec!["thread-child".to_string()],
+            prompt: Some("help".to_string()),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort: None,
+            agents_states: Default::default(),
+        },
+        ThreadItem::WebSearch {
+            id: "web-1".to_string(),
+            query: "codex".to_string(),
+            action: None,
+        },
+        ThreadItem::ImageGeneration {
+            id: "image-1".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: None,
+            result: "ok".to_string(),
+            saved_path: None,
+        },
+    ];
+
+    for item in completed_tool_items {
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
+                    ItemCompletedNotification {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        completed_at_ms: 1_000,
+                        item,
+                    },
+                ))),
+                &mut out,
+            )
+            .await;
+    }
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    let turn_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
+        .expect("turn event should be emitted");
+    let payload = serde_json::to_value(turn_event).expect("serialize turn event");
+    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(7));
+    assert_eq!(payload["event_params"]["shell_command_count"], json!(1));
+    assert_eq!(payload["event_params"]["file_change_count"], json!(1));
+    assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(1));
+    assert_eq!(payload["event_params"]["dynamic_tool_call_count"], json!(1));
+    assert_eq!(
+        payload["event_params"]["subagent_tool_call_count"],
+        json!(1)
+    );
+    assert_eq!(payload["event_params"]["web_search_count"], json!(1));
+    assert_eq!(payload["event_params"]["image_generation_count"], json!(1));
+}
+
+#[tokio::test]
+async fn item_completed_without_turn_state_does_not_create_turn_state() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
+                ItemCompletedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    completed_at_ms: 1_000,
+                    item: sample_command_execution_item(
+                        CommandExecutionStatus::Completed,
+                        Some(0),
+                        Some(1),
+                    ),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert!(out.is_empty());
 }
 
 #[tokio::test]

@@ -1289,47 +1289,65 @@ async fn find_thread_path_by_id_str_in_subdir(
     };
     let thread_id = ThreadId::from_string(id_str).ok();
     let mut unverified_db_path = None;
+    let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
-        && let Some(db_path) = state_db::find_rollout_path_by_id(
-            Some(state_db_ctx),
-            thread_id,
-            archived_only,
-            "find_path_query",
-        )
-        .await
     {
-        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
-            match read_session_meta_line(&db_path).await {
-                Ok(meta_line) if meta_line.meta.id == thread_id => {
-                    return Ok(Some(db_path));
-                }
-                Ok(meta_line) => {
+        match state_db_ctx
+            .find_rollout_path_by_id(thread_id, archived_only)
+            .await
+        {
+            Ok(Some(db_path)) => {
+                if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+                    match read_session_meta_line(&db_path).await {
+                        Ok(meta_line) if meta_line.meta.id == thread_id => {
+                            return Ok(Some(db_path));
+                        }
+                        Ok(meta_line) => {
+                            tracing::error!(
+                                "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
+                                meta_line.meta.id,
+                                db_path.display()
+                            );
+                            tracing::warn!(
+                                "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
+                            );
+                            codex_state::record_fallback(
+                                "find_thread_path",
+                                "mismatch",
+                                /*telemetry_override*/ None,
+                            );
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
+                                db_path.display()
+                            );
+                            unverified_db_path = Some(db_path);
+                        }
+                    }
+                } else {
                     tracing::error!(
-                        "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
-                        meta_line.meta.id,
+                        "state db returned stale rollout path for thread {id_str}: {}",
                         db_path.display()
                     );
                     tracing::warn!(
-                        "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
+                        "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
                     );
-                }
-                Err(err) => {
-                    tracing::debug!(
-                        "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
-                        db_path.display()
+                    codex_state::record_fallback(
+                        "find_thread_path",
+                        "stale_path",
+                        /*telemetry_override*/ None,
                     );
-                    unverified_db_path = Some(db_path);
                 }
             }
-        } else {
-            tracing::error!(
-                "state db returned stale rollout path for thread {id_str}: {}",
-                db_path.display()
-            );
-            tracing::warn!(
-                "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
-            );
+            Ok(None) => fallback_reason = Some("missing_row"),
+            Err(err) => {
+                tracing::warn!(
+                    "state db find_rollout_path_by_id failed during find_path_query: {err}"
+                );
+                fallback_reason = Some("db_error");
+            }
         }
     }
 
@@ -1357,6 +1375,13 @@ async fn find_thread_path_by_id_str_in_subdir(
         tracing::warn!(
             "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
         );
+        if let Some(reason) = fallback_reason {
+            codex_state::record_fallback(
+                "find_thread_path",
+                reason,
+                /*telemetry_override*/ None,
+            );
+        }
         state_db::read_repair_rollout_path(
             state_db_ctx,
             thread_id,

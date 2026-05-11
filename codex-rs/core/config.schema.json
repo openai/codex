@@ -379,9 +379,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "builtin_mcp": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -479,6 +476,9 @@
               "type": "boolean"
             },
             "memory_tool": {
+              "type": "boolean"
+            },
+            "mentions_v2": {
               "type": "boolean"
             },
             "multi_agent": {
@@ -3935,9 +3935,6 @@
         "browser_use_external": {
           "type": "boolean"
         },
-        "builtin_mcp": {
-          "type": "boolean"
-        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -4035,6 +4032,9 @@
           "type": "boolean"
         },
         "memory_tool": {
+          "type": "boolean"
+        },
+        "mentions_v2": {
           "type": "boolean"
         },
         "multi_agent": {

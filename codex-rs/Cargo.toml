@@ -5,7 +5,6 @@ members = [
     "agent-graph-store",
     "agent-identity",
     "backend-client",
-    "builtin-mcps",
     "bwrap",
     "ansi-escape",
     "async-utils",
@@ -144,7 +143,6 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
-codex-builtin-mcps = { path = "builtin-mcps" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
@@ -180,7 +178,6 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
-codex-memories-mcp = { path = "memories/mcp" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }

@@ -134,8 +134,6 @@ pub enum Feature {
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
-    /// Enable product-owned built-in MCP servers.
-    BuiltInMcp,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -152,7 +150,7 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
-    /// Use the new path for the built-in apps MCP server.
+    /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
     /// Enable the tool_search tool for apps.
     ToolSearch,
@@ -192,6 +190,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
@@ -798,12 +798,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::BuiltInMcp,
-        key: "builtin_mcp",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Chronicle,
         key: "chronicle",
         stage: Stage::UnderDevelopment,
@@ -1015,6 +1009,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Experimental {
+            name: "Mentions v2",
+            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
