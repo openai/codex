@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::context::is_compaction_preserved_contextual_user_message_content;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -397,9 +398,20 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
                     Some(user.message())
                 }
             }
-            _ => None,
+            _ => compaction_preserved_contextual_user_message_text(item),
         })
         .collect()
+}
+
+fn compaction_preserved_contextual_user_message_text(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role == "user" && is_compaction_preserved_contextual_user_message_content(content) {
+        content_items_to_text(content)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn is_summary_message(message: &str) -> bool {

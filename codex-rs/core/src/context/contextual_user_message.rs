@@ -43,11 +43,30 @@ fn is_standard_contextual_user_text(text: &str) -> bool {
         .any(|fragment| fragment.matches_text(text))
 }
 
+/// Returns true for contextual user fragments that should survive compaction.
+fn is_compaction_preserved_contextual_user_text(text: &str) -> bool {
+    CONTEXTUAL_USER_FRAGMENTS
+        .iter()
+        .any(|fragment| fragment.is_compaction_preserved_text(text))
+}
+
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
     parse_hook_prompt_fragment(text).is_some() || is_standard_contextual_user_text(text)
+}
+
+/// Returns true when message content includes any compaction-preserved contextual user fragment.
+pub(crate) fn is_compaction_preserved_contextual_user_message_content(
+    content: &[ContentItem],
+) -> bool {
+    content.iter().any(|content_item| {
+        let ContentItem::InputText { text } = content_item else {
+            return false;
+        };
+        is_compaction_preserved_contextual_user_text(text)
+    })
 }
 
 pub(crate) fn parse_visible_hook_prompt_message(

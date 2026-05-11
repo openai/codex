@@ -11,6 +11,7 @@ impl ContextualUserFragment for GoalContext {
     const ROLE: &'static str = "user";
     const START_MARKER: &'static str = "<goal_context>";
     const END_MARKER: &'static str = "</goal_context>";
+    const PRESERVE_DURING_COMPACTION: bool = true;
 
     fn body(&self) -> String {
         format!("\n{}\n", self.prompt)

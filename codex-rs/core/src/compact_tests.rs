@@ -1,4 +1,6 @@
 use super::*;
+use crate::context::ContextualUserFragment;
+use crate::context::GoalContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -82,7 +84,11 @@ fn collect_user_messages_extracts_user_text_only() {
 }
 
 #[test]
-fn collect_user_messages_filters_session_prefix_entries() {
+fn collect_user_messages_filters_session_prefix_entries_and_preserves_goal_context() {
+    let goal_context = GoalContext {
+        prompt: "Continue working toward the active thread goal.".to_string(),
+    }
+    .render();
     let items = vec![
         ResponseItem::Message {
             id: None,
@@ -113,11 +119,22 @@ do things
             }],
             phase: None,
         },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: goal_context.clone(),
+            }],
+            phase: None,
+        },
     ];
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(vec!["real user message".to_string()], collected);
+    assert_eq!(
+        vec!["real user message".to_string(), goal_context],
+        collected
+    );
 }
 
 #[test]
@@ -353,6 +370,9 @@ keep me updated
 
 #[tokio::test]
 async fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
+    let goal_context: ResponseItem = ContextualUserFragment::into(GoalContext {
+        prompt: "Continue working toward the active thread goal.".to_string(),
+    });
     let compacted_history = vec![
         ResponseItem::Message {
             id: None,
@@ -378,6 +398,7 @@ async fn process_compacted_history_inserts_context_before_last_real_user_message
             }],
             phase: None,
         },
+        goal_context.clone(),
     ];
 
     let (refreshed, initial_context) = process_compacted_history_with_test_session(
@@ -412,6 +433,7 @@ async fn process_compacted_history_inserts_context_before_last_real_user_message
         }],
         phase: None,
     });
+    expected.push(goal_context);
     assert_eq!(refreshed, expected);
 }
 

@@ -7,6 +7,7 @@ use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::context::is_compaction_preserved_contextual_user_message_content;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -283,7 +284,8 @@ pub(crate) async fn process_compacted_history(
 /// - `developer` messages because remote output can include stale/duplicated
 ///   instruction content.
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   while preserving real user messages and persisted hook prompts.
+///   while preserving real user messages, persisted hook prompts, and
+///   compaction-preserved contextual user messages.
 ///
 /// This intentionally keeps:
 /// - `assistant` messages (future remote compaction models may emit them)
@@ -292,11 +294,11 @@ pub(crate) async fn process_compacted_history(
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => {
+        ResponseItem::Message { role, content, .. } if role == "user" => {
             matches!(
                 crate::event_mapping::parse_turn_item(item),
                 Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
-            )
+            ) || is_compaction_preserved_contextual_user_message_content(content)
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,

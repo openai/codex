@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 /// fragments without constructing the concrete context payload.
 pub(crate) trait FragmentRegistration: Sync {
     fn matches_text(&self, text: &str) -> bool;
+    fn is_compaction_preserved_text(&self, text: &str) -> bool;
 }
 
 pub(crate) struct FragmentRegistrationProxy<T> {
@@ -26,6 +27,10 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
     fn matches_text(&self, text: &str) -> bool {
         T::matches_text(text)
     }
+
+    fn is_compaction_preserved_text(&self, text: &str) -> bool {
+        T::PRESERVE_DURING_COMPACTION && T::matches_text(text)
+    }
 }
 
 /// Context payload that is injected as a message fragment.
@@ -41,6 +46,7 @@ pub trait ContextualUserFragment {
     const ROLE: &'static str;
     const START_MARKER: &'static str;
     const END_MARKER: &'static str;
+    const PRESERVE_DURING_COMPACTION: bool = false;
 
     fn body(&self) -> String;
 
