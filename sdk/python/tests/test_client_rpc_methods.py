@@ -66,6 +66,7 @@ def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
                 "id": "thread-1",
                 "modelProvider": "openai",
                 "preview": "",
+                "sessionId": "session-1",
                 "source": "cli",
                 "status": {"type": "idle"},
                 "turns": [],

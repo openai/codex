@@ -2019,7 +2019,6 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 #[test]
 fn sandbox_policy_round_trips_workspace_write_access() {
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -2029,7 +2028,6 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -2075,7 +2073,6 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
     assert_eq!(
         policy,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![absolute_path("/workspace")],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3415,6 +3412,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         responsesapi_client_metadata: None,
         environments: None,
         cwd: None,
+        workspace_roots: None,
         approval_policy: None,
         approvals_reviewer: None,
         sandbox_policy: None,
@@ -3430,6 +3428,23 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn permission_profile_selection_params_uses_id_only_shape() {
+    let params: PermissionProfileSelectionParams = serde_json::from_value(json!({
+        "id": ":workspace"
+    }))
+    .expect("permission profile selection should deserialize");
+    assert_eq!(
+        params,
+        PermissionProfileSelectionParams {
+            id: ":workspace".to_string()
+        }
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(serialized, json!({ "id": ":workspace" }));
 }
 
 #[test]

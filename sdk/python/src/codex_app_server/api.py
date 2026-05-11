@@ -15,7 +15,6 @@ from .generated.v2_all import (
     ReasoningSummary,
     SandboxMode,
     SandboxPolicy,
-    ServiceTier,
     SortDirection,
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
@@ -26,6 +25,7 @@ from .generated.v2_all import (
     ThreadReadResponse,
     ThreadResumeParams,
     ThreadSetNameResponse,
+    ThreadSource,
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartSource,
@@ -152,8 +152,9 @@ class Codex:
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
+        thread_source: ThreadSource | None = None,
     ) -> Thread:
         params = ThreadStartParams(
             approval_policy=approval_policy,
@@ -170,6 +171,7 @@ class Codex:
             service_name=service_name,
             service_tier=service_tier,
             session_start_source=session_start_source,
+            thread_source=thread_source,
         )
         started = self._client.thread_start(params)
         return Thread(self._client, started.thread.id)
@@ -216,7 +218,7 @@ class Codex:
         model_provider: str | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
     ) -> Thread:
         params = ThreadResumeParams(
             thread_id=thread_id,
@@ -249,7 +251,8 @@ class Codex:
         model: str | None = None,
         model_provider: str | None = None,
         sandbox: SandboxMode | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
+        thread_source: ThreadSource | None = None,
     ) -> Thread:
         params = ThreadForkParams(
             thread_id=thread_id,
@@ -264,6 +267,7 @@ class Codex:
             model_provider=model_provider,
             sandbox=sandbox,
             service_tier=service_tier,
+            thread_source=thread_source,
         )
         forked = self._client.thread_fork(thread_id, params)
         return Thread(self._client, forked.thread.id)
@@ -274,7 +278,6 @@ class Codex:
     def thread_unarchive(self, thread_id: str) -> Thread:
         unarchived = self._client.thread_unarchive(thread_id)
         return Thread(self._client, unarchived.thread.id)
-
     # END GENERATED: Codex.flat_methods
 
     def models(self, *, include_hidden: bool = False) -> ModelListResponse:
@@ -349,8 +352,9 @@ class AsyncCodex:
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
+        thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadStartParams(
@@ -368,6 +372,7 @@ class AsyncCodex:
             service_name=service_name,
             service_tier=service_tier,
             session_start_source=session_start_source,
+            thread_source=thread_source,
         )
         started = await self._client.thread_start(params)
         return AsyncThread(self, started.thread.id)
@@ -415,7 +420,7 @@ class AsyncCodex:
         model_provider: str | None = None,
         personality: Personality | None = None,
         sandbox: SandboxMode | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadResumeParams(
@@ -449,7 +454,8 @@ class AsyncCodex:
         model: str | None = None,
         model_provider: str | None = None,
         sandbox: SandboxMode | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
+        thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadForkParams(
@@ -465,6 +471,7 @@ class AsyncCodex:
             model_provider=model_provider,
             sandbox=sandbox,
             service_tier=service_tier,
+            thread_source=thread_source,
         )
         forked = await self._client.thread_fork(thread_id, params)
         return AsyncThread(self, forked.thread.id)
@@ -477,7 +484,6 @@ class AsyncCodex:
         await self._ensure_initialized()
         unarchived = await self._client.thread_unarchive(thread_id)
         return AsyncThread(self, unarchived.thread.id)
-
     # END GENERATED: AsyncCodex.flat_methods
 
     async def models(self, *, include_hidden: bool = False) -> ModelListResponse:
@@ -502,7 +508,7 @@ class Thread:
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> RunResult:
         turn = self.turn(
@@ -537,7 +543,7 @@ class Thread:
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
         wire_input = _to_wire_input(input)
@@ -557,7 +563,6 @@ class Thread:
         )
         turn = self._client.turn_start(self.id, wire_input, params=params)
         return TurnHandle(self._client, self.id, turn.turn.id)
-
     # END GENERATED: Thread.flat_methods
 
     def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
@@ -587,7 +592,7 @@ class AsyncThread:
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> RunResult:
         turn = await self.turn(
@@ -622,7 +627,7 @@ class AsyncThread:
         output_schema: JsonObject | None = None,
         personality: Personality | None = None,
         sandbox_policy: SandboxPolicy | None = None,
-        service_tier: ServiceTier | None = None,
+        service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
@@ -647,7 +652,6 @@ class AsyncThread:
             params=params,
         )
         return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
-
     # END GENERATED: AsyncThread.flat_methods
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:

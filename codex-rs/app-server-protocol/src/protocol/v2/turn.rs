@@ -64,6 +64,11 @@ pub struct TurnStartParams {
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Replace the workspace roots for this turn and subsequent turns. Omitted
+    /// preserves the current roots.
+    #[experimental("turn/start.workspaceRoots")]
+    #[ts(optional = nullable)]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     /// Override the approval policy for this turn and subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -72,13 +77,13 @@ pub struct TurnStartParams {
     /// subsequent turns.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    /// Override the sandbox policy for this turn and subsequent turns.
+    /// Deprecated for turns. The server rejects this field because the
+    /// thread permission profile value is not mutable through `turn/start`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Select a named permissions profile for this turn and subsequent turns.
-    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
-    /// for supported turn adjustments instead of replacing the full
-    /// permissions profile.
+    /// Cannot be combined with `sandboxPolicy`. This updates profile identity
+    /// metadata without replacing the effective permissions profile.
     #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,

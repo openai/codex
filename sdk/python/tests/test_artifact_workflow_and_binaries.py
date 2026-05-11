@@ -99,6 +99,9 @@ def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
         "ExperimentalFeatureStage",
         "InputModality",
         "MessagePhase",
+        "PluginAvailability",
+        "ProcessOutputStream",
+        "TurnItemsView",
     ]
 
 
@@ -398,9 +401,7 @@ def test_runtime_resource_binaries_are_included_by_wheel_config(
     pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
     assert {
         "include": pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["include"],
-        "helper": (
-            staged / "src" / "codex_cli_bin" / "bin" / "helper"
-        ).read_text(),
+        "helper": (staged / "src" / "codex_cli_bin" / "bin" / "helper").read_text(),
     } == {
         "include": ["src/codex_cli_bin/bin/**"],
         "helper": "fake helper\n",
