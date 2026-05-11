@@ -1,5 +1,4 @@
 mod contributors;
-mod extension;
 mod registry;
 mod state;
 
@@ -14,7 +13,6 @@ pub use contributors::ToolContributor;
 pub use contributors::ToolHandler;
 pub use contributors::TurnItemContributionFuture;
 pub use contributors::TurnItemContributor;
-pub use extension::CodexExtension;
 pub use registry::ExtensionRegistry;
 pub use registry::ExtensionRegistryBuilder;
 pub use registry::empty_extension_registry;
