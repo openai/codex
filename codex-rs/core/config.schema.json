@@ -956,7 +956,7 @@
             "command": {
               "type": "string"
             },
-            "command_windows": {
+            "commandWindows": {
               "default": null,
               "type": "string"
             },
