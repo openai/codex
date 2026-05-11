@@ -15,7 +15,6 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
-use codex_app_server_client::EnvironmentManagerArgs;
 use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
@@ -156,6 +155,7 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 
 enum InitialOperation {
     UserTurn {
@@ -222,6 +222,14 @@ fn exec_root_span() -> tracing::Span {
     )
 }
 
+fn exec_stderr_env_filter() -> EnvFilter {
+    // OTEL export is best-effort; keep exporter self-diagnostics out of
+    // headless command output unless the caller opts in with RUST_LOG.
+    EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(EXEC_DEFAULT_LOG_FILTER))
+        .unwrap_or_else(|_| EnvFilter::new("error"))
+}
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     #[allow(clippy::print_stderr)]
     if let Some(message) = cli.removed_full_auto_warning() {
@@ -268,18 +276,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
-        .with_filter(env_filter);
+        .with_filter(exec_stderr_env_filter());
 
     let sandbox_mode = if removed_full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -478,6 +478,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             None
         }
     };
+    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
+    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -508,6 +510,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let state_db = codex_core::init_state_db(&config).await;
+    let environment_manager = if run_loader_overrides.ignore_user_config {
+        EnvironmentManager::from_env(local_runtime_paths).await?
+    } else {
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?
+    };
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -517,9 +524,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
-        environment_manager: std::sync::Arc::new(
-            EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await,
-        ),
+        environment_manager: std::sync::Arc::new(environment_manager),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
@@ -1600,6 +1605,15 @@ async fn handle_server_request(
                 request_id,
                 &method,
                 "chatgpt auth token refresh is not supported in exec mode".to_string(),
+            )
+            .await
+        }
+        ServerRequest::AttestationGenerate { request_id, .. } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                "attestation generation is not supported in exec mode".to_string(),
             )
             .await
         }

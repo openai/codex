@@ -31,7 +31,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
-use bottom_pane_view::ViewCompletion;
+pub(crate) use bottom_pane_view::ViewCompletion;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
@@ -95,6 +95,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
+mod mentions_v2;
 pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
@@ -104,7 +105,6 @@ pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
-#[cfg(test)]
 pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
@@ -113,6 +113,7 @@ pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
+use slash_commands::ServiceTierCommand;
 mod feedback_view;
 mod hooks_browser_view;
 pub(crate) use feedback_view::FeedbackAudience;
@@ -319,6 +320,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.composer.set_mentions_v2_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_mention_bindings()
     }
@@ -394,8 +400,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_fast_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_fast_command_enabled(enabled);
+    pub fn set_service_tier_commands_enabled(&mut self, enabled: bool) {
+        self.composer.set_service_tier_commands_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
+        self.composer.set_service_tier_commands(commands);
         self.request_redraw();
     }
 

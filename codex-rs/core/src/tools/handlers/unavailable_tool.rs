@@ -5,14 +5,26 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub struct UnavailableToolHandler {
     tool_name: ToolName,
+    spec: Option<ToolSpec>,
 }
 
 impl UnavailableToolHandler {
-    pub fn new(tool_name: ToolName) -> Self {
-        Self { tool_name }
+    pub fn new(tool_name: ToolName, spec: ToolSpec) -> Self {
+        Self {
+            tool_name,
+            spec: Some(spec),
+        }
+    }
+
+    pub fn without_spec(tool_name: ToolName) -> Self {
+        Self {
+            tool_name,
+            spec: None,
+        }
     }
 }
 
@@ -32,6 +44,10 @@ impl ToolHandler for UnavailableToolHandler {
         self.tool_name.clone()
     }
 
+    fn spec(&self) -> Option<ToolSpec> {
+        self.spec.clone()
+    }
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -42,7 +58,7 @@ impl ToolHandler for UnavailableToolHandler {
         match payload {
             ToolPayload::Function { .. } => Ok(FunctionToolOutput::from_text(
                 unavailable_tool_message(
-                    self.tool_name.display(),
+                    &self.tool_name,
                     "Retry after the tool becomes available or ask the user to re-enable it.",
                 ),
                 Some(false),

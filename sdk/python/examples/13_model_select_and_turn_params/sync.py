@@ -5,18 +5,24 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import assistant_text_from_turn, ensure_local_sdk_src, find_turn_by_id, runtime_config
+from _bootstrap import (
+    assistant_text_from_turn,
+    ensure_local_sdk_src,
+    find_turn_by_id,
+    runtime_config,
+)
 
 ensure_local_sdk_src()
 
-from codex_app_server import (
-    AskForApproval,
+from openai_codex import (
     Codex,
+    TextInput,
+)
+from openai_codex.types import (
     Personality,
     ReasoningEffort,
     ReasoningSummary,
     SandboxPolicy,
-    TextInput,
 )
 
 REASONING_RANK = {
@@ -32,7 +38,9 @@ PREFERRED_MODEL = "gpt-5.4"
 
 def _pick_highest_model(models):
     visible = [m for m in models if not m.hidden] or models
-    preferred = next((m for m in visible if m.model == PREFERRED_MODEL or m.id == PREFERRED_MODEL), None)
+    preferred = next(
+        (m for m in visible if m.model == PREFERRED_MODEL or m.id == PREFERRED_MODEL), None
+    )
     if preferred is not None:
         return preferred
     known_names = {m.id for m in visible} | {m.model for m in visible}
@@ -71,7 +79,6 @@ SANDBOX_POLICY = SandboxPolicy.model_validate(
         "access": {"type": "fullAccess"},
     }
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
 
 
 with Codex(config=runtime_config()) as codex:
@@ -100,7 +107,6 @@ with Codex(config=runtime_config()) as codex:
 
     second = thread.turn(
         TextInput("Return JSON for a safe feature-flag rollout plan."),
-        approval_policy=APPROVAL_POLICY,
         cwd=str(Path.cwd()),
         effort=selected_effort,
         model=selected_model.model,

@@ -380,6 +380,12 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "PostToolUse")]
     #[ts(rename = "PostToolUse")]
     pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PreCompact")]
+    #[ts(rename = "PreCompact")]
+    pub pre_compact: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostCompact")]
+    #[ts(rename = "PostCompact")]
+    pub post_compact: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
@@ -407,6 +413,9 @@ pub enum ConfiguredHookHandler {
     #[ts(rename = "command")]
     Command {
         command: String,
+        #[serde(rename = "commandWindows")]
+        #[ts(rename = "commandWindows")]
+        command_windows: Option<String>,
         #[serde(rename = "timeoutSec")]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,

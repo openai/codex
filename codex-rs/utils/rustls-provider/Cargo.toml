@@ -9,3 +9,7 @@ workspace = true
 
 [dependencies]
 rustls = { workspace = true }
+
+[lib]
+test = false
+doctest = false

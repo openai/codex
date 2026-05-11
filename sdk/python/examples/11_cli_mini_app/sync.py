@@ -9,9 +9,11 @@ from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
-from codex_app_server import (
+from openai_codex import (
     Codex,
     TextInput,
+)
+from openai_codex.types import (
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
 )

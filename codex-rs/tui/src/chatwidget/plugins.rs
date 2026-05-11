@@ -1729,6 +1729,12 @@ impl ChatWidget {
             ..Default::default()
         });
         items.push(SelectionItem {
+            name: "Hooks".to_string(),
+            description: Some(plugin_hook_summary(plugin)),
+            is_disabled: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
             name: "Apps".to_string(),
             description: Some(plugin_app_summary(plugin)),
             is_disabled: true,
@@ -2137,6 +2143,29 @@ fn plugin_app_summary(plugin: &PluginDetail) -> String {
             .apps
             .iter()
             .map(|app| app.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn plugin_hook_summary(plugin: &PluginDetail) -> String {
+    if plugin.hooks.is_empty() {
+        "No plugin hooks.".to_string()
+    } else {
+        let mut event_counts = Vec::<(codex_app_server_protocol::HookEventName, usize)>::new();
+        for hook in &plugin.hooks {
+            if let Some((_, handler_count)) = event_counts
+                .iter_mut()
+                .find(|(event_name, _)| *event_name == hook.event_name)
+            {
+                *handler_count += 1;
+            } else {
+                event_counts.push((hook.event_name, 1));
+            }
+        }
+        event_counts
+            .into_iter()
+            .map(|(event_name, handler_count)| format!("{event_name:?} ({handler_count})"))
             .collect::<Vec<_>>()
             .join(", ")
     }

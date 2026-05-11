@@ -3,6 +3,8 @@ use super::message_tool::SendMessageArgs;
 use super::message_tool::handle_message_string_tool;
 use super::*;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::handlers::multi_agents_spec::create_send_message_tool;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
@@ -11,6 +13,10 @@ impl ToolHandler for Handler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("send_message")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_send_message_tool())
     }
 
     fn kind(&self) -> ToolKind {

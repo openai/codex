@@ -54,6 +54,7 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
+            started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
             reason: None,
             network_approval_context: None,
@@ -458,7 +459,7 @@ async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
         "expected orphan end entry after flush: {second:?}"
     );
     assert!(
-        chat.active_cell.is_none(),
+        chat.transcript.active_cell.is_none(),
         "both entries should be finalized"
     );
 }
@@ -705,9 +706,9 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 
     terminal_interaction(&mut chat, "call-1", "proc-1", "");
 
-    assert!(chat.active_cell.is_none());
+    assert!(chat.transcript.active_cell.is_none());
     assert_eq!(
-        chat.current_status.header,
+        chat.status_state.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -727,7 +728,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
     assert_eq!(
-        chat.current_status.header,
+        chat.status_state.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -793,7 +794,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
     assert_eq!(
-        chat.current_status.header,
+        chat.status_state.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -1021,7 +1022,7 @@ async fn user_message_during_user_shell_command_is_queued_not_steered() {
         ),
         other => panic!("expected queued user message after shell completion, got {other:?}"),
     }
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]

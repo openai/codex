@@ -27,6 +27,13 @@ pub enum ThreadStoreError {
         message: String,
     },
 
+    /// The store implementation does not support this operation yet.
+    #[error("thread-store unsupported operation: {operation}")]
+    Unsupported {
+        /// Stable operation name for callers that need to map unsupported operations.
+        operation: &'static str,
+    },
+
     /// Catch-all for implementation failures that do not fit a more specific category.
     #[error("thread-store internal error: {message}")]
     Internal {

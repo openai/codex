@@ -37,7 +37,6 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -46,9 +45,6 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_config::types::OtelConfig;
-use codex_config::types::OtelConfigToml;
-use codex_config::types::OtelExporterKind;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -68,11 +64,10 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
-use codex_mcp::BuiltinMcpServerOptions;
 use codex_mcp::McpConfig;
-use codex_mcp::configured_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -104,6 +99,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
+use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -115,6 +113,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
+use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
 use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::default_builtin_permission_profile_name;
@@ -132,6 +131,7 @@ pub(crate) mod agent_roles;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
+mod otel;
 mod permissions;
 #[cfg(test)]
 mod schema;
@@ -383,8 +383,6 @@ pub enum ThreadStoreConfig {
     /// Persist threads locally using rollout JSONL files and sqlite metadata.
     #[default]
     Local,
-    /// Persist threads through the remote thread-store service.
-    Remote { endpoint: String },
     /// In-memory thread store for test and debug configurations.
     InMemory { id: String },
 }
@@ -476,6 +474,8 @@ pub struct Config {
     pub compact_prompt: Option<String>,
 
     /// Optional commit attribution text for commit message co-author trailers.
+    /// This top-level setting only takes effect when `[features].codex_git_commit`
+    /// is enabled.
     ///
     /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
     /// - `Some("")` or whitespace-only: disable commit attribution
@@ -710,7 +710,7 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
-    /// Optional path override for the built-in apps MCP server.
+    /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
@@ -1089,13 +1089,6 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
-        let builtin_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
-            codex_self_exe: self.codex_self_exe.as_deref(),
-            codex_home: self.codex_home.as_path(),
-            memories_enabled: self.features.enabled(Feature::BuiltInMcp)
-                && self.features.enabled(Feature::MemoryTool)
-                && self.memories.use_memories,
-        });
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()
@@ -1116,11 +1109,9 @@ impl Config {
             && mcp_requirements.value.is_empty()
         {
             // A present empty allowlist bans configurable MCPs, including plugin MCPs merged
-            // above. Built-ins are product-owned and stay available regardless of admin
-            // allowlists.
+            // above.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
-        configured_mcp_servers.extend(builtin_mcp_servers);
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1136,6 +1127,16 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
+            client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
+                ElicitationCapability {
+                    form: Some(FormElicitationCapability::default()),
+                    url: Some(UrlElicitationCapability::default()),
+                }
+            } else {
+                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                // indicates this should be an empty object.
+                ElicitationCapability::default()
+            },
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
@@ -1733,17 +1734,11 @@ fn resolve_tool_suggest_config_from_config(
     }
 }
 
-fn thread_store_config(
-    thread_store: Option<ThreadStoreToml>,
-    legacy_remote_endpoint: Option<String>,
-) -> ThreadStoreConfig {
+fn thread_store_config(thread_store: Option<ThreadStoreToml>) -> ThreadStoreConfig {
     match thread_store {
         Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
-        Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
         Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
-        None => legacy_remote_endpoint.map_or(ThreadStoreConfig::Local, |endpoint| {
-            ThreadStoreConfig::Remote { endpoint }
-        }),
+        None => ThreadStoreConfig::Local,
     }
 }
 
@@ -2033,6 +2028,13 @@ fn apps_mcp_path_override_toml_config(
     }
 }
 
+fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&NetworkProxyConfigToml> {
+    match features?.network_proxy.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
@@ -2097,6 +2099,13 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
+        if cfg.experimental_thread_store_endpoint.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`experimental_thread_store_endpoint` is no longer supported; remove it from config.toml",
+            ));
+        }
+
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -2216,6 +2225,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
@@ -2299,7 +2309,7 @@ impl Config {
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
         let (
-            configured_network_proxy_config,
+            mut configured_network_proxy_config,
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
@@ -2512,6 +2522,22 @@ impl Config {
                 None,
             )
         };
+        if enable_network_proxy && permission_profile.network_sandbox_policy().is_enabled() {
+            if let Some(network_proxy) = network_proxy_toml_config(cfg.features.as_ref()) {
+                apply_network_proxy_feature_config(
+                    &mut configured_network_proxy_config,
+                    network_proxy,
+                );
+            }
+            if let Some(network_proxy) = network_proxy_toml_config(config_profile.features.as_ref())
+            {
+                apply_network_proxy_feature_config(
+                    &mut configured_network_proxy_config,
+                    network_proxy,
+                );
+            }
+            configured_network_proxy_config.network.enabled = true;
+        }
         let approval_policy_was_explicit = approval_policy_override.is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some();
@@ -2735,10 +2761,7 @@ impl Config {
                 notices.fast_default_opt_out = Some(true);
                 None
             }
-            None => config_profile
-                .service_tier
-                .or(cfg.service_tier)
-                .map(|service_tier| service_tier.request_value().to_string()),
+            None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = service_tier.and_then(|service_tier| {
             match ServiceTier::from_request_value(&service_tier) {
@@ -2975,6 +2998,7 @@ impl Config {
             .value
             .set(effective_permission_profile)
             .map_err(std::io::Error::from)?;
+        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
             service_tier,
@@ -3121,10 +3145,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
-            experimental_thread_store: thread_store_config(
-                cfg.experimental_thread_store,
-                cfg.experimental_thread_store_endpoint,
-            ),
+            experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -3202,23 +3223,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
-            otel: {
-                let t: OtelConfigToml = cfg.otel.unwrap_or_default();
-                let log_user_prompt = t.log_user_prompt.unwrap_or(false);
-                let environment = t
-                    .environment
-                    .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
-                let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
-                let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
-                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
-                OtelConfig {
-                    log_user_prompt,
-                    environment,
-                    exporter,
-                    trace_exporter,
-                    metrics_exporter,
-                }
-            },
+            otel,
         };
         Ok(config)
         })

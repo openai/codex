@@ -7,7 +7,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -127,7 +127,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let patch = "*** Begin Patch\n*** Add File: delegated.txt\n+hello\n*** End Patch\n";
     let sse1 = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call_id, patch),
+        ev_apply_patch_custom_tool_call(call_id, patch),
         ev_completed("resp-1"),
     ]);
     let review_json = serde_json::json!({

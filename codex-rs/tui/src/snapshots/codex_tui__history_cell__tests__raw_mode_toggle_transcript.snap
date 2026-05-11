@@ -10,9 +10,11 @@ rich before:
 • - first item
   - second item
   
-  | Col | Value |
-  | --- | --- |
-  | code | x = 1 |
+  ┌──────┬───────┐
+  │ Col  │ Value │
+  ├──────┼───────┤
+  │ code │ x = 1 │
+  └──────┴───────┘
   
   copy me
 • Called
@@ -46,9 +48,11 @@ rich after:
 • - first item
   - second item
   
-  | Col | Value |
-  | --- | --- |
-  | code | x = 1 |
+  ┌──────┬───────┐
+  │ Col  │ Value │
+  ├──────┼───────┤
+  │ code │ x = 1 │
+  └──────┴───────┘
   
   copy me
 • Called

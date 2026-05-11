@@ -83,7 +83,9 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Print runner specs (Windows)
         shell: powershell
         run: |
@@ -112,7 +114,7 @@ jobs:
           cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -128,7 +130,7 @@ jobs:
           done
 
       - name: Upload Windows binaries
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
@@ -165,22 +167,24 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Download prebuilt Windows primary binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-primary
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows app-server binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows-binaries-${{ matrix.target }}-app-server
           path: codex-rs/target/${{ matrix.target }}/release
@@ -215,6 +219,48 @@ jobs:
             cp "target/${{ matrix.target }}/release/${binary}.exe" \
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
+
+      - name: Build Python runtime wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.target }}" in
+            aarch64-pc-windows-msvc)
+              platform_tag="win_arm64"
+              ;;
+            x86_64-pc-windows-msvc)
+              platform_tag="win_amd64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          # Keep the helpers next to codex.exe in the runtime wheel so Windows
+          # sandbox/elevation lookup matches the standalone release zip.
+          python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime \
+            "$stage_dir" \
+            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex.exe" \
+            --codex-version "${GITHUB_REF_NAME}" \
+            --platform-tag "$platform_tag" \
+            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-command-runner.exe" \
+            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe"
+          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheel-${{ matrix.target }}
+          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          if-no-files-found: error
 
       - name: Install DotSlash
         uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
@@ -281,7 +327,7 @@ jobs:
             "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.target }}
           path: |

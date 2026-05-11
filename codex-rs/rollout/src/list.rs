@@ -50,6 +50,8 @@ pub struct ThreadItem {
     pub thread_id: Option<ThreadId>,
     /// First user message captured for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Best available user-facing preview for discovery and list display.
+    pub preview: Option<String>,
     /// Working directory from session metadata.
     pub cwd: Option<PathBuf>,
     /// Git branch from session metadata.
@@ -85,9 +87,9 @@ pub type ConversationsPage = ThreadsPage;
 #[derive(Default)]
 struct HeadTailSummary {
     saw_session_meta: bool,
-    saw_user_event: bool,
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
+    preview: Option<String>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
     git_sha: Option<String>,
@@ -738,7 +740,8 @@ async fn build_thread_item(
     cwd_filters: Option<&[PathBuf]>,
     updated_at: Option<String>,
 ) -> Option<ThreadItem> {
-    // Read head and detect message events; stop once meta + user are found.
+    // Read head and detect preview-bearing events; goal previews can appear before
+    // the first normal user message.
     let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
         .await
         .unwrap_or_default();
@@ -764,11 +767,12 @@ async fn build_thread_item(
     {
         return None;
     }
-    // Apply filters: must have session meta and at least one user message event
-    if summary.saw_session_meta && summary.saw_user_event {
+    // Apply filters: must have session meta and a discoverable preview.
+    if summary.saw_session_meta && summary.preview.is_some() {
         let HeadTailSummary {
             thread_id,
             first_user_message,
+            preview,
             cwd,
             git_branch,
             git_sha,
@@ -789,6 +793,7 @@ async fn build_thread_item(
             path,
             thread_id,
             first_user_message,
+            preview,
             cwd,
             git_branch,
             git_sha,
@@ -1078,7 +1083,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
     while lines_scanned < head_limit
         || (summary.saw_session_meta
-            && !summary.saw_user_event
+            && (summary.preview.is_none() || summary.first_user_message.is_none())
             && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
     {
         let line_opt = lines.next_line().await?;
@@ -1131,19 +1136,23 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                 // Not included in `head`; skip.
             }
             RolloutItem::EventMsg(ev) => {
-                if let EventMsg::UserMessage(user) = ev {
-                    summary.saw_user_event = true;
-                    if summary.first_user_message.is_none() {
-                        let message = strip_user_message_prefix(user.message.as_str()).to_string();
-                        if !message.is_empty() {
-                            summary.first_user_message = Some(message);
-                        }
+                if let Some(preview) = event_msg_preview(&ev) {
+                    if summary.preview.is_none() {
+                        summary.preview = Some(preview.clone());
+                    }
+                    if let EventMsg::UserMessage(_) = ev
+                        && summary.first_user_message.is_none()
+                    {
+                        summary.first_user_message = Some(preview);
                     }
                 }
             }
         }
 
-        if summary.saw_session_meta && summary.saw_user_event {
+        if summary.saw_session_meta
+            && summary.preview.is_some()
+            && summary.first_user_message.is_some()
+        {
             break;
         }
     }
@@ -1195,6 +1204,31 @@ fn strip_user_message_prefix(text: &str) -> &str {
     match text.find(USER_MESSAGE_BEGIN) {
         Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
         None => text.trim(),
+    }
+}
+
+fn event_msg_preview(event: &EventMsg) -> Option<String> {
+    match event {
+        EventMsg::UserMessage(user) => {
+            let message = strip_user_message_prefix(user.message.as_str());
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+            if user
+                .images
+                .as_ref()
+                .is_some_and(|images| !images.is_empty())
+                || !user.local_images.is_empty()
+            {
+                return Some("[Image]".to_string());
+            }
+            None
+        }
+        EventMsg::ThreadGoalUpdated(event) => {
+            let objective = event.goal.objective.trim();
+            (!objective.is_empty()).then(|| objective.to_string())
+        }
+        _ => None,
     }
 }
 
@@ -1255,47 +1289,65 @@ async fn find_thread_path_by_id_str_in_subdir(
     };
     let thread_id = ThreadId::from_string(id_str).ok();
     let mut unverified_db_path = None;
+    let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
-        && let Some(db_path) = state_db::find_rollout_path_by_id(
-            Some(state_db_ctx),
-            thread_id,
-            archived_only,
-            "find_path_query",
-        )
-        .await
     {
-        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
-            match read_session_meta_line(&db_path).await {
-                Ok(meta_line) if meta_line.meta.id == thread_id => {
-                    return Ok(Some(db_path));
-                }
-                Ok(meta_line) => {
+        match state_db_ctx
+            .find_rollout_path_by_id(thread_id, archived_only)
+            .await
+        {
+            Ok(Some(db_path)) => {
+                if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+                    match read_session_meta_line(&db_path).await {
+                        Ok(meta_line) if meta_line.meta.id == thread_id => {
+                            return Ok(Some(db_path));
+                        }
+                        Ok(meta_line) => {
+                            tracing::error!(
+                                "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
+                                meta_line.meta.id,
+                                db_path.display()
+                            );
+                            tracing::warn!(
+                                "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
+                            );
+                            codex_state::record_fallback(
+                                "find_thread_path",
+                                "mismatch",
+                                /*telemetry_override*/ None,
+                            );
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
+                                db_path.display()
+                            );
+                            unverified_db_path = Some(db_path);
+                        }
+                    }
+                } else {
                     tracing::error!(
-                        "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
-                        meta_line.meta.id,
+                        "state db returned stale rollout path for thread {id_str}: {}",
                         db_path.display()
                     );
                     tracing::warn!(
-                        "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
+                        "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
                     );
-                }
-                Err(err) => {
-                    tracing::debug!(
-                        "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
-                        db_path.display()
+                    codex_state::record_fallback(
+                        "find_thread_path",
+                        "stale_path",
+                        /*telemetry_override*/ None,
                     );
-                    unverified_db_path = Some(db_path);
                 }
             }
-        } else {
-            tracing::error!(
-                "state db returned stale rollout path for thread {id_str}: {}",
-                db_path.display()
-            );
-            tracing::warn!(
-                "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
-            );
+            Ok(None) => fallback_reason = Some("missing_row"),
+            Err(err) => {
+                tracing::warn!(
+                    "state db find_rollout_path_by_id failed during find_path_query: {err}"
+                );
+                fallback_reason = Some("db_error");
+            }
         }
     }
 
@@ -1323,6 +1375,13 @@ async fn find_thread_path_by_id_str_in_subdir(
         tracing::warn!(
             "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
         );
+        if let Some(reason) = fallback_reason {
+            codex_state::record_fallback(
+                "find_thread_path",
+                reason,
+                /*telemetry_override*/ None,
+            );
+        }
         state_db::read_repair_rollout_path(
             state_db_ctx,
             thread_id,

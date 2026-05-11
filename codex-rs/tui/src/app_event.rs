@@ -43,7 +43,6 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
@@ -61,6 +60,10 @@ pub(crate) enum RealtimeAudioDeviceKind {
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,
     ReplaceExisting,
+    UpdateExisting {
+        status: ThreadGoalStatus,
+        token_budget: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +87,12 @@ impl RealtimeAudioDeviceKind {
             Self::Speaker => "speaker",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsolidationScrollbackReflow {
+    IfResizeReflowRan,
+    Required,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +246,11 @@ pub(crate) enum AppEvent {
     /// Open the current thread goal summary/action menu.
     OpenThreadGoalMenu {
         thread_id: ThreadId,
+    },
+
+    /// Open an editor for the current thread goal objective.
+    OpenThreadGoalEditor {
+        thread_id: Option<ThreadId>,
     },
 
     /// Set or replace the current thread goal objective.
@@ -519,9 +533,15 @@ pub(crate) enum AppEvent {
     /// finalization. The `App` handler walks backward through `transcript_cells`
     /// to find the `AgentMessageCell` run and splices in the consolidated cell.
     /// The `cwd` keeps local file-link display stable across the final re-render.
+    /// `scrollback_reflow` lets table-tail finalization force the already-emitted
+    /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
+    /// `deferred_history_cell` lets callers add the final stream tail to the
+    /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
         source: String,
         cwd: PathBuf,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+        deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
@@ -569,7 +589,7 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<String>,
     },
 
     /// Open the device picker for a realtime microphone or speaker.
@@ -774,6 +794,11 @@ pub(crate) enum AppEvent {
     TrustHook {
         key: String,
         current_hash: String,
+    },
+
+    /// Trust the current definitions for one or more hooks by stable hook key.
+    TrustHooks {
+        updates: Vec<crate::hooks_rpc::HookTrustUpdate>,
     },
 
     /// Result of persisting hook enabled state.

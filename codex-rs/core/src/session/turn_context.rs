@@ -11,7 +11,6 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
-use codex_tools::ToolEnvironmentMode;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -39,7 +38,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) shell: String,
+    pub(crate) shell: Option<String>,
 }
 
 impl TurnEnvironment {
@@ -53,11 +52,11 @@ impl TurnEnvironment {
 
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
-pub(crate) struct TurnContext {
+pub struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
-    pub(crate) config: Arc<Config>,
+    pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
@@ -85,7 +84,7 @@ pub(crate) struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
-    pub(crate) features: ManagedFeatures,
+    pub features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
@@ -522,6 +521,10 @@ impl Session {
             &per_turn_config.agent_roles,
         ));
 
+        let mut per_turn_config = per_turn_config;
+        per_turn_config.service_tier = per_turn_config
+            .service_tier
+            .filter(|service_tier| model_info.supports_service_tier(service_tier));
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),

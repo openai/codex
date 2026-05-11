@@ -364,13 +364,13 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
-        skills_watcher: Arc<SkillsWatcher>,
+        extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        state_db: Option<state_db::StateDbHandle>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -468,7 +468,22 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_ctx = if config.ephemeral { None } else { state_db };
+        let state_db_fut = async {
+            if config.ephemeral {
+                None
+            } else if let Some(local_store) =
+                thread_store.as_any().downcast_ref::<LocalThreadStore>()
+            {
+                local_store.state_db().await
+            } else {
+                None
+            }
+        }
+        .instrument(info_span!(
+            "session_init.state_db",
+            otel.name = "session_init.state_db",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
@@ -492,8 +507,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (thread_persistence_result, (auth, mcp_servers, auth_statuses)) =
-            tokio::join!(thread_persistence_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -703,7 +718,7 @@ impl Session {
                 tx
             };
             let thread_name =
-                thread_title_from_state_db(state_db_ctx.as_ref(), &config.codex_home, thread_id)
+                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
                         "session_init.thread_name_lookup",
                         otel.name = "session_init.thread_name_lookup",
@@ -796,6 +811,16 @@ impl Session {
                 SessionId::from(thread_id)
             };
             let agent_control = agent_control.with_session_id(session_id);
+            let session_extension_data = codex_extension_api::ExtensionData::new();
+            let thread_extension_data = codex_extension_api::ExtensionData::new();
+            for contributor in extensions.thread_start_contributors() {
+                contributor.contribute(
+                    config.as_ref(),
+                    &session_extension_data,
+                    &thread_extension_data,
+                );
+            }
+
             let services = SessionServices {
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
@@ -831,13 +856,17 @@ impl Session {
                 skills_manager,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
-                skills_watcher,
+                extensions,
+                // TODO(jif): extract session to share between sub-agents
+                session_extension_data,
+                thread_extension_data,
                 agent_control,
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
+                attestation_provider: attestation_provider.clone(),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     session_id,
@@ -849,6 +878,7 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
+                    attestation_provider,
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
@@ -918,20 +948,27 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            // Start the watcher after SessionConfigured so it cannot emit earlier events.
-            sess.start_skills_watcher_listener();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
-                .filter(|(_, server)| server.enabled && server.required)
+                .filter(|(_, server)| server.enabled() && server.required())
                 .map(|(name, _)| name.clone())
                 .collect();
             required_mcp_servers.sort();
-            let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+            let enabled_mcp_server_count =
+                mcp_servers.values().filter(|server| server.enabled()).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
+            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
+                ElicitationCapability {
+                    form: Some(FormElicitationCapability::default()),
+                    url: Some(UrlElicitationCapability::default()),
+                }
+            } else {
+                ElicitationCapability::default()
+            };
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
@@ -974,8 +1011,10 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
+                client_elicitation_capability,
                 tool_plugin_provenance,
                 auth,
+                Some(sess.mcp_elicitation_reviewer()),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

@@ -8,6 +8,10 @@ use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
+use std::io;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::tempdir;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -20,6 +24,61 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
 #[test]
 fn exec_defaults_analytics_to_enabled() {
     assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+}
+
+#[derive(Clone)]
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
+    type Writer = TestLogSink;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogSink {
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl Write for TestLogSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.lock().expect("log buffer lock").extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn exec_default_stderr_filter_suppresses_otel_self_diagnostics() {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let writer = TestLogWriter {
+        buffer: Arc::clone(&buffer),
+    };
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(writer)
+            .with_filter(EnvFilter::try_new(EXEC_DEFAULT_LOG_FILTER).expect("default filter")),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::error!(target: "opentelemetry_sdk", "telemetry export failed");
+        tracing::error!(target: "opentelemetry_otlp", "telemetry request failed");
+        tracing::error!(target: "codex_exec_test", "real exec error");
+    });
+
+    let logs = String::from_utf8(buffer.lock().expect("log buffer lock").clone()).expect("utf8");
+    assert!(!logs.contains("telemetry export failed"));
+    assert!(!logs.contains("telemetry request failed"));
+    assert!(logs.contains("real exec error"));
 }
 
 #[test]

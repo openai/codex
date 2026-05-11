@@ -1122,8 +1122,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
+        rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
+        /*elicitation_reviewer*/ None,
     )
     .await;
     *session.services.mcp_connection_manager.write().await = manager;
