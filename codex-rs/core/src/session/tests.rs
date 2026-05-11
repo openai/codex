@@ -8154,11 +8154,13 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
             matches!(
                 item,
                 ResponseInputItem::Message { role, content, .. }
-                    if role == "developer"
+                    if role == "user"
                         && content.iter().any(|content| matches!(
                             content,
                             ContentItem::InputText { text }
-                                if text.contains("The active thread goal objective was edited")
+                                if text.starts_with("<goal_context>")
+                                    && text.trim_end().ends_with("</goal_context>")
+                                    && text.contains("The active thread goal objective was edited")
                                     && text.contains("Write a concise benchmark summary")
                         ))
             )
