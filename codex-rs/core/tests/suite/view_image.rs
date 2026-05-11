@@ -18,6 +18,11 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -473,7 +478,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_rejects_local_reads_outside_cwd_in_read_only_mode() -> anyhow::Result<()> {
+async fn view_image_tool_rejects_local_reads_outside_sandbox_read_roots() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -507,9 +512,19 @@ async fn view_image_tool_rejects_local_reads_outside_cwd_in_read_only_mode() -> 
     )
     .await;
 
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: test.config.cwd.clone(),
+            },
+            access: FileSystemAccessMode::Read,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
     test.submit_turn_with_permission_profile(
         "attach the image outside the workspace",
-        PermissionProfile::read_only(),
+        permission_profile,
     )
     .await?;
 
@@ -518,7 +533,7 @@ async fn view_image_tool_rejects_local_reads_outside_cwd_in_read_only_mode() -> 
         .context("missing request containing sandboxed view_image output")?;
     assert!(
         request.inputs_of_type("input_image").is_empty(),
-        "read-only local view_image should not attach images outside the selected cwd"
+        "sandboxed local view_image should not attach images outside configured read roots"
     );
     let output_text = request
         .function_call_output_content_and_success(call_id)
