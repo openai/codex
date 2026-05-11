@@ -535,20 +535,22 @@ pub(crate) fn user_message_text(message: &[UserInput]) -> String {
 }
 
 fn truncate_user_message(message: &[UserInput], remaining_tokens: usize) -> Vec<UserInput> {
-    let truncated_text = truncate_text(
-        &user_message_text(message),
-        TruncationPolicy::Tokens(remaining_tokens),
-    );
-    let mut text_inserted = false;
+    let mut remaining_tokens = remaining_tokens;
     let mut truncated = Vec::with_capacity(message.len());
     for item in message {
         match item {
-            UserInput::Text { .. } if !text_inserted => {
-                truncated.push(UserInput::Text {
-                    text: truncated_text.clone(),
-                    text_elements: Vec::new(),
-                });
-                text_inserted = true;
+            UserInput::Text { text, .. } if remaining_tokens > 0 => {
+                let token_count = approx_token_count(text);
+                if token_count <= remaining_tokens {
+                    truncated.push(item.clone());
+                    remaining_tokens = remaining_tokens.saturating_sub(token_count);
+                } else {
+                    truncated.push(UserInput::Text {
+                        text: truncate_text(text, TruncationPolicy::Tokens(remaining_tokens)),
+                        text_elements: Vec::new(),
+                    });
+                    remaining_tokens = 0;
+                }
             }
             UserInput::Text { .. } => {}
             _ => truncated.push(item.clone()),
