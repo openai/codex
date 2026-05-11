@@ -2,7 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsManager;
@@ -70,10 +70,13 @@ impl MarketplaceCli {
         let overrides = config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?;
+        let strict_config = config_overrides.strict_config;
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
-            MarketplaceSubcommand::Upgrade(args) => run_upgrade(overrides, args).await?,
+            MarketplaceSubcommand::Upgrade(args) => {
+                run_upgrade(overrides, strict_config, args).await?
+            }
             MarketplaceSubcommand::Remove(args) => run_remove(args).await?,
         }
 
@@ -120,10 +123,14 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
 
 async fn run_upgrade(
     overrides: Vec<(String, toml::Value)>,
+    strict_config: bool,
     args: UpgradeMarketplaceArgs,
 ) -> Result<()> {
     let UpgradeMarketplaceArgs { marketplace_name } = args;
-    let config = Config::load_with_cli_overrides(overrides)
+    let config = ConfigBuilder::default()
+        .cli_overrides(overrides)
+        .strict_config(strict_config)
+        .build()
         .await
         .context("failed to load configuration")?;
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;

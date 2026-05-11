@@ -17,6 +17,10 @@ use toml::Value;
 /// calling code can decide how to interpret the right-hand side.
 #[derive(Parser, Debug, Default, Clone)]
 pub struct CliConfigOverrides {
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", global = true, default_value_t = false)]
+    pub strict_config: bool,
+
     /// Override a configuration value that would otherwise be loaded from
     /// `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override
     /// nested values. The `value` portion is parsed as TOML. If it fails to
@@ -37,6 +41,14 @@ pub struct CliConfigOverrides {
 }
 
 impl CliConfigOverrides {
+    /// Prepend root-level config flags so they have lower precedence than
+    /// command-specific flags parsed after a subcommand.
+    pub fn prepend_root_overrides(&mut self, root_overrides: Self) {
+        self.strict_config |= root_overrides.strict_config;
+        self.raw_overrides
+            .splice(0..0, root_overrides.raw_overrides);
+    }
+
     /// Parse the raw strings captured from the CLI into a list of `(path,
     /// value)` tuples where `value` is a `serde_json::Value`.
     pub fn parse_overrides(&self) -> Result<Vec<(String, Value)>, String> {
@@ -184,10 +196,32 @@ mod tests {
     fn canonicalizes_use_legacy_landlock_alias() {
         let overrides = CliConfigOverrides {
             raw_overrides: vec!["use_legacy_landlock=true".to_string()],
+            strict_config: false,
         };
         let parsed = overrides.parse_overrides().expect("parse_overrides");
         assert_eq!(parsed[0].0.as_str(), "features.use_legacy_landlock");
         assert_eq!(parsed[0].1.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn prepends_root_overrides_and_preserves_strict_config() {
+        let mut subcommand_overrides = CliConfigOverrides {
+            strict_config: false,
+            raw_overrides: vec!["model=\"gpt-5.2\"".to_string()],
+        };
+        subcommand_overrides.prepend_root_overrides(CliConfigOverrides {
+            strict_config: true,
+            raw_overrides: vec!["model=\"gpt-5.1\"".to_string()],
+        });
+
+        assert_eq!(
+            subcommand_overrides.raw_overrides,
+            vec![
+                "model=\"gpt-5.1\"".to_string(),
+                "model=\"gpt-5.2\"".to_string(),
+            ]
+        );
+        assert!(subcommand_overrides.strict_config);
     }
 
     #[test]

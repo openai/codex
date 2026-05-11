@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;
+        inner.config_overrides.strict_config |= top_cli.config_overrides.strict_config;
         inner
             .config_overrides
             .raw_overrides

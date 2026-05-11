@@ -7,6 +7,7 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
     let cli = TopCli::parse_from([
         "codex-exec",
         "resume",
+        "--strict-config",
         "--last",
         "--json",
         "--model",
@@ -17,8 +18,12 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
         "--skip-git-repo-check",
         PROMPT,
     ]);
+    let mut inner = cli.inner;
+    inner
+        .config_overrides
+        .prepend_root_overrides(cli.config_overrides);
 
-    let Some(codex_exec::Command::Resume(args)) = cli.inner.command else {
+    let Some(codex_exec::Command::Resume(args)) = inner.command.as_ref() else {
         panic!("expected resume command");
     };
     let effective_prompt = args.prompt.clone().or_else(|| {
@@ -29,9 +34,10 @@ fn top_cli_parses_resume_prompt_after_config_flag() {
         }
     });
     assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
-    assert_eq!(cli.config_overrides.raw_overrides.len(), 1);
+    assert_eq!(inner.config_overrides.raw_overrides.len(), 1);
     assert_eq!(
-        cli.config_overrides.raw_overrides[0],
+        inner.config_overrides.raw_overrides[0],
         "reasoning_level=xhigh"
     );
+    assert!(inner.config_overrides.strict_config);
 }
