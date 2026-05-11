@@ -635,6 +635,26 @@ pub(crate) async fn run_turn(
                 // Aborted turn is reported via a different event.
                 break;
             }
+            Err(CodexErr::ContextWindowExceeded) => {
+                let reset_client_session = match run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    &mut client_session,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await
+                {
+                    Ok(reset_client_session) => reset_client_session,
+                    Err(_) => return None,
+                };
+                if reset_client_session {
+                    client_session.reset_websocket_session();
+                }
+                can_drain_pending_input = false;
+                continue;
+            }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
                     let mut state = sess.state.lock().await;

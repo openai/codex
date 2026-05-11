@@ -25,7 +25,6 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -57,6 +56,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_compact_user_history_with_summary_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -79,7 +79,6 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
@@ -2695,32 +2694,34 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
+async fn context_window_error_sets_total_tokens_to_model_window_before_auto_compact_recovery()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
     const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
 
-    mount_sse_once_match(
+    let responses_mock = mount_sse_sequence(
         &server,
-        body_string_contains("trigger context window"),
-        sse_failed(
-            "resp_context_window",
-            "context_length_exceeded",
-            "Your input exceeds the context window of this model. Please adjust your input and try again.",
-        ),
+        vec![
+            sse(vec![
+                ev_response_created("resp_seed"),
+                ev_completed("resp_seed"),
+            ]),
+            sse_failed(
+                "resp_context_window",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            sse(vec![
+                ev_response_created("resp_retry"),
+                ev_completed("resp_retry"),
+            ]),
+        ],
     )
     .await;
-
-    mount_sse_once_match(
-        &server,
-        body_string_contains("seed turn"),
-        sse(vec![
-            ev_response_created("resp_seed"),
-            ev_completed("resp_seed"),
-        ]),
-    )
-    .await;
+    let compact_mock =
+        mount_compact_user_history_with_summary_once(&server, "AUTO_RECOVERY_SUMMARY").await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -2782,17 +2783,32 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         EFFECTIVE_CONTEXT_WINDOW
     );
 
-    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
-    assert!(
-        matches!(
-            error_event,
-            EventMsg::Error(ref err) if err.message == expected_context_window_message
-        ),
-        "expected context window error; got {error_event:?}"
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected overflow recovery to issue one remote compaction request"
     );
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected seed, overflowing, and recovered sampling requests"
+    );
+    let recovered_request = requests
+        .last()
+        .expect("recovered sampling request should be captured");
+    let recovered_user_messages = recovered_request.message_input_texts("user");
+    assert_eq!(
+        recovered_user_messages
+            .iter()
+            .filter(|message| message.as_str() == "trigger context window")
+            .count(),
+        1,
+        "recovered sampling request should preserve incoming user text exactly once"
+    );
 
     Ok(())
 }

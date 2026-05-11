@@ -1328,6 +1328,158 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn normal_loop_context_window_error_auto_remote_compacts_and_resumes_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let user_message = "turn rescued by remote compaction";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse_failed(
+                "remote-overflow",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            ),
+            responses::sse(vec![
+                responses::ev_assistant_message("recovered-assistant", "REMOTE_RECOVERED"),
+                responses::ev_completed("recovered-response"),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_AUTO_RECOVERY_SUMMARY",
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: user_message.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected normal-loop overflow to issue one remote compact request"
+    );
+
+    let responses = responses_mock.requests();
+    assert_eq!(
+        responses.len(),
+        2,
+        "expected overflowing and recovered sampling requests"
+    );
+    let recovered_user_messages = responses[1].message_input_texts("user");
+    assert_eq!(
+        recovered_user_messages
+            .iter()
+            .filter(|message| message.as_str() == user_message)
+            .count(),
+        1,
+        "recovered sampling request should preserve incoming user text exactly once"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn normal_loop_context_window_error_stops_after_remote_compaction_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let overflow_mock = mount_sse_once(
+        harness.server(),
+        responses::sse_failed(
+            "remote-overflow",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+    let post_compact_turn_mock = mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("should-not-run", "SHOULD_NOT_RUN"),
+            responses::ev_completed("should-not-run-response"),
+        ]),
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": "invalid compact payload shape" }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "turn whose overflow rescue fails".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        error_message.contains("Error running remote compact task"),
+        "expected remote compact task error prefix, got {error_message}"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one failed remote compact request"
+    );
+    assert_eq!(
+        overflow_mock.requests().len(),
+        1,
+        "expected exactly one overflowing sampling request"
+    );
+    assert!(
+        post_compact_turn_mock.requests().is_empty(),
+        "expected agent loop to stop before retrying sampling after compact failure"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
