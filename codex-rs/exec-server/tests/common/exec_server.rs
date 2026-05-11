@@ -57,7 +57,13 @@ pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> 
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    exec_server_with_env(std::iter::empty::<(&str, &str)>()).await
+    exec_server_with_listen_url_and_env("ws://127.0.0.1:0", std::iter::empty::<(&str, &str)>())
+        .await
+}
+
+pub(crate) async fn http_exec_server() -> anyhow::Result<ExecServerHarness> {
+    exec_server_with_listen_url_and_env("ws+http://127.0.0.1:0", std::iter::empty::<(&str, &str)>())
+        .await
 }
 
 pub(crate) async fn exec_server_with_env<I, K, V>(env: I) -> anyhow::Result<ExecServerHarness>
@@ -66,10 +72,22 @@ where
     K: AsRef<std::ffi::OsStr>,
     V: AsRef<std::ffi::OsStr>,
 {
+    exec_server_with_listen_url_and_env("ws://127.0.0.1:0", env).await
+}
+
+async fn exec_server_with_listen_url_and_env<I, K, V>(
+    listen_url: &str,
+    env: I,
+) -> anyhow::Result<ExecServerHarness>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<std::ffi::OsStr>,
+    V: AsRef<std::ffi::OsStr>,
+{
     let helper_paths = test_codex_helper_paths()?;
     let codex_home = TempDir::new()?;
     let mut child = Command::new(&helper_paths.codex_exe);
-    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+    child.args(["exec-server", "--listen", listen_url]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
@@ -79,7 +97,8 @@ where
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
-    let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
+    let (websocket, _) =
+        connect_websocket_when_ready(&websocket_connect_url(&websocket_url)).await?;
     Ok(ExecServerHarness {
         _codex_home: codex_home,
         _helper_paths: helper_paths,
@@ -101,7 +120,8 @@ impl ExecServerHarness {
     }
 
     pub(crate) async fn reconnect_websocket(&mut self) -> anyhow::Result<()> {
-        let (websocket, _) = connect_websocket_when_ready(&self.websocket_url).await?;
+        let (websocket, _) =
+            connect_websocket_when_ready(&websocket_connect_url(&self.websocket_url)).await?;
         self.websocket = websocket;
         Ok(())
     }
@@ -254,8 +274,14 @@ async fn read_listen_url_from_stdout(child: &mut Child) -> anyhow::Result<String
             .map_err(|_| anyhow!("timed out waiting for exec-server stdout"))??
             .ok_or_else(|| anyhow!("exec-server stdout closed before emitting listen URL"))?;
         let listen_url = line.trim();
-        if listen_url.starts_with("ws://") {
+        if listen_url.starts_with("ws://") || listen_url.starts_with("ws+http://") {
             return Ok(listen_url.to_string());
         }
     }
+}
+
+fn websocket_connect_url(websocket_url: &str) -> String {
+    websocket_url
+        .strip_prefix("ws+http://")
+        .map_or_else(|| websocket_url.to_string(), |url| format!("ws://{url}"))
 }

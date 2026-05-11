@@ -1,3 +1,11 @@
+use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::extract::State;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::routing::get;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
@@ -17,6 +25,7 @@ pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum ExecServerListenTransport {
     WebSocket(SocketAddr),
+    HttpUpgradeWebSocket(SocketAddr),
     Stdio,
 }
 
@@ -31,11 +40,11 @@ impl std::fmt::Display for ExecServerListenUrlParseError {
         match self {
             ExecServerListenUrlParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT` or `stdio`"
+                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT`, `ws+http://IP:PORT`, or `stdio`"
             ),
             ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
-                "invalid websocket --listen URL `{listen_url}`; expected `ws://IP:PORT`"
+                "invalid websocket --listen URL `{listen_url}`; expected `ws://IP:PORT` or `ws+http://IP:PORT`"
             ),
         }
     }
@@ -59,6 +68,15 @@ pub(crate) fn parse_listen_url(
             });
     }
 
+    if let Some(socket_addr) = listen_url.strip_prefix("ws+http://") {
+        return socket_addr
+            .parse::<SocketAddr>()
+            .map(ExecServerListenTransport::HttpUpgradeWebSocket)
+            .map_err(|_| {
+                ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url.to_string())
+            });
+    }
+
     Err(ExecServerListenUrlParseError::UnsupportedListenUrl(
         listen_url.to_string(),
     ))
@@ -71,6 +89,9 @@ pub(crate) async fn run_transport(
     match parse_listen_url(listen_url)? {
         ExecServerListenTransport::WebSocket(bind_address) => {
             run_websocket_listener(bind_address, runtime_paths).await
+        }
+        ExecServerListenTransport::HttpUpgradeWebSocket(bind_address) => {
+            run_http_upgrade_websocket_listener(bind_address, runtime_paths).await
         }
         ExecServerListenTransport::Stdio => run_stdio_connection(runtime_paths).await,
     }
@@ -135,6 +156,55 @@ async fn run_websocket_listener(
             }
         });
     }
+}
+
+async fn run_http_upgrade_websocket_listener(
+    bind_address: SocketAddr,
+    runtime_paths: ExecServerRuntimePaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = TcpListener::bind(bind_address).await?;
+    let local_addr = listener.local_addr()?;
+    let processor = ConnectionProcessor::new(runtime_paths);
+    info!("codex-exec-server listening on ws+http://{local_addr}");
+    println!("ws+http://{local_addr}");
+    std::io::stdout().flush()?;
+
+    let router = Router::new()
+        .route("/", any(websocket_upgrade_handler))
+        .route("/readyz", get(readiness_handler))
+        .with_state(ExecServerWebSocketState { processor });
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ExecServerWebSocketState {
+    processor: ConnectionProcessor,
+}
+
+async fn readiness_handler() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn websocket_upgrade_handler(
+    websocket: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    State(state): State<ExecServerWebSocketState>,
+) -> impl IntoResponse {
+    info!(%peer_addr, "exec-server HTTP-upgrade websocket client connected");
+    websocket.on_upgrade(move |stream| async move {
+        state
+            .processor
+            .run_connection(JsonRpcConnection::from_axum_websocket(
+                stream,
+                format!("exec-server HTTP-upgrade websocket {peer_addr}"),
+            ))
+            .await;
+    })
 }
 
 #[cfg(test)]
