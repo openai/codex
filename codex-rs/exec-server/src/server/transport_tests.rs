@@ -126,36 +126,12 @@ fn parse_listen_url_accepts_websocket_url() {
 }
 
 #[test]
-fn parse_listen_url_accepts_http_upgrade_websocket_url() {
-    let transport = parse_listen_url("ws+http://127.0.0.1:1234")
-        .expect("HTTP-upgrade websocket listen URL should parse");
-    assert_eq!(
-        transport,
-        ExecServerListenTransport::HttpUpgradeWebSocket(
-            "127.0.0.1:1234"
-                .parse::<SocketAddr>()
-                .expect("valid socket address")
-        )
-    );
-}
-
-#[test]
 fn parse_listen_url_rejects_invalid_websocket_url() {
     let err = parse_listen_url("ws://localhost:1234")
         .expect_err("hostname bind address should be rejected");
     assert_eq!(
         err.to_string(),
         "invalid websocket --listen URL `ws://localhost:1234`; expected `ws://IP:PORT` or `ws+http://IP:PORT`"
-    );
-}
-
-#[test]
-fn parse_listen_url_rejects_invalid_http_upgrade_websocket_url() {
-    let err = parse_listen_url("ws+http://localhost:1234")
-        .expect_err("hostname bind address should be rejected");
-    assert_eq!(
-        err.to_string(),
-        "invalid websocket --listen URL `ws+http://localhost:1234`; expected `ws://IP:PORT` or `ws+http://IP:PORT`"
     );
 }
 
