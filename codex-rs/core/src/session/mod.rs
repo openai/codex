@@ -603,9 +603,10 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
-        let cwd = environment_selections
-            .primary()
-            .map(|turn_environment| turn_environment.cwd.clone())
+        let cwd = primary_environment
+            .as_deref()
+            .and_then(Environment::default_cwd)
+            .cloned()
             .unwrap_or_else(|| config.cwd.clone());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
