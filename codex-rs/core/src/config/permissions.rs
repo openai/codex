@@ -59,12 +59,12 @@ pub(crate) fn builtin_permission_profile(
         BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
         BUILT_IN_WORKSPACE_PROFILE => Some(match workspace_write {
             Some(SandboxWorkspaceWrite {
-                writable_roots,
+                writable_roots: _,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             }) => PermissionProfile::workspace_write_with(
-                writable_roots,
+                &[],
                 if *network_access {
                     NetworkSandboxPolicy::Enabled
                 } else {
