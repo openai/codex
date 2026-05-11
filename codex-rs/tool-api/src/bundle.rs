@@ -80,7 +80,6 @@ pub trait ToolExecutor<C>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use std::sync::Arc;
     use std::task::Context;
     use std::task::Poll;
@@ -95,7 +94,9 @@ mod tests {
 
     impl ToolExecutor<()> for DefaultMutatingExecutor {
         fn execute<'a>(&'a self, _call: ToolCall<()>) -> ToolFuture<'a> {
-            Box::pin(async { Ok(Box::new(JsonToolOutput::new(serde_json::json!(null)))) })
+            Box::pin(async {
+                Ok(Box::new(JsonToolOutput::new(serde_json::json!(null))) as Box<dyn ToolOutput>)
+            })
         }
     }
 
