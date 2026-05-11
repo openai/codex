@@ -122,3 +122,103 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
     );
     Ok(())
 }
+
+#[tokio::test]
+#[serial]
+async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
+    let temp_home = TempDir::new()?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let workspace = TempDir::new()?;
+    let cwd = dunce::canonicalize(workspace.path())?.abs();
+    let glob_secret = cwd.join("secret.env");
+    let exact_secret = cwd.join("exact-secret.txt");
+    let public = cwd.join("public.txt");
+    std::fs::write(&glob_secret, "glob secret\n")?;
+    std::fs::write(&exact_secret, "exact secret\n")?;
+    std::fs::write(&public, "public ok\n")?;
+
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: exact_secret },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let output = process_exec_tool_call(
+        ExecParams {
+            command: vec![
+                "cmd.exe".to_string(),
+                "/D".to_string(),
+                "/C".to_string(),
+                "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & type public.txt".to_string(),
+            ],
+            cwd: cwd.clone(),
+            expiration: 10_000.into(),
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env: HashMap::new(),
+            network: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Elevated,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
+        &permission_profile,
+        &cwd,
+        &None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
+    )
+    .await?;
+
+    assert_eq!(output.exit_code, 0, "sandboxed command should complete");
+    assert!(
+        output.stdout.text.contains("GLOB-DENIED"),
+        "glob deny-read should block the secret: {:?}",
+        output.stdout
+    );
+    assert!(
+        !output.stdout.text.contains("GLOB-READ"),
+        "glob deny-read should not allow the secret: {:?}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.text.contains("EXACT-DENIED"),
+        "exact deny-read should block the secret: {:?}",
+        output.stdout
+    );
+    assert!(
+        !output.stdout.text.contains("EXACT-READ"),
+        "exact deny-read should not allow the secret: {:?}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.text.contains("public ok"),
+        "allowed reads should still work: {:?}",
+        output.stdout
+    );
+    assert_eq!(output.stderr.text, "");
+    Ok(())
+}
