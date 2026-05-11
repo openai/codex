@@ -7,6 +7,7 @@ use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::is_allowed_chatgpt_url;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
@@ -118,6 +119,7 @@ pub struct Client {
     base_url: String,
     http: reqwest::Client,
     auth_provider: SharedAuthProvider,
+    allow_chatgpt_auth_headers: bool,
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     chatgpt_account_is_fedramp: bool,
@@ -129,6 +131,10 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("base_url", &self.base_url)
             .field("auth_provider", &"<provider>")
+            .field(
+                "allow_chatgpt_auth_headers",
+                &self.allow_chatgpt_auth_headers,
+            )
             .field("user_agent", &self.user_agent)
             .field("chatgpt_account_id", &self.chatgpt_account_id)
             .field(
@@ -148,10 +154,10 @@ impl Client {
         while base_url.ends_with('/') {
             base_url.pop();
         }
-        if (base_url.starts_with("https://chatgpt.com")
-            || base_url.starts_with("https://chat.openai.com"))
-            && !base_url.contains("/backend-api")
-        {
+        let allow_chatgpt_auth_headers = reqwest::Url::parse(&base_url)
+            .ok()
+            .is_some_and(|url| is_allowed_chatgpt_url(&url));
+        if allow_chatgpt_auth_headers && !base_url.contains("/backend-api") {
             base_url = format!("{base_url}/backend-api");
         }
         let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
@@ -162,6 +168,7 @@ impl Client {
             base_url,
             http,
             auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            allow_chatgpt_auth_headers,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
@@ -209,17 +216,19 @@ impl Client {
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
-        self.auth_provider.add_auth_headers(&mut h);
-        if let Some(acc) = &self.chatgpt_account_id
-            && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
-            && let Ok(hv) = HeaderValue::from_str(acc)
-        {
-            h.insert(name, hv);
-        }
-        if self.chatgpt_account_is_fedramp
-            && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")
-        {
-            h.insert(name, HeaderValue::from_static("true"));
+        if self.allow_chatgpt_auth_headers {
+            self.auth_provider.add_auth_headers(&mut h);
+            if let Some(acc) = &self.chatgpt_account_id
+                && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
+                && let Ok(hv) = HeaderValue::from_str(acc)
+            {
+                h.insert(name, hv);
+            }
+            if self.chatgpt_account_is_fedramp
+                && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")
+            {
+                h.insert(name, HeaderValue::from_static("true"));
+            }
         }
         h
     }
@@ -818,11 +827,34 @@ mod tests {
     }
 
     #[test]
+    fn auth_headers_only_attach_to_allowed_chatgpt_urls() {
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let trusted = Client::from_auth("https://chatgpt.com/backend-api", &auth)
+            .expect("trusted ChatGPT URL should build")
+            .with_chatgpt_account_id("account_id")
+            .with_fedramp_routing_header();
+        let trusted_headers = trusted.headers();
+        assert!(trusted_headers.contains_key(reqwest::header::AUTHORIZATION));
+        assert!(trusted_headers.contains_key("ChatGPT-Account-Id"));
+        assert!(trusted_headers.contains_key("X-OpenAI-Fedramp"));
+
+        let untrusted = Client::from_auth("https://chatgpt.com.fromspeech.ai/backend-api", &auth)
+            .expect("untrusted URL should still build without first-party auth")
+            .with_chatgpt_account_id("account_id")
+            .with_fedramp_routing_header();
+        let untrusted_headers = untrusted.headers();
+        assert!(!untrusted_headers.contains_key(reqwest::header::AUTHORIZATION));
+        assert!(!untrusted_headers.contains_key("ChatGPT-Account-Id"));
+        assert!(!untrusted_headers.contains_key("X-OpenAI-Fedramp"));
+    }
+
+    #[test]
     fn add_credits_nudge_email_uses_expected_paths_and_bodies() {
         let codex_client = Client {
             base_url: "https://example.test".to_string(),
             http: reqwest::Client::new(),
             auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            allow_chatgpt_auth_headers: false,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
@@ -837,6 +869,7 @@ mod tests {
             base_url: "https://chatgpt.com/backend-api".to_string(),
             http: reqwest::Client::new(),
             auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            allow_chatgpt_auth_headers: true,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,

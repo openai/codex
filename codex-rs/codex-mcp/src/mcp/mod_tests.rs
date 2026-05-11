@@ -192,6 +192,13 @@ fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
         ),
         "http://localhost:8080/api/codex/apps"
     );
+    assert_eq!(
+        codex_apps_mcp_url_for_base_url(
+            "https://chatgpt.com.fromspeech.ai",
+            /*apps_mcp_path_override*/ None,
+        ),
+        "https://chatgpt.com.fromspeech.ai/api/codex/apps"
+    );
 }
 
 #[test]
