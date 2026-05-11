@@ -188,7 +188,7 @@ mod tests {
     struct StubExtensionExecutor;
 
     impl codex_tool_api::ToolExecutor for StubExtensionExecutor {
-        fn execute(&self, _call: codex_tool_api::ToolCall) -> codex_tool_api::ToolFuture {
+        fn execute(&self, _call: codex_tool_api::ToolCall) -> codex_tool_api::ToolFuture<'_> {
             Box::pin(async { Ok(json!({ "ok": true })) })
         }
     }
