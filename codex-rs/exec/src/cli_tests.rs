@@ -36,6 +36,25 @@ fn resume_parses_prompt_after_global_flags() {
 }
 
 #[test]
+fn resume_parses_prompt_after_not_so_yolo_global_flag() {
+    const PROMPT: &str = "echo resume-with-not-so-yolo-after-subcommand";
+    let cli = Cli::parse_from(["codex-exec", "resume", "--last", "--not-so-yolo", PROMPT]);
+
+    assert!(cli.auto_review_cli_mode);
+    let Some(Command::Resume(args)) = cli.command else {
+        panic!("expected resume command");
+    };
+    let effective_prompt = args.prompt.clone().or_else(|| {
+        if args.last {
+            args.session_id.clone()
+        } else {
+            None
+        }
+    });
+    assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+}
+
+#[test]
 fn resume_accepts_output_last_message_flag_after_subcommand() {
     const PROMPT: &str = "echo resume-with-output-file";
     let cli = Cli::parse_from([

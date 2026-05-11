@@ -4,6 +4,7 @@ mod apply_patch;
 mod auth_env;
 mod ephemeral;
 mod mcp_required_exit;
+mod not_so_yolo;
 mod originator;
 mod output_schema;
 mod prompt_stdin;

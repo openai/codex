@@ -2219,6 +2219,52 @@ mod tests {
     }
 
     #[test]
+    fn resume_merges_not_so_yolo_flag() {
+        let interactive = finalize_resume_from_args(["codex", "resume", "--not-so-yolo"].as_ref());
+
+        assert!(interactive.auto_review_cli_mode);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn exec_inherits_root_not_so_yolo_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--not-so-yolo", "exec", "hello"])
+            .expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: _,
+            feature_toggles: _,
+            remote: _,
+            subcommand,
+        } = cli;
+        let Some(Subcommand::Exec(mut exec_cli)) = subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        exec_cli
+            .shared
+            .inherit_exec_root_options(&interactive.shared);
+
+        assert!(exec_cli.auto_review_cli_mode);
+        assert!(!exec_cli.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn not_so_yolo_conflicts_with_approval_policy() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "--not-so-yolo",
+            "--ask-for-approval",
+            "on-request",
+        ])
+        .expect_err("conflicting permission flags should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn fork_picker_logic_none_and_not_last() {
         let interactive = finalize_fork_from_args(["codex", "fork"].as_ref());
         assert!(interactive.fork_picker);

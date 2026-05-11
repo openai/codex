@@ -175,3 +175,66 @@ impl SharedCliOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use pretty_assertions::assert_eq;
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[clap(flatten)]
+        shared: SharedCliOptions,
+    }
+
+    #[test]
+    fn parses_not_so_yolo() {
+        let cli = TestCli::parse_from(["test", "--not-so-yolo"]);
+
+        assert!(cli.shared.auto_review_cli_mode);
+        assert!(!cli.shared.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn yolo_and_not_so_yolo_conflict() {
+        let err = TestCli::try_parse_from(["test", "--yolo", "--not-so-yolo"])
+            .expect_err("permission modes should conflict");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn not_so_yolo_inherits_to_exec_subcommand_options() {
+        let root = SharedCliOptions {
+            auto_review_cli_mode: true,
+            ..Default::default()
+        };
+        let mut exec = SharedCliOptions::default();
+
+        exec.inherit_exec_root_options(&root);
+
+        assert!(exec.auto_review_cli_mode);
+        assert!(!exec.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn subcommand_permission_mode_blocks_root_not_so_yolo() {
+        let root = SharedCliOptions {
+            auto_review_cli_mode: true,
+            ..Default::default()
+        };
+        let mut exec = SharedCliOptions {
+            sandbox_mode: Some(SandboxModeCliArg::ReadOnly),
+            ..Default::default()
+        };
+
+        exec.inherit_exec_root_options(&root);
+
+        assert!(!exec.auto_review_cli_mode);
+        assert!(matches!(
+            exec.sandbox_mode,
+            Some(SandboxModeCliArg::ReadOnly)
+        ));
+    }
+}
