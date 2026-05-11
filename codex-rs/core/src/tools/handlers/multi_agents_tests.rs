@@ -679,7 +679,8 @@ async fn multi_agent_v2_spawn_role_service_tier_persists_in_child_config() {
             function_payload(json!({
                 "message": "inspect this repo",
                 "task_name": "tiered_role",
-                "agent_type": role_name
+                "agent_type": role_name,
+                "fork_turns": "1"
             })),
         ))
         .await
