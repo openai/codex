@@ -271,6 +271,7 @@ struct TurnState {
     completed: Option<CompletedTurnState>,
     latest_diff: Option<String>,
     steer_count: usize,
+    tool_counts: TurnToolCounts,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -278,6 +279,42 @@ struct ToolItemKey {
     thread_id: String,
     turn_id: String,
     item_id: String,
+}
+
+#[derive(Default)]
+struct TurnToolCounts {
+    total: usize,
+    shell_command: usize,
+    file_change: usize,
+    mcp_tool_call: usize,
+    dynamic_tool_call: usize,
+    subagent_tool_call: usize,
+    web_search: usize,
+    image_generation: usize,
+}
+
+impl TurnToolCounts {
+    fn record(&mut self, item: &ThreadItem) {
+        match item {
+            ThreadItem::CommandExecution { .. } => self.shell_command += 1,
+            ThreadItem::FileChange { .. } => self.file_change += 1,
+            ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
+            ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
+            ThreadItem::CollabAgentToolCall { .. } => self.subagent_tool_call += 1,
+            ThreadItem::WebSearch { .. } => self.web_search += 1,
+            ThreadItem::ImageGeneration { .. } => self.image_generation += 1,
+            ThreadItem::UserMessage { .. }
+            | ThreadItem::HookPrompt { .. }
+            | ThreadItem::AgentMessage { .. }
+            | ThreadItem::Plan { .. }
+            | ThreadItem::Reasoning { .. }
+            | ThreadItem::ImageView { .. }
+            | ThreadItem::EnteredReviewMode { .. }
+            | ThreadItem::ExitedReviewMode { .. }
+            | ThreadItem::ContextCompaction { .. } => return,
+        }
+        self.total += 1;
+    }
 }
 
 impl AnalyticsReducer {
@@ -497,6 +534,7 @@ impl AnalyticsReducer {
             completed: None,
             latest_diff: None,
             steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
@@ -520,6 +558,7 @@ impl AnalyticsReducer {
             completed: None,
             latest_diff: None,
             steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
@@ -684,6 +723,7 @@ impl AnalyticsReducer {
                     completed: None,
                     latest_diff: None,
                     steer_count: 0,
+                    tool_counts: TurnToolCounts::default(),
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
@@ -777,6 +817,16 @@ impl AnalyticsReducer {
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
+                let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
+                    tracing::warn!(
+                        thread_id = %notification.thread_id,
+                        turn_id = %notification.turn_id,
+                        item_id,
+                        "dropping turn tool count update: missing turn state"
+                    );
+                    return;
+                };
+                turn_state.tool_counts.record(&notification.item);
                 let key = ToolItemKey {
                     thread_id: notification.thread_id.clone(),
                     turn_id: notification.turn_id.clone(),
@@ -823,6 +873,7 @@ impl AnalyticsReducer {
                     completed: None,
                     latest_diff: None,
                     steer_count: 0,
+                    tool_counts: TurnToolCounts::default(),
                 });
                 turn_state.started_at = notification
                     .turn
@@ -843,6 +894,7 @@ impl AnalyticsReducer {
                             completed: None,
                             latest_diff: None,
                             steer_count: 0,
+                            tool_counts: TurnToolCounts::default(),
                         });
                 turn_state.thread_id = Some(notification.thread_id);
                 turn_state.latest_diff = Some(notification.diff);
@@ -861,6 +913,7 @@ impl AnalyticsReducer {
                             completed: None,
                             latest_diff: None,
                             steer_count: 0,
+                            tool_counts: TurnToolCounts::default(),
                         });
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
@@ -1776,14 +1829,14 @@ fn codex_turn_event_params(
         status: completed.status,
         turn_error: completed.turn_error,
         steer_count: Some(turn_state.steer_count),
-        total_tool_call_count: None,
-        shell_command_count: None,
-        file_change_count: None,
-        mcp_tool_call_count: None,
-        dynamic_tool_call_count: None,
-        subagent_tool_call_count: None,
-        web_search_count: None,
-        image_generation_count: None,
+        total_tool_call_count: Some(turn_state.tool_counts.total),
+        shell_command_count: Some(turn_state.tool_counts.shell_command),
+        file_change_count: Some(turn_state.tool_counts.file_change),
+        mcp_tool_call_count: Some(turn_state.tool_counts.mcp_tool_call),
+        dynamic_tool_call_count: Some(turn_state.tool_counts.dynamic_tool_call),
+        subagent_tool_call_count: Some(turn_state.tool_counts.subagent_tool_call),
+        web_search_count: Some(turn_state.tool_counts.web_search),
+        image_generation_count: Some(turn_state.tool_counts.image_generation),
         input_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.input_tokens),

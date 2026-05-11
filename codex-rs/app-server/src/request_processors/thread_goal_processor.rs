@@ -107,7 +107,7 @@ impl ThreadGoalRequestProcessor {
                     "ephemeral thread does not support goals: {thread_id}"
                 ))
             })?,
-            None => find_thread_path_by_id_str(
+            None => codex_rollout::find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
                 self.state_db.as_deref(),
@@ -271,7 +271,7 @@ impl ThreadGoalRequestProcessor {
                     "ephemeral thread does not support goals: {thread_id}"
                 ))
             })?,
-            None => find_thread_path_by_id_str(
+            None => codex_rollout::find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
                 self.state_db.as_deref(),
@@ -335,7 +335,7 @@ impl ThreadGoalRequestProcessor {
                 return Ok(state_db);
             }
         } else {
-            find_thread_path_by_id_str(
+            codex_rollout::find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
                 self.state_db.as_deref(),

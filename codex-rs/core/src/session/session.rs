@@ -962,6 +962,14 @@ impl Session {
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
+            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
+                ElicitationCapability {
+                    form: Some(FormElicitationCapability::default()),
+                    url: Some(UrlElicitationCapability::default()),
+                }
+            } else {
+                ElicitationCapability::default()
+            };
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
@@ -1005,6 +1013,7 @@ impl Session {
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
+                client_elicitation_capability,
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),

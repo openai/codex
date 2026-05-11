@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -190,6 +192,9 @@ fn kill_windows_process_tree(pid: u32) -> bool {
     let pid = pid.to_string();
     match std::process::Command::new("taskkill")
         .args(["/PID", pid.as_str(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
     {
         Ok(status) => status.success(),

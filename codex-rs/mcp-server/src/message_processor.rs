@@ -5,7 +5,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
@@ -71,7 +70,7 @@ impl MessageProcessor {
             environment_manager,
             empty_extension_registry(),
             /*analytics_events_client*/ None,
-            thread_store_from_config(config.as_ref(), state_db.clone()),
+            codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
             state_db.clone(),
             installation_id,
             /*attestation_provider*/ None,

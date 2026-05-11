@@ -277,7 +277,6 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 #[cfg(test)]
 use codex_core::read_head_for_summary;
@@ -489,12 +488,14 @@ mod config_errors;
 mod request_errors;
 mod thread_goal_processor;
 mod thread_lifecycle;
+mod thread_resume_redaction;
 mod thread_summary;
 
 use self::config_errors::*;
 use self::request_errors::*;
 use self::thread_goal_processor::api_thread_goal_from_state;
 use self::thread_lifecycle::*;
+use self::thread_resume_redaction::*;
 use self::thread_summary::*;
 
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;

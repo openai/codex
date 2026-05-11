@@ -31,6 +31,7 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
+use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
@@ -132,6 +133,8 @@ pub struct McpConfig {
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,
+    /// Client-side elicitation capabilities advertised during MCP initialization.
+    pub client_elicitation_capability: ElicitationCapability,
     /// Config-backed MCP servers keyed by server name.
     ///
     /// Runtime-only additions are merged later by [`effective_mcp_servers`].
@@ -276,6 +279,7 @@ pub async fn read_mcp_resource(
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
+        config.client_elicitation_capability.clone(),
         tool_plugin_provenance(config),
         auth,
         /*elicitation_reviewer*/ None,
@@ -345,6 +349,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
+        config.client_elicitation_capability.clone(),
         tool_plugin_provenance,
         auth,
         /*elicitation_reviewer*/ None,
