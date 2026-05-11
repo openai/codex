@@ -461,11 +461,8 @@ impl JsonRpcWebSocketMessage for Message {
             Message::Text(text) => {
                 serde_json::from_str(text.as_ref()).map(JsonRpcWebSocketFrame::Message)
             }
-            Message::Binary(bytes) => {
-                serde_json::from_slice(bytes.as_ref()).map(JsonRpcWebSocketFrame::Message)
-            }
             Message::Close(_) => Ok(JsonRpcWebSocketFrame::Close),
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
                 Ok(JsonRpcWebSocketFrame::Ignore)
             }
         }
@@ -482,13 +479,10 @@ impl JsonRpcWebSocketMessage for AxumWebSocketMessage {
             AxumWebSocketMessage::Text(text) => {
                 serde_json::from_str(text.as_ref()).map(JsonRpcWebSocketFrame::Message)
             }
-            AxumWebSocketMessage::Binary(bytes) => {
-                serde_json::from_slice(bytes.as_ref()).map(JsonRpcWebSocketFrame::Message)
-            }
             AxumWebSocketMessage::Close(_) => Ok(JsonRpcWebSocketFrame::Close),
-            AxumWebSocketMessage::Ping(_) | AxumWebSocketMessage::Pong(_) => {
-                Ok(JsonRpcWebSocketFrame::Ignore)
-            }
+            AxumWebSocketMessage::Binary(_)
+            | AxumWebSocketMessage::Ping(_)
+            | AxumWebSocketMessage::Pong(_) => Ok(JsonRpcWebSocketFrame::Ignore),
         }
     }
 
