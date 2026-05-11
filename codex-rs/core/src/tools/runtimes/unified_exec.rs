@@ -59,6 +59,7 @@ pub struct UnifiedExecRequest {
     pub hook_command: String,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
+    pub sandbox_cwd: AbsolutePathBuf,
     pub environment: Arc<Environment>,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
@@ -216,6 +217,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b AbsolutePathBuf> {
+        Some(&req.sandbox_cwd)
+    }
+
     fn network_approval_spec(
         &self,
         req: &UnifiedExecRequest,
@@ -385,9 +390,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unified_exec_keeps_sandbox_policy_anchored_to_turn_cwd() {
-        let dir = tempdir().expect("create temp dir");
-        let cwd = AbsolutePathBuf::try_from(dir.path().to_path_buf()).expect("absolute temp dir");
+    async fn unified_exec_uses_the_trusted_sandbox_cwd() {
+        let cwd_dir = tempdir().expect("create process temp dir");
+        let sandbox_dir = tempdir().expect("create sandbox temp dir");
+        let cwd =
+            AbsolutePathBuf::try_from(cwd_dir.path().to_path_buf()).expect("absolute temp dir");
+        let sandbox_cwd = AbsolutePathBuf::try_from(sandbox_dir.path().to_path_buf())
+            .expect("absolute sandbox temp dir");
         let manager = UnifiedExecProcessManager::default();
         let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
         let request = UnifiedExecRequest {
@@ -395,6 +404,7 @@ mod tests {
             hook_command: "pwd".to_string(),
             process_id: 1000,
             cwd,
+            sandbox_cwd: sandbox_cwd.clone(),
             environment: Arc::new(Environment::default_for_tests()),
             env: HashMap::new(),
             exec_server_env_config: None,
@@ -412,6 +422,6 @@ mod tests {
             },
         };
 
-        assert_eq!(runtime.sandbox_cwd(&request), None);
+        assert_eq!(runtime.sandbox_cwd(&request), Some(&sandbox_cwd));
     }
 }
