@@ -395,13 +395,23 @@ impl TestCodexBuilder {
             std::env::current_exe()?,
             codex_linux_sandbox_exe,
         )?;
-        let environment_manager = Arc::new(
-            codex_exec_server::EnvironmentManager::create_for_tests(
-                exec_server_url,
-                local_runtime_paths,
-            )
-            .await,
-        );
+        let environment_manager = match exec_server_url {
+            Some(exec_server_url) => {
+                codex_exec_server::EnvironmentManager::create_remote_aware_for_tests(
+                    exec_server_url,
+                    local_runtime_paths,
+                )
+                .await?
+            }
+            None => {
+                codex_exec_server::EnvironmentManager::create_for_tests(
+                    /*exec_server_url*/ None,
+                    local_runtime_paths,
+                )
+                .await
+            }
+        };
+        let environment_manager = Arc::new(environment_manager);
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -701,6 +711,38 @@ impl TestCodex {
             environments,
         )
         .await
+    }
+
+    pub async fn submit_turn_with_environments_no_wait(
+        &self,
+        prompt: &str,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        let (sandbox_policy, permission_profile) =
+            turn_permission_fields(PermissionProfile::Disabled, self.config.cwd.as_path());
+        let session_model = self.session_configured.model.clone();
+        self.codex
+            .submit(Op::UserTurn {
+                environments,
+                items: vec![UserInput::Text {
+                    text: prompt.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                cwd: self.config.cwd.to_path_buf(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: None,
+                sandbox_policy,
+                permission_profile,
+                model: session_model,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await?;
+        Ok(())
     }
 
     async fn submit_turn_with_permission_profile_context(

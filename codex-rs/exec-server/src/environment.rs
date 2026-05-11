@@ -91,6 +91,23 @@ impl EnvironmentManager {
         Self::from_default_provider_url(exec_server_url, local_runtime_paths).await
     }
 
+    /// Builds a test-only manager that keeps the local environment addressable
+    /// alongside a remote default environment.
+    pub async fn create_remote_aware_for_tests(
+        exec_server_url: String,
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Result<Self, ExecServerError> {
+        let snapshot = EnvironmentProviderSnapshot {
+            environments: vec![(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                Environment::remote_inner(exec_server_url, /*local_runtime_paths*/ None),
+            )],
+            default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
+            include_local: true,
+        };
+        Self::from_provider_snapshot(snapshot, local_runtime_paths)
+    }
+
     /// Builds a manager from `CODEX_EXEC_SERVER_URL` and local runtime paths
     /// used when creating local filesystem helpers.
     pub async fn new(args: EnvironmentManagerArgs) -> Self {
@@ -526,6 +543,34 @@ mod tests {
         ));
         assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert!(!manager.local_environment().is_remote());
+    }
+
+    #[tokio::test]
+    async fn remote_aware_test_manager_keeps_local_environment_addressable()
+    -> Result<(), ExecServerError> {
+        let manager = EnvironmentManager::create_remote_aware_for_tests(
+            "ws://127.0.0.1:8765".to_string(),
+            test_runtime_paths(),
+        )
+        .await?;
+
+        assert_eq!(
+            manager.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID)
+        );
+        assert!(
+            manager
+                .get_environment(REMOTE_ENVIRONMENT_ID)
+                .expect("remote environment")
+                .is_remote()
+        );
+        assert!(
+            !manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+                .is_remote()
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use toml::Value as TomlValue;
@@ -408,6 +409,9 @@ async fn find_project_root(
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
+                Ok(_) if marker == ".git" && is_ambient_git_marker_dir(ancestor.as_path()) => {
+                    continue;
+                }
                 Ok(_) => return ancestor,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => {
@@ -421,6 +425,22 @@ async fn find_project_root(
     }
 
     cwd.clone()
+}
+
+#[cfg(unix)]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    dir.parent().is_none()
+        || dir.metadata().is_ok_and(|metadata| {
+            let mode = metadata.mode();
+            mode & 0o002 != 0 && mode & 0o1000 != 0
+        })
+}
+
+#[cfg(not(unix))]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    dir.parent().is_none()
 }
 
 fn dirs_between_project_root_and_cwd(

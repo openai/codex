@@ -382,6 +382,20 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
+                let message = err.to_string();
+                emit_failed_exec_end_for_unified_exec(
+                    Arc::clone(&context.session),
+                    Arc::clone(&context.turn),
+                    context.call_id.clone(),
+                    request.command.clone(),
+                    cwd,
+                    Some(request.process_id.to_string()),
+                    Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default())),
+                    String::new(),
+                    message,
+                    Duration::ZERO,
+                )
+                .await;
                 self.release_process_id(request.process_id).await;
                 return Err(err);
             }

@@ -80,6 +80,14 @@ impl ResponseMock {
             .iter()
             .find_map(|req| req.function_call_output_text(call_id))
     }
+
+    /// Returns the full matching `function_call_output` item for the provided
+    /// `call_id`, searching across all captured requests.
+    pub fn function_call_output(&self, call_id: &str) -> Option<Value> {
+        self.requests()
+            .iter()
+            .find_map(|req| req.maybe_function_call_output(call_id))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +217,10 @@ impl ResponsesRequest {
         self.call_output(call_id, "function_call_output")
     }
 
+    pub fn maybe_function_call_output(&self, call_id: &str) -> Option<Value> {
+        self.maybe_call_output(call_id, "function_call_output")
+    }
+
     pub fn custom_tool_call_output(&self, call_id: &str) -> Value {
         self.call_output(call_id, "custom_tool_call_output")
     }
@@ -218,13 +230,18 @@ impl ResponsesRequest {
     }
 
     pub fn call_output(&self, call_id: &str, call_type: &str) -> Value {
+        self.maybe_call_output(call_id, call_type)
+            .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
+    }
+
+    pub fn maybe_call_output(&self, call_id: &str, call_type: &str) -> Option<Value> {
         self.input()
             .iter()
             .find(|item| {
-                item.get("type").unwrap() == call_type && item.get("call_id").unwrap() == call_id
+                item.get("type").and_then(Value::as_str) == Some(call_type)
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
             })
             .cloned()
-            .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
     }
 
     /// Returns true if this request's `input` contains a `function_call` with
@@ -1469,6 +1486,24 @@ pub async fn mount_function_call_agent_response(
 /// POST to `/v1/responses`. Panics if more requests are received than bodies
 /// provided. Also asserts the exact number of expected calls.
 pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> ResponseMock {
+    mount_sse_sequence_with_expectation(server, bodies, /*expect_all_calls*/ true).await
+}
+
+/// Mounts a sequence of SSE response bodies without verifying that every body
+/// was consumed. Tests that need to inspect early Codex errors can use this to
+/// avoid masking the real failure with WireMock's drop-time verifier.
+pub async fn mount_sse_sequence_no_verify(
+    server: &MockServer,
+    bodies: Vec<String>,
+) -> ResponseMock {
+    mount_sse_sequence_with_expectation(server, bodies, /*expect_all_calls*/ false).await
+}
+
+async fn mount_sse_sequence_with_expectation(
+    server: &MockServer,
+    bodies: Vec<String>,
+    expect_all_calls: bool,
+) -> ResponseMock {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
@@ -1496,11 +1531,12 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
     };
 
     let (mock, response_mock) = base_mock();
-    mock.respond_with(responder)
-        .up_to_n_times(num_calls as u64)
-        .expect(num_calls as u64)
-        .mount(server)
-        .await;
+    let mock = mock.respond_with(responder).up_to_n_times(num_calls as u64);
+    if expect_all_calls {
+        mock.expect(num_calls as u64).mount(server).await;
+    } else {
+        mock.mount(server).await;
+    }
 
     response_mock
 }

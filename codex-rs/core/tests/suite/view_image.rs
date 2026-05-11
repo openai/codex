@@ -32,7 +32,6 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -63,6 +62,41 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
 
 const VIEW_IMAGE_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn wait_for_function_call_output(
+    test: &TestCodex,
+    response_mock: &responses::ResponseMock,
+    call_id: &str,
+) -> anyhow::Result<Value> {
+    let mut events = Vec::new();
+    let output = tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            if let Some(output) = response_mock.function_call_output(call_id) {
+                return Ok(output);
+            }
+            tokio::select! {
+                event = test.codex.next_event() => {
+                    let event = event.context("codex event stream ended while waiting for function_call_output")?;
+                    match &event.msg {
+                        EventMsg::Error(error) => {
+                            anyhow::bail!("turn errored before function_call_output for {call_id}: {}", error.message);
+                        }
+                        EventMsg::TurnComplete(_) => {
+                            anyhow::bail!("turn completed before function_call_output for {call_id}; events: {events:?}");
+                        }
+                        _ => events.push(format!("{:?}", event.msg)),
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    })
+    .await
+    .with_context(|| {
+        format!("timed out waiting for function_call_output for {call_id}; events: {events:?}")
+    })??;
+    Ok(output)
+}
 
 fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
@@ -417,7 +451,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
     )
     .await?;
     let call_id = "call-view-image-local-env";
-    let response_mock = mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -501,18 +535,19 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             /*sandbox*/ None,
         )
         .await?;
-    let png = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    )?;
     test.fs()
-        .write_file(&image_path, png, /*sandbox*/ None)
+        .write_file(
+            &image_path,
+            png_bytes(/*width*/ 1, /*height*/ 1, [255, 0, 0, 255])?,
+            /*sandbox*/ None,
+        )
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd.clone(),
     };
     let call_id = "call-view-image-multi-env";
-    let response_mock = mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence_no_verify(
         &server,
         vec![
             sse(vec![
@@ -537,21 +572,18 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     )
     .await;
 
-    test.submit_turn_with_environments(
+    test.submit_turn_with_environments_no_wait(
         "route view image",
-        Some(vec![local_selection, remote_selection]),
+        Some(vec![remote_selection, local_selection]),
     )
     .await?;
 
-    let output = response_mock
-        .last_request()
-        .context("missing request containing view_image output")?
-        .function_call_output(call_id)
-        .clone();
-    let output_items = output
-        .get("output")
-        .and_then(Value::as_array)
-        .context("view_image output should be content items")?;
+    let output = wait_for_function_call_output(&test, &response_mock, call_id).await?;
+    assert_eq!(response_mock.requests().len(), 2);
+    let output_value = output.get("output").unwrap_or(&output);
+    let output_items = output_value.as_array().with_context(|| {
+        format!("view_image output should be content items, got {output_value}")
+    })?;
     assert_eq!(output_items.len(), 1);
     let image_url = output_items[0]
         .get("image_url")

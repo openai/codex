@@ -44,7 +44,7 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
     };
     let project_root = cwd_dir
         .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
+        .find(|ancestor| ancestor.join(".git").exists() && !is_ambient_git_marker_dir(ancestor))
         .unwrap_or(cwd_dir.as_path())
         .to_path_buf();
 

@@ -38,6 +38,21 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
+/// Return the git repository root for `base_dir` using the provided executor
+/// filesystem. This is the remote-environment equivalent of [`get_git_repo_root`].
+pub async fn get_git_repo_root_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    base_dir: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let base = match fs.get_metadata(base_dir, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => base_dir.clone(),
+        _ => base_dir.parent()?,
+    };
+    find_ancestor_git_entry_with_fs(fs, &base)
+        .await
+        .map(|(repo_root, _)| repo_root)
+}
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
@@ -760,7 +775,7 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
 
     loop {
         let dot_git = dir.join(".git");
-        if dot_git.exists() {
+        if dot_git.exists() && !is_ambient_git_marker_dir(&dir) {
             return Some((dir, dot_git));
         }
 
@@ -774,13 +789,31 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
+#[cfg(unix)]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    dir.parent().is_none()
+        || dir.metadata().is_ok_and(|metadata| {
+            let mode = metadata.mode();
+            mode & 0o002 != 0 && mode & 0o1000 != 0
+        })
+}
+
+#[cfg(not(unix))]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    dir.parent().is_none()
+}
+
 async fn find_ancestor_git_entry_with_fs(
     fs: &dyn ExecutorFileSystem,
     base_dir: &AbsolutePathBuf,
 ) -> Option<(AbsolutePathBuf, AbsolutePathBuf)> {
     for dir in base_dir.ancestors() {
         let dot_git = dir.join(".git");
-        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok() {
+        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok()
+            && !is_ambient_git_marker_dir(dir.as_path())
+        {
             return Some((dir, dot_git));
         }
     }
@@ -831,6 +864,34 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[cfg(unix)]
+    #[test]
+    fn get_git_repo_root_ignores_ambient_git_markers() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp_root = tempfile::tempdir().expect("tempdir");
+        let mut permissions = fs::metadata(tmp_root.path())
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o1777);
+        fs::set_permissions(tmp_root.path(), permissions).expect("set sticky permissions");
+        fs::write(tmp_root.path().join(".git"), "gitdir: fake\n").expect("write .git marker");
+
+        let non_repo_cwd = tmp_root.path().join("child");
+        fs::create_dir_all(&non_repo_cwd).expect("create non-repo cwd");
+        assert_eq!(get_git_repo_root(&non_repo_cwd), None);
+
+        let repo_cwd = tmp_root.path().join("repo").join("nested");
+        fs::create_dir_all(&repo_cwd).expect("create repo cwd");
+        fs::write(tmp_root.path().join("repo").join(".git"), "gitdir: fake\n")
+            .expect("write nested .git marker");
+        assert_eq!(
+            get_git_repo_root(&repo_cwd),
+            Some(tmp_root.path().join("repo"))
+        );
+    }
 
     #[test]
     fn canonicalize_git_remote_url_normalizes_github_variants() {

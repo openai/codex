@@ -941,7 +941,7 @@ allow_local_binding = true
                 Err(err) => panic!("rebuild config layer stack with network requirements: {err}"),
             };
     });
-    let test = builder.build_remote_aware(server).await?;
+    let test = builder.build(server).await?;
     assert!(
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"

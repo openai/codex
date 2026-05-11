@@ -937,11 +937,30 @@ async fn find_project_root(
                 .await
                 .is_ok()
             {
+                if marker == ".git" && is_ambient_git_marker_dir(ancestor.as_path()) {
+                    continue;
+                }
                 return Ok(ancestor);
             }
         }
     }
     Ok(cwd.clone())
+}
+
+#[cfg(unix)]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    dir.parent().is_none()
+        || dir.metadata().is_ok_and(|metadata| {
+            let mode = metadata.mode();
+            mode & 0o002 != 0 && mode & 0o1000 != 0
+        })
+}
+
+#[cfg(not(unix))]
+fn is_ambient_git_marker_dir(dir: &Path) -> bool {
+    dir.parent().is_none()
 }
 
 struct LoadedProjectLayers {
