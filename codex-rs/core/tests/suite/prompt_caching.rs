@@ -436,9 +436,12 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         /*exclude_tmpdir_env_var*/ true,
         /*exclude_slash_tmp*/ true,
     );
-    let sandbox_policy = permission_profile
-        .to_legacy_sandbox_policy(config.cwd.as_path())
-        .expect("workspace profile should have legacy projection");
+    let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+        &permission_profile,
+        &permission_profile.file_system_sandbox_policy(),
+        permission_profile.network_sandbox_policy(),
+        config.cwd.as_path(),
+    );
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
