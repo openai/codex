@@ -116,7 +116,7 @@ async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
         let ids = test.thread_manager.list_thread_ids().await;
         if let Some(spawned_id) = ids
             .iter()
-            .find(|id| **id != test.session_configured.session_id)
+            .find(|id| **id != test.session_configured.thread_id)
         {
             return Ok(spawned_id.to_string());
         }

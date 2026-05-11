@@ -35,6 +35,57 @@ fn stores() -> &'static Mutex<HashMap<String, Arc<InMemoryThreadStore>>> {
     IN_MEMORY_THREAD_STORES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ListItemsParams;
+    use crate::ListTurnsParams;
+    use crate::SortDirection;
+    use crate::StoredTurnItemsView;
+
+    #[tokio::test]
+    async fn default_turn_pagination_methods_return_unsupported() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::default();
+
+        let turns_err = store
+            .list_turns(ListTurnsParams {
+                thread_id,
+                include_archived: true,
+                cursor: None,
+                page_size: 10,
+                sort_direction: SortDirection::Asc,
+                items_view: StoredTurnItemsView::Summary,
+            })
+            .await
+            .expect_err("default list_turns should be unsupported");
+        assert!(matches!(
+            turns_err,
+            ThreadStoreError::Unsupported {
+                operation: "list_turns"
+            }
+        ));
+
+        let items_err = store
+            .list_items(ListItemsParams {
+                thread_id,
+                turn_id: "turn_1".to_string(),
+                include_archived: true,
+                cursor: None,
+                page_size: 10,
+                sort_direction: SortDirection::Asc,
+            })
+            .await
+            .expect_err("default list_items should be unsupported");
+        assert!(matches!(
+            items_err,
+            ThreadStoreError::Unsupported {
+                operation: "list_items"
+            }
+        ));
+    }
+}
+
 fn stores_guard() -> MutexGuard<'static, HashMap<String, Arc<InMemoryThreadStore>>> {
     match stores().lock() {
         Ok(guard) => guard,
@@ -256,10 +307,16 @@ fn stored_thread_from_state(
         items: history_items.clone(),
     });
     let name = state.names.get(&thread_id).cloned().flatten();
+    let rollout_path = state
+        .rollout_paths
+        .iter()
+        .find_map(|(path, mapped_thread_id)| {
+            (*mapped_thread_id == thread_id).then(|| path.clone())
+        });
 
     Ok(StoredThread {
         thread_id,
-        rollout_path: None,
+        rollout_path,
         forked_from_id: created.forked_from_id,
         preview: String::new(),
         name,
@@ -272,6 +329,7 @@ fn stored_thread_from_state(
         cwd: PathBuf::new(),
         cli_version: "test".to_string(),
         source: created.source.clone(),
+        thread_source: created.thread_source,
         agent_nickname: None,
         agent_role: None,
         agent_path: None,

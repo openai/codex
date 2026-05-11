@@ -23,6 +23,9 @@ mod tests {
         let windows_style = Path::new(r"C:\Users\Dev\Repo");
         let slash_style = Path::new("c:/users/dev/repo");
 
-        assert_eq!(canonical_path_key(windows_style), canonical_path_key(slash_style));
+        assert_eq!(
+            canonical_path_key(windows_style),
+            canonical_path_key(slash_style)
+        );
     }
 }

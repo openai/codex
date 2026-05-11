@@ -510,14 +510,18 @@ ensure_file (const char *path,
      the create file will fail in the read-only
      case with EROFS instead of EEXIST.
 
-     We're trying to set up a mount point for a non-directory, so any
-     non-directory, non-symlink is acceptable - it doesn't necessarily
-     have to be a regular file. */
+     We're trying to set up a mount point for a non-directory, for which
+     the kernel will accept any non-directory. If it's a symlink, follow
+     it and look at the target: again, any non-directory is good enough.
+     We'll only get S_ISLNK if the path is a dangling symlink (target
+     doesn't exist). */
   if (stat (path, &buf) ==  0 &&
       !S_ISDIR (buf.st_mode) &&
       !S_ISLNK (buf.st_mode))
     return 0;
 
+  /* If the file didn't exist, create it. If it was a dangling symlink
+   * (S_ISLNK above) then this will create the target of the symlink. */
   if (create_file (path, mode, NULL) != 0 &&  errno != EEXIST)
     return -1;
 
@@ -681,7 +685,8 @@ ensure_dir (const char *path,
   /* We check this ahead of time, otherwise
      the mkdir call can fail in the read-only
      case with EROFS instead of EEXIST on some
-     filesystems (such as NFS) */
+     filesystems (such as NFS).
+     We follow symlinks: it's OK if path is a symlink to a directory. */
   if (stat (path, &buf) == 0)
     {
       if (!S_ISDIR (buf.st_mode))

@@ -34,6 +34,8 @@ impl TokenUsage {
         (self.non_cached_input() + self.output_tokens.max(0)).max(0)
     }
 
+    /// Returns the raw `total_tokens` value. For `last_token_usage`, this is the latest active
+    /// context size; for `total_token_usage`, this is the accumulated session total.
     pub(crate) fn tokens_in_context_window(&self) -> i64 {
         self.total_tokens
     }

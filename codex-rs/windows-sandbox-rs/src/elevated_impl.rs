@@ -37,72 +37,11 @@ mod windows_impl {
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
     use crate::runner_client::spawn_runner_transport;
+    use crate::sandbox_utils::ensure_codex_home_exists;
+    use crate::sandbox_utils::inject_git_safe_directory;
     use crate::token::convert_string_sid_to_sid;
     use anyhow::Result;
-    use std::collections::HashMap;
     use std::path::Path;
-    use std::path::PathBuf;
-
-    /// Ensures the parent directory of a path exists before writing to it.
-    /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
-    fn find_git_root(start: &Path) -> Option<PathBuf> {
-        let mut cur = dunce::canonicalize(start).ok()?;
-        loop {
-            let marker = cur.join(".git");
-            if marker.is_dir() {
-                return Some(cur);
-            }
-            if marker.is_file() {
-                if let Ok(txt) = std::fs::read_to_string(&marker)
-                    && let Some(rest) = txt.trim().strip_prefix("gitdir:")
-                {
-                    let gitdir = rest.trim();
-                    let resolved = if Path::new(gitdir).is_absolute() {
-                        PathBuf::from(gitdir)
-                    } else {
-                        cur.join(gitdir)
-                    };
-                    return resolved.parent().map(Path::to_path_buf).or(Some(cur));
-                }
-                return Some(cur);
-            }
-            let parent = cur.parent()?;
-            if parent == cur {
-                return None;
-            }
-            cur = parent.to_path_buf();
-        }
-    }
-
-    /// Creates the sandbox user's Codex home directory if it does not already exist.
-    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
-        std::fs::create_dir_all(p)?;
-        Ok(())
-    }
-
-    /// Adds a git safe.directory entry to the environment when running inside a repository.
-    /// git will not otherwise allow the Sandbox user to run git commands on the repo directory
-    /// which is owned by the primary user.
-    fn inject_git_safe_directory(
-        env_map: &mut HashMap<String, String>,
-        cwd: &Path,
-        _logs_base_dir: Option<&Path>,
-    ) {
-        if let Some(git_root) = find_git_root(cwd) {
-            let mut cfg_count: usize = env_map
-                .get("GIT_CONFIG_COUNT")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
-            let git_path = git_root.to_string_lossy().replace("\\\\", "/");
-            env_map.insert(
-                format!("GIT_CONFIG_KEY_{cfg_count}"),
-                "safe.directory".to_string(),
-            );
-            env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
-            cfg_count += 1;
-            env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
-        }
-    }
 
     pub use crate::windows_impl::CaptureResult;
 
@@ -130,7 +69,7 @@ mod windows_impl {
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
-        inject_git_safe_directory(&mut env_map, cwd, None);
+        inject_git_safe_directory(&mut env_map, cwd);
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;

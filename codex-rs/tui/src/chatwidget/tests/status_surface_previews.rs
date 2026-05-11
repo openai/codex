@@ -64,7 +64,7 @@ async fn status_surface_preview_lines_live_only_snapshot() {
     cache_project_root(&mut chat, "preview-live-root");
     chat.status_line_branch = Some("feature/live-preview-branch".to_string());
     chat.thread_name = Some("Live preview thread".to_string());
-    chat.last_plan_progress = Some((2, 5));
+    chat.transcript.last_plan_progress = Some((2, 5));
 
     let snapshot = combined_preview_snapshot(
         &mut chat,
@@ -112,6 +112,8 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
             StatusLineItem::ProjectRoot,
             StatusLineItem::GitBranch,
             StatusLineItem::ThreadTitle,
+            StatusLineItem::Permissions,
+            StatusLineItem::ApprovalMode,
         ],
         &[
             TerminalTitleItem::Thread,
@@ -121,6 +123,22 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
     );
 
     assert_chatwidget_snapshot!("status_surface_previews_hardcoded_only", snapshot);
+}
+
+#[tokio::test]
+async fn thread_title_falls_back_to_thread_id_when_unnamed() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    assert_eq!(
+        status_preview_line(&mut chat, &[StatusLineItem::ThreadTitle]),
+        thread_id.to_string()
+    );
+    assert_eq!(
+        title_preview_line(&mut chat, &[TerminalTitleItem::Thread]),
+        thread_id.to_string()
+    );
 }
 
 #[tokio::test]
@@ -184,7 +202,7 @@ async fn terminal_title_setup_popup_live_only_snapshot() {
     cache_project_root(&mut chat, "preview-live-root");
     chat.status_line_branch = Some("feature/live-preview-branch".to_string());
     chat.thread_name = Some("Live preview thread".to_string());
-    chat.last_plan_progress = Some((2, 5));
+    chat.transcript.last_plan_progress = Some((2, 5));
     chat.config.tui_terminal_title = Some(vec![
         "project-name".to_string(),
         "thread-title".to_string(),

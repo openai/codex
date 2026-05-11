@@ -10,7 +10,7 @@ pub(crate) mod requests;
 pub(crate) mod sse;
 pub(crate) mod telemetry;
 
-pub use crate::requests::headers::build_conversation_headers;
+pub use crate::requests::headers::build_session_headers;
 pub use codex_client::RequestTelemetry;
 pub use codex_client::ReqwestTransport;
 pub use codex_client::TransportError;
@@ -30,6 +30,7 @@ pub use crate::common::RawMemoryMetadata;
 pub use crate::common::Reasoning;
 pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;
+pub use crate::common::ResponseProcessedWsRequest;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;
 pub use crate::common::ResponsesWsRequest;

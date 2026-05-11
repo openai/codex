@@ -7,6 +7,8 @@ license.workspace = true
 [lib]
 name = "codex_backend_openapi_models"
 path = "src/lib.rs"
+test = false
+doctest = false
 
 [lints]
 workspace = true
@@ -20,6 +22,3 @@ workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
-
-[package.metadata.cargo-shear]
-ignored = ["serde_with"]

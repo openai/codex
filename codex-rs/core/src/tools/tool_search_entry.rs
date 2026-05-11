@@ -1,3 +1,4 @@
+use crate::tools::flat_tool_name;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::LoadableToolSpec;
@@ -5,7 +6,6 @@ use codex_tools::ToolSearchResultSource;
 use codex_tools::ToolsConfig;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
 use codex_tools::tool_search_result_source_to_loadable_tool_spec;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
@@ -15,15 +15,15 @@ pub(crate) struct ToolSearchEntry {
 }
 
 pub(crate) fn build_tool_search_entries(
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    mcp_tools: Option<&[ToolInfo]>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mut entries = Vec::new();
 
     let mut mcp_tools = mcp_tools
-        .map(|tools| tools.values().collect::<Vec<_>>())
+        .map(|tools| tools.iter().collect::<Vec<_>>())
         .unwrap_or_default();
-    mcp_tools.sort_by_key(|info| info.canonical_tool_name().display());
+    mcp_tools.sort_by_key(|info| info.canonical_tool_name());
     for info in mcp_tools {
         match mcp_tool_search_entry(info) {
             Ok(entry) => entries.push(entry),
@@ -55,7 +55,7 @@ pub(crate) fn build_tool_search_entries(
 
 pub(crate) fn build_tool_search_entries_for_config(
     config: &ToolsConfig,
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    mcp_tools: Option<&[ToolInfo]>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mcp_tools = if config.namespace_tools {
@@ -95,8 +95,9 @@ fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, 
 }
 
 fn build_mcp_search_text(info: &ToolInfo) -> String {
+    let tool_name = info.canonical_tool_name();
     let mut parts = vec![
-        info.canonical_tool_name().display(),
+        flat_tool_name(&tool_name).into_owned(),
         info.callable_name.clone(),
         info.tool.name.to_string(),
         info.server_name.clone(),

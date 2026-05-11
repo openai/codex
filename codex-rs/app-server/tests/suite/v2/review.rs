@@ -363,6 +363,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     let started: ThreadStartedNotification =
         serde_json::from_value(notification.params.expect("params must be present"))?;
     assert_eq!(started.thread.id, review_thread_id);
+    assert_eq!(started.thread.session_id, review_thread_id);
 
     Ok(())
 }

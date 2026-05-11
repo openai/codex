@@ -1,7 +1,10 @@
 use super::*;
 use crate::agent::status::is_final;
+use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
+use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
+use codex_tools::ToolSpec;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -13,13 +16,26 @@ use tokio::time::Instant;
 
 use tokio::time::timeout_at;
 
-pub(crate) struct Handler;
+#[derive(Default)]
+pub(crate) struct Handler {
+    options: WaitAgentTimeoutOptions,
+}
+
+impl Handler {
+    pub(crate) fn new(options: WaitAgentTimeoutOptions) -> Self {
+        Self { options }
+    }
+}
 
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("wait_agent")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_wait_agent_tool_v1(self.options))
     }
 
     fn kind(&self) -> ToolKind {

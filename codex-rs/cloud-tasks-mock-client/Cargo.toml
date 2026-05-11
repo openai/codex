@@ -8,6 +8,8 @@ version.workspace = true
 [lib]
 name = "codex_cloud_tasks_mock_client"
 path = "src/lib.rs"
+test = false
+doctest = false
 
 [lints]
 workspace = true

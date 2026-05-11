@@ -192,7 +192,10 @@ fn append_plugin_hook_sources(
             display_order,
             HookHandlerSource {
                 path: &source_path,
-                key_source: format!("{plugin_id}:{source_relative_path}"),
+                key_source: crate::declarations::plugin_hook_key_source(
+                    plugin_id.as_str(),
+                    source_relative_path.as_str(),
+                ),
                 source: HookSource::Plugin,
                 is_managed: false,
                 hook_states,
@@ -385,10 +388,16 @@ fn append_matcher_groups(
             match handler {
                 HookHandlerConfig::Command {
                     command,
+                    command_windows,
                     timeout_sec,
                     r#async,
                     status_message,
                 } => {
+                    let command = if cfg!(windows) {
+                        command_windows.unwrap_or(command)
+                    } else {
+                        command
+                    };
                     if r#async {
                         warnings.push(format!(
                             "skipping async hook in {}: async hooks are not supported yet",
@@ -406,6 +415,7 @@ fn append_matcher_groups(
                     let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                     let normalized_handler = HookHandlerConfig::Command {
                         command: command.clone(),
+                        command_windows: None,
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
@@ -416,13 +426,8 @@ fn append_matcher_groups(
                         command.replace(&format!("${{{key}}}"), value)
                     });
                     // TODO(abhinav): replace this positional suffix with a durable hook id.
-                    let key = format!(
-                        "{}:{}:{}:{}",
-                        source.key_source,
-                        hook_event_key_label(event_name),
-                        group_index,
-                        handler_index
-                    );
+                    let key =
+                        crate::hook_key(&source.key_source, event_name, group_index, handler_index);
                     let state = source.hook_states.get(&key);
                     let enabled = hook_enabled(source.is_managed, state);
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
@@ -497,24 +502,13 @@ fn command_hook_hash(
     group.matcher = matcher.map(ToOwned::to_owned);
     group.hooks = vec![normalized_handler];
     let identity = NormalizedHookIdentity {
-        event_name: hook_event_key_label(event_name),
+        event_name: crate::hook_event_key_label(event_name),
         group,
     };
     let Ok(value) = TomlValue::try_from(identity) else {
         unreachable!("normalized hook identity should serialize to TOML");
     };
     version_for_toml(&value)
-}
-
-fn hook_event_key_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
-    match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse => "pre_tool_use",
-        codex_protocol::protocol::HookEventName::PermissionRequest => "permission_request",
-        codex_protocol::protocol::HookEventName::PostToolUse => "post_tool_use",
-        codex_protocol::protocol::HookEventName::SessionStart => "session_start",
-        codex_protocol::protocol::HookEventName::UserPromptSubmit => "user_prompt_submit",
-        codex_protocol::protocol::HookEventName::Stop => "stop",
-    }
 }
 
 fn hook_trust_status(
@@ -621,6 +615,7 @@ mod tests {
             matcher: matcher.map(str::to_string),
             hooks: vec![HookHandlerConfig::Command {
                 command: "echo hello".to_string(),
+                command_windows: None,
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
@@ -766,12 +761,52 @@ mod tests {
                     matcher: None,
                     hooks: vec![HookHandlerConfig::Command {
                         command: "echo hello".to_string(),
+                        command_windows: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
                     }],
                 }],
                 ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_resolves_windows_command_override_during_discovery() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut Vec::new(),
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::PreToolUse,
+            vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "echo unix".to_string(),
+                    command_windows: Some("echo windows".to_string()),
+                    timeout_sec: None,
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(
+            handlers[0].command,
+            if cfg!(windows) {
+                "echo windows"
+            } else {
+                "echo unix"
             }
         );
     }
