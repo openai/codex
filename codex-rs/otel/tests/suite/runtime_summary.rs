@@ -44,6 +44,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*success*/ true,
         "ok",
         &[],
+        /*extra_trace_fields*/ &[],
     );
     manager.record_api_request(
         /*attempt*/ 1,

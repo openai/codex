@@ -248,6 +248,7 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             std::time::Duration::from_millis(42),
             /*success*/ true,
             "secret output\nsecond line",
+            &[],
             &[
                 ("mcp_server", "internal-mcp"),
                 ("mcp_server_origin", "stdio"),
@@ -273,6 +274,14 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
     assert_eq!(
         tool_log_attrs.get("output").map(String::as_str),
         Some("secret output\nsecond line")
+    );
+    assert_eq!(
+        tool_log_attrs.get("mcp_server").map(String::as_str),
+        Some("internal-mcp")
+    );
+    assert_eq!(
+        tool_log_attrs.get("mcp_server_origin").map(String::as_str),
+        Some("stdio")
     );
 
     let spans = span_exporter.get_finished_spans().expect("span export");

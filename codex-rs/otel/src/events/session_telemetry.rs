@@ -63,9 +63,10 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
-fn tag_value<'a>(tags: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
-    tags.iter()
-        .find_map(|(tag_key, value)| (*tag_key == key).then_some(*value))
+fn trace_field_value<'a>(fields: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find_map(|(field_key, value)| (*field_key == key).then_some(*value))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -907,6 +908,7 @@ impl SessionTelemetry {
         call_id: &str,
         arguments: &str,
         extra_tags: &[(&str, &str)],
+        extra_trace_fields: &[(&str, &str)],
         f: F,
     ) -> Result<(String, bool), E>
     where
@@ -931,6 +933,7 @@ impl SessionTelemetry {
             success,
             output.as_ref(),
             extra_tags,
+            extra_trace_fields,
         );
 
         result
@@ -970,6 +973,7 @@ impl SessionTelemetry {
         success: bool,
         output: &str,
         extra_tags: &[(&str, &str)],
+        extra_trace_fields: &[(&str, &str)],
     ) {
         let success_str = if success { "true" } else { "false" };
         let mut tags = Vec::with_capacity(2 + extra_tags.len());
@@ -978,8 +982,9 @@ impl SessionTelemetry {
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
-        let mcp_server = tag_value(extra_tags, "mcp_server").unwrap_or("");
-        let mcp_server_origin = tag_value(extra_tags, "mcp_server_origin").unwrap_or("");
+        let mcp_server = trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("");
+        let mcp_server_origin =
+            trace_field_value(extra_trace_fields, "mcp_server_origin").unwrap_or("");
         log_event!(
             self,
             event.name = "codex.tool_result",
