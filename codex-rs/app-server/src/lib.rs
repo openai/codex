@@ -431,6 +431,7 @@ pub async fn run_main_with_transport_options(
     session_source: SessionSource,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
+    let strict_config = cli_config_overrides.strict_config;
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -461,6 +462,7 @@ pub async fn run_main_with_transport_options(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
         loader_overrides,
+        strict_config,
         Default::default(),
         arg0_paths.clone(),
         Arc::new(NoopThreadConfigLoader),

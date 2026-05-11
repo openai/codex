@@ -6,7 +6,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -68,7 +68,10 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides)
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .strict_config(cli_config_overrides.strict_config)
+        .build()
         .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))

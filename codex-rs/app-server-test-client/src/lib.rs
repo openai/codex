@@ -2128,6 +2128,7 @@ impl TestClientTracing {
     async fn initialize(config_overrides: &[String]) -> Result<Self> {
         let cli_kv_overrides = CliConfigOverrides {
             raw_overrides: config_overrides.to_vec(),
+            strict_config: false,
         }
         .parse_overrides()
         .map_err(|e| anyhow::anyhow!("error parsing -c overrides: {e}"))?;

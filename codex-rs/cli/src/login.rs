@@ -10,6 +10,7 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
@@ -431,7 +432,12 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
         }
     };
 
-    match Config::load_with_cli_overrides(cli_overrides).await {
+    match ConfigBuilder::default()
+        .cli_overrides(cli_overrides)
+        .strict_config(cli_config_overrides.strict_config)
+        .build()
+        .await
+    {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {e}");

@@ -3,8 +3,10 @@ use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
 
-use codex_core::config::Config;
+use anyhow::anyhow;
+use codex_core::config::ConfigBuilder;
 use codex_login::AuthManager;
+use codex_utils_cli::CliConfigOverrides;
 
 pub fn set_user_agent_suffix(suffix: &str) {
     if let Ok(mut guard) = codex_login::default_client::USER_AGENT_SUFFIX.lock() {
@@ -41,18 +43,25 @@ pub fn normalize_base_url(input: &str) -> String {
     base_url
 }
 
-pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
-    // TODO: pass in cli overrides once cloud tasks properly support them.
-    let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(
-        AuthManager::new(
-            config.codex_home.to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            config.cli_auth_credentials_store_mode,
-            chatgpt_base_url.or(Some(config.chatgpt_base_url)),
-        )
-        .await,
+pub async fn load_auth_manager(
+    chatgpt_base_url: Option<String>,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<AuthManager> {
+    let cli_overrides = config_overrides
+        .parse_overrides()
+        .map_err(|err| anyhow!("Error parsing -c overrides: {err}"))?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_overrides)
+        .strict_config(config_overrides.strict_config)
+        .build()
+        .await?;
+    Ok(AuthManager::new(
+        config.codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+        chatgpt_base_url.or(Some(config.chatgpt_base_url)),
     )
+    .await)
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
@@ -68,7 +77,8 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
+    let config_overrides = CliConfigOverrides::default();
+    if let Ok(am) = load_auth_manager(/*chatgpt_base_url*/ None, &config_overrides).await
         && let Some(auth) = am.auth().await
         && auth.uses_codex_backend()
     {

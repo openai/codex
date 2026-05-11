@@ -13,6 +13,7 @@ use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
 use codex_login::default_client::get_codex_user_agent;
+use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -40,7 +41,10 @@ struct BackendContext {
     base_url: String,
 }
 
-async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext> {
+async fn init_backend(
+    user_agent_suffix: &str,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<BackendContext> {
     #[cfg(debug_assertions)]
     let use_mock = matches!(
         std::env::var("CODEX_CLOUD_TASKS_MODE").ok().as_deref(),
@@ -53,6 +57,9 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     #[cfg(debug_assertions)]
     if use_mock {
+        if config_overrides.strict_config {
+            let _ = util::load_auth_manager(Some(base_url.clone()), config_overrides).await?;
+        }
         return Ok(BackendContext {
             backend: Arc::new(codex_cloud_tasks_mock_client::MockClient),
             base_url,
@@ -68,11 +75,8 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
-    let auth_manager = util::load_auth_manager(Some(base_url.clone())).await;
-    let auth = match auth_manager.as_ref() {
-        Some(manager) => manager.auth().await,
-        None => None,
-    };
+    let auth_manager = util::load_auth_manager(Some(base_url.clone()), config_overrides).await?;
+    let auth = auth_manager.auth().await;
     let auth = match auth {
         Some(auth) => auth,
         None => {
@@ -154,14 +158,17 @@ async fn resolve_git_ref_with_git_info(
     }
 }
 
-async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
+async fn run_exec_command(
+    args: crate::cli::ExecCommand,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
     let crate::cli::ExecCommand {
         query,
         environment,
         branch,
         attempts,
     } = args;
-    let ctx = init_backend("codex_cloud_tasks_exec").await?;
+    let ctx = init_backend("codex_cloud_tasks_exec", config_overrides).await?;
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
     let git_ref = resolve_git_ref(branch.as_ref()).await;
@@ -490,8 +497,11 @@ fn format_task_list_lines(
     lines
 }
 
-async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<()> {
-    let ctx = init_backend("codex_cloud_tasks_status").await?;
+async fn run_status_command(
+    args: crate::cli::StatusCommand,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_status", config_overrides).await?;
     let task_id = parse_task_id(&args.task_id)?;
     let summary =
         codex_cloud_tasks_client::CloudBackend::get_task_summary(&*ctx.backend, task_id).await?;
@@ -506,8 +516,11 @@ async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<(
     Ok(())
 }
 
-async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
-    let ctx = init_backend("codex_cloud_tasks_list").await?;
+async fn run_list_command(
+    args: crate::cli::ListCommand,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_list", config_overrides).await?;
     let env_filter = if let Some(env) = args.environment {
         Some(resolve_environment_id(&ctx, &env).await?)
     } else {
@@ -573,8 +586,11 @@ async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_diff_command(args: crate::cli::DiffCommand) -> anyhow::Result<()> {
-    let ctx = init_backend("codex_cloud_tasks_diff").await?;
+async fn run_diff_command(
+    args: crate::cli::DiffCommand,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_diff", config_overrides).await?;
     let task_id = parse_task_id(&args.task_id)?;
     let attempts = collect_attempt_diffs(&*ctx.backend, &task_id).await?;
     let selected = select_attempt(&attempts, args.attempt)?;
@@ -582,8 +598,11 @@ async fn run_diff_command(args: crate::cli::DiffCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_apply_command(args: crate::cli::ApplyCommand) -> anyhow::Result<()> {
-    let ctx = init_backend("codex_cloud_tasks_apply").await?;
+async fn run_apply_command(
+    args: crate::cli::ApplyCommand,
+    config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_apply", config_overrides).await?;
     let task_id = parse_task_id(&args.task_id)?;
     let attempts = collect_attempt_diffs(&*ctx.backend, &task_id).await?;
     let selected = select_attempt(&attempts, args.attempt)?;
@@ -729,16 +748,19 @@ fn spawn_apply(
 
 /// Entry point for the `codex cloud` subcommand.
 pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Some(command) = cli.command {
+    let Cli {
+        config_overrides,
+        command,
+    } = cli;
+    if let Some(command) = command {
         return match command {
-            crate::cli::Command::Exec(args) => run_exec_command(args).await,
-            crate::cli::Command::Status(args) => run_status_command(args).await,
-            crate::cli::Command::List(args) => run_list_command(args).await,
-            crate::cli::Command::Apply(args) => run_apply_command(args).await,
-            crate::cli::Command::Diff(args) => run_diff_command(args).await,
+            crate::cli::Command::Exec(args) => run_exec_command(args, &config_overrides).await,
+            crate::cli::Command::Status(args) => run_status_command(args, &config_overrides).await,
+            crate::cli::Command::List(args) => run_list_command(args, &config_overrides).await,
+            crate::cli::Command::Apply(args) => run_apply_command(args, &config_overrides).await,
+            crate::cli::Command::Diff(args) => run_diff_command(args, &config_overrides).await,
         };
     }
-    let Cli { .. } = cli;
 
     // Very minimal logging setup; mirrors other crates' pattern.
     let default_level = "error";
@@ -753,7 +775,8 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
         .try_init();
 
     info!("Launching Cloud Tasks list UI");
-    let BackendContext { backend, .. } = init_backend("codex_cloud_tasks_tui").await?;
+    let BackendContext { backend, .. } =
+        init_backend("codex_cloud_tasks_tui", &config_overrides).await?;
     let backend = backend;
 
     // Terminal setup
