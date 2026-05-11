@@ -138,7 +138,11 @@ default_cwd = "{default_cwd_display}"
         .await?;
     let response = started
         .process
-        .read(/*after_seq*/ None, None, Some(1_000))
+        .read(
+            /*after_seq*/ None,
+            /*max_bytes*/ None,
+            Some(1_000),
+        )
         .await?;
     let stdout = response
         .chunks
