@@ -19,14 +19,14 @@ use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
-use codex_tool_api::ExecutableToolSpec;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tool_api::ToolError as ExtensionToolError;
-use codex_tool_api::ToolInput as ExtensionToolInput;
-use codex_tool_api::ToolOutput as ExtensionToolOutput;
 use codex_tools::ConfiguredToolSpec;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
@@ -41,51 +41,52 @@ pub enum ToolKind {
 }
 
 struct BundledToolOutput {
-    input: ExtensionToolInput,
-    output: Box<dyn ExtensionToolOutput>,
+    value: Value,
 }
 
 impl ToolOutput for BundledToolOutput {
     fn log_preview(&self) -> String {
-        self.output.log_preview()
+        self.value.to_string()
     }
 
     fn success_for_logging(&self) -> bool {
-        self.output.success_for_logging()
+        true
     }
 
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        self.output.to_response_item(call_id, &self.input)
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(self.value.to_string()),
+                success: Some(true),
+            },
+        }
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<Value> {
+        Some(self.value.clone())
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
-        self.output.code_mode_result(&self.input)
+        self.value.clone()
     }
 }
 
 struct BundledToolHandler {
     bundle: ExtensionToolBundle,
+    spec: ToolSpec,
 }
 
 impl BundledToolHandler {
-    fn new(bundle: ExtensionToolBundle) -> Self {
-        Self { bundle }
+    fn new(bundle: ExtensionToolBundle, spec: ToolSpec) -> Self {
+        Self { bundle, spec }
     }
 
-    fn input_from_payload(&self, payload: &ToolPayload) -> Option<ExtensionToolInput> {
-        match (self.bundle.spec(), payload) {
-            (ExecutableToolSpec::Function(_), ToolPayload::Function { arguments }) => {
-                Some(ExtensionToolInput::Function {
-                    arguments: arguments.clone(),
-                })
-            }
-            (ExecutableToolSpec::Freeform(_), ToolPayload::Custom { input }) => {
-                Some(ExtensionToolInput::Freeform {
-                    input: input.clone(),
-                })
-            }
-            _ => None,
-        }
+    fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
+        let ToolPayload::Function { arguments } = payload else {
+            return None;
+        };
+        Some(arguments)
     }
 }
 
@@ -93,15 +94,11 @@ impl ToolHandler for BundledToolHandler {
     type Output = BundledToolOutput;
 
     fn tool_name(&self) -> ToolName {
-        self.bundle.tool_name()
+        ToolName::plain(self.bundle.tool_name())
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(self.bundle.spec().clone().into())
-    }
-
-    fn supports_parallel_tool_calls(&self) -> bool {
-        self.bundle.supports_parallel_tool_calls()
+        Some(self.spec.clone())
     }
 
     fn kind(&self) -> ToolKind {
@@ -109,41 +106,56 @@ impl ToolHandler for BundledToolHandler {
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        self.input_from_payload(payload).is_some()
+        self.arguments_from_payload(payload).is_some()
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let Some(input) = self.input_from_payload(&invocation.payload) else {
-            return false;
-        };
-        self.bundle
-            .executor()
-            .is_mutating(&codex_tool_api::ToolCall {
-                call_id: invocation.call_id.clone(),
-                input,
-            })
-            .await
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        true
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let arguments = self.arguments_from_payload(&invocation.payload)?;
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
+            tool_input: extension_tool_hook_input(arguments),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let arguments = self.arguments_from_payload(&invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: extension_tool_hook_input(arguments),
+            tool_response: result
+                .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let input = self
-            .input_from_payload(&invocation.payload)
+        let arguments = self
+            .arguments_from_payload(&invocation.payload)
             .ok_or_else(|| {
                 FunctionCallError::Fatal(format!(
                     "tool {} invoked with incompatible payload",
                     self.bundle.tool_name()
                 ))
-            })?;
-        let output = self
+            })?
+            .to_string();
+        let value = self
             .bundle
             .executor()
             .execute(codex_tool_api::ToolCall {
                 call_id: invocation.call_id,
-                input: input.clone(),
+                arguments,
             })
             .await
             .map_err(map_extension_tool_error)?;
-        Ok(BundledToolOutput { input, output })
+        Ok(BundledToolOutput { value })
     }
 }
 
@@ -651,18 +663,24 @@ impl ToolRegistryBuilder {
     }
 
     pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
-        let tool_name = bundle.tool_name();
+        let tool_name = ToolName::plain(bundle.tool_name());
         if self.handlers.contains_key(&tool_name) {
-            error_or_panic(format!("handler for tool {tool_name} already registered"));
+            warn!("Skipping extension tool `{tool_name}`: handler already registered");
             return;
         }
 
-        self.push_spec(
-            bundle.spec().clone().into(),
-            bundle.supports_parallel_tool_calls(),
-        );
+        let spec = match extension_tool_spec(bundle.spec()) {
+            Ok(spec) => spec,
+            Err(error) => {
+                error_or_panic(format!(
+                    "failed to convert extension tool `{tool_name}` to a host spec: {error}"
+                ));
+                return;
+            }
+        };
+        self.push_spec(spec.clone(), /*supports_parallel_tool_calls*/ false);
 
-        let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle));
+        let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);
     }
 
@@ -688,6 +706,27 @@ fn map_extension_tool_error(error: ExtensionToolError) -> FunctionCallError {
         ExtensionToolError::RespondToModel(message) => FunctionCallError::RespondToModel(message),
         ExtensionToolError::Fatal(message) => FunctionCallError::Fatal(message),
     }
+}
+
+fn extension_tool_spec(
+    spec: &codex_tool_api::FunctionToolSpec,
+) -> Result<ToolSpec, serde_json::Error> {
+    Ok(ToolSpec::Function(ResponsesApiTool {
+        name: spec.name.clone(),
+        description: spec.description.clone(),
+        strict: spec.strict,
+        defer_loading: None,
+        parameters: codex_tools::parse_tool_input_schema(&spec.parameters)?,
+        output_schema: None,
+    }))
+}
+
+fn extension_tool_hook_input(arguments: &str) -> Value {
+    if arguments.trim().is_empty() {
+        return Value::Object(serde_json::Map::new());
+    }
+
+    serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_string()))
 }
 
 #[cfg(test)]

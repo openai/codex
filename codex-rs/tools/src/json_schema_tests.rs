@@ -1,8 +1,8 @@
+use super::AdditionalProperties;
 use super::JsonSchema;
 use super::JsonSchemaPrimitiveType;
 use super::JsonSchemaType;
 use super::parse_tool_input_schema;
-use crate::AdditionalProperties;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 

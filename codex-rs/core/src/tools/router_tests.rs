@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -10,12 +9,9 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionToolSpec;
-use codex_extension_api::JsonSchema;
-use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolBundle;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFuture;
-use codex_extension_api::ToolInput;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
@@ -37,22 +33,24 @@ use super::extension_tool_bundles;
 struct ExtensionEchoContributor;
 
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
-    fn tools(&self, _thread_store: &ExtensionData) -> Vec<ToolBundle> {
+    fn tools(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<ToolBundle> {
         vec![ToolBundle::new(
             FunctionToolSpec {
                 name: "extension_echo".to_string(),
                 description: "Echoes arguments through an extension tool.".to_string(),
                 strict: true,
-                defer_loading: None,
-                parameters: JsonSchema::object(
-                    BTreeMap::from([(
-                        "message".to_string(),
-                        JsonSchema::string(/*description*/ None),
-                    )]),
-                    Some(vec!["message".to_string()]),
-                    Some(false.into()),
-                ),
-                output_schema: None,
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }),
             },
             Arc::new(ExtensionEchoExecutor),
         )]
@@ -64,18 +62,13 @@ struct ExtensionEchoExecutor;
 impl ToolExecutor for ExtensionEchoExecutor {
     fn execute<'a>(&'a self, call: ExtensionToolCall) -> ToolFuture<'a> {
         Box::pin(async move {
-            let ToolInput::Function { arguments } = &call.input else {
-                panic!("expected function tool input")
-            };
             let arguments: serde_json::Value =
-                serde_json::from_str(arguments).expect("test arguments should parse");
-            let output = JsonToolOutput::from_serializable(json!({
+                serde_json::from_str(&call.arguments).expect("test arguments should parse");
+            Ok(json!({
                 "arguments": arguments,
                 "callId": call.call_id.clone(),
                 "ok": true,
-            }))?;
-            let output: Box<dyn codex_extension_api::ToolOutput> = Box::new(output);
-            Ok(output)
+            }))
         })
     }
 }

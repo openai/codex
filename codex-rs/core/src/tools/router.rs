@@ -306,7 +306,12 @@ pub(crate) fn extension_tool_bundles(session: &Session) -> Vec<ExtensionToolBund
         .extensions
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| contributor.tools(&session.services.thread_extension_data))
+        .flat_map(|contributor| {
+            contributor.tools(
+                &session.services.session_extension_data,
+                &session.services.thread_extension_data,
+            )
+        })
         .collect()
 }
 

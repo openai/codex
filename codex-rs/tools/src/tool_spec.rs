@@ -7,7 +7,6 @@ use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
 use codex_protocol::config_types::WebSearchUserLocationType;
-use codex_tool_api::ExecutableToolSpec;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -72,15 +71,6 @@ impl From<LoadableToolSpec> for ToolSpec {
         match value {
             LoadableToolSpec::Function(tool) => ToolSpec::Function(tool),
             LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
-        }
-    }
-}
-
-impl From<ExecutableToolSpec> for ToolSpec {
-    fn from(value: ExecutableToolSpec) -> Self {
-        match value {
-            ExecutableToolSpec::Function(tool) => Self::Function(tool),
-            ExecutableToolSpec::Freeform(tool) => Self::Freeform(tool),
         }
     }
 }

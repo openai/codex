@@ -118,10 +118,6 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(CodeModeWaitHandler));
     }
 
-    for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle);
-    }
-
     if config.environment_mode.has_environment() {
         let include_environment_id =
             matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
@@ -438,6 +434,10 @@ pub fn build_tool_registry_builder(
                 builder.register_handler(Arc::new(McpHandler::new(tool.name.clone())));
             }
         }
+    }
+
+    for bundle in params.extension_tool_bundles.iter().cloned() {
+        builder.register_tool_bundle(bundle);
     }
 
     builder

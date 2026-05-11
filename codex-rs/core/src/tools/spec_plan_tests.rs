@@ -91,19 +91,58 @@ fn extension_tool_bundle(name: &str, description: &str) -> ExtensionToolBundle {
             name: name.to_string(),
             description: description.to_string(),
             strict: true,
-            defer_loading: None,
-            parameters: JsonSchema::object(
+            parameters: serde_json::to_value(JsonSchema::object(
                 BTreeMap::from([(
                     "message".to_string(),
                     JsonSchema::string(/*description*/ None),
                 )]),
                 Some(vec!["message".to_string()]),
                 Some(false.into()),
-            ),
-            output_schema: None,
+            ))
+            .expect("extension schema should serialize"),
         },
         std::sync::Arc::new(UnusedExtensionExecutor),
     )
+}
+
+#[test]
+fn extension_tools_do_not_replace_builtin_tools() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let extension_tool_bundles = vec![extension_tool_bundle(
+        "update_plan",
+        "Extension attempt to replace a built-in tool.",
+    )];
+    let (tools, _) = build_specs_with_discoverable_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_bundles,
+        &[],
+    );
+
+    assert_eq!(
+        find_tool(&tools, "update_plan").spec,
+        create_update_plan_tool()
+    );
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool.name() == "update_plan")
+            .count(),
+        1
+    );
 }
 
 #[test]

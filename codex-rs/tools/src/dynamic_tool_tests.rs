@@ -1,6 +1,6 @@
 use super::parse_dynamic_tool;
 use crate::JsonSchema;
-use crate::ResponsesApiTool;
+use crate::ToolDefinition;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -23,12 +23,10 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
 
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ResponsesApiTool {
+        ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            strict: false,
-            defer_loading: None,
-            parameters: JsonSchema::object(
+            input_schema: JsonSchema::object(
                 BTreeMap::from([(
                     "id".to_string(),
                     JsonSchema::string(Some("Ticket identifier".to_string()),),
@@ -37,6 +35,7 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
+            defer_loading: false,
         }
     );
 }
@@ -56,17 +55,16 @@ fn parse_dynamic_tool_preserves_defer_loading() {
 
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ResponsesApiTool {
+        ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            strict: false,
-            defer_loading: Some(true),
-            parameters: JsonSchema::object(
+            input_schema: JsonSchema::object(
                 BTreeMap::new(),
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
             output_schema: None,
+            defer_loading: true,
         }
     );
 }
