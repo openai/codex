@@ -513,11 +513,11 @@ mod windows_impl {
                 sync_persistent_deny_read_acls(
                     codex_home,
                     &caps.workspace,
-                    additional_deny_read_paths,
+                    &additional_deny_read_paths,
                     psid_generic,
                 )
             } else {
-                apply_deny_read_acls(additional_deny_read_paths, psid_generic)
+                apply_deny_read_acls(&additional_deny_read_paths, psid_generic)
             } {
                 Ok(paths) => paths,
                 Err(err) => {
