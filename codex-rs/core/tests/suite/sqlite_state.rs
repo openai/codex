@@ -141,6 +141,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     forked_from_id: None,
                     timestamp: "2026-01-27T12:00:00Z".to_string(),
                     cwd: codex_home.to_path_buf(),
+                    workspace_roots: Vec::new(),
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),

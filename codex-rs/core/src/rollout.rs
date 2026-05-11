@@ -37,6 +37,10 @@ impl codex_rollout::RolloutConfigView for Config {
         self.cwd.as_path()
     }
 
+    fn workspace_roots(&self) -> &[codex_utils_absolute_path::AbsolutePathBuf] {
+        &self.workspace_roots
+    }
+
     fn model_provider_id(&self) -> &str {
         self.model_provider_id.as_str()
     }

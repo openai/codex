@@ -13,7 +13,6 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
@@ -30,7 +29,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;
@@ -146,10 +144,6 @@ fn sample_thread(thread_id: &str) -> Thread {
     }
 }
 
-fn sample_permission_profile() -> AppServerPermissionProfile {
-    CorePermissionProfile::Disabled.into()
-}
-
 fn sample_thread_start_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadStart(ThreadStartResponse {
         thread: sample_thread("thread-1"),
@@ -157,11 +151,11 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
     })
@@ -174,11 +168,11 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
     })
@@ -191,11 +185,11 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
     })
