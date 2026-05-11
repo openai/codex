@@ -567,6 +567,7 @@ impl ThreadManager {
         .await
     }
 
+    // TODO(jif) merge with fork_agent
     /// Spawn a subagent by forking persisted history from `forked_from_thread_id`.
     pub async fn spawn_subagent(
         &self,
