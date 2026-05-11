@@ -71,3 +71,43 @@ impl ToolOutput for JsonToolOutput {
         self.value.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseInputItem;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::JsonToolOutput;
+    use super::ToolOutput;
+    use crate::ToolInput;
+
+    #[test]
+    fn json_tool_output_renders_function_output() {
+        let input = ToolInput::Function {
+            arguments: "{}".to_string(),
+        };
+        let output = JsonToolOutput::from_serializable(json!({ "ok": true }))
+            .expect("serializable value should produce json output");
+
+        assert_eq!(output.log_preview(), "{\"ok\":true}");
+        assert!(output.success_for_logging());
+        assert_eq!(
+            output.to_response_item("call-1", &input),
+            ResponseInputItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text("{\"ok\":true}".to_string()),
+                    success: Some(true),
+                },
+            }
+        );
+        assert_eq!(
+            output.post_tool_use_response("call-1", &input),
+            Some(json!({ "ok": true }))
+        );
+        assert_eq!(output.code_mode_result(&input), json!({ "ok": true }));
+    }
+}
