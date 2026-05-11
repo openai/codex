@@ -139,6 +139,7 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
     )
 }
 
+#[cfg(unix)]
 fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> PermissionProfile {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
