@@ -105,6 +105,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
     .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command[2], "echo hello");
+    assert!(command.contains(&"-NoProfile".to_string()));
     Ok(())
 }
 

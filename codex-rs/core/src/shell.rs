@@ -52,10 +52,10 @@ impl Shell {
             }
             ShellType::PowerShell => {
                 let mut args = vec![self.shell_path.to_string_lossy().to_string()];
-                if !use_login_shell {
-                    args.push("-NoProfile".to_string());
-                }
-
+                // PowerShell profiles can trigger sandbox-incompatible startup side effects,
+                // so keep tool execution profile-free regardless of login-shell preference.
+                let _ = use_login_shell;
+                args.push("-NoProfile".to_string());
                 args.push("-Command".to_string());
                 args.push(command.to_string());
                 args
