@@ -104,7 +104,6 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
-use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
@@ -1104,7 +1103,9 @@ fn config_request_overrides_from_config(
     );
     insert(
         "personality",
-        Some(config.personality.unwrap_or(Personality::None).to_string()),
+        config
+            .personality
+            .map(|personality| personality.to_string()),
     );
     insert(
         "web_search",
@@ -1561,6 +1562,7 @@ mod tests {
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
+    use codex_protocol::config_types::Personality;
     use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::config_types::Verbosity;
@@ -1886,6 +1888,27 @@ mod tests {
         assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));
         assert_eq!(fork.config, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn config_request_overrides_preserve_implicit_personality_default() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.personality = None;
+
+        let implicit_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+
+        assert!(!implicit_overrides.contains_key("personality"));
+
+        config.personality = Some(Personality::None);
+        let explicit_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+
+        assert_eq!(
+            explicit_overrides.get("personality"),
+            Some(&serde_json::Value::String("none".to_string()))
+        );
     }
 
     #[tokio::test]
