@@ -14,9 +14,11 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginShareContext;
 use codex_app_server_protocol::PluginShareDeleteResponse;
+use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginShareListItem;
 use codex_app_server_protocol::PluginShareListResponse;
 use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginShareSaveResponse;
 use codex_app_server_protocol::PluginShareUpdateTargetsResponse;
@@ -172,7 +174,6 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: Some(expected_plugin_path),
             }],
         }
@@ -224,10 +225,12 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
                 },
                 {
                     "principal_type": "workspace",
                     "principal_id": "account-123",
+                    "role": "reader",
                 },
             ],
         })))
@@ -252,6 +255,7 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
                     {
                         "principalType": "user",
                         "principalId": "user-1",
+                        "role": "editor",
                     },
                 ],
             })),
@@ -345,6 +349,7 @@ async fn plugin_share_rejects_workspace_targets_from_client() -> Result<()> {
                     {
                         "principalType": "workspace",
                         "principalId": "account-123",
+                        "role": "reader",
                     },
                 ],
             })),
@@ -373,6 +378,7 @@ async fn plugin_share_rejects_workspace_targets_from_client() -> Result<()> {
                     {
                         "principalType": "workspace",
                         "principalId": "account-123",
+                        "role": "reader",
                     },
                 ],
             })),
@@ -422,6 +428,7 @@ async fn plugin_share_save_rejects_access_policy_for_existing_plugin() -> Result
                     {
                         "principalType": "user",
                         "principalId": "user-1",
+                        "role": "reader",
                     },
                 ],
             })),
@@ -511,7 +518,6 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: None,
             }],
         }
@@ -543,10 +549,12 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
                 },
                 {
                     "principal_type": "workspace",
                     "principal_id": "account-123",
+                    "role": "reader",
                 },
             ],
         })))
@@ -555,19 +563,23 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
                 {
                     "principal_type": "user",
                     "principal_id": "owner-1",
+                    "role": "owner",
                     "name": "Owner",
                 },
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
                     "name": "Gavin",
                 },
                 {
                     "principal_type": "workspace",
                     "principal_id": "account-123",
+                    "role": "reader",
                     "name": "Workspace",
                 },
             ],
+            "discoverability": "UNLISTED",
         })))
         .expect(1)
         .mount(&server)
@@ -585,6 +597,7 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
                     {
                         "principalType": "user",
                         "principalId": "user-1",
+                        "role": "editor",
                     },
                 ],
             })),
@@ -601,11 +614,26 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
     assert_eq!(
         response,
         PluginShareUpdateTargetsResponse {
-            principals: vec![PluginSharePrincipal {
-                principal_type: PluginSharePrincipalType::User,
-                principal_id: "user-1".to_string(),
-                name: "Gavin".to_string(),
-            }],
+            principals: vec![
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "owner-1".to_string(),
+                    role: PluginSharePrincipalRole::Owner,
+                    name: "Owner".to_string(),
+                },
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-1".to_string(),
+                    role: PluginSharePrincipalRole::Editor,
+                    name: "Gavin".to_string(),
+                },
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::Workspace,
+                    principal_id: "account-123".to_string(),
+                    role: PluginSharePrincipalRole::Reader,
+                    name: "Workspace".to_string(),
+                },
+            ],
             discoverability: codex_app_server_protocol::PluginShareDiscoverability::Unlisted,
         }
     );
@@ -709,7 +737,6 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: None,
             }],
         }
@@ -737,7 +764,22 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "discoverability": "PRIVATE",
         "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+        "share_principals": [
+            {
+                "principal_type": "user",
+                "principal_id": "user-owner__account-123",
+                "role": "owner",
+                "name": "Owner"
+            },
+            {
+                "principal_type": "user",
+                "principal_id": "user-reader__account-123",
+                "role": "reader",
+                "name": "Reader"
+            }
+        ],
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
@@ -793,10 +835,24 @@ fn expected_plugin_interface() -> PluginInterface {
 fn expected_share_context(plugin_id: &str) -> PluginShareContext {
     PluginShareContext {
         remote_plugin_id: plugin_id.to_string(),
+        discoverability: Some(PluginShareDiscoverability::Private),
         share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
         creator_account_user_id: None,
         creator_name: None,
-        share_targets: None,
+        share_principals: Some(vec![
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-owner__account-123".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Owner".to_string(),
+            },
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-reader__account-123".to_string(),
+                role: PluginSharePrincipalRole::Reader,
+                name: "Reader".to_string(),
+            },
+        ]),
     }
 }
 

@@ -2,7 +2,7 @@
 
 Public surface of `codex_app_server` for app-server v2.
 
-This SDK surface is experimental. The current implementation intentionally allows only one active turn consumer (`Thread.run()`, `TurnHandle.stream()`, or `TurnHandle.run()`) per client instance at a time.
+This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
 
 ## Package Entry
 
@@ -137,8 +137,8 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 
 Behavior notes:
 
-- `stream()` and `run()` are exclusive per client instance in the current experimental build
-- starting a second turn consumer on the same `Codex` instance raises `RuntimeError`
+- `stream()` and `run()` consume only notifications for their own turn ID
+- one `Codex` instance can stream multiple active turns concurrently
 
 ### AsyncTurnHandle
 
@@ -149,8 +149,8 @@ Behavior notes:
 
 Behavior notes:
 
-- `stream()` and `run()` are exclusive per client instance in the current experimental build
-- starting a second turn consumer on the same `AsyncCodex` instance raises `RuntimeError`
+- `stream()` and `run()` consume only notifications for their own turn ID
+- one `AsyncCodex` instance can stream multiple active turns concurrently
 
 ## Inputs
 

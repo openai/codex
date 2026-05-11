@@ -85,6 +85,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderCapabilities::default()
     }
 
+    /// Returns whether requests made through this provider should include attestation.
+    fn supports_attestation(&self) -> bool {
+        false
+    }
+
     /// Returns the provider-scoped auth manager, when this provider uses one.
     ///
     /// TODO(celia-oai): Make auth manager access internal to this crate so callers
@@ -165,6 +170,13 @@ impl ModelProvider for ConfiguredModelProvider {
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    fn supports_attestation(&self) -> bool {
+        self.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .is_some_and(|auth| auth.is_chatgpt_auth())
     }
 
     async fn auth(&self) -> Option<CodexAuth> {

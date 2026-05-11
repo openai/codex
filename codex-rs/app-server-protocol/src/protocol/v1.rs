@@ -46,6 +46,9 @@ pub struct InitializeCapabilities {
     /// Opt into receiving experimental API methods and fields.
     #[serde(default)]
     pub experimental_api: bool,
+    /// Opt into `attestation/generate` requests for upstream `x-oai-attestation`.
+    #[serde(default)]
+    pub request_attestation: bool,
     /// Exact notification method names that should be suppressed for this
     /// connection (for example `thread/started`).
     #[ts(optional = nullable)]

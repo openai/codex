@@ -407,6 +407,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     )
     .new_session()
 }
@@ -1025,7 +1026,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         session: Arc::clone(&session),
         turn: Arc::clone(&turn),
         call_id: "probe-call".to_string(),
-        tool_name: "probe".to_string(),
+        tool_name: codex_tools::ToolName::plain("probe"),
     };
 
     orchestrator
@@ -3725,7 +3726,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -3734,6 +3734,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await;
 
@@ -3836,7 +3837,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -3875,7 +3875,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         session_extension_data: codex_extension_api::ExtensionData::new(),
         thread_extension_data: codex_extension_api::ExtensionData::new(),
-        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -3885,6 +3884,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id.into(),
@@ -3896,6 +3896,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -4065,7 +4066,6 @@ async fn make_session_with_config_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -4074,6 +4074,7 @@ async fn make_session_with_config_and_rx(
             /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
@@ -4168,7 +4169,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        Arc::new(SkillsWatcher::noop()),
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -4184,6 +4184,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             ),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
@@ -5556,7 +5557,6 @@ where
             .expect("create environment"),
     );
 
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -5595,7 +5595,6 @@ where
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         session_extension_data: codex_extension_api::ExtensionData::new(),
         thread_extension_data: codex_extension_api::ExtensionData::new(),
-        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5605,6 +5604,7 @@ where
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             state_db,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id.into(),
@@ -5616,6 +5616,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -5904,9 +5905,9 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
         .into_iter()
         .find(|text| text.contains("<environment_context>"))
         .expect("environment update item should be emitted");
-    assert!(environment_update.contains("<network enabled=\"true\">"));
-    assert!(environment_update.contains("<allowed>api.example.com</allowed>"));
-    assert!(environment_update.contains("<denied>blocked.example.com</denied>"));
+    assert!(environment_update.contains(
+        "<network enabled=\"true\"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>"
+    ));
 }
 
 #[tokio::test]

@@ -3,6 +3,8 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginSharePrincipalRole;
+use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
@@ -88,13 +90,14 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
 
 fn load_shared_plugin_ids_by_local_path(
     config: &Config,
-) -> std::collections::BTreeMap<AbsolutePathBuf, String> {
+) -> Result<std::collections::BTreeMap<AbsolutePathBuf, String>, JSONRPCErrorError> {
     codex_core_plugins::remote::load_plugin_share_remote_ids_by_local_path(
         config.codex_home.as_path(),
     )
-    .unwrap_or_else(|err| {
-        warn!("failed to load plugin share local path mapping: {err}");
-        std::collections::BTreeMap::new()
+    .map_err(|err| {
+        internal_error(format!(
+            "failed to load plugin share local path mapping: {err}"
+        ))
     })
 }
 
@@ -108,10 +111,11 @@ fn share_context_for_source(
             .cloned()
             .map(|remote_plugin_id| PluginShareContext {
                 remote_plugin_id,
+                discoverability: None,
                 share_url: None,
                 creator_account_user_id: None,
                 creator_name: None,
-                share_targets: None,
+                share_principals: None,
             }),
         MarketplacePluginSource::Git { .. } => None,
     }
@@ -160,6 +164,35 @@ fn validate_client_plugin_share_targets(
     Ok(())
 }
 
+fn remote_plugin_share_target_role(
+    role: PluginShareTargetRole,
+) -> codex_core_plugins::remote::RemotePluginShareTargetRole {
+    match role {
+        PluginShareTargetRole::Reader => {
+            codex_core_plugins::remote::RemotePluginShareTargetRole::Reader
+        }
+        PluginShareTargetRole::Editor => {
+            codex_core_plugins::remote::RemotePluginShareTargetRole::Editor
+        }
+    }
+}
+
+fn plugin_share_principal_role_from_remote(
+    role: codex_core_plugins::remote::RemotePluginSharePrincipalRole,
+) -> PluginSharePrincipalRole {
+    match role {
+        codex_core_plugins::remote::RemotePluginSharePrincipalRole::Reader => {
+            PluginSharePrincipalRole::Reader
+        }
+        codex_core_plugins::remote::RemotePluginSharePrincipalRole::Editor => {
+            PluginSharePrincipalRole::Editor
+        }
+        codex_core_plugins::remote::RemotePluginSharePrincipalRole::Owner => {
+            PluginSharePrincipalRole::Owner
+        }
+    }
+}
+
 fn remote_plugin_share_targets(
     targets: Vec<PluginShareTarget>,
 ) -> Vec<codex_core_plugins::remote::RemotePluginShareTarget> {
@@ -179,6 +212,7 @@ fn remote_plugin_share_targets(
                     }
                 },
                 principal_id: target.principal_id,
+                role: remote_plugin_share_target_role(target.role),
             },
         )
         .collect()
@@ -200,6 +234,7 @@ fn plugin_share_principal_from_remote(
             }
         },
         principal_id: principal.principal_id,
+        role: plugin_share_principal_role_from_remote(principal.role),
         name: principal.name,
     }
 }
@@ -415,7 +450,7 @@ impl PluginRequestProcessor {
 
             let config_for_marketplace_listing = plugins_input.clone();
             let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-            let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config);
+            let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
             match tokio::task::spawn_blocking(move || {
                 let outcome = plugins_manager_for_marketplace_listing
                     .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
@@ -527,9 +562,24 @@ impl PluginRequestProcessor {
                     }
                 }
                 Err(
+                    err @ (RemotePluginCatalogError::AuthRequired
+                    | RemotePluginCatalogError::UnsupportedAuthMode),
+                ) if explicit_marketplace_kinds => {
+                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                        err,
+                        "list remote plugin catalog",
+                    ));
+                }
+                Err(
                     RemotePluginCatalogError::AuthRequired
                     | RemotePluginCatalogError::UnsupportedAuthMode,
                 ) => {}
+                Err(err) if explicit_marketplace_kinds => {
+                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                        err,
+                        "list remote plugin catalog",
+                    ));
+                }
                 Err(err) => {
                     warn!(
                         error = %err,
@@ -603,11 +653,56 @@ impl PluginRequestProcessor {
                     .read_plugin_for_config(&plugins_input, &request)
                     .await
                     .map_err(|err| Self::marketplace_error(err, "read plugin details"))?;
-                let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config);
+                let shared_plugin_ids_by_local_path =
+                    load_shared_plugin_ids_by_local_path(&config)?;
                 let share_context = share_context_for_source(
                     &outcome.plugin.source,
                     &shared_plugin_ids_by_local_path,
                 );
+                let share_context = match share_context {
+                    Some(context) => {
+                        let auth = self.auth_manager.auth().await;
+                        let remote_plugin_service_config = RemotePluginServiceConfig {
+                            chatgpt_base_url: config.chatgpt_base_url.clone(),
+                        };
+                        match codex_core_plugins::remote::fetch_remote_plugin_share_context(
+                            &remote_plugin_service_config,
+                            auth.as_ref(),
+                            &context.remote_plugin_id,
+                        )
+                        .await
+                        {
+                            Ok(Some(remote_share_context))
+                                if remote_share_context.share_principals.is_some() =>
+                            {
+                                Some(remote_plugin_share_context_to_info(remote_share_context))
+                            }
+                            Ok(Some(_)) => {
+                                warn!(
+                                    remote_plugin_id = %context.remote_plugin_id,
+                                    "remote shared plugin detail did not include share principals; returning local share mapping context"
+                                );
+                                Some(context)
+                            }
+                            Ok(None) => {
+                                warn!(
+                                    remote_plugin_id = %context.remote_plugin_id,
+                                    "remote shared plugin detail did not include share context; returning local share mapping context"
+                                );
+                                Some(context)
+                            }
+                            Err(err) => {
+                                warn!(
+                                    remote_plugin_id = %context.remote_plugin_id,
+                                    error = %err,
+                                    "failed to hydrate local plugin share context; returning local share mapping context"
+                                );
+                                Some(context)
+                            }
+                        }
+                    }
+                    None => None,
+                };
                 let environment_manager = self.thread_manager.environment_manager();
                 let app_summaries =
                     load_plugin_app_summaries(&config, &outcome.plugin.apps, &environment_manager)
@@ -807,7 +902,6 @@ impl PluginRequestProcessor {
             return Err(invalid_request("invalid remote plugin id"));
         }
         validate_client_plugin_share_targets(&share_targets)?;
-        let requested_share_targets = share_targets.clone();
 
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
@@ -829,12 +923,6 @@ impl PluginRequestProcessor {
                 .principals
                 .into_iter()
                 .map(plugin_share_principal_from_remote)
-                .filter(|principal| {
-                    requested_share_targets.iter().any(|target| {
-                        target.principal_type == principal.principal_type
-                            && target.principal_id == principal.principal_id
-                    })
-                })
                 .collect(),
             discoverability: remote_plugin_share_discoverability_to_info(result.discoverability),
         })
@@ -859,13 +947,11 @@ impl PluginRequestProcessor {
         .map(|summary| {
             let RemoteCatalogPluginShareSummary {
                 summary,
-                share_url,
                 local_plugin_path,
             } = summary;
             let plugin = remote_plugin_summary_to_info(summary);
             PluginShareListItem {
                 plugin,
-                share_url: share_url.unwrap_or_default(),
                 local_plugin_path,
             }
         })
@@ -1521,11 +1607,14 @@ fn remote_plugin_share_context_to_info(
 ) -> PluginShareContext {
     PluginShareContext {
         remote_plugin_id: context.remote_plugin_id,
+        discoverability: Some(remote_plugin_share_discoverability_to_info(
+            context.discoverability,
+        )),
         share_url: context.share_url,
         creator_account_user_id: context.creator_account_user_id,
         creator_name: context.creator_name,
-        share_targets: context.share_targets.map(|targets| {
-            targets
+        share_principals: context.share_principals.map(|principals| {
+            principals
                 .into_iter()
                 .map(plugin_share_principal_from_remote)
                 .collect()

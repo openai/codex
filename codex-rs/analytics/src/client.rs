@@ -30,6 +30,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
 use std::collections::HashSet;
@@ -352,6 +353,7 @@ impl AnalyticsEventsClient {
             notification,
             ServerNotification::TurnStarted(_)
                 | ServerNotification::TurnCompleted(_)
+                | ServerNotification::TurnDiffUpdated(_)
                 | ServerNotification::ItemStarted(_)
                 | ServerNotification::ItemCompleted(_)
                 | ServerNotification::ItemGuardianApprovalReviewStarted(_)
@@ -371,6 +373,7 @@ async fn send_track_events(
     if events.is_empty() {
         return;
     }
+
     let Some(auth) = auth_manager.auth().await else {
         return;
     };
@@ -380,12 +383,45 @@ async fn send_track_events(
 
     let base_url = base_url.trim_end_matches('/');
     let url = format!("{base_url}/codex/analytics-events/events");
+    for events in track_event_request_batches(events) {
+        send_track_events_request(&auth, &url, events).await;
+    }
+}
+
+fn track_event_request_batches(events: Vec<TrackEventRequest>) -> Vec<Vec<TrackEventRequest>> {
+    let mut batches = Vec::new();
+    let mut current_batch = Vec::new();
+
+    for event in events {
+        if event.should_send_in_isolated_request() {
+            if !current_batch.is_empty() {
+                batches.push(current_batch);
+                current_batch = Vec::new();
+            }
+            batches.push(vec![event]);
+        } else {
+            current_batch.push(event);
+        }
+    }
+
+    if !current_batch.is_empty() {
+        batches.push(current_batch);
+    }
+
+    batches
+}
+
+async fn send_track_events_request(auth: &CodexAuth, url: &str, events: Vec<TrackEventRequest>) {
+    if events.is_empty() {
+        return;
+    }
+
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
-        .post(&url)
+        .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()

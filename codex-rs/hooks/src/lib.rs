@@ -69,13 +69,9 @@ pub use schema::write_schema_fixtures;
 pub use types::Hook;
 pub use types::HookEvent;
 pub use types::HookEventAfterAgent;
-pub use types::HookEventAfterToolUse;
 pub use types::HookPayload;
 pub use types::HookResponse;
 pub use types::HookResult;
-pub use types::HookToolInput;
-pub use types::HookToolInputLocalShell;
-pub use types::HookToolKind;
 
 /// Returns the hook event label used in persisted hook-state keys.
 pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {

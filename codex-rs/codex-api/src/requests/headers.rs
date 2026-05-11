@@ -6,9 +6,11 @@ pub fn build_session_headers(session_id: Option<String>, thread_id: Option<Strin
     let mut headers = HeaderMap::new();
     if let Some(id) = session_id {
         insert_header(&mut headers, "session_id", &id);
+        insert_header(&mut headers, "session-id", &id);
     }
     if let Some(id) = thread_id {
         insert_header(&mut headers, "thread_id", &id);
+        insert_header(&mut headers, "thread-id", &id);
     }
     headers
 }

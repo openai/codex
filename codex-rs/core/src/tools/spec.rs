@@ -1,5 +1,6 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::tools::flat_tool_name;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
@@ -136,7 +137,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .collect::<HashSet<_>>();
 
     for unavailable_tool in unavailable_called_tools {
-        let tool_name = unavailable_tool.display();
+        let tool_name = flat_tool_name(&unavailable_tool).into_owned();
         if existing_spec_names.insert(tool_name.clone()) {
             let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
                 name: tool_name.clone(),
