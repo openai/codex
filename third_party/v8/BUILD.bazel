@@ -220,6 +220,20 @@ genrule(
     ]),
 )
 
+genrule(
+    name = "crdtp_binding_cc_147_4_0",
+    srcs = ["@v8_crate_147_4_0//:crdtp_binding_cc"],
+    outs = ["crdtp_binding_147_4_0.cc"],
+    cmd = " ".join([
+        "sed",
+        "-e 's|#include \"support.h\"|#include \"support_147_4_0.h\"|'",
+        "-e 's|\"v8/third_party/inspector_protocol/|\"third_party/inspector_protocol/|g'",
+        "$(location @v8_crate_147_4_0//:crdtp_binding_cc)",
+        ">",
+        '"$@"',
+    ]),
+)
+
 copy_file(
     name = "support_h_147_4_0",
     src = "@v8_crate_147_4_0//:support_h",
@@ -228,11 +242,15 @@ copy_file(
 
 cc_library(
     name = "v8_147_4_0_binding",
-    srcs = [":binding_cc_147_4_0"],
+    srcs = [
+        ":binding_cc_147_4_0",
+        ":crdtp_binding_cc_147_4_0",
+    ],
     hdrs = [":support_h_147_4_0"],
     copts = V8_COPTS + V8_CUSTOM_LIBCXX_COPTS,
     deps = [
         "@v8//:core_lib_icu",
+        "@v8//:rusty_v8_crdtp_headers",
         "@v8//:rusty_v8_internal_headers",
     ] + select({
         ":use_rusty_v8_custom_libcxx": [
