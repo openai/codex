@@ -357,11 +357,11 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         Some("Bearer Access Token")
     );
     assert_eq!(
-        compact_request.header("session_id").as_deref(),
+        compact_request.header("session-id").as_deref(),
         Some(session_id.as_str())
     );
     assert_eq!(
-        compact_request.header("thread_id").as_deref(),
+        compact_request.header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
     let compact_body = compact_request.body_json();
@@ -1046,12 +1046,12 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     assert_eq!(
         compact_mock
             .single_request()
-            .header("session_id")
+            .header("session-id")
             .as_deref(),
         Some(session_id.as_str())
     );
     assert_eq!(
-        compact_mock.single_request().header("thread_id").as_deref(),
+        compact_mock.single_request().header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
     let follow_up_request = responses_mock.single_request();

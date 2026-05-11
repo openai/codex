@@ -764,10 +764,8 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-    let request_session_id = request.header("session_id").expect("session_id header");
-    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
-    let request_thread_id = request.header("thread_id").expect("thread_id header");
-    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -779,12 +777,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let thread_id_string = expected_thread_id.to_string();
 
     assert_eq!(request_session_id, expected_session_id.to_string());
-    assert_eq!(
-        request_session_id_hyphenated,
-        expected_session_id.to_string()
-    );
     assert_eq!(request_thread_id, thread_id_string.as_str());
-    assert_eq!(request_thread_id_hyphenated, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
     assert_eq!(
@@ -1046,20 +1039,13 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
 
-    let request_session_id = request.header("session_id").expect("session_id header");
-    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
-    let request_thread_id = request.header("thread_id").expect("thread_id header");
-    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
     assert_eq!(request_session_id, expected_session_id.to_string());
-    assert_eq!(
-        request_session_id_hyphenated,
-        expected_session_id.to_string()
-    );
     assert_eq!(request_thread_id, expected_thread_id.to_string());
-    assert_eq!(request_thread_id_hyphenated, expected_thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
