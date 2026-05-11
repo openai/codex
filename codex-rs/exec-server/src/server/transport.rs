@@ -2,8 +2,10 @@ use axum::Router;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::any;
+use axum::routing::get;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
@@ -120,6 +122,7 @@ async fn run_websocket_listener(
 
     let router = Router::new()
         .route("/", any(websocket_upgrade_handler))
+        .route("/readyz", get(readiness_handler))
         .with_state(ExecServerWebSocketState { processor });
     axum::serve(
         listener,
@@ -132,6 +135,10 @@ async fn run_websocket_listener(
 #[derive(Clone)]
 struct ExecServerWebSocketState {
     processor: ConnectionProcessor,
+}
+
+async fn readiness_handler() -> StatusCode {
+    StatusCode::OK
 }
 
 async fn websocket_upgrade_handler(
