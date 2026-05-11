@@ -149,8 +149,8 @@ mod tests {
     }
 
     #[test]
-    fn bundle_preserves_plain_tool_name() {
-        let bundle = ToolBundle::new(
+    fn bundle_preserves_input_tool_name_and_namespace_metadata() {
+        let plain_bundle = ToolBundle::new(
             ToolName::plain("echo"),
             "Echo arguments.".to_string(),
             JsonSchema::object(
@@ -160,14 +160,7 @@ mod tests {
             ),
             Arc::new(StubExecutor),
         );
-
-        assert_eq!(bundle.tool_name(), &ToolName::plain("echo"));
-        assert_eq!(bundle.namespace(), None);
-    }
-
-    #[test]
-    fn bundle_derives_namespace_from_namespaced_tool_name() {
-        let bundle = ToolBundle::new(
+        let namespaced_bundle = ToolBundle::new(
             ToolName::namespaced("extension_tools/", "echo"),
             "Echo arguments.".to_string(),
             JsonSchema::object(
@@ -178,18 +171,20 @@ mod tests {
             Arc::new(StubExecutor),
         );
 
+        assert_eq!(plain_bundle.tool_name(), &ToolName::plain("echo"));
+        assert_eq!(plain_bundle.namespace(), None);
         assert_eq!(
-            bundle.tool_name(),
+            namespaced_bundle.tool_name(),
             &ToolName::namespaced("extension_tools/", "echo")
         );
         assert_eq!(
-            bundle.namespace(),
+            namespaced_bundle.namespace(),
             Some(&ToolNamespace::new("extension_tools/"))
         );
     }
 
     #[test]
-    fn bundle_sets_tool_name_when_namespace_metadata_is_attached() {
+    fn bundle_in_namespace_updates_tool_name_and_namespace_metadata() {
         let bundle = ToolBundle::new(
             ToolName::plain("echo"),
             "Echo arguments.".to_string(),

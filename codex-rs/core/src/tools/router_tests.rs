@@ -314,74 +314,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
             .any(|spec| spec.name() == "extension_echo"),
         "expected extension-provided tool to be visible to the model"
     );
-
-    let call = ToolRouter::build_tool_call(
-        &session,
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "extension_echo".to_string(),
-            namespace: None,
-            arguments: json!({ "message": "hello" }).to_string(),
-            call_id: "call-extension".to_string(),
-        },
-    )
-    .await?
-    .expect("function_call should produce a tool call");
-
-    let result = router
-        .dispatch_tool_call_with_code_mode_result(
-            Arc::new(session),
-            Arc::new(turn),
-            CancellationToken::new(),
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-            call,
-            ToolCallSource::Direct,
-        )
-        .await?;
-
-    let response = result.into_response();
-    match response {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            assert_eq!(call_id, "call-extension");
-            let FunctionCallOutputBody::Text(text) = output.body else {
-                panic!("expected text function call output")
-            };
-            let value: serde_json::Value =
-                serde_json::from_str(&text).expect("extension tool output should be json");
-            assert_eq!(
-                value,
-                json!({
-                    "arguments": { "message": "hello" },
-                    "callId": "call-extension",
-                    "ok": true,
-                })
-            );
-        }
-        other => panic!("expected function call output, got {other:?}"),
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn namespaced_extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::Result<()>
-{
-    let (mut session, turn) = make_session_and_context().await;
-    session.services.extensions = extension_tool_test_registry();
-
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
-            discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(&session),
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-    );
-
     assert!(
         router
             .find_spec(&ToolName::namespaced("extension_tools", "echo"))
@@ -392,35 +324,47 @@ async fn namespaced_extension_tool_bundles_are_model_visible_and_dispatchable() 
         namespace_function_names(&router.model_visible_specs(), "extension_tools"),
         vec!["echo".to_string()]
     );
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
 
-    let call = ToolRouter::build_tool_call(
-        &session,
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "echo".to_string(),
-            namespace: Some("extension_tools".to_string()),
-            arguments: json!({ "message": "hello" }).to_string(),
-            call_id: "call-extension-namespace".to_string(),
-        },
-    )
-    .await?
-    .expect("function_call should produce a tool call");
-
-    let result = router
-        .dispatch_tool_call_with_code_mode_result(
-            Arc::new(session),
-            Arc::new(turn),
-            CancellationToken::new(),
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-            call,
-            ToolCallSource::Direct,
+    for (name, namespace, call_id) in [
+        ("extension_echo", None, "call-extension"),
+        ("echo", Some("extension_tools"), "call-extension-namespace"),
+    ] {
+        let call = ToolRouter::build_tool_call(
+            session.as_ref(),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: name.to_string(),
+                namespace: namespace.map(str::to_string),
+                arguments: json!({ "message": "hello" }).to_string(),
+                call_id: call_id.to_string(),
+            },
         )
-        .await?;
+        .await?
+        .expect("function_call should produce a tool call");
 
-    let response = result.into_response();
+        let result = router
+            .dispatch_tool_call_with_code_mode_result(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                CancellationToken::new(),
+                Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+                call,
+                ToolCallSource::Direct,
+            )
+            .await?;
+
+        assert_extension_tool_response(result.into_response(), call_id);
+    }
+
+    Ok(())
+}
+
+fn assert_extension_tool_response(response: ResponseInputItem, expected_call_id: &str) {
     match response {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            assert_eq!(call_id, "call-extension-namespace");
+            assert_eq!(call_id, expected_call_id);
             let FunctionCallOutputBody::Text(text) = output.body else {
                 panic!("expected text function call output")
             };
@@ -430,15 +374,13 @@ async fn namespaced_extension_tool_bundles_are_model_visible_and_dispatchable() 
                 value,
                 json!({
                     "arguments": { "message": "hello" },
-                    "callId": "call-extension-namespace",
+                    "callId": expected_call_id,
                     "ok": true,
                 })
             );
         }
         other => panic!("expected function call output, got {other:?}"),
     }
-
-    Ok(())
 }
 
 fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<String> {
