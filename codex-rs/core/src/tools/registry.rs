@@ -21,6 +21,11 @@ use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_tool_api::ExecutableToolSpec;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
+use codex_tool_api::ToolError as ExtensionToolError;
+use codex_tool_api::ToolInput as ExtensionToolInput;
+use codex_tool_api::ToolOutput as ExtensionToolOutput;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -33,6 +38,113 @@ use tracing::warn;
 pub enum ToolKind {
     Function,
     Mcp,
+}
+
+struct BundledToolOutput {
+    input: ExtensionToolInput,
+    output: Box<dyn ExtensionToolOutput>,
+}
+
+impl ToolOutput for BundledToolOutput {
+    fn log_preview(&self) -> String {
+        self.output.log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.output.success_for_logging()
+    }
+
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        self.output.to_response_item(call_id, &self.input)
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
+        self.output.code_mode_result(&self.input)
+    }
+}
+
+struct BundledToolHandler {
+    bundle: ExtensionToolBundle,
+}
+
+impl BundledToolHandler {
+    fn new(bundle: ExtensionToolBundle) -> Self {
+        Self { bundle }
+    }
+
+    fn input_from_payload(&self, payload: &ToolPayload) -> Option<ExtensionToolInput> {
+        match (self.bundle.spec(), payload) {
+            (ExecutableToolSpec::Function(_), ToolPayload::Function { arguments }) => {
+                Some(ExtensionToolInput::Function {
+                    arguments: arguments.clone(),
+                })
+            }
+            (ExecutableToolSpec::Freeform(_), ToolPayload::Custom { input }) => {
+                Some(ExtensionToolInput::Freeform {
+                    input: input.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+impl ToolHandler for BundledToolHandler {
+    type Output = BundledToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        self.bundle.tool_name()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(self.bundle.spec().clone().into())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.bundle.supports_parallel_tool_calls()
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        self.input_from_payload(payload).is_some()
+    }
+
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let Some(input) = self.input_from_payload(&invocation.payload) else {
+            return false;
+        };
+        self.bundle
+            .executor()
+            .is_mutating(&codex_tool_api::ToolCall {
+                call_id: invocation.call_id.clone(),
+                input,
+            })
+            .await
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let input = self
+            .input_from_payload(&invocation.payload)
+            .ok_or_else(|| {
+                FunctionCallError::Fatal(format!(
+                    "tool {} invoked with incompatible payload",
+                    self.bundle.tool_name()
+                ))
+            })?;
+        let output = self
+            .bundle
+            .executor()
+            .execute(codex_tool_api::ToolCall {
+                call_id: invocation.call_id,
+                input: input.clone(),
+            })
+            .await
+            .map_err(map_extension_tool_error)?;
+        Ok(BundledToolOutput { input, output })
+    }
 }
 
 pub trait ToolHandler: Send + Sync {
@@ -538,6 +650,22 @@ impl ToolRegistryBuilder {
         self.handlers.insert(name, handler);
     }
 
+    pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
+        let tool_name = bundle.tool_name();
+        if self.handlers.contains_key(&tool_name) {
+            error_or_panic(format!("handler for tool {tool_name} already registered"));
+            return;
+        }
+
+        self.push_spec(
+            bundle.spec().clone().into(),
+            bundle.supports_parallel_tool_calls(),
+        );
+
+        let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle));
+        self.handlers.insert(tool_name, handler);
+    }
+
     pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {
         &self.specs
     }
@@ -552,6 +680,13 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
+    }
+}
+
+fn map_extension_tool_error(error: ExtensionToolError) -> FunctionCallError {
+    match error {
+        ExtensionToolError::RespondToModel(message) => FunctionCallError::RespondToModel(message),
+        ExtensionToolError::Fatal(message) => FunctionCallError::Fatal(message),
     }
 }
 

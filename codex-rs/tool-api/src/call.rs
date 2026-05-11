@@ -1,6 +1,5 @@
 /// One executable tool call delivered to a contributed tool.
-pub struct ToolCall<C> {
-    pub context: C,
+pub struct ToolCall {
     pub call_id: String,
     pub input: ToolInput,
 }

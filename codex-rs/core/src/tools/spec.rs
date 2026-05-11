@@ -13,6 +13,7 @@ use crate::tools::spec_plan_types::ToolRegistryBuildMcpTool;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
@@ -69,6 +70,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_bundles: &[ExtensionToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::UnavailableToolHandler;
@@ -120,6 +122,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .as_ref()
                 .map(|inputs| &inputs.tool_namespaces),
             discoverable_tools: discoverable_tools.as_deref(),
+            extension_tool_bundles,
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: WaitAgentTimeoutOptions {

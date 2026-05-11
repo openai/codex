@@ -1,41 +1,10 @@
-use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use serde::Deserialize;
+use codex_tool_api::FunctionToolSpec as ResponsesApiTool;
 use serde::Serialize;
-use serde_json::Value;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FreeformTool {
-    pub name: String,
-    pub description: String,
-    pub format: FreeformToolFormat,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FreeformToolFormat {
-    pub r#type: String,
-    pub syntax: String,
-    pub definition: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ResponsesApiTool {
-    pub name: String,
-    pub description: String,
-    /// TODO: Validation. When strict is set to true, the JSON schema,
-    /// `required` and `additional_properties` must be present. All fields in
-    /// `properties` must be present in `required`.
-    pub strict: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub defer_loading: Option<bool>,
-    pub parameters: JsonSchema,
-    #[serde(skip)]
-    pub output_schema: Option<Value>,
-}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]

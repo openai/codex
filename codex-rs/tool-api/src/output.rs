@@ -15,12 +15,6 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, input: &ToolInput) -> ResponseInputItem;
 
-    /// Returns the stable value exposed to post-tool-use hook integration when a
-    /// host chooses to wire that surface for this tool.
-    fn post_tool_use_response(&self, _call_id: &str, _input: &ToolInput) -> Option<Value> {
-        None
-    }
-
     fn code_mode_result(&self, input: &ToolInput) -> Value;
 }
 
@@ -63,10 +57,6 @@ impl ToolOutput for JsonToolOutput {
         }
     }
 
-    fn post_tool_use_response(&self, _call_id: &str, _input: &ToolInput) -> Option<Value> {
-        Some(self.value.clone())
-    }
-
     fn code_mode_result(&self, _input: &ToolInput) -> Value {
         self.value.clone()
     }
@@ -103,10 +93,6 @@ mod tests {
                     success: Some(true),
                 },
             }
-        );
-        assert_eq!(
-            output.post_tool_use_response("call-1", &input),
-            Some(json!({ "ok": true }))
         );
         assert_eq!(output.code_mode_result(&input), json!({ "ok": true }));
     }

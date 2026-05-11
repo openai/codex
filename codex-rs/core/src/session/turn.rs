@@ -55,6 +55,7 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::extension_tool_bundles;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unavailable_tool::collect_unavailable_called_tools;
@@ -1268,6 +1269,7 @@ pub(crate) async fn built_tools(
             unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
+            extension_tool_bundles: extension_tool_bundles(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     )))
