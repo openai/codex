@@ -472,7 +472,7 @@ mod windows_impl {
             // starts, otherwise it could create a missing path under a writable
             // parent before the deny-write ACE exists.
             if !path.exists() {
-                std::fs::create_dir_all(path)
+                std::fs::create_dir_all(&path)
                     .with_context(|| format!("create deny-write path {}", path.display()))?;
             }
             deny.insert(path.clone());
