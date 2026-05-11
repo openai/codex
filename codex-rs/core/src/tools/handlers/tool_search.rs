@@ -250,10 +250,12 @@ mod tests {
                             description: "Create events desktop tool".to_string(),
                             strict: false,
                             defer_loading: Some(true),
-                            parameters: codex_tools::JsonSchema::object(
-                                Default::default(),
-                                /*required*/ None,
-                                Some(false.into()),
+                            parameters: codex_tools::JsonSchema::from_raw_tool_input_schema(
+                                serde_json::json!({
+                                    "type": "object",
+                                    "properties": {},
+                                    "additionalProperties": false,
+                                }),
                             ),
                             output_schema: None,
                         }),
@@ -262,10 +264,12 @@ mod tests {
                             description: "List events desktop tool".to_string(),
                             strict: false,
                             defer_loading: Some(true),
-                            parameters: codex_tools::JsonSchema::object(
-                                Default::default(),
-                                /*required*/ None,
-                                Some(false.into()),
+                            parameters: codex_tools::JsonSchema::from_raw_tool_input_schema(
+                                serde_json::json!({
+                                    "type": "object",
+                                    "properties": {},
+                                    "additionalProperties": false,
+                                }),
                             ),
                             output_schema: None,
                         }),
@@ -280,13 +284,15 @@ mod tests {
                             .to_string(),
                         strict: false,
                         defer_loading: Some(true),
-                        parameters: codex_tools::JsonSchema::object(
-                            std::collections::BTreeMap::from([(
-                                "mode".to_string(),
-                                codex_tools::JsonSchema::string(/*description*/ None),
-                            )]),
-                            Some(vec!["mode".to_string()]),
-                            Some(false.into()),
+                        parameters: codex_tools::JsonSchema::from_raw_tool_input_schema(
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {
+                                    "mode": { "type": "string" },
+                                },
+                                "required": ["mode"],
+                                "additionalProperties": false,
+                            }),
                         ),
                         output_schema: None,
                     })],

@@ -37,7 +37,6 @@ use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
@@ -1129,7 +1128,7 @@ async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
 }
 
 #[tokio::test]
-async fn test_mcp_tool_property_missing_type_defaults_to_string() {
+async fn test_mcp_tool_property_missing_type_preserves_raw_schema() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);
     let mut features = Features::with_defaults();
@@ -1146,20 +1145,18 @@ async fn test_mcp_tool_property_missing_type_defaults_to_string() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": {"description": "search query"}
+        }
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(vec![mcp_tool_info_with_display_name(
             "dash/search",
-            mcp_tool(
-                "search",
-                "Search docs",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {"description": "search query"}
-                    }
-                }),
-            ),
+            mcp_tool("search", "Search docs", input_schema.clone()),
         )]),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1171,15 +1168,7 @@ async fn test_mcp_tool_property_missing_type_defaults_to_string() {
         *tool,
         ResponsesApiTool {
             name: "search".to_string(),
-            parameters: JsonSchema::object(
-                /*properties*/
-                BTreeMap::from([(
-                    "query".to_string(),
-                    JsonSchema::string(Some("search query".to_string())),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "Search docs".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
@@ -1206,18 +1195,16 @@ async fn test_mcp_tool_preserves_integer_schema() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"page": {"type": "integer"}}
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(vec![mcp_tool_info_with_display_name(
             "dash/paginate",
-            mcp_tool(
-                "paginate",
-                "Pagination",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {"page": {"type": "integer"}}
-                }),
-            ),
+            mcp_tool("paginate", "Pagination", input_schema.clone()),
         )]),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1229,15 +1216,7 @@ async fn test_mcp_tool_preserves_integer_schema() {
         *tool,
         ResponsesApiTool {
             name: "paginate".to_string(),
-            parameters: JsonSchema::object(
-                /*properties*/
-                BTreeMap::from([(
-                    "page".to_string(),
-                    JsonSchema::integer(/*description*/ None),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "Pagination".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
@@ -1247,7 +1226,7 @@ async fn test_mcp_tool_preserves_integer_schema() {
 }
 
 #[tokio::test]
-async fn test_mcp_tool_array_without_items_gets_default_string_items() {
+async fn test_mcp_tool_array_without_items_preserves_raw_schema() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);
     let mut features = Features::with_defaults();
@@ -1265,18 +1244,16 @@ async fn test_mcp_tool_array_without_items_gets_default_string_items() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"tags": {"type": "array"}}
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(vec![mcp_tool_info_with_display_name(
             "dash/tags",
-            mcp_tool(
-                "tags",
-                "Tags",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {"tags": {"type": "array"}}
-                }),
-            ),
+            mcp_tool("tags", "Tags", input_schema.clone()),
         )]),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1288,18 +1265,7 @@ async fn test_mcp_tool_array_without_items_gets_default_string_items() {
         *tool,
         ResponsesApiTool {
             name: "tags".to_string(),
-            parameters: JsonSchema::object(
-                /*properties*/
-                BTreeMap::from([(
-                    "tags".to_string(),
-                    JsonSchema::array(
-                        JsonSchema::string(/*description*/ None),
-                        /*description*/ None,
-                    ),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "Tags".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
@@ -1309,7 +1275,7 @@ async fn test_mcp_tool_array_without_items_gets_default_string_items() {
 }
 
 #[tokio::test]
-async fn test_mcp_tool_anyof_defaults_to_string() {
+async fn test_mcp_tool_anyof_preserves_raw_schema() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);
     let mut features = Features::with_defaults();
@@ -1326,20 +1292,18 @@ async fn test_mcp_tool_anyof_defaults_to_string() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
+        }
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(vec![mcp_tool_info_with_display_name(
             "dash/value",
-            mcp_tool(
-                "value",
-                "AnyOf Value",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
-                    }
-                }),
-            ),
+            mcp_tool("value", "AnyOf Value", input_schema.clone()),
         )]),
         /*deferred_mcp_tools*/ None,
         &[],
@@ -1351,21 +1315,7 @@ async fn test_mcp_tool_anyof_defaults_to_string() {
         *tool,
         ResponsesApiTool {
             name: "value".to_string(),
-            parameters: JsonSchema::object(
-                /*properties*/
-                BTreeMap::from([(
-                    "value".to_string(),
-                    JsonSchema::any_of(
-                        vec![
-                            JsonSchema::string(/*description*/ None),
-                            JsonSchema::number(/*description*/ None),
-                        ],
-                        /*description*/ None,
-                    ),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "AnyOf Value".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
@@ -1391,6 +1341,30 @@ async fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "string_argument": {"type": "string"},
+            "number_argument": {"type": "number"},
+            "object_argument": {
+                "type": "object",
+                "properties": {
+                    "string_property": {"type": "string"},
+                    "number_property": {"type": "number"}
+                },
+                "required": ["string_property", "number_property"],
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "addtl_prop": {"type": "string"}
+                    },
+                    "required": ["addtl_prop"],
+                    "additionalProperties": false
+                }
+            }
+        }
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(vec![mcp_tool_info_with_display_name(
@@ -1398,29 +1372,7 @@ async fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
             mcp_tool(
                 "do_something_cool",
                 "Do something cool",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                    "string_argument": {"type": "string"},
-                    "number_argument": {"type": "number"},
-                    "object_argument": {
-                        "type": "object",
-                        "properties": {
-                            "string_property": {"type": "string"},
-                            "number_property": {"type": "number"}
-                        },
-                        "required": ["string_property", "number_property"],
-                        "additionalProperties": {
-                            "type": "object",
-                            "properties": {
-                                "addtl_prop": {"type": "string"}
-                            },
-                            "required": ["addtl_prop"],
-                            "additionalProperties": false
-                            }
-                        }
-                    }
-                }),
+                input_schema.clone(),
             ),
         )]),
         /*deferred_mcp_tools*/ None,
@@ -1433,51 +1385,7 @@ async fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         *tool,
         ResponsesApiTool {
             name: "do_something_cool".to_string(),
-            parameters: JsonSchema::object(
-                /*properties*/
-                BTreeMap::from([
-                    (
-                        "string_argument".to_string(),
-                        JsonSchema::string(/*description*/ None),
-                    ),
-                    (
-                        "number_argument".to_string(),
-                        JsonSchema::number(/*description*/ None),
-                    ),
-                    (
-                        "object_argument".to_string(),
-                        JsonSchema::object(
-                            BTreeMap::from([
-                                (
-                                    "string_property".to_string(),
-                                    JsonSchema::string(/*description*/ None),
-                                ),
-                                (
-                                    "number_property".to_string(),
-                                    JsonSchema::number(/*description*/ None),
-                                ),
-                            ]),
-                            Some(vec![
-                                "string_property".to_string(),
-                                "number_property".to_string(),
-                            ]),
-                            Some(
-                                JsonSchema::object(
-                                    BTreeMap::from([(
-                                        "addtl_prop".to_string(),
-                                        JsonSchema::string(/*description*/ None),
-                                    )]),
-                                    Some(vec!["addtl_prop".to_string()]),
-                                    Some(false.into()),
-                                )
-                                .into(),
-                            ),
-                        ),
-                    ),
-                ]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "Do something cool".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),

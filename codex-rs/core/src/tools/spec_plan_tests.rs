@@ -1275,7 +1275,7 @@ fn test_test_model_info_includes_sync_tool() {
 }
 
 #[test]
-fn test_build_specs_mcp_tools_converted() {
+fn test_build_specs_mcp_tools_preserve_raw_schema() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
@@ -1290,6 +1290,23 @@ fn test_build_specs_mcp_tools_converted() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "string_argument": { "type": "string" },
+            "number_argument": { "type": "number" },
+            "object_argument": {
+                "type": "object",
+                "properties": {
+                    "string_property": { "type": "string" },
+                    "number_property": { "type": "number" },
+                },
+                "required": ["string_property", "number_property"],
+                "additionalProperties": false,
+            },
+        },
+    });
+
     let (tools, _) = build_specs(
         &tools_config,
         Some(HashMap::from([(
@@ -1297,22 +1314,7 @@ fn test_build_specs_mcp_tools_converted() {
             mcp_tool(
                 "do_something_cool",
                 "Do something cool",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "string_argument": { "type": "string" },
-                        "number_argument": { "type": "number" },
-                        "object_argument": {
-                            "type": "object",
-                            "properties": {
-                                "string_property": { "type": "string" },
-                                "number_property": { "type": "number" },
-                            },
-                            "required": ["string_property", "number_property"],
-                            "additionalProperties": false,
-                        },
-                    },
-                }),
+                input_schema.clone(),
             ),
         )])),
         /*deferred_mcp_tools*/ None,
@@ -1324,40 +1326,7 @@ fn test_build_specs_mcp_tools_converted() {
         tool,
         &ResponsesApiTool {
             name: "do_something_cool".to_string(),
-            parameters: JsonSchema::object(
-                BTreeMap::from([
-                    (
-                        "string_argument".to_string(),
-                        JsonSchema::string(/*description*/ None),
-                    ),
-                    (
-                        "number_argument".to_string(),
-                        JsonSchema::number(/*description*/ None),
-                    ),
-                    (
-                        "object_argument".to_string(),
-                        JsonSchema::object(
-                            BTreeMap::from([
-                                (
-                                    "string_property".to_string(),
-                                    JsonSchema::string(/*description*/ None),
-                                ),
-                                (
-                                    "number_property".to_string(),
-                                    JsonSchema::number(/*description*/ None),
-                                ),
-                            ]),
-                            Some(vec![
-                                "string_property".to_string(),
-                                "number_property".to_string(),
-                            ]),
-                            Some(false.into()),
-                        ),
-                    ),
-                ]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(input_schema),
             description: "Do something cool".to_string(),
             strict: false,
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
