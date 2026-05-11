@@ -15,6 +15,7 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::canonicalize_path;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -96,6 +97,7 @@ pub struct SetupRootOverrides {
     pub read_roots: Option<Vec<PathBuf>>,
     pub read_roots_include_platform_defaults: bool,
     pub write_roots: Option<Vec<PathBuf>>,
+    pub deny_read_paths: Option<Vec<PathBuf>>,
     pub deny_write_paths: Option<Vec<PathBuf>>,
 }
 
@@ -151,6 +153,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
             read_roots: Some(read_roots),
             read_roots_include_platform_defaults: false,
             write_roots: Some(Vec::new()),
+            deny_read_paths: None,
             deny_write_paths: None,
         },
     )
@@ -168,6 +171,7 @@ fn run_setup_refresh_inner(
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
@@ -180,6 +184,7 @@ fn run_setup_refresh_inner(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_read_paths,
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
@@ -417,6 +422,8 @@ struct ElevationPayload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    deny_read_paths: Vec<PathBuf>,
     #[serde(default)]
     deny_write_paths: Vec<PathBuf>,
     proxy_ports: Vec<u16>,
@@ -720,6 +727,7 @@ pub fn run_elevated_setup(
         )
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
@@ -732,6 +740,7 @@ pub fn run_elevated_setup(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_read_paths,
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
@@ -805,16 +814,16 @@ fn build_payload_deny_write_paths(
     let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()
-        .map(|path| {
-            if path.exists() {
-                dunce::canonicalize(&path).unwrap_or(path)
-            } else {
-                path
-            }
-        })
+        .map(|path| canonicalize_path(&path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
     deny_write_paths
+}
+
+fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
+    // Keep the configured spelling here so the ACL layer can plan both the
+    // lexical path and any existing canonical target for reparse-point aliases.
+    explicit_deny_read_paths.unwrap_or_default()
 }
 
 fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -1327,6 +1336,7 @@ mod tests {
                 read_roots: Some(vec![readable_root.clone()]),
                 read_roots_include_platform_defaults: true,
                 write_roots: None,
+                deny_read_paths: None,
                 deny_write_paths: None,
             },
         );
@@ -1374,6 +1384,7 @@ mod tests {
                 read_roots: Some(vec![readable_root.clone()]),
                 read_roots_include_platform_defaults: false,
                 write_roots: None,
+                deny_read_paths: None,
                 deny_write_paths: None,
             },
         );
@@ -1452,6 +1463,19 @@ mod tests {
             canonical_windows_platform_default_roots()
                 .into_iter()
                 .all(|path| roots.contains(&path))
+        );
+    }
+
+    #[test]
+    fn build_payload_deny_read_paths_preserves_explicit_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let existing = tmp.path().join("secret.env");
+        let missing = tmp.path().join("future.env");
+        fs::write(&existing, "secret").expect("write existing");
+
+        assert_eq!(
+            super::build_payload_deny_read_paths(Some(vec![existing.clone(), missing.clone()])),
+            vec![existing, missing]
         );
     }
 }

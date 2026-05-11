@@ -14,6 +14,7 @@ use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -27,6 +28,11 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[PathBuf],
+    deny_write_paths_override: &[PathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,
@@ -38,6 +44,11 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         cwd,
         &mut env_map,
         &command,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
     )?;
 
     let spawn_request = SpawnRequest {

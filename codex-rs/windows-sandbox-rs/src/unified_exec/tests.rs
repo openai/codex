@@ -160,6 +160,8 @@ fn legacy_non_tty_cmd_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -173,6 +175,42 @@ fn legacy_non_tty_cmd_emits_output() {
         let stdout = String::from_utf8_lossy(&stdout);
         assert_eq!(exit_code, 0, "stdout={stdout:?}");
         assert!(stdout.contains("LEGACY-NONTTY-CMD"), "stdout={stdout:?}");
+    });
+}
+
+#[test]
+fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("legacy-non-tty-deny-read");
+        let secret_path = cwd.join("legacy-non-tty-deny-read-secret.env");
+        let err = spawn_windows_sandbox_session_legacy(
+            "workspace-write",
+            cwd.as_path(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "echo deny-read".to_string(),
+            ],
+            cwd.as_path(),
+            HashMap::new(),
+            Some(5_000),
+            std::slice::from_ref(&secret_path),
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect_err("legacy deny-read should require the elevated backend");
+        assert!(
+            err.to_string()
+                .contains("deny-read overrides require the elevated Windows sandbox backend"),
+            "unexpected error: {err:#}"
+        );
     });
 }
 
@@ -200,6 +238,8 @@ fn legacy_non_tty_powershell_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -424,6 +464,8 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -472,6 +514,8 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -523,6 +567,8 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ false,
