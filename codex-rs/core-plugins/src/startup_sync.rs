@@ -24,6 +24,8 @@ const OPENAI_PLUGINS_OWNER: &str = "openai";
 const OPENAI_PLUGINS_REPO: &str = "plugins";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
+const CURATED_PLUGINS_CLONE_TEMP_DIR_PREFIX: &str = "plugins-clone-";
+const CURATED_PLUGINS_GIT_CWD_TEMP_DIR_PREFIX: &str = "curated-git-cwd-";
 const CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION: &str = "export-backup";
 const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -138,8 +140,9 @@ fn sync_openai_plugins_repo_with_transport_overrides(
 fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Result<String, String> {
     let repo_path = curated_plugins_repo_path(codex_home);
     let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
-    let remote_sha = git_ls_remote_head_sha(git_binary)?;
-    let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary);
+    let git_context = CuratedGitInvocationContext::create(codex_home)?;
+    let remote_sha = git_ls_remote_head_sha(git_binary, &git_context)?;
+    let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary, &git_context);
 
     if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.join(".git").is_dir() {
         return Ok(remote_sha);
@@ -147,8 +150,8 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
 
     let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
     let clone_output = run_git_command_with_timeout(
-        Command::new(git_binary)
-            .env("GIT_OPTIONAL_LOCKS", "0")
+        git_context
+            .command(git_binary)
             .arg("clone")
             .arg("--depth")
             .arg("1")
@@ -159,7 +162,7 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
     )?;
     ensure_git_success(&clone_output, "git clone curated plugins repo")?;
 
-    let cloned_sha = git_head_sha(staged_repo_dir.path(), git_binary)?;
+    let cloned_sha = git_head_sha(staged_repo_dir.path(), git_binary, &git_context)?;
     if cloned_sha != remote_sha {
         return Err(format!(
             "curated plugins clone HEAD mismatch: expected {remote_sha}, got {cloned_sha}"
@@ -244,7 +247,7 @@ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<TempDir,
     remove_stale_curated_repo_temp_dirs(parent, CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE);
 
     let clone_dir = tempfile::Builder::new()
-        .prefix("plugins-clone-")
+        .prefix(CURATED_PLUGINS_CLONE_TEMP_DIR_PREFIX)
         .tempdir_in(parent)
         .map_err(|err| {
             format!(
@@ -285,11 +288,14 @@ fn remove_stale_curated_repo_temp_dirs(parent: &Path, max_age: Duration) {
         }
 
         let path = entry.path();
-        let is_plugins_clone_dir = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("plugins-clone-"));
-        if !is_plugins_clone_dir {
+        let is_curated_temp_dir =
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(CURATED_PLUGINS_CLONE_TEMP_DIR_PREFIX)
+                        || name.starts_with(CURATED_PLUGINS_GIT_CWD_TEMP_DIR_PREFIX)
+                });
+        if !is_curated_temp_dir {
             continue;
         }
 
@@ -455,9 +461,10 @@ fn read_local_git_or_sha_file(
     repo_path: &Path,
     sha_path: &Path,
     git_binary: &str,
+    git_context: &CuratedGitInvocationContext,
 ) -> Option<String> {
     if repo_path.join(".git").is_dir()
-        && let Ok(sha) = git_head_sha(repo_path, git_binary)
+        && let Ok(sha) = git_head_sha(repo_path, git_binary, git_context)
     {
         return Some(sha);
     }
@@ -465,10 +472,78 @@ fn read_local_git_or_sha_file(
     read_sha_file(sha_path)
 }
 
-fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
-    let output = run_git_command_with_timeout(
-        Command::new(git_binary)
+/// Isolated process context for curated plugin Git calls.
+///
+/// These commands can run before a project has been trusted. Running Git from a
+/// fresh Codex-owned directory and blocking repository discovery above it
+/// prevents an untrusted project `.git/config` from supplying executable config
+/// such as credential helpers. Global and system Git config still apply so
+/// user-managed proxy and CA settings keep working.
+struct CuratedGitInvocationContext {
+    _cwd: TempDir,
+    cwd_path: PathBuf,
+}
+
+impl CuratedGitInvocationContext {
+    fn create(codex_home: &Path) -> Result<Self, String> {
+        let parent = codex_home.join(".tmp");
+        std::fs::create_dir_all(&parent).map_err(|err| {
+            format!(
+                "failed to create curated plugins git cwd parent {}: {err}",
+                parent.display()
+            )
+        })?;
+        let cwd = tempfile::Builder::new()
+            .prefix(CURATED_PLUGINS_GIT_CWD_TEMP_DIR_PREFIX)
+            .tempdir_in(&parent)
+            .map_err(|err| {
+                format!(
+                    "failed to create curated plugins git cwd in {}: {err}",
+                    parent.display()
+                )
+            })?;
+        let cwd_path = cwd.path().canonicalize().map_err(|err| {
+            format!(
+                "failed to resolve curated plugins git cwd {}: {err}",
+                cwd.path().display()
+            )
+        })?;
+        Ok(Self {
+            _cwd: cwd,
+            cwd_path,
+        })
+    }
+
+    fn command(&self, git_binary: &str) -> Command {
+        let mut command = Command::new(git_binary);
+        command
+            .current_dir(&self.cwd_path)
             .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_CEILING_DIRECTORIES", &self.cwd_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env_remove("GIT_CONFIG")
+            .env_remove("GIT_CONFIG_COUNT")
+            .env_remove("GIT_CONFIG_LOCAL")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE");
+        for (key, _) in std::env::vars_os() {
+            let key = key.to_string_lossy();
+            if key.starts_with("GIT_CONFIG_KEY_") || key.starts_with("GIT_CONFIG_VALUE_") {
+                command.env_remove(key.as_ref());
+            }
+        }
+        command
+    }
+}
+
+fn git_ls_remote_head_sha(
+    git_binary: &str,
+    git_context: &CuratedGitInvocationContext,
+) -> Result<String, String> {
+    let output = run_git_command_with_timeout(
+        git_context
+            .command(git_binary)
             .arg("ls-remote")
             .arg("https://github.com/openai/plugins.git")
             .arg("HEAD"),
@@ -492,9 +567,13 @@ fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
     Ok(sha.to_string())
 }
 
-fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, String> {
-    let output = Command::new(git_binary)
-        .env("GIT_OPTIONAL_LOCKS", "0")
+fn git_head_sha(
+    repo_path: &Path,
+    git_binary: &str,
+    git_context: &CuratedGitInvocationContext,
+) -> Result<String, String> {
+    let output = git_context
+        .command(git_binary)
         .arg("-C")
         .arg(repo_path)
         .arg("rev-parse")

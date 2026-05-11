@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -66,6 +67,12 @@ fn write_curated_plugin_sha(codex_home: &Path) {
     );
 }
 
+fn command_env<'a>(command: &'a Command, key: &str) -> Option<Option<&'a OsStr>> {
+    command
+        .get_envs()
+        .find_map(|(name, value)| (name == OsStr::new(key)).then_some(value))
+}
+
 fn has_plugins_clone_dirs(codex_home: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(codex_home.join(".tmp")) else {
         return false;
@@ -77,7 +84,7 @@ fn has_plugins_clone_dirs(codex_home: &Path) -> bool {
             && path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("plugins-clone-"))
+                .is_some_and(|name| name.starts_with(CURATED_PLUGINS_CLONE_TEMP_DIR_PREFIX))
     })
 }
 
@@ -231,24 +238,66 @@ fn remove_stale_curated_repo_temp_dirs_removes_only_matching_directories() {
     let tmp = tempdir().expect("tempdir");
     let parent = tmp.path().join(".tmp");
     let stale_clone_dir = parent.join("plugins-clone-stale");
+    let stale_git_cwd_dir = parent.join("curated-git-cwd-stale");
     let fresh_clone_dir = parent.join("plugins-clone-fresh");
+    let fresh_git_cwd_dir = parent.join("curated-git-cwd-fresh");
     let unrelated_dir = parent.join("plugins-cache");
 
     std::fs::create_dir_all(&stale_clone_dir).expect("create stale clone dir");
+    std::fs::create_dir_all(&stale_git_cwd_dir).expect("create stale git cwd dir");
     std::fs::create_dir_all(&fresh_clone_dir).expect("create fresh clone dir");
+    std::fs::create_dir_all(&fresh_git_cwd_dir).expect("create fresh git cwd dir");
     std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
     set_dir_mtime(
         &stale_clone_dir,
         CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE + Duration::from_secs(60),
     )
     .expect("age stale clone dir");
+    set_dir_mtime(
+        &stale_git_cwd_dir,
+        CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE + Duration::from_secs(60),
+    )
+    .expect("age stale git cwd dir");
     set_dir_mtime(&fresh_clone_dir, Duration::ZERO).expect("age fresh clone dir");
+    set_dir_mtime(&fresh_git_cwd_dir, Duration::ZERO).expect("age fresh git cwd dir");
 
     remove_stale_curated_repo_temp_dirs(&parent, CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE);
 
     assert!(!stale_clone_dir.exists());
+    assert!(!stale_git_cwd_dir.exists());
     assert!(fresh_clone_dir.is_dir());
+    assert!(fresh_git_cwd_dir.is_dir());
     assert!(unrelated_dir.is_dir());
+}
+
+#[test]
+fn curated_git_command_uses_isolated_cwd_without_hiding_global_config() {
+    let tmp = tempdir().expect("tempdir");
+    let git_context = CuratedGitInvocationContext::create(tmp.path()).expect("git context");
+    let command = git_context.command("git");
+
+    assert_eq!(
+        command.get_current_dir(),
+        Some(git_context.cwd_path.as_path())
+    );
+    assert_eq!(
+        command_env(&command, "GIT_OPTIONAL_LOCKS"),
+        Some(Some(OsStr::new("0")))
+    );
+    assert_eq!(
+        command_env(&command, "GIT_CEILING_DIRECTORIES"),
+        Some(Some(git_context.cwd_path.as_os_str()))
+    );
+    assert_eq!(
+        command_env(&command, "GIT_TERMINAL_PROMPT"),
+        Some(Some(OsStr::new("0")))
+    );
+    assert_eq!(command_env(&command, "GIT_CONFIG_NOSYSTEM"), None);
+    assert_eq!(command_env(&command, "GIT_CONFIG_GLOBAL"), None);
+    assert_eq!(command_env(&command, "GIT_CONFIG_SYSTEM"), None);
+    assert_eq!(command_env(&command, "GIT_CONFIG_COUNT"), Some(None));
+    assert_eq!(command_env(&command, "GIT_DIR"), Some(None));
+    assert_eq!(command_env(&command, "GIT_WORK_TREE"), Some(None));
 }
 
 #[cfg(unix)]
@@ -302,6 +351,64 @@ exit 1
     assert!(repo_path.join(".git").is_dir());
     assert_curated_gmail_repo(&repo_path);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_via_git_runs_commands_from_isolated_cwd() {
+    let tmp = tempdir().expect("tempdir");
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-isolated-cwd-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let log_path = tmp.path().join("git-invocations.log");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+
+    write_executable_script(
+        &git_path,
+        &format!(
+            r#"#!/bin/sh
+record_invocation() {{
+  printf '%s|%s|%s\n' "$1" "$PWD" "$GIT_CEILING_DIRECTORIES" >> "{log_path}"
+}}
+if [ "$1" = "ls-remote" ]; then
+  record_invocation "ls-remote"
+  printf '%s\tHEAD\n' "{sha}"
+  exit 0
+fi
+if [ "$1" = "clone" ]; then
+  record_invocation "clone"
+  dest="$5"
+  mkdir -p "$dest/.git" "$dest/.agents/plugins" "$dest/plugins/gmail/.codex-plugin"
+  printf '{{"name":"openai-curated","plugins":[{{"name":"gmail","source":{{"source":"local","path":"./plugins/gmail"}}}}]}}' > "$dest/.agents/plugins/marketplace.json"
+  printf '%s\n' '{{"name":"gmail"}}' > "$dest/plugins/gmail/.codex-plugin/plugin.json"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then
+  record_invocation "rev-parse"
+  printf '%s\n' "{sha}"
+  exit 0
+fi
+echo "unexpected git invocation: $@" >&2
+exit 1
+"#,
+            log_path = log_path.display()
+        ),
+    );
+
+    sync_openai_plugins_repo_via_git(tmp.path(), git_path.to_str().expect("utf8 path"))
+        .expect("git sync should succeed");
+
+    let log = std::fs::read_to_string(&log_path).expect("read git invocation log");
+    let lines = log.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3);
+    for line in lines {
+        let parts = line.split('|').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[2], parts[1]);
+        assert!(parts[1].contains("/.tmp/curated-git-cwd-"));
+    }
 }
 
 #[cfg(unix)]
