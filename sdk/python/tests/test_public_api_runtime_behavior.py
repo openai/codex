@@ -93,6 +93,7 @@ def _item_completed_notification(
         method="item/completed",
         payload=ItemCompletedNotification.model_validate(
             {
+                "completedAtMs": 1,
                 "item": item,
                 "threadId": thread_id,
                 "turnId": turn_id,

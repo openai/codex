@@ -35,6 +35,8 @@ from .v2_all import McpToolCallProgressNotification
 from .v2_all import ModelReroutedNotification
 from .v2_all import ModelVerificationNotification
 from .v2_all import PlanDeltaNotification
+from .v2_all import ProcessExitedNotification
+from .v2_all import ProcessOutputDeltaNotification
 from .v2_all import ReasoningSummaryPartAddedNotification
 from .v2_all import ReasoningSummaryTextDeltaNotification
 from .v2_all import ReasoningTextDeltaNotification
@@ -101,6 +103,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "mcpServer/startupStatus/updated": McpServerStatusUpdatedNotification,
     "model/rerouted": ModelReroutedNotification,
     "model/verification": ModelVerificationNotification,
+    "process/exited": ProcessExitedNotification,
+    "process/outputDelta": ProcessOutputDeltaNotification,
     "remoteControl/status/changed": RemoteControlStatusChangedNotification,
     "serverRequest/resolved": ServerRequestResolvedNotification,
     "skills/changed": SkillsChangedNotification,
