@@ -463,7 +463,7 @@ pub(crate) async fn run_turn(
         )
         .await
         {
-            Ok(sampling_request_output) => {
+            Ok(SamplingRequestLoopOutcome::Completed(sampling_request_output)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -631,29 +631,10 @@ pub(crate) async fn run_turn(
                 }
                 continue;
             }
+            Ok(SamplingRequestLoopOutcome::StopTurn) => return None,
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
-            }
-            Err(CodexErr::ContextWindowExceeded) => {
-                let reset_client_session = match run_auto_compact(
-                    &sess,
-                    &turn_context,
-                    &mut client_session,
-                    InitialContextInjection::BeforeLastUserMessage,
-                    CompactionReason::ContextLimit,
-                    CompactionPhase::MidTurn,
-                )
-                .await
-                {
-                    Ok(reset_client_session) => reset_client_session,
-                    Err(_) => return None,
-                };
-                if reset_client_session {
-                    client_session.reset_websocket_session();
-                }
-                can_drain_pending_input = false;
-                continue;
             }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
@@ -1031,7 +1012,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> CodexResult<SamplingRequestLoopOutcome> {
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1060,6 +1041,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
         )
         .await;
+    let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
@@ -1089,11 +1071,31 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok(output);
+                return Ok(SamplingRequestLoopOutcome::Completed(output));
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                if retries >= max_retries {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                retries += 1;
+                let reset_client_session = match run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    client_session,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await
+                {
+                    Ok(reset_client_session) => reset_client_session,
+                    Err(_) => return Ok(SamplingRequestLoopOutcome::StopTurn),
+                };
+                if reset_client_session {
+                    client_session.reset_websocket_session();
+                }
+                continue;
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
@@ -1110,7 +1112,6 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,
@@ -1297,6 +1298,12 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Debug)]
+enum SamplingRequestLoopOutcome {
+    Completed(SamplingRequestResult),
+    StopTurn,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
