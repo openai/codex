@@ -124,7 +124,11 @@ async fn try_init_with_roots_inner(
         backfill_lease_seconds,
     )
     .await;
-    codex_state::record_backfill_gate(None, backfill_gate_started.elapsed(), &backfill_gate_result);
+    codex_state::record_backfill_gate(
+        /*telemetry*/ None,
+        backfill_gate_started.elapsed(),
+        &backfill_gate_result,
+    );
     backfill_gate_result?;
     Ok(runtime)
 }
@@ -210,7 +214,7 @@ fn emit_startup_warning(message: &str) {
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
-        codex_state::record_fallback(None, "get_state_db", "db_unavailable");
+        codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_unavailable");
         return None;
     }
     let runtime = match codex_state::StateRuntime::init(
@@ -221,7 +225,7 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     {
         Ok(runtime) => runtime,
         Err(_) => {
-            codex_state::record_fallback(None, "get_state_db", "db_error");
+            codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_error");
             return None;
         }
     };
@@ -248,7 +252,11 @@ async fn require_backfill_complete(
                 codex_home.display(),
                 state.status.as_str()
             );
-            codex_state::record_fallback(None, "get_state_db", "backfill_incomplete");
+            codex_state::record_fallback(
+                /*telemetry*/ None,
+                "get_state_db",
+                "backfill_incomplete",
+            );
             None
         }
         Err(err) => {
@@ -256,7 +264,7 @@ async fn require_backfill_complete(
                 "failed to read backfill state at {}: {err}",
                 codex_home.display()
             );
-            codex_state::record_fallback(None, "get_state_db", "db_error");
+            codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_error");
             None
         }
     }

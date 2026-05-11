@@ -1278,7 +1278,11 @@ async fn find_thread_path_by_id_str_in_subdir(
                             tracing::warn!(
                                 "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
                             );
-                            codex_state::record_fallback(None, "find_thread_path", "mismatch");
+                            codex_state::record_fallback(
+                                /*telemetry*/ None,
+                                "find_thread_path",
+                                "mismatch",
+                            );
                         }
                         Err(err) => {
                             tracing::debug!(
@@ -1296,7 +1300,11 @@ async fn find_thread_path_by_id_str_in_subdir(
                     tracing::warn!(
                         "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
                     );
-                    codex_state::record_fallback(None, "find_thread_path", "stale_path");
+                    codex_state::record_fallback(
+                        /*telemetry*/ None,
+                        "find_thread_path",
+                        "stale_path",
+                    );
                 }
             }
             Ok(None) => fallback_reason = Some("missing_row"),
@@ -1334,7 +1342,7 @@ async fn find_thread_path_by_id_str_in_subdir(
             "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
         );
         if let Some(reason) = fallback_reason {
-            codex_state::record_fallback(None, "find_thread_path", reason);
+            codex_state::record_fallback(/*telemetry*/ None, "find_thread_path", reason);
         }
         state_db::read_repair_rollout_path(
             state_db_ctx,
