@@ -71,6 +71,26 @@ impl<T: HttpTransport> ModelsClient<T> {
 
         Ok((models, header_etag))
     }
+
+    pub async fn validate_access(
+        &self,
+        client_version: &str,
+        extra_headers: HeaderMap,
+    ) -> Result<(), ApiError> {
+        self.session
+            .execute_with(
+                Method::GET,
+                Self::path(),
+                extra_headers,
+                /*body*/ None,
+                |req| {
+                    Self::append_client_version_query(req, client_version);
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

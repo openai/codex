@@ -85,9 +85,8 @@ pub async fn validate_api_key_with_models_endpoint(
     api_key: &str,
 ) -> CoreResult<()> {
     OpenAiModelsEndpoint::with_auth(provider_info, CodexAuth::from_api_key(api_key))
-        .list_models(&client_version_to_whole())
+        .validate_access(&client_version_to_whole())
         .await
-        .map(|_| ())
 }
 
 #[async_trait]
@@ -109,6 +108,34 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+        let client = self.models_client().await?;
+
+        timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client.list_models(client_version, HeaderMap::new()),
+        )
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+        .map_err(map_api_error)
+    }
+}
+
+impl OpenAiModelsEndpoint {
+    async fn validate_access(&self, client_version: &str) -> CoreResult<()> {
+        let _timer =
+            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+        let client = self.models_client().await?;
+
+        timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client.validate_access(client_version, HeaderMap::new()),
+        )
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+        .map_err(map_api_error)
+    }
+
+    async fn models_client(&self) -> CoreResult<ModelsClient<ReqwestTransport>> {
         let auth = self.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
@@ -121,16 +148,9 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
             auth_header_name: auth_telemetry.name,
             auth_env: self.auth_env(),
         });
-        let client = ModelsClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
 
-        timeout(
-            MODELS_REFRESH_TIMEOUT,
-            client.list_models(client_version, HeaderMap::new()),
-        )
-        .await
-        .map_err(|_| CodexErr::Timeout)?
-        .map_err(map_api_error)
+        Ok(ModelsClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry)))
     }
 }
 
