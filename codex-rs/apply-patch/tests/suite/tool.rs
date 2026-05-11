@@ -206,6 +206,52 @@ fn test_apply_patch_cli_add_overwrites_existing_file() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_apply_patch_cli_add_replaces_existing_hard_link() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let workspace = tmp.path().join("workspace");
+    let outside = tmp.path().join("outside.txt");
+    let link = workspace.join("hard-link.txt");
+    fs::create_dir_all(&workspace)?;
+    fs::write(&outside, "outside\n")?;
+    fs::hard_link(&outside, &link)?;
+
+    run_apply_patch_in_dir(
+        &workspace,
+        "*** Begin Patch\n*** Add File: hard-link.txt\n+workspace replacement\n*** End Patch",
+    )?
+    .success()
+    .stdout("Success. Updated the following files:\nA hard-link.txt\n");
+
+    assert_eq!(fs::read_to_string(&outside)?, "outside\n");
+    assert_eq!(fs::read_to_string(&link)?, "workspace replacement\n");
+
+    Ok(())
+}
+
+#[test]
+fn test_apply_patch_cli_update_replaces_existing_hard_link() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let workspace = tmp.path().join("workspace");
+    let outside = tmp.path().join("outside.txt");
+    let link = workspace.join("hard-link.txt");
+    fs::create_dir_all(&workspace)?;
+    fs::write(&outside, "outside\n")?;
+    fs::hard_link(&outside, &link)?;
+
+    run_apply_patch_in_dir(
+        &workspace,
+        "*** Begin Patch\n*** Update File: hard-link.txt\n@@\n-outside\n+workspace replacement\n*** End Patch",
+    )?
+    .success()
+    .stdout("Success. Updated the following files:\nM hard-link.txt\n");
+
+    assert_eq!(fs::read_to_string(&outside)?, "outside\n");
+    assert_eq!(fs::read_to_string(&link)?, "workspace replacement\n");
+
+    Ok(())
+}
+
+#[test]
 fn test_apply_patch_cli_delete_directory_fails() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let dir = tmp.path().join("dir");
