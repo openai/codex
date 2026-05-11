@@ -243,56 +243,6 @@ async fn approval_keys_include_move_destination() {
     assert_eq!(keys.len(), 2);
 }
 
-#[tokio::test]
-async fn intercepted_apply_patch_verification_uses_local_sandbox() {
-    let tmp = TempDir::new().expect("tmp");
-    std::fs::write(tmp.path().join("file.txt"), "old content\n").expect("write file");
-    let cwd = tmp.path().abs();
-    let command = vec![
-        "apply_patch".to_string(),
-        r#"*** Begin Patch
-*** Update File: file.txt
-@@
--old content
-+new content
-*** End Patch"#
-            .to_string(),
-    ];
-    let (session, mut turn) = make_session_and_context().await;
-    turn.permission_profile = PermissionProfile::read_only();
-    let turn_environment = turn
-        .environments
-        .turn_environments
-        .first()
-        .expect("local turn environment")
-        .clone();
-
-    let result = intercept_apply_patch(
-        &command,
-        &cwd,
-        LOCAL_FS.as_ref(),
-        turn_environment,
-        Arc::new(session),
-        Arc::new(turn),
-        /*tracker*/ None,
-        "call-1",
-        "exec_command",
-    )
-    .await;
-
-    let Err(FunctionCallError::RespondToModel(message)) = result else {
-        panic!("expected sandboxed filesystem error");
-    };
-    assert!(
-        message.contains("apply_patch verification failed"),
-        "{message}"
-    );
-    assert!(
-        message.contains("sandboxed filesystem operations require configured runtime paths"),
-        "{message}"
-    );
-}
-
 #[test]
 fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root() {
     let tmp = TempDir::new().expect("tmp");

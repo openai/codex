@@ -145,9 +145,6 @@ pub struct ApplyPatchAction {
 
     /// The working directory that was used to resolve relative paths in the patch.
     pub cwd: AbsolutePathBuf,
-
-    /// Optional environment selected by the patch preamble.
-    pub environment_id: Option<String>,
 }
 
 impl ApplyPatchAction {
@@ -181,7 +178,6 @@ impl ApplyPatchAction {
             changes,
             cwd: path.parent().expect("path should have parent"),
             patch,
-            environment_id: None,
         }
     }
 }

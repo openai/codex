@@ -168,7 +168,7 @@ pub async fn verify_apply_patch_args(
         patch,
         hunks,
         workdir,
-        environment_id,
+        ..
     } = args;
     let effective_cwd = workdir
         .as_ref()
@@ -229,7 +229,6 @@ pub async fn verify_apply_patch_args(
         changes,
         patch,
         cwd: effective_cwd,
-        environment_id,
     })
 }
 
@@ -811,7 +810,6 @@ PATCH"#,
                 )]),
                 patch: argv[1].clone(),
                 cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
-                environment_id: None,
             })
         );
     }
