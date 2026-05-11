@@ -1415,7 +1415,11 @@ async fn run_ratatui_app(
     let should_show_trust_screen = should_show_trust_screen(&config);
     let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
         && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled
+        && !matches!(
+            config.permissions.permission_profile(),
+            codex_protocol::models::PermissionProfile::Disabled
+        );
 
     let Cli {
         prompt,

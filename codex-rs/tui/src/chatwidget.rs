@@ -8983,6 +8983,10 @@ impl ChatWidget {
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
         if show_now
             && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
+            && !matches!(
+                self.config.permissions.permission_profile(),
+                PermissionProfile::Disabled
+            )
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")

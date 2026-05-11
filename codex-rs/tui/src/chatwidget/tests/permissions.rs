@@ -241,6 +241,26 @@ async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
     );
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_does_not_prompt_for_windows_sandbox_in_full_access_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, /*enabled*/ false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, /*enabled*/ false);
+    chat.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("set full access permission profile");
+
+    chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
+
+    assert!(
+        chat.bottom_pane.no_modal_or_popup_active(),
+        "expected no startup sandbox NUX popup in full-access mode"
+    );
+}
+
 #[tokio::test]
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

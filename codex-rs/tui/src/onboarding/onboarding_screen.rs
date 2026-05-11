@@ -141,8 +141,12 @@ impl OnboardingScreen {
             }
         }
         #[cfg(target_os = "windows")]
-        let show_windows_create_sandbox_hint =
-            WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+        let show_windows_create_sandbox_hint = WindowsSandboxLevel::from_config(&config)
+            == WindowsSandboxLevel::Disabled
+            && !matches!(
+                config.permissions.permission_profile(),
+                codex_protocol::models::PermissionProfile::Disabled
+            );
         #[cfg(not(target_os = "windows"))]
         let show_windows_create_sandbox_hint = false;
         let highlighted = TrustDirectorySelection::Trust;
