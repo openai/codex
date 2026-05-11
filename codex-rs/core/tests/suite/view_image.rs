@@ -473,6 +473,67 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_rejects_local_reads_outside_cwd_in_read_only_mode() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    let outside_dir = TempDir::new()?;
+    let outside_path = outside_dir.path().join("outside.png");
+    fs::write(
+        &outside_path,
+        png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?,
+    )?;
+    let call_id = "call-view-image-outside-cwd";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "view_image",
+                    &json!({ "path": outside_path.as_path() }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_permission_profile(
+        "attach the image outside the workspace",
+        PermissionProfile::read_only(),
+    )
+    .await?;
+
+    let request = response_mock
+        .last_request()
+        .context("missing request containing sandboxed view_image output")?;
+    assert!(
+        request.inputs_of_type("input_image").is_empty(),
+        "read-only local view_image should not attach images outside the selected cwd"
+    );
+    let output_text = request
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .context("sandboxed view_image error text present")?;
+    let expected_prefix = format!("unable to locate image at `{}`:", outside_path.display());
+    assert!(
+        output_text.starts_with(&expected_prefix),
+        "expected error to start with `{expected_prefix}` but got `{output_text}`"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
