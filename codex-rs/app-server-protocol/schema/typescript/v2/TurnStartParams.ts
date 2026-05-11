@@ -21,7 +21,8 @@ approvalPolicy?: AskForApproval | null, /**
  * subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, /**
- * Override the sandbox policy for this turn and subsequent turns.
+ * Deprecated for turns. The server rejects this field because the
+ * thread permission profile value is not mutable through `turn/start`.
  */
 sandboxPolicy?: SandboxPolicy | null, /**
  * Override the model for this turn and subsequent turns.

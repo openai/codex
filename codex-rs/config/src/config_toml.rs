@@ -757,7 +757,7 @@ impl ConfigToml {
             SandboxMode::ReadOnly => PermissionProfile::read_only(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
                 Some(SandboxWorkspaceWrite {
-                    writable_roots,
+                    writable_roots: _,
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
@@ -768,7 +768,7 @@ impl ConfigToml {
                         NetworkSandboxPolicy::Restricted
                     };
                     PermissionProfile::workspace_write_with(
-                        writable_roots,
+                        &[],
                         network_policy,
                         *exclude_tmpdir_env_var,
                         *exclude_slash_tmp,
