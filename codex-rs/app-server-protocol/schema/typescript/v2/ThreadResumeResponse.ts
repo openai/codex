@@ -16,7 +16,7 @@ instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**
  */
 approvalsReviewer: ApprovalsReviewer, /**
  * Legacy sandbox policy retained for compatibility. Experimental clients
- * should prefer `permissionProfile` when they need exact runtime
- * permissions.
+ * should prefer `activePermissionProfile` for named permission profile
+ * identity metadata.
  */
 sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null};

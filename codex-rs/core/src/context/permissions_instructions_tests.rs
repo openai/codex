@@ -56,7 +56,6 @@ fn builds_permissions_with_network_access_override() {
 #[test]
 fn builds_permissions_from_policy() {
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -104,6 +103,41 @@ fn builds_permissions_from_profile() {
     assert!(text.contains("`sandbox_mode` is `workspace-write`"));
     assert!(text.contains("Network access is enabled."));
     assert!(text.contains(writable_root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn writable_roots_text_limits_long_root_lists() {
+    let roots = (0..MAX_WRITABLE_ROOTS_IN_PROMPT + 2)
+        .map(|index| WritableRoot {
+            root: AbsolutePathBuf::from_absolute_path(format!("/tmp/root-{index}"))
+                .expect("absolute path"),
+            read_only_subpaths: Vec::new(),
+            protected_metadata_names: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    let text = writable_roots_text(Some(roots)).expect("writable roots text");
+
+    assert!(text.contains("/tmp/root-0"));
+    assert!(text.contains(&format!("/tmp/root-{}", MAX_WRITABLE_ROOTS_IN_PROMPT - 1)));
+    assert!(!text.contains(&format!("/tmp/root-{MAX_WRITABLE_ROOTS_IN_PROMPT}")));
+    assert!(text.contains("and 2 more"));
+}
+
+#[test]
+fn writable_roots_text_truncates_long_root_labels() {
+    let long_segment = "a".repeat(MAX_WRITABLE_ROOT_LABEL_CHARS + 20);
+    let root = WritableRoot {
+        root: AbsolutePathBuf::from_absolute_path(format!("/tmp/{long_segment}"))
+            .expect("absolute path"),
+        read_only_subpaths: Vec::new(),
+        protected_metadata_names: Vec::new(),
+    };
+
+    let text = writable_roots_text(Some(vec![root])).expect("writable roots text");
+
+    assert!(!text.contains(&long_segment));
+    assert!(text.contains("..."));
 }
 
 #[test]
