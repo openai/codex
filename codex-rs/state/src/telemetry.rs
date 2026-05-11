@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::DB_FALLBACK_METRIC;
 use crate::DB_INIT_DURATION_METRIC;
 use crate::DB_INIT_METRIC;
+use tracing::debug;
 
 /// Low-cardinality sink for SQLite startup and fallback telemetry.
 ///
@@ -23,10 +24,15 @@ static PROCESS_DB_TELEMETRY: OnceLock<DbTelemetryHandle> = OnceLock::new();
 /// Install the process-wide SQLite telemetry sink.
 ///
 /// Startup owners should call this once after OTEL initialization. Low-level
-/// database paths will use the registered sink unless a test passes an
-/// explicit sink for that call.
+/// database paths will use the registered sink unless an explicit sink is
+/// provided. Subsequent installs are ignored and keep the first installed sink.
 pub fn install_process_db_telemetry(telemetry: DbTelemetryHandle) -> bool {
-    PROCESS_DB_TELEMETRY.set(telemetry).is_ok()
+    if PROCESS_DB_TELEMETRY.set(telemetry).is_ok() {
+        true
+    } else {
+        debug!("process SQLite telemetry sink already installed; ignoring duplicate install");
+        false
+    }
 }
 
 #[derive(Clone, Copy)]
