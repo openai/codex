@@ -50,6 +50,8 @@ pub struct FileSystemSandboxContext {
     pub permissions: PermissionProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
@@ -77,16 +79,34 @@ impl FileSystemSandboxContext {
         permissions: PermissionProfile,
         cwd: AbsolutePathBuf,
     ) -> Self {
-        Self::from_permissions_and_cwd(permissions, Some(cwd))
+        Self::from_permission_profile_with_workspace_roots(permissions, cwd.clone(), vec![cwd])
     }
 
     fn from_permissions_and_cwd(
         permissions: PermissionProfile,
         cwd: Option<AbsolutePathBuf>,
     ) -> Self {
+        let workspace_roots = cwd.iter().cloned().collect();
+        Self::from_permissions_cwd_and_workspace_roots(permissions, cwd, workspace_roots)
+    }
+
+    pub fn from_permission_profile_with_workspace_roots(
+        permissions: PermissionProfile,
+        cwd: AbsolutePathBuf,
+        workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> Self {
+        Self::from_permissions_cwd_and_workspace_roots(permissions, Some(cwd), workspace_roots)
+    }
+
+    fn from_permissions_cwd_and_workspace_roots(
+        permissions: PermissionProfile,
+        cwd: Option<AbsolutePathBuf>,
+        workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> Self {
         Self {
             permissions,
             cwd,
+            workspace_roots,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,

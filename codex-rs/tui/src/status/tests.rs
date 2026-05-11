@@ -30,7 +30,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -307,7 +306,7 @@ async fn status_permissions_named_read_only_profile_shows_builtin_label() {
 }
 
 #[tokio::test]
-async fn status_permissions_read_only_profile_shows_additional_writable_roots() {
+async fn status_permissions_read_only_profile_ignores_workspace_root_metadata() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config
@@ -326,19 +325,13 @@ async fn status_permissions_read_only_profile_shows_additional_writable_roots() 
                 &file_system_policy,
                 NetworkSandboxPolicy::Restricted,
             ),
-            Some(
-                ActivePermissionProfile::new(":read-only").with_modifications(vec![
-                    ActivePermissionProfileModification::AdditionalWritableRoot {
-                        path: extra_root,
-                    },
-                ]),
-            ),
+            Some(ActivePermissionProfile::new(":read-only")),
         )
         .expect("set permission profile");
 
     assert_eq!(
         permissions_text_for(&config).as_deref(),
-        Some("Read Only + 1 writable root (on-request)")
+        Some("Read Only (on-request)")
     );
 }
 
@@ -390,7 +383,7 @@ async fn status_permissions_workspace_auto_review_shows_reviewer_label() {
 }
 
 #[tokio::test]
-async fn status_permissions_named_profile_shows_additional_writable_roots() {
+async fn status_permissions_named_workspace_profile_uses_builtin_label() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config
@@ -408,19 +401,13 @@ async fn status_permissions_named_profile_shows_additional_writable_roots() {
                 /*exclude_tmpdir_env_var*/ false,
                 /*exclude_slash_tmp*/ false,
             ),
-            Some(
-                ActivePermissionProfile::new(":workspace").with_modifications(vec![
-                    ActivePermissionProfileModification::AdditionalWritableRoot {
-                        path: extra_root,
-                    },
-                ]),
-            ),
+            Some(ActivePermissionProfile::new(":workspace")),
         )
         .expect("set permission profile");
 
     assert_eq!(
         permissions_text_for(&config).as_deref(),
-        Some("Workspace + 1 writable root (on-request)")
+        Some("Workspace (on-request)")
     );
 }
 

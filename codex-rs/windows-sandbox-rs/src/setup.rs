@@ -355,7 +355,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
 
 fn gather_legacy_full_read_roots(
     command_cwd: &Path,
-    policy: &SandboxPolicy,
+    _policy: &SandboxPolicy,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
@@ -368,11 +368,6 @@ fn gather_legacy_full_read_roots(
         roots.extend(profile_read_roots(Path::new(&up)));
     }
     roots.push(command_cwd.to_path_buf());
-    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-        for root in writable_roots {
-            roots.push(root.to_path_buf());
-        }
-    }
     canonical_existing(&roots)
 }
 
@@ -952,7 +947,6 @@ mod tests {
     use super::proxy_ports_from_env;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -1276,26 +1270,19 @@ mod tests {
     }
 
     #[test]
-    fn workspace_write_roots_remain_readable() {
+    fn workspace_write_cwd_remains_readable() {
         let tmp = TempDir::new().expect("tempdir");
         let codex_home = tmp.path().join("codex-home");
         let command_cwd = tmp.path().join("workspace");
-        let writable_root = tmp.path().join("extra-write-root");
         fs::create_dir_all(&command_cwd).expect("create workspace");
-        fs::create_dir_all(&writable_root).expect("create writable root");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::from_absolute_path(&writable_root)
-                    .expect("absolute writable root"),
-            ],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
 
         let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
-        let expected_writable =
-            dunce::canonicalize(&writable_root).expect("canonical writable root");
+        let expected_writable = dunce::canonicalize(&command_cwd).expect("canonical command cwd");
 
         assert!(roots.contains(&expected_writable));
     }
@@ -1406,10 +1393,6 @@ mod tests {
         fs::create_dir_all(&command_git).expect("create command .git");
         fs::create_dir_all(&extra_codex).expect("create extra .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::from_absolute_path(&extra_write_root)
-                    .expect("absolute writable root"),
-            ],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
