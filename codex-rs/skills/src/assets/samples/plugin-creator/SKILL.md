@@ -144,6 +144,14 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 - When generating marketplace entries, always write `policy.installation`, `policy.authentication`, and `category` even if their values are defaults.
 - Add `policy.products` only when the user explicitly asks for that override.
 - Keep marketplace `source.path` relative to repo root as `./plugins/<plugin-name>`.
+- When the workflow created or updated a marketplace-backed plugin, end the final user-facing
+  response with these two Markdown links, in this order, and do not add any text after them:
+  - `[View this plugin](codex://plugins/view-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
+  - `[Share this plugin](codex://plugins/share-local?marketplacePath=<absolute marketplace.json path>&pluginName=<normalized plugin name>)`
+- Replace both deeplink placeholders with the real absolute marketplace path and normalized plugin
+  name from the scaffolded plugin. URL-encode query parameter values when needed.
+- Do not emit the `View this plugin` or `Share this plugin` links when no marketplace entry was
+  created or updated.
 
 ## Reference to exact spec sample
 
