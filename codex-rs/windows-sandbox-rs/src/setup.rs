@@ -364,9 +364,6 @@ fn gather_legacy_full_read_roots(
             .iter()
             .map(PathBuf::from),
     );
-    if let Ok(up) = std::env::var("USERPROFILE") {
-        roots.extend(profile_read_roots(Path::new(&up)));
-    }
     roots.push(command_cwd.to_path_buf());
     if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
         for root in writable_roots {
@@ -956,9 +953,42 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    static USERPROFILE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value.as_ref());
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn canonical_windows_platform_default_roots() -> Vec<PathBuf> {
         WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
@@ -1453,5 +1483,24 @@ mod tests {
                 .into_iter()
                 .all(|path| roots.contains(&path))
         );
+    }
+
+    #[test]
+    fn full_read_roots_do_not_derive_user_profile_children() {
+        let _env_lock = USERPROFILE_ENV_LOCK.lock().expect("lock USERPROFILE env");
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let user_profile = tmp.path().join("user-profile");
+        let desktop = user_profile.join("Desktop");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&desktop).expect("create desktop");
+        let _user_profile = EnvVarGuard::set("USERPROFILE", &user_profile);
+        let policy = SandboxPolicy::new_read_only_policy();
+
+        let roots = gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home);
+        let desktop = dunce::canonicalize(&desktop).expect("canonical desktop");
+
+        assert!(!roots.contains(&desktop));
     }
 }
