@@ -2657,17 +2657,14 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     .await?;
 
     let approval = expect_exec_approval(&test, command).await;
-    let amendment = approval
-        .proposed_execpolicy_amendment
-        .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(&command.to_string()));
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
+async fn approving_fallback_rule_for_sandbox_override_is_not_persisted() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -2711,18 +2708,13 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
 
     let approval = expect_exec_approval(&test, command).await;
     let approval_id = approval.effective_approval_id();
-    let amendment = approval
-        .proposed_execpolicy_amendment
-        .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(&command.to_string()));
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
 
     test.codex
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: None,
-            decision: ReviewDecision::ApprovedExecpolicyAmendment {
-                proposed_execpolicy_amendment: amendment.clone(),
-            },
+            decision: ReviewDecision::Approved,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2747,14 +2739,6 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
         ]),
     )
     .await;
-    let second_results = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-invalid-prefix-1", "done"),
-            ev_completed("resp-invalid-prefix-2"),
-        ]),
-    )
-    .await;
 
     submit_turn(
         &test,
@@ -2764,19 +2748,8 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
-
-    let second_output = parse_result(
-        &second_results
-            .single_request()
-            .function_call_output(call_id),
-    );
-    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
-    assert!(
-        second_output.stdout.is_empty(),
-        "unexpected stdout: {}",
-        second_output.stdout
-    );
+    let second_approval = expect_exec_approval(&test, command).await;
+    assert_eq!(second_approval.proposed_execpolicy_amendment, None);
 
     Ok(())
 }

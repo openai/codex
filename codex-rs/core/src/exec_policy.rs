@@ -246,6 +246,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) sandbox_cwd: &'a Path,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) allow_execpolicy_amendment: bool,
 }
 
 impl ExecPolicyManager {
@@ -281,6 +282,7 @@ impl ExecPolicyManager {
             sandbox_cwd,
             sandbox_permissions,
             prefix_rule,
+            allow_execpolicy_amendment,
         } = req;
         let exec_policy = self.current();
         let ExecPolicyCommands {
@@ -291,7 +293,9 @@ impl ExecPolicyManager {
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_complex_parsing;
+        let auto_amendment_allowed = !used_complex_parsing
+            && allow_execpolicy_amendment
+            && !sandbox_permissions.requests_sandbox_override();
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 cmd,
@@ -649,7 +653,6 @@ pub(crate) fn render_decision_for_unmatched_command(
             codex_shell_command::is_safe_command::is_safe_powershell_words(command)
         }
     };
-
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
     let environment_lacks_sandbox_protections = cfg!(windows)
@@ -699,6 +702,15 @@ pub(crate) fn render_decision_for_unmatched_command(
             | AskForApproval::UnlessTrusted
             | AskForApproval::Granular(_) => Decision::Prompt,
         };
+    }
+
+    if sandbox_permissions.requests_sandbox_override()
+        && matches!(
+            file_system_sandbox_policy.kind,
+            FileSystemSandboxKind::Restricted
+        )
+    {
+        return Decision::Prompt;
     }
 
     match approval_policy {

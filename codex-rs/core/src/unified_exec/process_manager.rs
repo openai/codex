@@ -1037,6 +1037,7 @@ impl UnifiedExecProcessManager {
                     request.sandbox_permissions
                 },
                 prefix_rule: request.prefix_rule.clone(),
+                allow_execpolicy_amendment: request.allow_execpolicy_amendment,
             })
             .await;
         let req = UnifiedExecToolRequest {

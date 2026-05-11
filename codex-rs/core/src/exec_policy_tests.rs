@@ -938,14 +938,55 @@ EOF"#
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "zsh".to_string(),
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn known_safe_shell_wrapper_with_escalation_requires_approval() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "/tmp/cc01_fake/bash".to_string(),
                 "-lc".to_string(),
-                r#"cat <<'EOF' > /some/important/folder/test.txt
-hello world
-EOF"#
-                    .to_string(),
-            ])),
+                "ls".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn known_safe_shell_wrapper_with_on_failure_escalation_requires_approval() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "/tmp/cc01_fake/bash".to_string(),
+                "-lc".to_string(),
+                "ls".to_string(),
+            ],
+            approval_policy: AskForApproval::OnFailure,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1265,10 +1306,7 @@ async fn exec_approval_requirement_prompts_for_inline_additional_permissions_und
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "touch".to_string(),
-                "requested-dir/requested-but-unused.txt".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1288,10 +1326,7 @@ async fn exec_approval_requirement_prompts_for_known_safe_escalation_under_on_re
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "echo".to_string(),
-                "hello".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1380,6 +1415,7 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1420,6 +1456,7 @@ async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled(
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1447,6 +1484,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1475,6 +1513,7 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1507,6 +1546,7 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1539,6 +1579,7 @@ async fn request_rule_uses_prefix_rule() {
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1546,10 +1587,7 @@ async fn request_rule_uses_prefix_rule() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "cargo".to_string(),
-                "install".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1572,6 +1610,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            allow_execpolicy_amendment: true,
         })
         .await;
 
@@ -1579,11 +1618,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "rm".to_string(),
-                "-rf".to_string(),
-                "/tmp/codex".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1612,6 +1647,7 @@ async fn heuristics_apply_when_other_commands_match_policy() {
                 sandbox_cwd: Path::new("/tmp"),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                allow_execpolicy_amendment: true,
             })
             .await,
         ExecApprovalRequirement::NeedsApproval {
@@ -2105,6 +2141,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 sandbox_cwd: Path::new("/tmp"),
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                allow_execpolicy_amendment: true,
             })
             .await,
         "{pwsh_approval_reason}"
@@ -2132,6 +2169,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 sandbox_cwd: Path::new("/tmp"),
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                allow_execpolicy_amendment: true,
             })
             .await,
         r#"On all platforms, a forbidden command should require approval
@@ -2155,6 +2193,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 sandbox_cwd: Path::new("/tmp"),
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                allow_execpolicy_amendment: true,
             })
             .await,
         r#"On all platforms, a forbidden command should require approval
@@ -2256,6 +2295,7 @@ async fn exec_approval_requirement_for_command(
             sandbox_cwd: Path::new("/tmp"),
             sandbox_permissions,
             prefix_rule,
+            allow_execpolicy_amendment: true,
         })
         .await
 }

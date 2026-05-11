@@ -9533,6 +9533,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             sandbox_cwd: turn_context.cwd.as_path(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            allow_execpolicy_amendment: true,
         })
         .await;
     assert!(matches!(

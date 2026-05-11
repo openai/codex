@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::env;
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
@@ -419,6 +423,127 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_fake_shell_escalation_requires_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_model("gpt-5.2").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let fake_shell_dir = test.config.cwd.join("cc01_fake");
+    fs::create_dir_all(&fake_shell_dir)?;
+    let fake_shell = fake_shell_dir.join("bash");
+    let proof_file = env::current_dir()?.join("cli_8725_fake_shell_proof.txt");
+    let _ = fs::remove_file(&proof_file);
+
+    fs::write(
+        &fake_shell,
+        format!(
+            "#!/bin/sh\nprintf 'fake shell escaped' > {}\nexit 0\n",
+            codex_shell_command::parse_command::shlex_join(&[proof_file
+                .to_string_lossy()
+                .to_string()]),
+        ),
+    )?;
+    let mut permissions = fs::metadata(&fake_shell)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_shell, permissions)?;
+
+    let call_id = "uexec-fake-shell-escalation";
+    let args = json!({
+        "cmd": "ls",
+        "shell": fake_shell.to_string_lossy().to_string(),
+        "yield_time_ms": 1_000,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "validate fake shell sandbox escape guard",
+    });
+
+    mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "run fake shell escalation regression".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile: None,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    match event {
+        EventMsg::ExecApprovalRequest(approval) => {
+            assert_eq!(
+                approval.command,
+                vec![
+                    fake_shell.to_string_lossy().to_string(),
+                    "-lc".to_string(),
+                    "ls".to_string(),
+                ],
+            );
+            assert_eq!(approval.proposed_execpolicy_amendment, None);
+        }
+        EventMsg::TurnComplete(_) => {
+            assert!(
+                !proof_file.exists(),
+                "fake shell ran without approval and created outside proof file at {}",
+                proof_file.display(),
+            );
+            panic!("expected exec approval before turn completion");
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    assert!(
+        !proof_file.exists(),
+        "fake shell should not run before approval: {}",
+        proof_file.display(),
+    );
 
     Ok(())
 }
