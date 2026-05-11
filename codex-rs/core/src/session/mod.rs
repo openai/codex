@@ -286,6 +286,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PendingInputItem;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -3065,7 +3066,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_steer_input(input.into());
         turn_state.accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
@@ -3177,12 +3178,15 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+    pub(crate) async fn prepend_pending_input_items(
+        &self,
+        input: Vec<PendingInputItem>,
+    ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(input);
+                ts.prepend_pending_input_items(input);
                 Ok(())
             }
             None => Err(()),
@@ -3194,13 +3198,25 @@ impl Session {
         reason = "active turn checks and turn state updates must remain atomic"
     )]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        self.get_pending_input_items()
+            .await
+            .into_iter()
+            .map(PendingInputItem::into_response_input_item)
+            .collect()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub(crate) async fn get_pending_input_items(&self) -> Vec<PendingInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
                     (
-                        ts.take_pending_input(),
+                        ts.take_pending_input_items(),
                         ts.accepts_mailbox_delivery_for_current_turn(),
                     )
                 }
@@ -3215,7 +3231,7 @@ impl Session {
             mailbox_rx
                 .drain()
                 .into_iter()
-                .map(|mail| mail.to_response_input_item())
+                .map(|mail| PendingInputItem::injected(mail.to_response_input_item()))
                 .collect::<Vec<_>>()
         };
         if pending_input.is_empty() {

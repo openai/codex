@@ -962,6 +962,25 @@ async fn usage_limit_error_pauses_pending_steers_until_confirmed() {
 }
 
 #[tokio::test]
+async fn generic_rate_limit_error_does_not_pause_pending_steers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.pending_steers
+        .push_back(pending_steer("keep this in flight"));
+    chat.refresh_pending_input_preview();
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::Generic,
+        "Rate limit reached.".to_string(),
+    );
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert!(chat.rejected_steers_queue.is_empty());
+    assert!(!chat.queued_sends_paused_after_usage_limit);
+}
+
+#[tokio::test]
 async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     enable_workspace_owner_usage_nudge(&mut chat);

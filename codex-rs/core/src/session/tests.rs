@@ -4,6 +4,7 @@ use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
+use crate::context::UserShellCommand;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -59,6 +60,7 @@ use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::ActiveTurn;
+use crate::state::PendingInputItem;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -7310,7 +7312,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn task_finish_discards_leftover_pending_user_input_after_usage_limit() {
+async fn task_finish_discards_leftover_pending_steer_after_usage_limit() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
@@ -7328,15 +7330,16 @@ async fn task_finish_discards_leftover_pending_user_input_after_usage_limit() {
 
     while rx.try_recv().is_ok() {}
 
-    sess.inject_response_items(vec![ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
+    sess.steer_input(
+        vec![UserInput::Text {
             text: "late pending input".to_string(),
+            text_elements: Vec::new(),
         }],
-        phase: None,
-    }])
+        Some(&tc.sub_id),
+        /*responsesapi_client_metadata*/ None,
+    )
     .await
-    .expect("inject pending input into active turn");
+    .expect("steer active turn");
     sess.mark_usage_limit_reached(&tc.sub_id).await;
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
@@ -7369,6 +7372,69 @@ async fn task_finish_discards_leftover_pending_user_input_after_usage_limit() {
             ..
         }) if turn_id == tc.sub_id
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_preserves_injected_pending_context_after_usage_limit() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    while rx.try_recv().is_ok() {}
+
+    let shell_output = match ContextualUserFragment::into(UserShellCommand::new(
+        "echo hi",
+        /*exit_code*/ 0,
+        std::time::Duration::from_secs(1),
+        "hi",
+    )) {
+        ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } => ResponseInputItem::Message {
+            role,
+            content,
+            phase,
+        },
+        other => panic!("expected user shell output message, got {other:?}"),
+    };
+    let code_mode_notification = ResponseInputItem::CustomToolCallOutput {
+        call_id: "call-1".to_string(),
+        name: Some("code_mode".to_string()),
+        output: FunctionCallOutputPayload::from_text("cell output".to_string()),
+    };
+    sess.inject_response_items(vec![shell_output.clone(), code_mode_notification.clone()])
+        .await
+        .expect("inject pending context into active turn");
+    sess.mark_usage_limit_reached(&tc.sub_id).await;
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+
+    let history = sess.clone_history().await;
+    assert!(
+        history
+            .raw_items()
+            .contains(&ResponseItem::from(shell_output))
+    );
+    assert!(
+        history
+            .raw_items()
+            .contains(&ResponseItem::from(code_mode_notification))
+    );
 }
 
 #[tokio::test]
@@ -7548,8 +7614,15 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .await
         .expect("inject initial pending input into active turn");
 
-    let drained = sess.get_pending_input().await;
-    assert_eq!(drained, vec![blocked, later.clone()]);
+    let drained = sess.get_pending_input_items().await;
+    assert_eq!(
+        drained
+            .iter()
+            .cloned()
+            .map(PendingInputItem::into_response_input_item)
+            .collect::<Vec<_>>(),
+        vec![blocked, later.clone()]
+    );
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -7557,7 +7630,7 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input(drained_iter.collect())
+    sess.prepend_pending_input_items(drained_iter.collect())
         .await
         .expect("requeue later pending input at the front of the queue");
 
@@ -7635,7 +7708,13 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 
     assert!(sess.active_turn.lock().await.is_none());
     assert_eq!(
-        turn_state.lock().await.take_pending_input(),
+        turn_state
+            .lock()
+            .await
+            .take_pending_input_items()
+            .into_iter()
+            .map(PendingInputItem::into_response_input_item)
+            .collect::<Vec<_>>(),
         vec![pending_item]
     );
 }

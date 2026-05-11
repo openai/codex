@@ -29,6 +29,7 @@ use crate::hook_runtime::record_pending_input;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
+use crate::state::PendingInputItem;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnTokenUsageFact;
@@ -40,7 +41,6 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -562,7 +562,7 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_input = Vec::<PendingInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
@@ -588,15 +588,24 @@ impl Session {
         };
         if let Some(turn_state) = turn_state.as_ref() {
             let mut ts = turn_state.lock().await;
-            pending_input = ts.take_pending_input();
+            pending_input = ts.take_pending_input_items();
             turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             usage_limit_reached = ts.usage_limit_reached();
         }
-        if !usage_limit_reached && !pending_input.is_empty() {
+        if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item).await {
+                if usage_limit_reached && pending_input_item.is_turn_steer() {
+                    continue;
+                }
+                match inspect_pending_input(
+                    self,
+                    &turn_context,
+                    pending_input_item.into_response_input_item(),
+                )
+                .await
+                {
                     PendingInputHookDisposition::Accepted(pending_input) => {
                         record_pending_input(self, &turn_context, *pending_input).await;
                     }

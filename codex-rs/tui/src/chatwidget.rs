@@ -3071,8 +3071,10 @@ impl ChatWidget {
     }
 
     fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
-        self.defer_pending_steers_after_usage_limit();
-        self.pause_queued_sends_after_limit_error();
+        if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+            self.defer_pending_steers_after_usage_limit();
+            self.pause_queued_sends_after_limit_error();
+        }
 
         if !self.workspace_owner_usage_nudge_enabled() {
             self.on_error(message);

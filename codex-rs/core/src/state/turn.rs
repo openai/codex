@@ -25,6 +25,32 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PendingInputItem {
+    TurnSteer(ResponseInputItem),
+    Injected(ResponseInputItem),
+}
+
+impl PendingInputItem {
+    pub(crate) fn turn_steer(input: ResponseInputItem) -> Self {
+        Self::TurnSteer(input)
+    }
+
+    pub(crate) fn injected(input: ResponseInputItem) -> Self {
+        Self::Injected(input)
+    }
+
+    pub(crate) fn is_turn_steer(&self) -> bool {
+        matches!(self, Self::TurnSteer(_))
+    }
+
+    pub(crate) fn into_response_input_item(self) -> ResponseInputItem {
+        match self {
+            Self::TurnSteer(input) | Self::Injected(input) => input,
+        }
+    }
+}
+
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
@@ -113,7 +139,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<ResponseInputItem>,
+    pending_input: Vec<PendingInputItem>,
     usage_limit_reached: bool,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<AdditionalPermissionProfile>,
@@ -221,10 +247,14 @@ impl TurnState {
     }
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
-        self.pending_input.push(input);
+        self.pending_input.push(PendingInputItem::injected(input));
     }
 
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+    pub(crate) fn push_pending_steer_input(&mut self, input: ResponseInputItem) {
+        self.pending_input.push(PendingInputItem::turn_steer(input));
+    }
+
+    pub(crate) fn prepend_pending_input_items(&mut self, mut input: Vec<PendingInputItem>) {
         if input.is_empty() {
             return;
         }
@@ -233,7 +263,7 @@ impl TurnState {
         self.pending_input = input;
     }
 
-    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
+    pub(crate) fn take_pending_input_items(&mut self) -> Vec<PendingInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
