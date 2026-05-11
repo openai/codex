@@ -463,7 +463,7 @@ pub(crate) async fn run_turn(
         )
         .await
         {
-            Ok(SamplingRequestLoopOutcome::Completed(sampling_request_output)) => {
+            Ok(sampling_request_output) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -631,7 +631,6 @@ pub(crate) async fn run_turn(
                 }
                 continue;
             }
-            Ok(SamplingRequestLoopOutcome::StopTurn) => return None,
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
@@ -1012,7 +1011,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestLoopOutcome> {
+) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1071,7 +1070,7 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok(SamplingRequestLoopOutcome::Completed(output));
+                return Ok(output);
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
@@ -1090,7 +1089,7 @@ async fn run_sampling_request(
                 .await
                 {
                     Ok(reset_client_session) => reset_client_session,
-                    Err(_) => return Ok(SamplingRequestLoopOutcome::StopTurn),
+                    Err(_) => return Err(CodexErr::TurnAborted),
                 };
                 if reset_client_session {
                     client_session.reset_websocket_session();
@@ -1298,12 +1297,6 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-}
-
-#[derive(Debug)]
-enum SamplingRequestLoopOutcome {
-    Completed(SamplingRequestResult),
-    StopTurn,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
