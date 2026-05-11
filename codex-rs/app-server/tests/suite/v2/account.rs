@@ -995,6 +995,48 @@ async fn login_account_api_key_rejects_unusable_key_before_persisting() -> Resul
 }
 
 #[tokio::test]
+async fn login_account_api_key_validation_transient_failure_is_retryable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": { "message": "temporary outage" }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        err.error.message,
+        "Could not validate API key right now. Check your connection and try again."
+    );
+    assert!(!codex_home.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(

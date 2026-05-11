@@ -45,6 +45,10 @@ enum RefreshTokenRequestOutcome {
     FailedPermanently,
 }
 
+fn api_key_validation_unavailable() -> JSONRPCErrorError {
+    invalid_request("Could not validate API key right now. Check your connection and try again.")
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -297,6 +301,17 @@ impl AccountRequestProcessor {
                 CodexErr::UnexpectedStatus(err) if matches!(err.status.as_u16(), 401 | 403) => {
                     invalid_request("API key is invalid or unusable.")
                 }
+                CodexErr::UnexpectedStatus(err)
+                    if err.status.is_server_error() || matches!(err.status.as_u16(), 408 | 429) =>
+                {
+                    api_key_validation_unavailable()
+                }
+                CodexErr::Timeout
+                | CodexErr::Stream(..)
+                | CodexErr::ResponseStreamFailed(_)
+                | CodexErr::ConnectionFailed(_)
+                | CodexErr::InternalServerError
+                | CodexErr::RetryLimit(_) => api_key_validation_unavailable(),
                 err => internal_error(format!("failed to validate api key: {err}")),
             })
     }
