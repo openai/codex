@@ -618,6 +618,102 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
 }
 
 #[tokio::test]
+async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "materialized thread",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread_id,
+                "objective": "keep polishing",
+                "status": "active",
+                "tokenBudget": 40,
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    let thread_id = ThreadId::from_string(&thread_id)?;
+    let persisted_goal = state_db
+        .get_thread_goal(thread_id)
+        .await?
+        .expect("goal should exist");
+    state_db
+        .account_thread_goal_usage(
+            thread_id,
+            /*time_delta_seconds*/ 12,
+            /*token_delta*/ 50,
+            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            Some(persisted_goal.goal_id.as_str()),
+        )
+        .await?;
+
+    let edit_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread_id.to_string(),
+                "objective": "keep polishing with clearer wording",
+                "status": "active",
+                "tokenBudget": 40,
+            })),
+        )
+        .await?;
+    let edit_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(edit_id)),
+    )
+    .await??;
+    let edit: ThreadGoalSetResponse = to_response(edit_resp)?;
+    let updated_goal = state_db
+        .get_thread_goal(thread_id)
+        .await?
+        .expect("goal should still exist");
+
+    assert_eq!(persisted_goal.goal_id, updated_goal.goal_id);
+    assert_eq!(edit.goal.objective, "keep polishing with clearer wording");
+    assert_eq!(edit.goal.status, ThreadGoalStatus::BudgetLimited);
+    assert_eq!(edit.goal.token_budget, Some(40));
+    assert_eq!(edit.goal.tokens_used, 50);
+    assert_eq!(edit.goal.time_used_seconds, 12);
+    assert_eq!(edit.goal.created_at, goal.goal.created_at);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

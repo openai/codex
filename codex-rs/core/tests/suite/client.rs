@@ -7,6 +7,7 @@ use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -907,6 +908,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
@@ -1136,10 +1138,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         auth_manager,
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
         installation_id,
+        /*attestation_provider*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config.clone())
@@ -2327,6 +2331,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     );
     let mut client_session = client.new_session();
 

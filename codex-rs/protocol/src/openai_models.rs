@@ -203,7 +203,6 @@ pub enum ConfigShellToolType {
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
     Freeform,
-    Function,
 }
 
 #[derive(

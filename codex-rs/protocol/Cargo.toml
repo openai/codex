@@ -21,7 +21,6 @@ codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-string = { workspace = true }
-codex-utils-template = { workspace = true }
 encoding_rs = { workspace = true }
 globset = { workspace = true }
 icu_decimal = { workspace = true }
@@ -60,5 +59,4 @@ tempfile = { workspace = true }
 [package.metadata.cargo-shear]
 # Required because:
 # `icu_provider`: contains a required `sync` feature for `icu_decimal`
-# `strum`: as strum_macros in non-nightly builds
-ignored = ["icu_provider", "strum"]
+ignored = ["icu_provider"]

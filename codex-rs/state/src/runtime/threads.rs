@@ -23,6 +23,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
     threads.tokens_used,
@@ -477,6 +478,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
         metadata: &crate::ThreadMetadata,
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let preview = metadata_preview(metadata);
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -497,6 +499,7 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    preview,
     sandbox_policy,
     approval_mode,
     tokens_used,
@@ -507,7 +510,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -537,6 +540,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
+        .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
@@ -677,6 +681,7 @@ WHERE id = ?
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        let preview = metadata_preview(metadata);
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
@@ -700,6 +705,7 @@ INSERT INTO threads (
     cwd,
     cli_version,
     title,
+    preview,
     sandbox_policy,
     approval_mode,
     tokens_used,
@@ -710,7 +716,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -728,6 +734,7 @@ ON CONFLICT(id) DO UPDATE SET
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
     title = excluded.title,
+    preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview),
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
@@ -765,6 +772,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
+        .bind(preview)
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
@@ -982,6 +990,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
     threads.tokens_used,
@@ -1058,7 +1067,7 @@ pub(super) fn push_thread_filters<'a>(
     } else {
         builder.push(" AND threads.archived = 0");
     }
-    builder.push(" AND threads.first_user_message <> ''");
+    builder.push(" AND threads.preview <> ''");
     if !allowed_sources.is_empty() {
         builder.push(" AND threads.source IN (");
         let mut separated = builder.separated(", ");
@@ -1092,9 +1101,11 @@ pub(super) fn push_thread_filters<'a>(
         None => {}
     }
     if let Some(search_term) = search_term {
-        builder.push(" AND instr(threads.title, ");
+        builder.push(" AND (instr(threads.title, ");
         builder.push_bind(search_term);
-        builder.push(") > 0");
+        builder.push(") > 0 OR instr(threads.preview, ");
+        builder.push_bind(search_term);
+        builder.push(") > 0)");
     }
     if let Some(anchor) = anchor {
         let anchor_ts = datetime_to_epoch_millis(anchor.ts);
@@ -1136,6 +1147,14 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
+    metadata
+        .preview
+        .as_deref()
+        .or(metadata.first_user_message.as_deref())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1514,6 +1533,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_thread_preserves_existing_preview_when_incoming_preview_is_empty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000459").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.first_user_message = None;
+        metadata.preview = Some("migrated goal preview".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let mut rollout_metadata = metadata.clone();
+        rollout_metadata.preview = None;
+
+        runtime
+            .upsert_thread(&rollout_metadata)
+            .await
+            .expect("rollout upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.preview.as_deref(), Some("migrated goal preview"));
+    }
+
+    #[tokio::test]
     async fn update_thread_git_info_preserves_newer_non_git_metadata() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -1532,11 +1584,12 @@ mod tests {
             DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
         );
         sqlx::query(
-            "UPDATE threads SET updated_at = ?, updated_at_ms = ?, tokens_used = ?, first_user_message = ? WHERE id = ?",
+            "UPDATE threads SET updated_at = ?, updated_at_ms = ?, tokens_used = ?, first_user_message = ?, preview = ? WHERE id = ?",
         )
         .bind(updated_at / 1000)
         .bind(updated_at)
         .bind(123_i64)
+        .bind("newer preview")
         .bind("newer preview")
         .bind(thread_id.to_string())
         .execute(runtime.pool.as_ref())
@@ -1564,6 +1617,7 @@ mod tests {
             persisted.first_user_message.as_deref(),
             Some("newer preview")
         );
+        assert_eq!(persisted.preview.as_deref(), Some("newer preview"));
         assert_eq!(datetime_to_epoch_millis(persisted.updated_at), updated_at);
         assert_eq!(persisted.git_sha.as_deref(), Some("abc123"));
         assert_eq!(persisted.git_branch.as_deref(), Some("feature/branch"));
@@ -1585,6 +1639,7 @@ mod tests {
         let mut existing = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         existing.tokens_used = 123;
         existing.first_user_message = Some("newer preview".to_string());
+        existing.preview = Some("newer preview".to_string());
         existing.updated_at = DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp");
         runtime
             .upsert_thread(&existing)
@@ -1594,6 +1649,7 @@ mod tests {
         let mut fallback = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         fallback.tokens_used = 0;
         fallback.first_user_message = None;
+        fallback.preview = None;
         fallback.updated_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
 
         let inserted = runtime
@@ -1612,6 +1668,7 @@ mod tests {
             persisted.first_user_message.as_deref(),
             Some("newer preview")
         );
+        assert_eq!(persisted.preview.as_deref(), Some("newer preview"));
         assert_eq!(
             datetime_to_epoch_millis(persisted.updated_at),
             datetime_to_epoch_millis(existing.updated_at)
@@ -1663,6 +1720,7 @@ mod tests {
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
         metadata.title = "original title".to_string();
         metadata.first_user_message = Some("first-user-message".to_string());
+        metadata.preview = None;
 
         runtime
             .upsert_thread(&metadata)
@@ -1687,6 +1745,7 @@ mod tests {
             persisted.first_user_message.as_deref(),
             Some("first-user-message")
         );
+        assert_eq!(persisted.preview.as_deref(), Some("first-user-message"));
     }
 
     #[tokio::test]

@@ -21,10 +21,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
-use crate::tools::handlers::apply_patch_spec::ApplyPatchToolArgs;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
-use crate::tools::handlers::apply_patch_spec::create_apply_patch_json_tool;
-use crate::tools::handlers::parse_arguments;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -43,7 +40,6 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
@@ -56,25 +52,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 
-pub struct ApplyPatchHandler {
-    options: ApplyPatchToolType,
-}
-
-impl Default for ApplyPatchHandler {
-    fn default() -> Self {
-        Self {
-            options: ApplyPatchToolType::Freeform,
-        }
-    }
-}
-
-impl ApplyPatchHandler {
-    pub(crate) fn new(apply_patch_tool_type: ApplyPatchToolType) -> Self {
-        Self {
-            options: apply_patch_tool_type,
-        }
-    }
-}
+pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
@@ -264,15 +242,8 @@ fn write_permissions_for_paths(
 }
 
 /// Extracts the raw patch text used as the command-shaped hook input for apply_patch.
-///
-/// The apply_patch tool can arrive as the older JSON/function shape or as a
-/// freeform custom tool call. Both represent the same file edit operation, so
-/// hooks see the raw patch body in `tool_input.command` either way.
 fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
     match payload {
-        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
-            .ok()
-            .map(|args| args.input),
         ToolPayload::Custom { input } => Some(input.clone()),
         _ => None,
     }
@@ -320,10 +291,7 @@ impl ToolHandler for ApplyPatchHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(match self.options {
-            ApplyPatchToolType::Freeform => create_apply_patch_freeform_tool(),
-            ApplyPatchToolType::Function => create_apply_patch_json_tool(),
-        })
+        Some(create_apply_patch_freeform_tool())
     }
 
     fn kind(&self) -> ToolKind {
@@ -331,10 +299,7 @@ impl ToolHandler for ApplyPatchHandler {
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(
-            payload,
-            ToolPayload::Function { .. } | ToolPayload::Custom { .. }
-        )
+        matches!(payload, ToolPayload::Custom { .. })
     }
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
@@ -380,17 +345,10 @@ impl ToolHandler for ApplyPatchHandler {
             ..
         } = invocation;
 
-        let patch_input = match payload {
-            ToolPayload::Function { arguments } => {
-                let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
-                args.input
-            }
-            ToolPayload::Custom { input } => input,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "apply_patch handler received unsupported payload".to_string(),
-                ));
-            }
+        let ToolPayload::Custom { input: patch_input } = payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "apply_patch handler received unsupported payload".to_string(),
+            ));
         };
 
         // Re-parse and verify the patch so we can compute changes and approval.

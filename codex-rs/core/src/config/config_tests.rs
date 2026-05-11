@@ -3371,69 +3371,6 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
-async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        mcp_servers: Some(BTreeMap::new()),
-        ..Default::default()
-    };
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
-        .build()
-        .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        mcp_servers: Some(BTreeMap::from([(
-            "docs".to_string(),
-            McpServerRequirement {
-                identity: McpServerIdentity::Command {
-                    command: "docs-mcp".to_string(),
-                },
-            },
-        )])),
-        ..Default::default()
-    };
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
-        .build()
-        .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -4272,87 +4209,6 @@ async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<(
     let _ = config.features.enable(Feature::NonPrefixedMcpToolNames);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(!mcp_config.prefix_mcp_tool_names);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert!(mcp_config.builtin_mcp_servers.is_empty());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            mcp_servers: HashMap::from([(
-                codex_mcp::MEMORIES_MCP_SERVER_NAME.to_string(),
-                http_mcp("https://user.example/memories"),
-            )]),
-            ..ConfigToml::default()
-        },
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
-    );
 
     Ok(())
 }
@@ -7308,6 +7164,30 @@ async fn legacy_fast_service_tier_override_uses_priority_request_value() -> std:
             ..Default::default()
         },
         fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_priority_service_tier_uses_priority_request_value() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
     )
     .await?;
 

@@ -43,31 +43,13 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
 }
 
 #[tokio::test]
-async fn pre_tool_use_payload_uses_json_patch_input() {
-    let patch = sample_patch();
-    let payload = ToolPayload::Function {
-        arguments: json!({ "input": patch }).to_string(),
-    };
-    let invocation = invocation_for_payload(payload).await;
-    let handler = ApplyPatchHandler::default();
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&invocation),
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: json!({ "command": patch }),
-        })
-    );
-}
-
-#[tokio::test]
 async fn pre_tool_use_payload_uses_freeform_patch_input() {
     let patch = sample_patch();
     let payload = ToolPayload::Custom {
         input: patch.to_string(),
     };
     let invocation = invocation_for_payload(payload).await;
-    let handler = ApplyPatchHandler::default();
+    let handler = ApplyPatchHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&invocation),
@@ -86,7 +68,7 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
     };
     let invocation = invocation_for_payload(payload).await;
     let output = ApplyPatchToolOutput::from_text("Success. Updated files.".to_string());
-    let handler = ApplyPatchHandler::default();
+    let handler = ApplyPatchHandler;
 
     assert_eq!(
         handler.post_tool_use_payload(&invocation, &output),
@@ -96,24 +78,6 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })
-    );
-}
-
-#[test]
-fn diff_consumer_does_not_stream_json_tool_call_arguments() {
-    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
-    assert!(
-        consumer
-            .push_delta("call-1".to_string(), r#"{"input":"*** Begin Patch\n"#)
-            .is_none()
-    );
-    assert!(
-        consumer
-            .push_delta(
-                "call-1".to_string(),
-                r#"*** Add File: hello.txt\n+hello\n*** End Patch\n"}"#
-            )
-            .is_none()
     );
 }
 

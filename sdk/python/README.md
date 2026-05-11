@@ -91,7 +91,7 @@ This supports the CI release flow:
 - run `generate-types` before packaging
 - stage `openai-codex-app-server-sdk` once with an exact `openai-codex-cli-bin==...` dependency
 - stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `openai-codex-cli-bin` as platform wheels only through PyPI trusted publishing; do not publish an sdist
+- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 

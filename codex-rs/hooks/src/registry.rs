@@ -46,7 +46,6 @@ pub struct HookListOutcome {
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
-    after_tool_use: Vec<Hook>,
     engine: ClaudeHooksEngine,
 }
 
@@ -76,7 +75,6 @@ impl Hooks {
         );
         Self {
             after_agent,
-            after_tool_use: Vec::new(),
             engine,
         }
     }
@@ -88,7 +86,6 @@ impl Hooks {
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
-            HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
     }
 

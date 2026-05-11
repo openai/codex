@@ -63,7 +63,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         default_reasoning_summary: ReasoningSummary::None,
         support_verbosity: true,
         default_verbosity: Some(Verbosity::Medium),
-        apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+        apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
         web_search_tool_type: WebSearchToolType::TextAndImage,
         truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
         supports_parallel_tool_calls: true,

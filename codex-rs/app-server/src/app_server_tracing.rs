@@ -1,7 +1,7 @@
 //! Tracing helpers shared by socket and in-process app-server entry points.
 //!
 //! The in-process path intentionally reuses the same span shape as JSON-RPC
-//! transports so request telemetry stays comparable across stdio, websocket,
+//! transports so request telemetry stays comparable across stdio, unix socket,
 //! and embedded callers. [`typed_request_span`] is the in-process counterpart
 //! of [`request_span`] and stamps `rpc.transport` as `"in-process"` while
 //! deriving client identity from the typed [`ClientRequest`] rather than
@@ -86,7 +86,6 @@ fn transport_name(transport: &AppServerTransport) -> &'static str {
     match transport {
         AppServerTransport::Stdio => "stdio",
         AppServerTransport::UnixSocket { .. } => "unix_socket",
-        AppServerTransport::WebSocket { .. } => "websocket",
         AppServerTransport::Off => "off",
     }
 }

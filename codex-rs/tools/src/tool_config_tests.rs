@@ -156,7 +156,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 }
 
 #[test]
-fn fallback_apply_patch_models_use_function_tool_by_default() {
+fn fallback_apply_patch_models_use_freeform_tool_by_default() {
     let model_info = model_info();
     let features = Features::with_defaults();
 
@@ -174,7 +174,7 @@ fn fallback_apply_patch_models_use_function_tool_by_default() {
 
     assert_eq!(
         tools_config.apply_patch_tool_type,
-        Some(ApplyPatchToolType::Function)
+        Some(ApplyPatchToolType::Freeform)
     );
 }
 

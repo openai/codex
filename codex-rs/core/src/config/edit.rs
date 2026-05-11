@@ -7,6 +7,7 @@ use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -535,9 +536,14 @@ impl ConfigDocument {
             }),
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
                 &["service_tier"],
-                service_tier
-                    .as_ref()
-                    .map(|service_tier| value(service_tier.clone())),
+                service_tier.as_ref().map(|service_tier| {
+                    let config_value = match ServiceTier::from_request_value(service_tier) {
+                        Some(ServiceTier::Fast) => "fast",
+                        Some(ServiceTier::Flex) => "flex",
+                        None => service_tier.as_str(),
+                    };
+                    value(config_value)
+                }),
             )),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],

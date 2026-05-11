@@ -433,15 +433,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         .function_call_output_content_and_success(call_id_success)
         .and_then(|(content, _)| content)
         .expect("success output string");
-    let output_json: Value = serde_json::from_str(&success_output)?;
-    assert_eq!(
-        output_json["metadata"]["exit_code"].as_i64(),
-        Some(0),
-        "expected exit code 0 after rerunning without escalation",
+    assert_regex_match(
+        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nshell ok\n?$",
+        &success_output,
     );
-    let stdout = output_json["output"].as_str().unwrap_or_default();
-    let stdout_pattern = r"(?s)^shell ok\n?$";
-    assert_regex_match(stdout_pattern, stdout);
 
     Ok(())
 }

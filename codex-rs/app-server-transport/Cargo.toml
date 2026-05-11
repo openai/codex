@@ -13,15 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
-axum = { workspace = true, default-features = false, features = [
-    "http1",
-    "json",
-    "tokio",
-    "ws",
-] }
 base64 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
@@ -31,16 +23,10 @@ codex-state = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
-constant_time_eq = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
-hmac = { workspace = true }
-jsonwebtoken = { workspace = true }
-owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

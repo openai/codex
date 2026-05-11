@@ -5,7 +5,6 @@
 //! the main event loop remains single-threaded.
 
 use super::*;
-use codex_app_server_protocol::HookTrustStatus;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -15,6 +14,9 @@ use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
 use codex_app_server_protocol::RequestId;
 
+use crate::hooks_rpc::fetch_hooks_list;
+use crate::hooks_rpc::write_hook_trust;
+use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -86,47 +88,6 @@ impl App {
                 .await
                 .map_err(|err| format!("{err:#}"));
             app_event_tx.send(AppEvent::SkillsListLoaded { result });
-        });
-    }
-
-    /// Emits the initial hook review warning without delaying the first interactive frame.
-    pub(super) fn refresh_startup_hooks(&mut self, app_server: &AppServerSession) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        let cwd = self.config.cwd.to_path_buf();
-        tokio::spawn(async move {
-            let result = fetch_hooks_list(request_handle, cwd.clone()).await;
-            let response = match result {
-                Ok(response) => response,
-                Err(err) => {
-                    tracing::warn!("failed to load startup hook review state: {err:#}");
-                    return;
-                }
-            };
-            let hooks_needing_review = response
-                .data
-                .into_iter()
-                .find(|entry| entry.cwd.as_path() == cwd.as_path())
-                .map(|entry| {
-                    entry
-                        .hooks
-                        .into_iter()
-                        .filter(|hook| {
-                            matches!(
-                                hook.trust_status,
-                                HookTrustStatus::Untrusted | HookTrustStatus::Modified
-                            )
-                        })
-                        .count()
-                })
-                .unwrap_or_default();
-            if let Some(message) =
-                startup_prompts::hooks_needing_review_warning(hooks_needing_review)
-            {
-                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_warning_event(message),
-                )));
-            }
         });
     }
 
@@ -377,6 +338,22 @@ impl App {
                 .await
                 .map(|_| ())
                 .map_err(|err| format!("Failed to trust hook: {err}"));
+            app_event_tx.send(AppEvent::HookTrusted { result });
+        });
+    }
+
+    pub(super) fn trust_hooks(
+        &mut self,
+        app_server: &AppServerSession,
+        updates: Vec<HookTrustUpdate>,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = write_hook_trusts(request_handle, updates)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to trust hooks: {err}"));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
@@ -674,20 +651,6 @@ pub(super) async fn fetch_plugins_list(
     Ok(response)
 }
 
-pub(super) async fn fetch_hooks_list(
-    request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
-) -> Result<HooksListResponse> {
-    let request_id = RequestId::String(format!("hooks-list-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::HooksList {
-            request_id,
-            params: HooksListParams { cwds: vec![cwd] },
-        })
-        .await
-        .wrap_err("hooks/list failed in TUI")
-}
-
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
 
 pub(super) fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
@@ -862,35 +825,6 @@ pub(super) async fn write_hook_enabled(
         })
         .await
         .wrap_err("config/batchWrite failed while updating hook enablement in TUI")
-}
-
-pub(super) async fn write_hook_trust(
-    request_handle: AppServerRequestHandle,
-    key: String,
-    current_hash: String,
-) -> Result<ConfigWriteResponse> {
-    let request_id = RequestId::String(format!("hooks-config-write-{}", Uuid::new_v4()));
-    let value = serde_json::json!({
-        key: {
-            "trusted_hash": current_hash,
-        }
-    });
-    request_handle
-        .request_typed(ClientRequest::ConfigBatchWrite {
-            request_id,
-            params: ConfigBatchWriteParams {
-                edits: vec![codex_app_server_protocol::ConfigEdit {
-                    key_path: "hooks.state".to_string(),
-                    value,
-                    merge_strategy: MergeStrategy::Upsert,
-                }],
-                file_path: None,
-                expected_version: None,
-                reload_user_config: true,
-            },
-        })
-        .await
-        .wrap_err("config/batchWrite failed while updating hook trust in TUI")
 }
 
 pub(super) fn build_feedback_upload_params(

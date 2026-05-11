@@ -32,12 +32,10 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
-use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
-use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -74,6 +72,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod analytics_utils;
 mod app_server_tracing;
+mod attestation;
 mod bespoke_event_handling;
 mod command_exec;
 mod config;
@@ -82,6 +81,7 @@ mod config_manager_service;
 mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
+mod extensions;
 mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
@@ -93,6 +93,7 @@ mod outgoing_message;
 mod request_processors;
 mod request_serialization;
 mod server_request_error;
+mod skills_watcher;
 mod thread_state;
 mod thread_status;
 mod transport;
@@ -101,9 +102,6 @@ pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::app_server_control_socket_path;
-pub use crate::transport::auth::AppServerWebsocketAuthArgs;
-pub use crate::transport::auth::AppServerWebsocketAuthSettings;
-pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 
@@ -159,22 +157,33 @@ enum ShutdownAction {
     Finish,
 }
 
-async fn shutdown_signal() -> IoResult<()> {
+#[derive(Clone, Copy)]
+enum ShutdownSignal {
+    Forceable,
+    #[cfg(unix)]
+    GracefulOnly,
+}
+
+async fn shutdown_signal() -> IoResult<ShutdownSignal> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::SignalKind;
         use tokio::signal::unix::signal;
 
         let mut term = signal(SignalKind::terminate())?;
+        let mut hangup = signal(SignalKind::hangup())?;
         tokio::select! {
-            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result,
-            _ = term.recv() => Ok(()),
+            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result.map(|_| ShutdownSignal::Forceable),
+            _ = term.recv() => Ok(ShutdownSignal::Forceable),
+            _ = hangup.recv() => Ok(ShutdownSignal::GracefulOnly),
         }
     }
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await
+        tokio::signal::ctrl_c()
+            .await
+            .map(|_| ShutdownSignal::Forceable)
     }
 }
 
@@ -187,9 +196,16 @@ impl ShutdownState {
         self.forced
     }
 
-    fn on_signal(&mut self, connection_count: usize, running_turn_count: usize) {
+    fn on_signal(
+        &mut self,
+        signal: ShutdownSignal,
+        connection_count: usize,
+        running_turn_count: usize,
+    ) {
         if self.requested {
-            self.forced = true;
+            if matches!(signal, ShutdownSignal::Forceable) {
+                self.forced = true;
+            }
             return;
         }
 
@@ -362,7 +378,6 @@ pub async fn run_main(
         default_analytics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
-        AppServerWebsocketAuthSettings::default(),
     )
     .await
 }
@@ -393,7 +408,6 @@ pub async fn run_main_with_transport(
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
-    auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
     run_main_with_transport_options(
         arg0_paths,
@@ -402,7 +416,6 @@ pub async fn run_main_with_transport(
         default_analytics_enabled,
         transport,
         session_source,
-        auth,
         AppServerRuntimeOptions::default(),
     )
     .await
@@ -416,7 +429,6 @@ pub async fn run_main_with_transport_options(
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
-    auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
@@ -655,16 +667,6 @@ pub async fn run_main_with_transport_options(
             .await?;
             transport_accept_handles.push(accept_handle);
         }
-        AppServerTransport::WebSocket { bind_address } => {
-            let accept_handle = start_websocket_acceptor(
-                *bind_address,
-                transport_event_tx.clone(),
-                transport_shutdown_token.clone(),
-                policy_from_settings(&auth)?,
-            )
-            .await?;
-            transport_accept_handles.push(accept_handle);
-        }
         AppServerTransport::Off => {}
     }
 
@@ -736,7 +738,7 @@ pub async fn run_main_with_transport_options(
                             }
                             OutboundControlEvent::DisconnectAll => {
                                 info!(
-                                    "disconnecting {} outbound websocket connection(s) for graceful restart",
+                                    "disconnecting {} outbound connection(s) for graceful restart",
                                     outbound_connections.len()
                                 );
                                 for connection_state in outbound_connections.values() {
@@ -813,11 +815,15 @@ pub async fn run_main_with_transport_options(
 
                 tokio::select! {
                     shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
-                        if let Err(err) = shutdown_signal_result {
-                            warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
-                        }
+                        let signal = match shutdown_signal_result {
+                            Ok(signal) => signal,
+                            Err(err) => {
+                                warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
+                                continue;
+                            }
+                        };
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_signal(connections.len(), running_turn_count);
+                        shutdown_state.on_signal(signal, connections.len(), running_turn_count);
                     }
                     changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
@@ -938,7 +944,14 @@ pub async fn run_main_with_transport_options(
                                                     ),
                                                 )
                                                 .await;
-                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .connection_initialized(
+                                                    connection_id,
+                                                    connection_state
+                                                        .session
+                                                        .request_attestation(),
+                                                )
+                                                .await;
                                             connection_state
                                                 .outbound_initialized
                                                 .store(true, std::sync::atomic::Ordering::Release);
@@ -1053,9 +1066,9 @@ pub async fn run_main_with_transport_options(
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
     match transport {
         AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::UnixSocket { .. }
-        | AppServerTransport::WebSocket { .. }
-        | AppServerTransport::Off => AppServerRpcTransport::Websocket,
+        AppServerTransport::UnixSocket { .. } | AppServerTransport::Off => {
+            AppServerRpcTransport::Websocket
+        }
     }
 }
 
