@@ -1196,16 +1196,7 @@ See the Codex keymap documentation for supported actions and examples."
                                 .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
                         )?;
                     }
-                    let terminal_size = tui.terminal.size()?;
-                    let pet_preview_area = Rect::new(
-                        /*x*/ 0,
-                        /*y*/ 0,
-                        terminal_size.width,
-                        terminal_size.height,
-                    );
-                    if let Some(request) =
-                        self.chat_widget.pet_picker_preview_draw(pet_preview_area)
-                    {
+                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
                         tui.draw_pet_picker_preview_image(Some(request))?;
                     } else if self.chat_widget.should_clear_pet_picker_preview_image() {
                         tui.draw_pet_picker_preview_image(/*request*/ None)?;

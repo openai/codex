@@ -19,7 +19,6 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::tui::FrameRequester;
@@ -267,10 +266,6 @@ impl AmbientPet {
             height_px: size.height_px,
             sixel_dir: self.sixel_dir.clone(),
         })
-    }
-
-    pub(crate) fn render_overlay(&self, area: Rect, composer_bottom_y: u16, buf: &mut Buffer) {
-        let _ = (area, composer_bottom_y, buf);
     }
 
     fn visible_notification(&self, now: Instant) -> Option<&PetNotification> {

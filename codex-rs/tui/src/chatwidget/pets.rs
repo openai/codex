@@ -102,10 +102,7 @@ impl ChatWidget {
             .max(1)
     }
 
-    pub(crate) fn pet_picker_preview_draw(
-        &self,
-        _terminal_area: Rect,
-    ) -> Option<crate::pets::AmbientPetDraw> {
+    pub(crate) fn pet_picker_preview_draw(&self) -> Option<crate::pets::AmbientPetDraw> {
         self.bottom_pane
             .selected_index_for_active_view(crate::pets::PET_PICKER_VIEW_ID)?;
         let area = self.pet_picker_preview_state.area()?;

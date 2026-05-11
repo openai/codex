@@ -10600,11 +10600,6 @@ impl Drop for ChatWidget {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
-        if self.bottom_pane.no_modal_or_popup_active()
-            && let Some(pet) = self.ambient_pet.as_ref()
-        {
-            pet.render_overlay(area, area.bottom(), buf);
-        }
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
