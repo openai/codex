@@ -1,6 +1,7 @@
 //! Shortcut picker construction for `/keymap`.
 
 use codex_config::types::TuiKeymap;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -15,8 +16,10 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::style::accent_style;
 
 use super::actions::KEYMAP_ACTIONS;
+use super::actions::KeymapActionFilter;
 use super::actions::action_label;
 use super::actions::bindings_for_action;
 use super::actions::format_binding_summary;
@@ -59,6 +62,7 @@ const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
     ("composer", "submit"),
     ("editor", "insert_newline"),
     ("composer", "queue"),
+    ("global", "toggle_fast_mode"),
     ("global", "open_external_editor"),
     ("global", "copy"),
     ("global", "toggle_vim_mode"),
@@ -116,32 +120,69 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
     },
 ];
 
+#[cfg(test)]
 pub(crate) fn build_keymap_picker_params(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
 ) -> SelectionViewParams {
+    build_keymap_picker_params_with_filter(
+        runtime_keymap,
+        keymap_config,
+        KeymapActionFilter::default(),
+    )
+}
+
+pub(crate) fn build_keymap_picker_params_with_filter(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
+) -> SelectionViewParams {
     build_keymap_picker_params_for_action(
         runtime_keymap,
         keymap_config,
+        action_filter,
         /*selected_action*/ None,
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_keymap_picker_params_for_selected_action(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
     context: &str,
     action: &str,
 ) -> SelectionViewParams {
-    build_keymap_picker_params_for_action(runtime_keymap, keymap_config, Some((context, action)))
+    build_keymap_picker_params_for_selected_action_with_filter(
+        runtime_keymap,
+        keymap_config,
+        KeymapActionFilter::default(),
+        context,
+        action,
+    )
+}
+
+pub(crate) fn build_keymap_picker_params_for_selected_action_with_filter(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
+    context: &str,
+    action: &str,
+) -> SelectionViewParams {
+    build_keymap_picker_params_for_action(
+        runtime_keymap,
+        keymap_config,
+        action_filter,
+        Some((context, action)),
+    )
 }
 
 fn build_keymap_picker_params_for_action(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
     selected_action: Option<(&str, &str)>,
 ) -> SelectionViewParams {
-    let rows = build_keymap_rows(runtime_keymap, keymap_config);
+    let rows = build_keymap_rows(runtime_keymap, keymap_config, action_filter);
     let total = rows.len();
     let custom_count = rows.iter().filter(|row| row.custom_binding).count();
     let unbound_count = rows.iter().filter(|row| row.is_unbound()).count();
@@ -287,9 +328,12 @@ fn keymap_debug_tab() -> SelectionTab {
 fn build_keymap_rows(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
 ) -> Vec<KeymapActionRow> {
     KEYMAP_ACTIONS
         .iter()
+        .copied()
+        .filter(|descriptor| descriptor.is_visible(action_filter))
         .map(|descriptor| {
             let bindings =
                 bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)
@@ -373,7 +417,7 @@ fn keymap_selection_item(row: &KeymapActionRow) -> SelectionItem {
 
 fn keymap_row_prefix(row: &KeymapActionRow) -> Vec<Span<'static>> {
     let indicator = if row.custom_binding {
-        "*".cyan()
+        "*".set_style(accent_style())
     } else if row.is_unbound() {
         "-".dim()
     } else {
@@ -408,25 +452,27 @@ fn action_count_line(count: usize) -> String {
 }
 
 fn keymap_picker_hint_line() -> Line<'static> {
+    let style = accent_style();
     Line::from(vec![
-        "left/right".cyan(),
+        "left/right".set_style(style),
         " group · ".dim(),
-        "enter".cyan(),
+        "enter".set_style(style),
         " edit shortcut · ".dim(),
-        "*".cyan(),
+        "*".set_style(style),
         " custom · ".dim(),
-        "-".cyan(),
+        "-".set_style(style),
         " unbound · ".dim(),
-        "esc".cyan(),
+        "esc".set_style(style),
         " close".dim(),
     ])
 }
 
 fn keymap_debug_hint_line() -> Line<'static> {
+    let style = accent_style();
     Line::from(vec![
-        "enter".cyan(),
+        "enter".set_style(style),
         " start inspector · ".dim(),
-        "esc".cyan(),
+        "esc".set_style(style),
         " close".dim(),
     ])
 }

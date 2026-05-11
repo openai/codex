@@ -569,6 +569,10 @@ impl TextArea {
             self.kill_to_beginning_of_line();
             return;
         }
+        if keymap.kill_whole_line.is_pressed(event) {
+            self.kill_current_line();
+            return;
+        }
         if keymap.kill_line_end.is_pressed(event) {
             self.kill_to_end_of_line();
             return;
@@ -780,7 +784,7 @@ impl TextArea {
 
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
         if op == VimOperator::Delete && self.vim_operator_keymap.delete_line.is_pressed(event) {
-            self.delete_current_line();
+            self.kill_current_line();
             return true;
         }
         if op == VimOperator::Yank && self.vim_operator_keymap.yank_line.is_pressed(event) {
@@ -1116,7 +1120,7 @@ impl TextArea {
         self.yank_line_range(range);
     }
 
-    fn delete_current_line(&mut self) {
+    fn kill_current_line(&mut self) {
         let range = self.current_line_range_with_newline();
         self.kill_line_range(range);
     }
@@ -2448,6 +2452,51 @@ mod tests {
     }
 
     #[test]
+    fn kill_current_line_removes_current_line_linewise() {
+        let mut t = ta_with("abc\ndef\nghi");
+        t.set_cursor(/*pos*/ 5);
+
+        t.kill_current_line();
+
+        assert_eq!(t.text(), "abc\nghi");
+        assert_eq!(t.cursor(), 4);
+        assert_eq!(t.kill_buffer, "def\n");
+        assert_eq!(t.kill_buffer_kind, KillBufferKind::Linewise);
+    }
+
+    #[test]
+    fn kill_current_line_keeps_previous_newline_for_final_line() {
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(/*pos*/ 5);
+
+        t.kill_current_line();
+
+        assert_eq!(t.text(), "abc\n");
+        assert_eq!(t.cursor(), 4);
+        assert_eq!(t.kill_buffer, "def");
+        assert_eq!(t.kill_buffer_kind, KillBufferKind::Linewise);
+    }
+
+    #[test]
+    fn kill_whole_line_keymap_dispatch_uses_linewise_kill() {
+        let mut t = ta_with("abc\ndef\nghi");
+        t.set_cursor(/*pos*/ 5);
+        let mut keymap = RuntimeKeymap::defaults().editor;
+        keymap.kill_line_start.clear();
+        keymap.kill_whole_line = vec![key_hint::ctrl(KeyCode::Char('u'))];
+
+        t.input_with_keymap(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &keymap,
+        );
+
+        assert_eq!(t.text(), "abc\nghi");
+        assert_eq!(t.cursor(), 4);
+        assert_eq!(t.kill_buffer, "def\n");
+        assert_eq!(t.kill_buffer_kind, KillBufferKind::Linewise);
+    }
+
+    #[test]
     fn delete_forward_word_variants() {
         let mut t = ta_with("hello   world ");
         t.set_cursor(/*pos*/ 0);
@@ -2669,6 +2718,17 @@ mod tests {
     }
 
     #[test]
+    fn c0_line_feed_inserts_newline_through_insert_newline_keymap() {
+        let mut t = ta_with("ab");
+        t.set_cursor(/*pos*/ 1);
+
+        t.input(KeyEvent::new(KeyCode::Char('\u{000a}'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "a\nb");
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
     fn c0_control_chars_respect_unbound_editor_movement() {
         let mut t = ta_with("a\nb");
         t.set_cursor(/*pos*/ 2);
@@ -2717,6 +2777,53 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn shift_backspace_and_shift_delete_keep_grapheme_delete_behavior() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 2);
+
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::SHIFT));
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT));
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn control_backspace_variants_delete_backward_word() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            let mut t = ta_with("hello world");
+            t.set_cursor(t.text().len());
+
+            t.input(KeyEvent::new(KeyCode::Backspace, modifiers));
+            assert_eq!(t.text(), "hello ");
+            assert_eq!(t.cursor(), 6);
+        }
+    }
+
+    #[test]
+    fn control_delete_variants_delete_forward_word() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            let mut t = ta_with("hello world");
+            t.set_cursor(/*pos*/ 0);
+
+            t.input(KeyEvent::new(KeyCode::Delete, modifiers));
+            assert_eq!(t.text(), " world");
+            assert_eq!(t.cursor(), 0);
+        }
     }
 
     #[test]

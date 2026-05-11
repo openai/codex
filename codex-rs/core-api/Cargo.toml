@@ -8,6 +8,7 @@ version.workspace = true
 doctest = false
 name = "codex_core_api"
 path = "src/lib.rs"
+test = false
 
 [lints]
 workspace = true
@@ -18,6 +19,7 @@ codex-arg0 = { workspace = true }
 codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }

@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
@@ -17,7 +19,7 @@ use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
-use crate::request_processors::DeviceKeyRequestProcessor;
+use crate::request_processors::EnvironmentRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
@@ -26,6 +28,7 @@ use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
+use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -34,9 +37,10 @@ use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
+use crate::skills_watcher::SkillsWatcher;
+use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
-use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
@@ -72,6 +76,7 @@ use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -82,6 +87,7 @@ use tokio::time::timeout;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
@@ -156,8 +162,9 @@ pub(crate) struct MessageProcessor {
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,
+    process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
-    device_key_processor: DeviceKeyRequestProcessor,
+    environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
@@ -176,7 +183,6 @@ pub(crate) struct MessageProcessor {
 
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
-    origin: ConnectionOrigin,
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
@@ -187,18 +193,18 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) opted_out_notification_methods: HashSet<String>,
     pub(crate) app_server_client_name: String,
     pub(crate) client_version: String,
+    pub(crate) request_attestation: bool,
 }
 
 impl Default for ConnectionSessionState {
     fn default() -> Self {
-        Self::new(ConnectionOrigin::WebSocket)
+        Self::new()
     }
 }
 
 impl ConnectionSessionState {
-    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            origin,
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
@@ -206,10 +212,6 @@ impl ConnectionSessionState {
 
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
-    }
-
-    fn allows_device_key_requests(&self) -> bool {
-        self.origin.allows_device_key_requests()
     }
 
     pub(crate) fn experimental_api_enabled(&self) -> bool {
@@ -237,6 +239,12 @@ impl ConnectionSessionState {
             .map(|session| session.client_version.as_str())
     }
 
+    pub(crate) fn request_attestation(&self) -> bool {
+        self.initialized
+            .get()
+            .is_some_and(|session| session.request_attestation)
+    }
+
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
         self.initialized.set(session).map_err(|_| ())
     }
@@ -251,9 +259,11 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) installation_id: String,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
@@ -272,9 +282,11 @@ impl MessageProcessor {
             environment_manager,
             feedback,
             log_db,
+            state_db,
             config_warnings,
             session_source,
             auth_manager,
+            installation_id,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
@@ -282,24 +294,32 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        let thread_state_manager = ThreadStateManager::new();
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
-        let thread_store = thread_store_from_config(config.as_ref());
+        let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
             environment_manager,
+            thread_extensions(),
             Some(analytics_events_client.clone()),
             Arc::clone(&thread_store),
+            state_db.clone(),
+            installation_id,
+            Some(app_server_attestation_provider(
+                outgoing.clone(),
+                thread_state_manager.clone(),
+            )),
         ));
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
+        let skills_watcher = SkillsWatcher::new(thread_manager.skills_manager(), outgoing.clone());
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
-        let thread_state_manager = ThreadStateManager::new();
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
@@ -331,12 +351,14 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
         );
+        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             feedback,
             log_db,
+            state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -371,12 +393,12 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&config),
             thread_state_manager.clone(),
+            state_db.clone(),
         );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             outgoing.clone(),
-            analytics_events_client.clone(),
             arg0_paths.clone(),
             Arc::clone(&config),
             config_manager.clone(),
@@ -386,6 +408,8 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
+            state_db,
+            Arc::clone(&skills_watcher),
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
@@ -399,11 +423,12 @@ impl MessageProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
+            Arc::clone(&skills_watcher),
         );
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
             let on_effective_plugins_changed =
-                plugin_processor.effective_plugins_changed_callback((*config).clone());
+                plugin_processor.effective_plugins_changed_callback();
             thread_manager
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
@@ -429,11 +454,8 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
-        let device_key_processor = DeviceKeyRequestProcessor::new(
-            outgoing.clone(),
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-        );
+        let environment_processor =
+            EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
@@ -453,8 +475,9 @@ impl MessageProcessor {
             apps_processor,
             catalog_processor,
             command_exec_processor,
+            process_exec_processor,
             config_processor,
-            device_key_processor,
+            environment_processor,
             external_agent_config_processor,
             feedback_processor,
             fs_processor,
@@ -622,9 +645,18 @@ impl MessageProcessor {
             .await;
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        request_attestation: bool,
+    ) {
         self.thread_processor
-            .connection_initialized(connection_id)
+            .connection_initialized(
+                connection_id,
+                ConnectionCapabilities {
+                    request_attestation,
+                },
+            )
             .await;
     }
 
@@ -669,6 +701,9 @@ impl MessageProcessor {
         self.outgoing.connection_closed(connection_id).await;
         self.fs_processor.connection_closed(connection_id).await;
         self.command_exec_processor
+            .connection_closed(connection_id)
+            .await;
+        self.process_exec_processor
             .connection_closed(connection_id)
             .await;
         self.thread_processor.connection_closed(connection_id).await;
@@ -717,7 +752,12 @@ impl MessageProcessor {
                 .await?;
             if connection_initialized {
                 self.thread_processor
-                    .connection_initialized(connection_id)
+                    .connection_initialized(
+                        connection_id,
+                        ConnectionCapabilities {
+                            request_attestation: session.request_attestation(),
+                        },
+                    )
                     .await;
             }
             return Ok(());
@@ -758,7 +798,6 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let device_key_requests_allowed = session.allows_device_key_requests();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -774,7 +813,6 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        device_key_requests_allowed,
                     )
                     .await;
                 if let Err(error) = result {
@@ -785,9 +823,9 @@ impl MessageProcessor {
         );
 
         if let Some(scope) = serialization_scope {
-            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            let (key, access) = RequestSerializationQueueKey::from_scope(connection_id, scope);
             self.request_serialization_queues
-                .enqueue(key, request)
+                .enqueue(key, access, request)
                 .await;
         } else {
             tokio::spawn(async move {
@@ -804,7 +842,6 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        device_key_requests_allowed: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -819,6 +856,11 @@ impl MessageProcessor {
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WindowsSandboxReadiness { .. } => self
+                .windows_sandbox_processor
+                .windows_sandbox_readiness()
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigDetect { params, .. } => self
@@ -847,29 +889,8 @@ impl MessageProcessor {
                 .config_requirements_read()
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::DeviceKeyCreate { params, .. } => {
-                self.device_key_processor.create(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeyPublic { params, .. } => {
-                self.device_key_processor.public(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeySign { params, .. } => {
-                self.device_key_processor.sign(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
+            ClientRequest::EnvironmentAdd { params, .. } => {
+                self.environment_processor.environment_add(params).await
             }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
@@ -939,12 +960,22 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadResume { params, .. } => {
                 self.thread_processor
-                    .thread_resume(request_id.clone(), params)
+                    .thread_resume(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
-                    .thread_fork(request_id.clone(), params)
+                    .thread_fork(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
@@ -1019,6 +1050,9 @@ impl MessageProcessor {
             ClientRequest::ThreadTurnsList { params, .. } => {
                 self.thread_processor.thread_turns_list(params).await
             }
+            ClientRequest::ThreadTurnsItemsList { params, .. } => {
+                self.thread_processor.thread_turns_items_list(params).await
+            }
             ClientRequest::ThreadShellCommand { params, .. } => {
                 self.thread_processor
                     .thread_shell_command(&request_id, params)
@@ -1058,6 +1092,11 @@ impl MessageProcessor {
             }
             ClientRequest::PluginShareSave { params, .. } => {
                 self.plugin_processor.plugin_share_save(params).await
+            }
+            ClientRequest::PluginShareUpdateTargets { params, .. } => {
+                self.plugin_processor
+                    .plugin_share_update_targets(params)
+                    .await
             }
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor.plugin_share_list(params).await
@@ -1234,6 +1273,26 @@ impl MessageProcessor {
             ClientRequest::CommandExecTerminate { params, .. } => {
                 self.command_exec_processor
                     .command_exec_terminate(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessSpawn { params, .. } => self
+                .process_exec_processor
+                .process_spawn(request_id.clone(), params)
+                .await
+                .map(|()| None),
+            ClientRequest::ProcessWriteStdin { params, .. } => {
+                self.process_exec_processor
+                    .process_write_stdin(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessKill { params, .. } => {
+                self.process_exec_processor
+                    .process_kill(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessResizePty { params, .. } => {
+                self.process_exec_processor
+                    .process_resize_pty(request_id.clone(), params)
                     .await
             }
             ClientRequest::FeedbackUpload { params, .. } => {

@@ -569,6 +569,7 @@ async fn load_plugin(
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
     let resolved_skills = load_plugin_skills(
         &plugin_root,
+        &loaded_plugin_id,
         manifest_paths,
         restriction_product,
         skill_config_rules,
@@ -647,6 +648,7 @@ impl ResolvedPluginSkills {
 
 pub async fn load_plugin_skills(
     plugin_root: &AbsolutePathBuf,
+    plugin_id: &PluginId,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
@@ -657,6 +659,7 @@ pub async fn load_plugin_skills(
             path,
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some(plugin_id.as_key()),
         })
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots).await;

@@ -12,9 +12,11 @@
 //! - Model information (name, reasoning level)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
+//! - Permissions profile
+//! - Approval mode
 //! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
-//! - Session info (thread title, ID, tokens used)
+//! - Session info (thread title, thread ID, tokens used)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -46,7 +48,7 @@ const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors
 /// Some items are conditionally displayed based on availability:
 /// - Git-related items only show when in a git repository
 /// - Context/limit items only show when data is available from the API
-/// - Session ID only shows after a session has started
+/// - Thread ID only shows after a session has started
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
@@ -71,9 +73,22 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
+    /// Open pull request number for the current branch.
+    PullRequestNumber,
+
+    /// Committed branch diff stats relative to the default branch.
+    BranchChanges,
+
     /// Compact runtime run-state text.
     #[strum(to_string = "run-state", serialize = "status")]
     Status,
+
+    /// Active permission profile or sandbox summary.
+    Permissions,
+
+    /// Active command approval mode.
+    #[strum(to_string = "approval-mode", serialize = "approval")]
+    ApprovalMode,
 
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -105,11 +120,15 @@ pub(crate) enum StatusLineItem {
     /// Total output tokens generated.
     TotalOutputTokens,
 
-    /// Full session UUID.
+    /// Full thread UUID.
+    #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
 
     /// Whether Fast mode is currently active.
     FastMode,
+
+    /// Whether raw scrollback mode is currently active.
+    RawOutput,
 
     /// Current thread title (if set by user).
     ThreadTitle,
@@ -127,7 +146,15 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::PullRequestNumber => {
+                "Open pull request number for the current branch (omitted when unavailable)"
+            }
+            StatusLineItem::BranchChanges => {
+                "Committed branch changes against the default branch (omitted when unavailable)"
+            }
             StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
+            StatusLineItem::Permissions => "Active permission profile or sandbox mode",
+            StatusLineItem::ApprovalMode => "Active command approval mode",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -147,11 +174,12 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
-            StatusLineItem::SessionId => {
-                "Current session identifier (omitted until session starts)"
-            }
+            StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
-            StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
+            StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
+            StatusLineItem::ThreadTitle => {
+                "Current thread title, or thread identifier when unnamed"
+            }
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             }
@@ -165,7 +193,11 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::PullRequestNumber => StatusSurfacePreviewItem::PullRequestNumber,
+            StatusLineItem::BranchChanges => StatusSurfacePreviewItem::BranchChanges,
             StatusLineItem::Status => StatusSurfacePreviewItem::Status,
+            StatusLineItem::Permissions => StatusSurfacePreviewItem::Permissions,
+            StatusLineItem::ApprovalMode => StatusSurfacePreviewItem::ApprovalMode,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
@@ -177,6 +209,7 @@ impl StatusLineItem {
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
@@ -406,6 +439,18 @@ mod tests {
         assert_eq!(
             "status".parse::<StatusLineItem>(),
             Ok(StatusLineItem::Status)
+        );
+    }
+
+    #[test]
+    fn git_summary_items_are_selectable_ids() {
+        assert_eq!(
+            "pull-request-number".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::PullRequestNumber)
+        );
+        assert_eq!(
+            "branch-changes".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::BranchChanges)
         );
     }
 

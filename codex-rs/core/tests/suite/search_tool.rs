@@ -570,6 +570,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
+    let first_request_body = requests[0].body_json();
 
     let apps_tool_call = server
         .received_requests()
@@ -597,12 +598,32 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         apps_tool_call.pointer("/params/_meta/x-codex-turn-metadata/session_id"),
         Some(&json!(test.session_configured.session_id.to_string()))
     );
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/x-codex-turn-metadata/thread_id"),
+        Some(&json!(test.session_configured.thread_id.to_string()))
+    );
     assert!(
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/turn_id")
             .and_then(Value::as_str)
             .is_some_and(|turn_id| !turn_id.is_empty()),
         "apps tools/call should include turn metadata turn_id: {apps_tool_call:?}"
+    );
+    assert_eq!(
+        apps_tool_call
+            .pointer("/params/_meta/x-codex-turn-metadata/model")
+            .and_then(Value::as_str),
+        Some("gpt-5.4")
+    );
+    let first_request_reasoning_effort = first_request_body
+        .pointer("/reasoning/effort")
+        .and_then(Value::as_str)
+        .expect("first response request should include reasoning effort");
+    assert_eq!(
+        apps_tool_call
+            .pointer("/params/_meta/x-codex-turn-metadata/reasoning_effort")
+            .and_then(Value::as_str),
+        Some(first_request_reasoning_effort)
     );
     let mcp_turn_started_at_unix_ms = apps_tool_call
         .pointer("/params/_meta/x-codex-turn-metadata/turn_started_at_unix_ms")
@@ -626,7 +647,6 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         Some(mcp_turn_started_at_unix_ms)
     );
 
-    let first_request_body = requests[0].body_json();
     let first_request_tools = tool_names(&first_request_body);
     assert!(
         first_request_tools
@@ -1025,6 +1045,95 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     assert!(
         !found_rmcp_image_tool,
         "disabled non-app MCP tools should not be searchable: {image_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_description() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let search_call_id = "tool-search-echo";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    search_call_id,
+                    &json!({
+                        "query": "Echo back the provided message and include environment data.",
+                        "limit": 8,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "rmcp".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    experimental_environment: None,
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: Some(vec!["echo".to_string()]),
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    supports_parallel_tool_calls: false,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "Find the rmcp echo tool.",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let tools = tool_search_output_tools(&requests[1], search_call_id);
+    let rmcp_namespace = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .expect("tool_search should return the rmcp namespace");
+    assert_eq!(
+        rmcp_namespace.get("description").and_then(Value::as_str),
+        Some("Use these tools to exercise the rmcp test server.")
     );
 
     Ok(())

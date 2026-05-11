@@ -23,10 +23,11 @@ codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
     "io-std",
@@ -51,3 +52,4 @@ pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
+wiremock = { workspace = true }

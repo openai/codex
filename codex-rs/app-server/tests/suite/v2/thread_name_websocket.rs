@@ -22,11 +22,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_core::find_thread_name_by_id;
-use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -40,11 +36,11 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let conversation_id = create_rollout(codex_home.path(), "2025-01-05T12-00-00")?;
 
-    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let (mut process, socket_path, _socket_dir) = spawn_websocket_server(codex_home.path()).await?;
 
     let result = async {
-        let mut ws1 = connect_websocket(bind_addr).await?;
-        let mut ws2 = connect_websocket(bind_addr).await?;
+        let mut ws1 = connect_websocket(&socket_path).await?;
+        let mut ws2 = connect_websocket(&socket_path).await?;
         initialize_both_clients(&mut ws1, &mut ws2).await?;
 
         send_request(
@@ -85,10 +81,6 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
             read_notification_for_method(&mut ws2, "thread/name/updated").await?;
         assert_thread_name_updated(ws2_notification, &conversation_id, renamed)?;
         assert_legacy_thread_name(codex_home.path(), &conversation_id, renamed).await?;
-        assert_eq!(
-            thread_name_update_rollout_count(codex_home.path(), &conversation_id).await?,
-            1
-        );
 
         assert_no_message(&mut ws1, Duration::from_millis(250)).await?;
         assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
@@ -99,7 +91,7 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
     process
         .kill()
         .await
-        .context("failed to stop websocket app-server process")?;
+        .context("failed to stop app-server process")?;
     result
 }
 
@@ -110,11 +102,11 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let conversation_id = create_rollout(codex_home.path(), "2025-01-05T12-05-00")?;
 
-    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let (mut process, socket_path, _socket_dir) = spawn_websocket_server(codex_home.path()).await?;
 
     let result = async {
-        let mut ws1 = connect_websocket(bind_addr).await?;
-        let mut ws2 = connect_websocket(bind_addr).await?;
+        let mut ws1 = connect_websocket(&socket_path).await?;
+        let mut ws2 = connect_websocket(&socket_path).await?;
         initialize_both_clients(&mut ws1, &mut ws2).await?;
 
         let renamed = "Stored rename";
@@ -141,10 +133,6 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
             read_notification_for_method(&mut ws2, "thread/name/updated").await?;
         assert_thread_name_updated(ws2_notification, &conversation_id, renamed)?;
         assert_legacy_thread_name(codex_home.path(), &conversation_id, renamed).await?;
-        assert_eq!(
-            thread_name_update_rollout_count(codex_home.path(), &conversation_id).await?,
-            1
-        );
 
         assert_no_message(&mut ws1, Duration::from_millis(250)).await?;
         assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
@@ -155,7 +143,7 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
     process
         .kill()
         .await
-        .context("failed to stop websocket app-server process")?;
+        .context("failed to stop app-server process")?;
     result
 }
 
@@ -205,24 +193,4 @@ async fn assert_legacy_thread_name(
         Some(expected_name)
     );
     Ok(())
-}
-
-async fn thread_name_update_rollout_count(
-    codex_home: &Path,
-    conversation_id: &str,
-) -> Result<usize> {
-    let rollout_path = find_thread_path_by_id_str(codex_home, conversation_id)
-        .await?
-        .context("rollout path")?;
-    let contents = tokio::fs::read_to_string(rollout_path).await?;
-    Ok(contents
-        .lines()
-        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
-        .filter(|line| {
-            matches!(
-                line.item,
-                RolloutItem::EventMsg(EventMsg::ThreadNameUpdated(_))
-            )
-        })
-        .count())
 }

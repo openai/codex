@@ -175,7 +175,11 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         process_id: 123,
         yield_time_ms: 1000,
         max_output_tokens: None,
-        workdir: None,
+        cwd: turn.cwd.clone(),
+        environment: turn
+            .environments
+            .primary_environment()
+            .expect("primary environment"),
         network: None,
         tty: true,
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,

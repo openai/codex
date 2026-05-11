@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
-use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
@@ -18,6 +18,8 @@ use arc_swap::ArcSwap;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConnectionManager;
@@ -59,13 +61,16 @@ pub(crate) struct SessionServices {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) skills_watcher: Arc<SkillsWatcher>,
+    pub(crate) extensions: Arc<ExtensionRegistry<crate::config::Config>>,
+    pub(crate) session_extension_data: ExtensionData,
+    pub(crate) thread_extension_data: ExtensionData,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,

@@ -1,13 +1,11 @@
 use super::*;
 
-pub(super) async fn open_state_db_for_direct_thread_lookup(
-    config: &Config,
-) -> Option<StateDbHandle> {
-    StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-        .await
-        .ok()
-}
+#[cfg(test)]
+use chrono::DateTime;
+#[cfg(test)]
+use chrono::Utc;
 
+#[cfg(test)]
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -82,18 +80,7 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
-pub(crate) async fn read_rollout_items_from_rollout(
-    path: &Path,
-) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
-        InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-        InitialHistory::Forked(items) => items,
-        InitialHistory::Resumed(resumed) => resumed.history,
-    };
-
-    Ok(items)
-}
-
+#[cfg(test)]
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -142,6 +129,7 @@ fn extract_conversation_summary(
     })
 }
 
+#[cfg(test)]
 fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
@@ -220,6 +208,7 @@ pub(super) fn thread_response_sandbox_policy(
     sandbox_policy.into()
 }
 
+#[cfg(test)]
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -228,6 +217,7 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+#[cfg(test)]
 async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
     let updated_at = tokio::fs::metadata(path)
         .await
@@ -245,6 +235,7 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
     ThreadStartedNotification { thread }
 }
 
+#[cfg(test)]
 pub(crate) fn summary_to_thread(
     summary: ConversationSummary,
     fallback_cwd: &AbsolutePathBuf,
@@ -273,14 +264,17 @@ pub(crate) fn summary_to_thread(
         AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
             .unwrap_or_else(|err| {
                 warn!(
+                    conversation_id = %conversation_id,
                     path = %path.display(),
                     "failed to normalize thread cwd while summarizing thread: {err}"
                 );
                 fallback_cwd.clone()
             });
 
+    let thread_id = conversation_id.to_string();
     Thread {
-        id: conversation_id.to_string(),
+        id: thread_id.clone(),
+        session_id: thread_id,
         forked_from_id: None,
         preview,
         ephemeral: false,
@@ -288,12 +282,13 @@ pub(crate) fn summary_to_thread(
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
         status: ThreadStatus::NotLoaded,
-        path: Some(path),
+        path: (!path.as_os_str().is_empty()).then_some(path),
         cwd,
         cli_version,
         agent_nickname: source.get_nickname(),
         agent_role: source.get_agent_role(),
         source: source.into(),
+        thread_source: None,
         git_info,
         name: None,
         turns: Vec::new(),

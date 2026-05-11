@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/goal_validation.rs
+expression: rendered
+---
+■ Goal objective is too long: 4,001 characters. Limit: 4,000 characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.

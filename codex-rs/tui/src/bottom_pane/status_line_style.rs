@@ -32,7 +32,9 @@ impl StatusLineAccent {
         match item {
             StatusLineItem::ModelName | StatusLineItem::ModelWithReasoning => Self::Model,
             StatusLineItem::CurrentDir | StatusLineItem::ProjectRoot => Self::Path,
-            StatusLineItem::GitBranch => Self::Branch,
+            StatusLineItem::GitBranch
+            | StatusLineItem::PullRequestNumber
+            | StatusLineItem::BranchChanges => Self::Branch,
             StatusLineItem::Status => Self::State,
             StatusLineItem::ContextRemaining
             | StatusLineItem::ContextUsed
@@ -42,7 +44,9 @@ impl StatusLineAccent {
             | StatusLineItem::TotalOutputTokens => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
             StatusLineItem::CodexVersion | StatusLineItem::SessionId => Self::Metadata,
-            StatusLineItem::FastMode => Self::Mode,
+            StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
+            StatusLineItem::Permissions => Self::Mode,
+            StatusLineItem::ApprovalMode => Self::Mode,
             StatusLineItem::ThreadTitle => Self::Thread,
             StatusLineItem::TaskProgress => Self::Progress,
         }
@@ -105,6 +109,11 @@ where
             )
         } else {
             Style::default().dim()
+        };
+        let style = if item == StatusLineItem::PullRequestNumber {
+            style.underlined()
+        } else {
+            style
         };
         spans.push(Span::styled(text, style));
     }
@@ -254,6 +263,25 @@ mod tests {
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, None);
         assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn pull_request_number_uses_link_style() {
+        let line = status_line_from_segments_with_resolver(
+            [(StatusLineItem::PullRequestNumber, "PR #20252".to_string())],
+            /*use_theme_colors*/ false,
+            |_| None,
+        )
+        .expect("status line");
+
+        assert_eq!(line.spans[0].style.fg, None);
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(
+            line.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
     }
 
     #[test]

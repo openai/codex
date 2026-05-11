@@ -98,14 +98,16 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TokenCount(_)
-        | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::McpToolCallEnd(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
+        | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
@@ -117,14 +119,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
                 None
             }
         }
-        EventMsg::McpToolCallEnd(event) if event.mcp_app_resource_uri.is_some() => {
-            Some(EventPersistenceMode::Limited)
-        }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
-        | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
-        | EventMsg::McpToolCallEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
@@ -144,7 +141,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
@@ -158,12 +154,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::PatchApplyBegin(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
-        | EventMsg::McpListToolsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
-        | EventMsg::ListSkillsResponse(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
@@ -176,7 +169,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::ImageGenerationBegin(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)

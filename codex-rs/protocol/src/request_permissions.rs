@@ -71,6 +71,8 @@ pub struct RequestPermissionsEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,

@@ -155,7 +155,10 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
 
     let request_id = mcp
-        .send_plugin_list_request(PluginListParams { cwds: None })
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        })
         .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,

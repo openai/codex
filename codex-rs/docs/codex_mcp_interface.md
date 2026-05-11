@@ -52,7 +52,7 @@ Use the separate `codex mcp` subcommand to manage configured MCP server launcher
 
 Use the v2 thread and turn APIs for all new integrations. `thread/start` creates a thread, `turn/start` submits user input, `turn/interrupt` stops an in-flight turn, and `thread/list` / `thread/read` expose persisted history.
 
-`getConversationSummary` remains as a compatibility helper for clients that still need a summary lookup by `conversationId` or `rolloutPath`.
+`getConversationSummary` remains as a compatibility helper for clients that still need a summary lookup by `conversationId` or `rolloutPath`. Lookups by `conversationId` are preferred; lookups by `rolloutPath` won't work with non-local thread stores.
 
 For complete request and response shapes, see the app-server README and the protocol definitions in `app-server-protocol/src/protocol/v2.rs`.
 

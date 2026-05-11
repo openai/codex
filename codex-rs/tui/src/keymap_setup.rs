@@ -21,10 +21,15 @@ mod actions;
 mod debug;
 mod picker;
 
+pub(crate) use actions::KeymapActionFilter;
 pub(crate) use debug::build_keymap_debug_view;
 pub(crate) use picker::KEYMAP_PICKER_VIEW_ID;
+#[cfg(test)]
 pub(crate) use picker::build_keymap_picker_params;
+#[cfg(test)]
 pub(crate) use picker::build_keymap_picker_params_for_selected_action;
+pub(crate) use picker::build_keymap_picker_params_for_selected_action_with_filter;
+pub(crate) use picker::build_keymap_picker_params_with_filter;
 
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
@@ -708,6 +713,9 @@ fn key_parts_to_config_key_spec(
     code: KeyCode,
     mut modifiers: KeyModifiers,
 ) -> Result<String, String> {
+    let (code, normalized_modifiers) = crate::key_hint::normalize_key_parts(code, modifiers);
+    modifiers = normalized_modifiers;
+
     let supported_modifiers = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT;
     if !modifiers.difference(supported_modifiers).is_empty() {
         return Err(
@@ -738,7 +746,7 @@ fn key_parts_to_config_key_spec(
         KeyCode::Char(' ') => "space".to_string(),
         KeyCode::Char(mut ch) => {
             if ch == '-' {
-                return Err("The `-` key cannot be represented in `tui.keymap` yet.".to_string());
+                return Ok(format_key_spec(modifiers, "minus"));
             }
             if !ch.is_ascii() || ch.is_ascii_control() {
                 return Err("Only printable ASCII keys can be stored in `tui.keymap`.".to_string());
@@ -754,18 +762,22 @@ fn key_parts_to_config_key_spec(
         }
     };
 
+    Ok(format_key_spec(modifiers, &key))
+}
+
+fn format_key_spec(modifiers: KeyModifiers, key: &str) -> String {
     let mut parts = Vec::new();
     if modifiers.contains(KeyModifiers::CONTROL) {
-        parts.push("ctrl".to_string());
+        parts.push("ctrl");
     }
     if modifiers.contains(KeyModifiers::ALT) {
-        parts.push("alt".to_string());
+        parts.push("alt");
     }
     if modifiers.contains(KeyModifiers::SHIFT) {
-        parts.push("shift".to_string());
+        parts.push("shift");
     }
     parts.push(key);
-    Ok(parts.join("-"))
+    parts.join("-")
 }
 
 #[cfg(test)]
@@ -819,6 +831,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
         render_buffer(&buf)
+    }
+
+    fn fast_mode_action_filter() -> KeymapActionFilter {
+        KeymapActionFilter {
+            fast_mode_enabled: true,
+        }
     }
 
     fn render_buffer(buf: &Buffer) -> String {
@@ -891,7 +909,11 @@ mod tests {
     #[test]
     fn picker_covers_every_replaceable_action() {
         let runtime = RuntimeKeymap::defaults();
-        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
         let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
 
         assert!(params.items.is_empty());
@@ -911,6 +933,57 @@ mod tests {
         assert!(KEYMAP_ACTIONS.iter().all(|descriptor| {
             bindings_for_action(&runtime, descriptor.context, descriptor.action).is_some()
         }));
+    }
+
+    #[test]
+    fn picker_hides_fast_mode_action_when_feature_is_disabled() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+
+        assert!(
+            all_tab
+                .items
+                .iter()
+                .all(|item| item.name != "Toggle Fast Mode")
+        );
+    }
+
+    #[test]
+    fn picker_shows_fast_mode_action_when_feature_is_enabled() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+        let common_tab = selection_tab(&params, KEYMAP_COMMON_TAB_ID);
+        let app_tab = selection_tab(&params, "app-shortcuts");
+        let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
+
+        for tab in [all_tab, common_tab, app_tab, unbound_tab] {
+            assert!(
+                tab.items.iter().any(|item| item.name == "Toggle Fast Mode"),
+                "expected Toggle Fast Mode in {}",
+                tab.label
+            );
+        }
+    }
+
+    #[test]
+    fn keymap_picker_fast_mode_enabled_snapshot() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_with_filter(
+            &runtime,
+            &TuiKeymap::default(),
+            fast_mode_action_filter(),
+        );
+
+        assert_snapshot!(
+            "keymap_picker_fast_mode_enabled",
+            render_picker(params, /*width*/ 120)
+        );
     }
 
     #[test]
@@ -1050,10 +1123,13 @@ mod tests {
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
 
-        assert_eq!(unbound_tab.items.len(), 1);
+        assert_eq!(unbound_tab.items.len(), 2);
         assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
         assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[0].is_disabled);
+        assert_eq!(unbound_tab.items[1].name, "Kill Whole Line");
+        assert_eq!(unbound_tab.items[1].description.as_deref(), Some("unbound"));
+        assert!(!unbound_tab.items[1].is_disabled);
     }
 
     #[test]
@@ -1534,21 +1610,46 @@ mod tests {
     }
 
     #[test]
-    fn key_capture_serializes_c0_control_fallbacks() {
+    fn key_capture_serializes_c0_control_chars_as_ctrl_bindings() {
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('\u{000a}'),
+                KeyModifiers::NONE,
+            )),
+            Ok("ctrl-j".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('\u{0015}'),
+                KeyModifiers::NONE,
+            )),
+            Ok("ctrl-u".to_string())
+        );
         assert_eq!(
             key_event_to_config_key_spec(KeyEvent::new(
                 KeyCode::Char('\u{0010}'),
-                KeyModifiers::NONE
+                KeyModifiers::NONE,
             )),
             Ok("ctrl-p".to_string())
         );
     }
 
     #[test]
-    fn key_capture_rejects_unrepresentable_keys() {
-        assert!(
-            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE))
-                .is_err()
+    fn key_capture_serializes_minus_as_named_key() {
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE)),
+            Ok("minus".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::ALT)),
+            Ok("alt-minus".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(
+                KeyCode::Char('-'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            )),
+            Ok("ctrl-alt-minus".to_string())
         );
     }
 

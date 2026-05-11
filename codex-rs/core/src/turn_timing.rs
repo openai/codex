@@ -107,7 +107,7 @@ fn now_unix_timestamp_secs() -> i64 {
     now_unix_timestamp_ms() / 1000
 }
 
-fn now_unix_timestamp_ms() -> i64 {
+pub(crate) fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

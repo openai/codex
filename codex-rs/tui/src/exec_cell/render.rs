@@ -5,6 +5,7 @@ use super::model::ExecCall;
 use super::model::ExecCell;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::plain_lines;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -242,6 +243,10 @@ impl HistoryCell for ExecCell {
             }
         }
         lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.transcript_lines(u16::MAX))
     }
 }
 

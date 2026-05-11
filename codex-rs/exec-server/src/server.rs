@@ -7,6 +7,7 @@ mod session_registry;
 mod transport;
 
 pub(crate) use handler::ExecServerHandler;
+pub(crate) use processor::ConnectionProcessor;
 pub use transport::DEFAULT_LISTEN_URL;
 pub use transport::ExecServerListenUrlParseError;
 

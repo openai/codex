@@ -1,0 +1,5 @@
+---
+source: tui/src/resume_picker.rs
+expression: "render_dense_row_snapshot(false,\nSome(PathBuf::from(\"/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs\")),\n100,)"
+---
+❯ 15m ago     Propose session picker redesign with enough title text to exercise truncation

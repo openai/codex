@@ -35,6 +35,9 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::RawOutputModeChanged { enabled } => {
+                self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -61,6 +64,7 @@ impl App {
                         },
                         None => crate::AppServerTarget::Embedded,
                     },
+                    self.state_db.clone(),
                     self.environment_manager.clone(),
                 )
                 .await
@@ -73,7 +77,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
                 };
-                match crate::resume_picker::run_resume_picker_with_app_server(
+                match crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                     tui,
                     &self.config,
                     /*show_all*/ false,
@@ -93,9 +97,13 @@ impl App {
                             }
                         }
                     }
-                    SessionSelection::Exit
-                    | SessionSelection::StartFresh
-                    | SessionSelection::Fork(_) => {}
+                    SessionSelection::Exit | SessionSelection::StartFresh => {
+                        self.refresh_in_memory_config_from_disk_best_effort(
+                            "closing the session picker",
+                        )
+                        .await;
+                    }
+                    SessionSelection::Fork(_) => {}
                 }
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
@@ -209,29 +217,19 @@ impl App {
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
-            AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
-                let end = self.transcript_cells.len();
-                let start =
-                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-                if start < end {
-                    let consolidated: Arc<dyn HistoryCell> =
-                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
-                    self.transcript_cells
-                        .splice(start..end, std::iter::once(consolidated.clone()));
-
-                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.consolidate_cells(start..end, consolidated.clone());
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    self.maybe_finish_stream_reflow(tui)?;
-                } else {
-                    self.maybe_finish_stream_reflow(tui)?;
-                }
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                scrollback_reflow,
+                deferred_history_cell,
+            } => {
+                self.handle_consolidate_agent_message(
+                    tui,
+                    source,
+                    cwd,
+                    scrollback_reflow,
+                    deferred_history_cell,
+                )?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
@@ -317,6 +315,17 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op).await?;
+            }
+            AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
+                self.append_message_history_entry(thread_id, text);
+            }
+            AppEvent::LookupMessageHistoryEntry {
+                thread_id,
+                offset,
+                log_id,
+            } => {
+                self.lookup_message_history_entry(thread_id, offset, log_id)
+                    .await?;
             }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
@@ -1255,25 +1264,21 @@ impl App {
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
-                self.config.service_tier = service_tier;
+                self.config.service_tier = service_tier.clone();
                 let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_service_tier(service_tier);
+                    .set_service_tier(service_tier.clone());
                 if service_tier.is_none() {
                     self.config.notices.fast_default_opt_out = Some(true);
                     edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
                 }
                 match edits.apply().await {
                     Ok(()) => {
-                        let status = if matches!(
-                            service_tier,
-                            Some(codex_protocol::config_types::ServiceTier::Fast)
-                        ) {
-                            "on"
+                        let mut message = if let Some(service_tier) = service_tier {
+                            format!("Service tier set to {service_tier}")
                         } else {
-                            "off"
+                            "Service tier cleared".to_string()
                         };
-                        let mut message = format!("Fast mode set to {status}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
                             message.push_str(profile);
@@ -1282,14 +1287,14 @@ impl App {
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "failed to persist fast mode selection");
+                        tracing::error!(error = %err, "failed to persist service tier selection");
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save Fast mode for profile `{profile}`: {err}"
+                                "Failed to save service tier for profile `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save default Fast mode: {err}"
+                                "Failed to save default service tier: {err}"
                             ));
                         }
                     }
@@ -1695,6 +1700,12 @@ impl App {
             AppEvent::SetHookEnabled { key, enabled } => {
                 self.set_hook_enabled(app_server, key, enabled);
             }
+            AppEvent::TrustHook { key, current_hash } => {
+                self.trust_hook(app_server, key, current_hash);
+            }
+            AppEvent::TrustHooks { updates } => {
+                self.trust_hooks(app_server, updates);
+            }
             AppEvent::HookEnabledSet {
                 key,
                 enabled,
@@ -1717,6 +1728,11 @@ impl App {
                     if let Err(err) = result {
                         self.chat_widget.add_error_message(err);
                     }
+                }
+            }
+            AppEvent::HookTrusted { result } => {
+                if let Err(err) = result {
+                    self.chat_widget.add_error_message(err);
                 }
             }
             AppEvent::OpenPermissionsPopup => {
@@ -1845,6 +1861,10 @@ impl App {
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {
                 self.chat_widget.set_status_line_branch(cwd, branch);
+                self.refresh_status_line();
+            }
+            AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
+                self.chat_widget.set_status_line_git_summary(cwd, summary);
                 self.refresh_status_line();
             }
             AppEvent::StatusLineSetupCancelled => {

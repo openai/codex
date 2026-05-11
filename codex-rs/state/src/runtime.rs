@@ -6,12 +6,10 @@ use crate::AgentJobItemStatus;
 use crate::AgentJobProgress;
 use crate::AgentJobStatus;
 use crate::LOGS_DB_FILENAME;
-use crate::LOGS_DB_VERSION;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
 use crate::STATE_DB_FILENAME;
-use crate::STATE_DB_VERSION;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -56,9 +54,6 @@ use tracing::warn;
 
 mod agent_jobs;
 mod backfill;
-mod device_key;
-#[cfg(test)]
-mod device_key_tests;
 mod goals;
 mod logs;
 mod memories;
@@ -67,7 +62,6 @@ mod remote_control;
 mod test_support;
 mod threads;
 
-pub use device_key::DeviceKeyBindingRecord;
 pub use goals::ThreadGoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
@@ -102,22 +96,6 @@ impl StateRuntime {
         tokio::fs::create_dir_all(&codex_home).await?;
         let state_migrator = runtime_state_migrator();
         let logs_migrator = runtime_logs_migrator();
-        let current_state_name = state_db_filename();
-        let current_logs_name = logs_db_filename();
-        remove_legacy_db_files(
-            &codex_home,
-            current_state_name.as_str(),
-            STATE_DB_FILENAME,
-            "state",
-        )
-        .await;
-        remove_legacy_db_files(
-            &codex_home,
-            current_logs_name.as_str(),
-            LOGS_DB_FILENAME,
-            "logs",
-        )
-        .await;
         let state_path = state_db_path(codex_home.as_path());
         let logs_path = logs_db_path(codex_home.as_path());
         let pool = match open_state_sqlite(&state_path, &state_migrator).await {
@@ -172,28 +150,15 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
 }
 
 async fn open_state_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<SqlitePool> {
+    // New state DBs should use incremental auto-vacuum, but retrofitting an
+    // existing DB requires a full VACUUM. Do not attempt that during process
+    // startup: it is maintenance work that can contend with foreground writers.
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
     migrator.run(&pool).await?;
-    let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
-        .fetch_one(&pool)
-        .await?;
-    if auto_vacuum != SqliteAutoVacuum::Incremental as i64 {
-        // Existing state DBs need one non-transactional `VACUUM` before
-        // SQLite persists `auto_vacuum = INCREMENTAL` in the database header.
-        sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
-            .execute(&pool)
-            .await?;
-        // We do it on best effort. If the lock can't be acquired, it will be done at next run.
-        let _ = sqlx::query("VACUUM").execute(&pool).await;
-    }
-    // We do it on best effort. If the lock can't be acquired, it will be done at next run.
-    let _ = sqlx::query("PRAGMA incremental_vacuum")
-        .execute(&pool)
-        .await;
     Ok(pool)
 }
 
@@ -207,12 +172,8 @@ async fn open_logs_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<Sq
     Ok(pool)
 }
 
-fn db_filename(base_name: &str, version: u32) -> String {
-    format!("{base_name}_{version}.sqlite")
-}
-
 pub fn state_db_filename() -> String {
-    db_filename(STATE_DB_FILENAME, STATE_DB_VERSION)
+    STATE_DB_FILENAME.to_string()
 }
 
 pub fn state_db_path(codex_home: &Path) -> PathBuf {
@@ -220,94 +181,11 @@ pub fn state_db_path(codex_home: &Path) -> PathBuf {
 }
 
 pub fn logs_db_filename() -> String {
-    db_filename(LOGS_DB_FILENAME, LOGS_DB_VERSION)
+    LOGS_DB_FILENAME.to_string()
 }
 
 pub fn logs_db_path(codex_home: &Path) -> PathBuf {
     codex_home.join(logs_db_filename())
-}
-
-async fn remove_legacy_db_files(
-    codex_home: &Path,
-    current_name: &str,
-    base_name: &str,
-    db_label: &str,
-) {
-    let mut entries = match tokio::fs::read_dir(codex_home).await {
-        Ok(entries) => entries,
-        Err(err) => {
-            warn!(
-                "failed to read codex_home for {db_label} db cleanup {}: {err}",
-                codex_home.display(),
-            );
-            return;
-        }
-    };
-    let mut legacy_paths = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if !entry
-            .file_type()
-            .await
-            .map(|file_type| file_type.is_file())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        if !should_remove_db_file(file_name.as_ref(), current_name, base_name) {
-            continue;
-        }
-
-        legacy_paths.push(entry.path());
-    }
-
-    // On Windows, SQLite can keep the main database file undeletable until the
-    // matching `-wal` / `-shm` sidecars are removed. Remove the longest
-    // sidecar-style paths first so the main file is attempted last.
-    legacy_paths.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
-    for legacy_path in legacy_paths {
-        let mut result = tokio::fs::remove_file(&legacy_path).await;
-        for _ in 0..3 {
-            if result.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            result = tokio::fs::remove_file(&legacy_path).await;
-        }
-        if let Err(err) = result {
-            warn!(
-                "failed to remove legacy {db_label} db file {}: {err}",
-                legacy_path.display(),
-            );
-        }
-    }
-}
-
-fn should_remove_db_file(file_name: &str, current_name: &str, base_name: &str) -> bool {
-    let mut normalized_name = file_name;
-    for suffix in ["-wal", "-shm", "-journal"] {
-        if let Some(stripped) = file_name.strip_suffix(suffix) {
-            normalized_name = stripped;
-            break;
-        }
-    }
-    if normalized_name == current_name {
-        return false;
-    }
-    let unversioned_name = format!("{base_name}.sqlite");
-    if normalized_name == unversioned_name {
-        return true;
-    }
-
-    let Some(version_with_extension) = normalized_name.strip_prefix(&format!("{base_name}_"))
-    else {
-        return false;
-    };
-    let Some(version_suffix) = version_with_extension.strip_suffix(".sqlite") else {
-        return false;
-    };
-    !version_suffix.is_empty() && version_suffix.chars().all(|ch| ch.is_ascii_digit())
 }
 
 #[cfg(test)]

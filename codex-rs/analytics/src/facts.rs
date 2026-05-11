@@ -28,6 +28,12 @@ use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AcceptedLineFingerprint {
+    pub path_hash: String,
+    pub line_hash: String,
+}
+
 #[derive(Clone)]
 pub struct TrackEventsContext {
     pub model_slug: String,
@@ -173,6 +179,7 @@ pub struct SkillInvocation {
     pub skill_name: String,
     pub skill_scope: SkillScope,
     pub skill_path: PathBuf,
+    pub plugin_id: Option<String>,
     pub invocation_type: InvocationType,
 }
 
@@ -295,6 +302,7 @@ pub(crate) enum AnalyticsFact {
         request: Box<ServerRequest>,
     },
     ServerResponse {
+        completed_at_ms: u64,
         response: Box<ServerResponse>,
     },
     Notification(Box<ServerNotification>),

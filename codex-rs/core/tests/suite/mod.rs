@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_test_binary_support::TestBinaryDispatchGuard;
 use codex_test_binary_support::TestBinaryDispatchMode;
@@ -14,6 +15,9 @@ use ctor::ctor;
 pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
     configure_test_binary_dispatch("codex-core-tests", |exe_name, argv1| {
         if argv1 == Some(CODEX_CORE_APPLY_PATCH_ARG1) {
+            return TestBinaryDispatchMode::DispatchArg0Only;
+        }
+        if argv1 == Some(CODEX_FS_HELPER_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
         if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
@@ -53,7 +57,6 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod live_cli;
-mod live_reload;
 mod model_overrides;
 mod model_switching;
 mod model_visible_layout;
@@ -61,6 +64,7 @@ mod models_cache_ttl;
 mod models_etag_responses;
 mod openai_file_mcp;
 mod otel;
+mod override_updates;
 mod pending_input;
 mod permissions_messages;
 mod personality;

@@ -20,6 +20,12 @@ impl WindowsSandboxRequestProcessor {
         }
     }
 
+    pub(crate) async fn windows_sandbox_readiness(
+        &self,
+    ) -> Result<WindowsSandboxReadinessResponse, JSONRPCErrorError> {
+        Ok(determine_windows_sandbox_readiness(&self.config))
+    }
+
     pub(crate) async fn windows_sandbox_setup_start(
         &self,
         request_id: &ConnectionRequestId,
@@ -99,5 +105,82 @@ impl WindowsSandboxRequestProcessor {
                 .await;
         });
         Ok(())
+    }
+}
+
+fn determine_windows_sandbox_readiness(config: &Config) -> WindowsSandboxReadinessResponse {
+    if !cfg!(windows) {
+        return WindowsSandboxReadinessResponse {
+            status: WindowsSandboxReadiness::NotConfigured,
+        };
+    }
+
+    determine_windows_sandbox_readiness_from_state(
+        WindowsSandboxLevel::from_config(config),
+        sandbox_setup_is_complete(config.codex_home.as_path()),
+    )
+}
+
+fn determine_windows_sandbox_readiness_from_state(
+    windows_sandbox_level: WindowsSandboxLevel,
+    sandbox_setup_is_complete: bool,
+) -> WindowsSandboxReadinessResponse {
+    let status = match windows_sandbox_level {
+        WindowsSandboxLevel::Disabled => WindowsSandboxReadiness::NotConfigured,
+        WindowsSandboxLevel::RestrictedToken => WindowsSandboxReadiness::Ready,
+        WindowsSandboxLevel::Elevated => {
+            if sandbox_setup_is_complete {
+                WindowsSandboxReadiness::Ready
+            } else {
+                WindowsSandboxReadiness::UpdateRequired
+            }
+        }
+    };
+
+    WindowsSandboxReadinessResponse { status }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn determine_windows_sandbox_readiness_reports_not_configured_when_disabled() {
+        let response = determine_windows_sandbox_readiness_from_state(
+            WindowsSandboxLevel::Disabled,
+            /*sandbox_setup_is_complete*/ false,
+        );
+
+        assert_eq!(response.status, WindowsSandboxReadiness::NotConfigured);
+    }
+
+    #[test]
+    fn determine_windows_sandbox_readiness_reports_ready_for_unelevated_mode() {
+        let response = determine_windows_sandbox_readiness_from_state(
+            WindowsSandboxLevel::RestrictedToken,
+            /*sandbox_setup_is_complete*/ false,
+        );
+
+        assert_eq!(response.status, WindowsSandboxReadiness::Ready);
+    }
+
+    #[test]
+    fn determine_windows_sandbox_readiness_reports_ready_for_complete_elevated_mode() {
+        let response = determine_windows_sandbox_readiness_from_state(
+            WindowsSandboxLevel::Elevated,
+            /*sandbox_setup_is_complete*/ true,
+        );
+
+        assert_eq!(response.status, WindowsSandboxReadiness::Ready);
+    }
+
+    #[test]
+    fn determine_windows_sandbox_readiness_reports_update_required_when_elevated_setup_is_stale() {
+        let response = determine_windows_sandbox_readiness_from_state(
+            WindowsSandboxLevel::Elevated,
+            /*sandbox_setup_is_complete*/ false,
+        );
+
+        assert_eq!(response.status, WindowsSandboxReadiness::UpdateRequired);
     }
 }

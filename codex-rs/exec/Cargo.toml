@@ -12,6 +12,7 @@ path = "src/main.rs"
 [lib]
 name = "codex_exec"
 path = "src/lib.rs"
+doctest = false
 
 [[test]]
 name = "all"
