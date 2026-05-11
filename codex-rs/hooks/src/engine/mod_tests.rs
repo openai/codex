@@ -183,12 +183,8 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
     let unix_log_path = managed_dir.join("unix_pre_tool_use_log.jsonl");
     let windows_log_path = managed_dir.join("windows_pre_tool_use_log.jsonl");
 
-    let python_command = |log_path: &Path| {
-        format!(
-            r#"python3 -c 'import json, pathlib, sys; payload = json.load(sys.stdin); pathlib.Path(r"{log_path}").write_text(json.dumps(payload), encoding="utf-8")'"#,
-            log_path = log_path.display()
-        )
-    };
+    let unix_command = |log_path: &Path| format!(r#"printf ok > "{}""#, log_path.display());
+    let windows_command = |log_path: &Path| format!(r#"echo ok > "{}""#, log_path.display());
 
     let managed_hooks = managed_hooks_for_current_platform(
         managed_dir,
@@ -197,8 +193,8 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
-                        unix: python_command(unix_log_path.as_path()),
-                        windows: python_command(windows_log_path.as_path()),
+                        unix: unix_command(unix_log_path.as_path()),
+                        windows: windows_command(windows_log_path.as_path()),
                     }),
                     timeout_sec: Some(10),
                     r#async: false,
