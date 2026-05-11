@@ -13,7 +13,6 @@ use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
-use crate::compact::is_summary_message;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -918,7 +917,21 @@ pub(super) fn filter_connectors_for_input(
         return Vec::new();
     }
 
-    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let user_message_texts = user_messages
+        .iter()
+        .map(|message| {
+            message
+                .iter()
+                .filter_map(|item| match item {
+                    UserInput::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    let mentions = collect_tool_mentions_from_messages(&user_message_texts);
     let mention_names_lower = mentions
         .plain_names
         .iter()
@@ -1013,7 +1026,6 @@ async fn run_sampling_request(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let current_turn_input = latest_real_user_turn(&input);
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1049,11 +1061,9 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            let prompt_input = sess
-                .clone_history()
+            sess.clone_history()
                 .await
-                .for_prompt(&turn_context.model_info.input_modalities);
-            restore_current_turn_for_sampling_retry(prompt_input, current_turn_input.as_ref())
+                .for_prompt(&turn_context.model_info.input_modalities)
         };
         let prompt = build_prompt(
             prompt_input,
@@ -1164,61 +1174,6 @@ async fn run_sampling_request(
             return Err(err);
         }
     }
-}
-
-fn latest_real_user_turn(input: &[ResponseItem]) -> Option<ResponseItem> {
-    input
-        .iter()
-        .rev()
-        .find_map(|item| match parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
-                Some(item.clone())
-            }
-            _ => None,
-        })
-}
-
-fn restore_current_turn_for_sampling_retry(
-    mut prompt_input: Vec<ResponseItem>,
-    current_turn_input: Option<&ResponseItem>,
-) -> Vec<ResponseItem> {
-    let Some(current_turn_input) = current_turn_input else {
-        return prompt_input;
-    };
-
-    if let Some(index) = prompt_input
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, item)| match parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
-                Some(index)
-            }
-            _ => None,
-        })
-    {
-        prompt_input[index] = current_turn_input.clone();
-        return prompt_input;
-    }
-
-    let insertion_index = prompt_input
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, item)| match parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user)) if is_summary_message(&user.message()) => Some(index),
-            _ if matches!(
-                item,
-                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
-            ) =>
-            {
-                Some(index)
-            }
-            _ => None,
-        })
-        .unwrap_or(prompt_input.len());
-    prompt_input.insert(insertion_index, current_turn_input.clone());
-    prompt_input
 }
 
 #[expect(
