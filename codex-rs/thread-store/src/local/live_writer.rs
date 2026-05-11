@@ -68,6 +68,7 @@ pub(super) async fn resume_thread(
         codex_home: store.config.codex_home.clone(),
         sqlite_home: store.config.sqlite_home.clone(),
         cwd,
+        workspace_roots: params.metadata.workspace_roots,
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };

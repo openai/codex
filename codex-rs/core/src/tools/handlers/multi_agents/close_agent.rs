@@ -24,84 +24,89 @@ impl ToolHandler for Handler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: CloseAgentArgs = parse_arguments(&arguments)?;
-        let agent_id = parse_agent_id_target(&args.target)?;
-        let receiver_agent = session
-            .services
-            .agent_control
-            .get_agent_metadata(agent_id)
-            .unwrap_or_default();
-        session
-            .send_event(
-                &turn,
-                CollabCloseBeginEvent {
-                    call_id: call_id.clone(),
-                    started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let args: CloseAgentArgs = parse_arguments(&arguments)?;
+            let agent_id = parse_agent_id_target(&args.target)?;
+            let receiver_agent = session
+                .services
+                .agent_control
+                .get_agent_metadata(agent_id)
+                .unwrap_or_default();
+            session
+                .send_event(
+                    &turn,
+                    CollabCloseBeginEvent {
+                        call_id: call_id.clone(),
+                        started_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.conversation_id,
+                        receiver_thread_id: agent_id,
+                    }
+                    .into(),
+                )
+                .await;
+            let status = match session
+                .services
+                .agent_control
+                .subscribe_status(agent_id)
+                .await
+            {
+                Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
+                Err(err) => {
+                    let status = session.services.agent_control.get_status(agent_id).await;
+                    session
+                        .send_event(
+                            &turn,
+                            CollabCloseEndEvent {
+                                call_id: call_id.clone(),
+                                completed_at_ms: now_unix_timestamp_ms(),
+                                sender_thread_id: session.conversation_id,
+                                receiver_thread_id: agent_id,
+                                receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                                receiver_agent_role: receiver_agent.agent_role.clone(),
+                                status,
+                            }
+                            .into(),
+                        )
+                        .await;
+                    return Err(collab_agent_error(agent_id, err));
                 }
-                .into(),
-            )
-            .await;
-        let status = match session
-            .services
-            .agent_control
-            .subscribe_status(agent_id)
-            .await
-        {
-            Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-            Err(err) => {
-                let status = session.services.agent_control.get_status(agent_id).await;
-                session
-                    .send_event(
-                        &turn,
-                        CollabCloseEndEvent {
-                            call_id: call_id.clone(),
-                            completed_at_ms: now_unix_timestamp_ms(),
-                            sender_thread_id: session.conversation_id,
-                            receiver_thread_id: agent_id,
-                            receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                            receiver_agent_role: receiver_agent.agent_role.clone(),
-                            status,
-                        }
-                        .into(),
-                    )
-                    .await;
-                return Err(collab_agent_error(agent_id, err));
-            }
-        };
-        let result = Box::pin(session.services.agent_control.close_agent(agent_id))
-            .await
-            .map_err(|err| collab_agent_error(agent_id, err))
-            .map(|_| ());
-        session
-            .send_event(
-                &turn,
-                CollabCloseEndEvent {
-                    call_id,
-                    completed_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
-                    status: status.clone(),
-                }
-                .into(),
-            )
-            .await;
-        result?;
+            };
+            let result = Box::pin(session.services.agent_control.close_agent(agent_id))
+                .await
+                .map_err(|err| collab_agent_error(agent_id, err))
+                .map(|_| ());
+            session
+                .send_event(
+                    &turn,
+                    CollabCloseEndEvent {
+                        call_id,
+                        completed_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.conversation_id,
+                        receiver_thread_id: agent_id,
+                        receiver_agent_nickname: receiver_agent.agent_nickname,
+                        receiver_agent_role: receiver_agent.agent_role,
+                        status: status.clone(),
+                    }
+                    .into(),
+                )
+                .await;
+            result?;
 
-        Ok(CloseAgentResult {
-            previous_status: status,
+            Ok(CloseAgentResult {
+                previous_status: status,
+            })
         })
     }
 }

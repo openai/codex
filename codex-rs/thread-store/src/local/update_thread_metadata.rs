@@ -1019,6 +1019,7 @@ mod tests {
     fn test_thread_metadata() -> ThreadPersistenceMetadata {
         ThreadPersistenceMetadata {
             cwd: Some(std::env::current_dir().expect("cwd")),
+            workspace_roots: Vec::new(),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
         }
