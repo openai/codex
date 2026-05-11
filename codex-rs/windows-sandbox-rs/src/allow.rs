@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+const PROTECTED_WRITE_SUBDIRS: &[&str] = &[".git", ".codex", ".agents"];
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct AllowDenyPaths {
     pub allow: HashSet<PathBuf>,
@@ -44,19 +46,11 @@ pub fn compute_allow_paths(
              policy_cwd: &Path,
              add_allow: &mut dyn FnMut(PathBuf),
              add_deny: &mut dyn FnMut(PathBuf)| {
-                let candidate = if root.is_absolute() {
-                    root
-                } else {
-                    policy_cwd.join(root)
-                };
-                let canonical = canonicalize(&candidate).unwrap_or(candidate);
+                let canonical = canonical_writable_root(root, policy_cwd);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
-                    let protected_entry = canonical.join(protected_subdir);
-                    if protected_entry.exists() {
-                        add_deny(protected_entry);
-                    }
+                for protected_entry in protected_child_deny_paths_for_canonical_root(&canonical) {
+                    add_deny(protected_entry);
                 }
             };
 
@@ -79,6 +73,40 @@ pub fn compute_allow_paths(
         }
     }
     AllowDenyPaths { allow, deny }
+}
+
+pub(crate) fn protected_child_deny_paths_for_roots<I, P>(
+    roots: I,
+    policy_cwd: &Path,
+) -> HashSet<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    roots
+        .into_iter()
+        .flat_map(|root| {
+            let canonical = canonical_writable_root(root.as_ref().to_path_buf(), policy_cwd);
+            protected_child_deny_paths_for_canonical_root(&canonical)
+        })
+        .collect()
+}
+
+fn canonical_writable_root(root: PathBuf, policy_cwd: &Path) -> PathBuf {
+    let candidate = if root.is_absolute() {
+        root
+    } else {
+        policy_cwd.join(root)
+    };
+    canonicalize(&candidate).unwrap_or(candidate)
+}
+
+fn protected_child_deny_paths_for_canonical_root(canonical: &Path) -> Vec<PathBuf> {
+    PROTECTED_WRITE_SUBDIRS
+        .iter()
+        .map(|protected_subdir| canonical.join(protected_subdir))
+        .filter(|protected_entry| protected_entry.exists())
+        .collect()
 }
 
 #[cfg(test)]

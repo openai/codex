@@ -35,6 +35,8 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
+use crate::allow::protected_child_deny_paths_for_roots;
+
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
@@ -168,7 +170,7 @@ fn run_setup_refresh_inner(
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_write_paths = build_payload_deny_write_paths(&request, &overrides, &write_roots);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -715,7 +717,7 @@ pub fn run_elevated_setup(
         )
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_write_paths = build_payload_deny_write_paths(&request, &overrides, &write_roots);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -789,7 +791,8 @@ fn build_payload_roots(
 
 fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
-    explicit_deny_write_paths: Option<Vec<PathBuf>>,
+    overrides: &SetupRootOverrides,
+    write_roots: &[PathBuf],
 ) -> Vec<PathBuf> {
     let allow_deny_paths: AllowDenyPaths = compute_allow_paths(
         request.policy,
@@ -797,10 +800,13 @@ fn build_payload_deny_write_paths(
         request.command_cwd,
         request.env_map,
     );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
+    let mut deny_write_paths: Vec<PathBuf> = overrides
+        .deny_write_paths
+        .as_deref()
         .unwrap_or_default()
-        .into_iter()
+        .iter()
         .map(|path| {
+            let path = path.to_path_buf();
             if path.exists() {
                 dunce::canonicalize(&path).unwrap_or(path)
             } else {
@@ -809,6 +815,12 @@ fn build_payload_deny_write_paths(
         })
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    if overrides.write_roots.is_some() {
+        deny_write_paths.extend(protected_child_deny_paths_for_roots(
+            write_roots,
+            request.policy_cwd,
+        ));
+    }
     deny_write_paths
 }
 
@@ -1406,8 +1418,14 @@ mod tests {
             proxy_enforced: false,
         };
 
+        let overrides = super::SetupRootOverrides {
+            write_roots: Some(vec![command_cwd.clone(), extra_write_root.clone()]),
+            deny_write_paths: Some(vec![explicit_deny.clone()]),
+            ..Default::default()
+        };
+        let (_, write_roots) = super::build_payload_roots(&request, &overrides);
         let deny_write_paths =
-            super::build_payload_deny_write_paths(&request, Some(vec![explicit_deny.clone()]));
+            super::build_payload_deny_write_paths(&request, &overrides, &write_roots);
 
         assert_eq!(
             [
