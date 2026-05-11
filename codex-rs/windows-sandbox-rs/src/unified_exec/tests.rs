@@ -5,6 +5,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -185,7 +186,9 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-non-tty-deny-read");
-        let secret_path = cwd.join("legacy-non-tty-deny-read-secret.env");
+        let secret_path =
+            AbsolutePathBuf::from_absolute_path(cwd.join("legacy-non-tty-deny-read-secret.env"))
+                .expect("absolute deny-read fixture path");
         let err = spawn_windows_sandbox_session_legacy(
             "workspace-write",
             cwd.as_path(),

@@ -608,16 +608,10 @@ async fn exec_windows_sandbox(
     let use_elevated = windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced);
     let additional_deny_write_paths = windows_sandbox_filesystem_overrides
         .map(|overrides| overrides.additional_deny_write_paths.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .map(AbsolutePathBuf::into_path_buf)
-        .collect::<Vec<_>>();
+        .unwrap_or_default();
     let additional_deny_read_paths = windows_sandbox_filesystem_overrides
         .map(|overrides| overrides.additional_deny_read_paths.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .map(AbsolutePathBuf::into_path_buf)
-        .collect::<Vec<_>>();
+        .unwrap_or_default();
     let elevated_read_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.read_roots_override.clone());
     let elevated_read_roots_include_platform_defaults = windows_sandbox_filesystem_overrides

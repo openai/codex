@@ -295,6 +295,7 @@ mod windows_impl {
     use super::workspace_acl::is_command_cwd_root;
     use anyhow::Context;
     use anyhow::Result;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::io;
@@ -382,10 +383,18 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        additional_deny_read_paths: &[PathBuf],
-        additional_deny_write_paths: &[PathBuf],
+        additional_deny_read_paths: &[AbsolutePathBuf],
+        additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
+        let additional_deny_read_paths = additional_deny_read_paths
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
+        let additional_deny_write_paths = additional_deny_write_paths
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
         let common = prepare_legacy_spawn_context(
             policy_json_or_preset,
             codex_home,

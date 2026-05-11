@@ -10,6 +10,7 @@
 mod backends;
 
 use anyhow::Result;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::SpawnedProcess;
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,8 +25,8 @@ pub async fn spawn_windows_sandbox_session_legacy(
     cwd: &Path,
     env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
-    additional_deny_read_paths: &[PathBuf],
-    additional_deny_write_paths: &[PathBuf],
+    additional_deny_read_paths: &[AbsolutePathBuf],
+    additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,
@@ -59,8 +60,8 @@ pub async fn spawn_windows_sandbox_session_elevated(
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[PathBuf],
-    deny_write_paths_override: &[PathBuf],
+    deny_read_paths_override: &[AbsolutePathBuf],
+    deny_write_paths_override: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,

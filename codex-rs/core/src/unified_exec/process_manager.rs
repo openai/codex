@@ -890,18 +890,12 @@ impl UnifiedExecProcessManager {
                 .windows_sandbox_filesystem_overrides
                 .as_ref()
                 .map(|overrides| overrides.additional_deny_write_paths.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
-                .collect::<Vec<_>>();
+                .unwrap_or_default();
             let additional_deny_read_paths = request
                 .windows_sandbox_filesystem_overrides
                 .as_ref()
                 .map(|overrides| overrides.additional_deny_read_paths.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
-                .collect::<Vec<_>>();
+                .unwrap_or_default();
             let elevated_read_roots_override = request
                 .windows_sandbox_filesystem_overrides
                 .as_ref()
