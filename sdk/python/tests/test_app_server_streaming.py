@@ -21,9 +21,7 @@ from openai_codex.generated.v2_all import (
 def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
     """A sync turn stream should expose deltas, completed items, and completion."""
     with AppServerHarness(tmp_path) as harness:
-        harness.responses.enqueue_sse(
-            streaming_response("stream-1", "msg-stream-1", ["he", "llo"])
-        )
+        harness.responses.enqueue_sse(streaming_response("stream-1", "msg-stream-1", ["he", "llo"]))
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
