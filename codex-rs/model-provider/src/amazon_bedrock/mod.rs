@@ -9,14 +9,19 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::Result;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 
+use crate::provider::ApprovalReviewModelSelection;
 use crate::provider::ModelProvider;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
@@ -59,6 +64,19 @@ impl ModelProvider for AmazonBedrockModelProvider {
             namespace_tools: false,
             image_generation: false,
             web_search: false,
+        }
+    }
+
+    fn approval_review_model_selection(
+        &self,
+        _available_models: &[ModelPreset],
+        _active_model_info: &ModelInfo,
+        _active_reasoning_effort: Option<ReasoningEffort>,
+        _preferred_model: &str,
+    ) -> ApprovalReviewModelSelection {
+        ApprovalReviewModelSelection {
+            model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
+            reasoning_effort: Some(ReasoningEffort::Low),
         }
     }
 
@@ -107,6 +125,8 @@ impl ModelProvider for AmazonBedrockModelProvider {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use crate::provider::ApprovalReviewModelSelection;
+
     use super::*;
 
     #[test]
@@ -137,6 +157,30 @@ mod tests {
                 namespace_tools: false,
                 image_generation: false,
                 web_search: false,
+            }
+        );
+    }
+
+    #[test]
+    fn approval_review_model_selection_uses_bedrock_gpt_5_4() {
+        let provider = AmazonBedrockModelProvider::new(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        );
+        let active_model_info =
+            codex_models_manager::model_info::model_info_from_slug("openai.gpt-oss-120b");
+
+        let selection = provider.approval_review_model_selection(
+            &[],
+            &active_model_info,
+            Some(ReasoningEffort::High),
+            "codex-auto-review",
+        );
+
+        assert_eq!(
+            selection,
+            ApprovalReviewModelSelection {
+                model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
             }
         );
     }

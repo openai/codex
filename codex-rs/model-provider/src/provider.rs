@@ -11,7 +11,10 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
@@ -70,6 +73,13 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
+/// Model and reasoning effort selected for provider-backed approval review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalReviewModelSelection {
+    pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 /// Runtime provider abstraction used by model execution.
 ///
 /// Implementations own provider-specific behavior for a model backend. The
@@ -83,6 +93,38 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Selects the model used for automatic approval review.
+    ///
+    /// Providers that require backend-specific model IDs should override this
+    /// method. The default behavior prefers a caller-provided reviewer model
+    /// when it is available, then falls back to the active turn model.
+    fn approval_review_model_selection(
+        &self,
+        available_models: &[ModelPreset],
+        active_model_info: &ModelInfo,
+        active_reasoning_effort: Option<ReasoningEffort>,
+        preferred_model: &str,
+    ) -> ApprovalReviewModelSelection {
+        let preferred_model = available_models
+            .iter()
+            .find(|preset| preset.model == preferred_model);
+        if let Some(preset) = preferred_model {
+            approval_review_selection_from_preset(preset)
+        } else {
+            let reasoning_effort = preferred_reasoning_effort(
+                active_model_info
+                    .supported_reasoning_levels
+                    .iter()
+                    .any(|preset| preset.effort == ReasoningEffort::Low),
+                active_reasoning_effort.or(active_model_info.default_reasoning_level),
+            );
+            ApprovalReviewModelSelection {
+                model: active_model_info.slug.clone(),
+                reasoning_effort,
+            }
+        }
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -128,6 +170,33 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
+}
+
+pub(crate) fn approval_review_selection_from_preset(
+    preset: &ModelPreset,
+) -> ApprovalReviewModelSelection {
+    let reasoning_effort = preferred_reasoning_effort(
+        preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|effort| effort.effort == ReasoningEffort::Low),
+        Some(preset.default_reasoning_effort),
+    );
+    ApprovalReviewModelSelection {
+        model: preset.model.clone(),
+        reasoning_effort,
+    }
+}
+
+pub(crate) fn preferred_reasoning_effort(
+    supports_low: bool,
+    fallback: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if supports_low {
+        Some(ReasoningEffort::Low)
+    } else {
+        fallback
+    }
 }
 
 /// Shared runtime model provider handle.
