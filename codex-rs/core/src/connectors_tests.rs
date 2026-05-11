@@ -2,6 +2,8 @@ use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use codex_config::AppRequirementToml;
+use codex_config::AppToolRequirementToml;
+use codex_config::AppToolsRequirementsToml;
 use codex_config::AppsRequirementsToml;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
@@ -359,6 +361,7 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), /*open_world_hint*/ None)),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -387,6 +390,7 @@ fn app_tool_policy_defaults_missing_destructive_hint_to_true() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(/*destructive_hint*/ None, Some(false))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -415,6 +419,7 @@ fn app_tool_policy_defaults_missing_open_world_hint_to_true() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(false), /*open_world_hint*/ None)),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -483,6 +488,7 @@ fn requirements_disabled_connector_overrides_enabled_connector() {
             "connector_123123".to_string(),
             AppRequirementToml {
                 enabled: Some(false),
+                tools: None,
             },
         )]),
     };
@@ -515,6 +521,7 @@ fn requirements_enabled_does_not_override_disabled_connector() {
             "connector_123123".to_string(),
             AppRequirementToml {
                 enabled: Some(true),
+                tools: None,
             },
         )]),
     };
@@ -548,6 +555,7 @@ enabled = true
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -591,6 +599,7 @@ async fn cloud_requirements_disable_connector_applies_without_user_apps_table() 
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -641,6 +650,7 @@ async fn local_requirements_disable_connector_overrides_user_apps_config() {
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -692,6 +702,7 @@ async fn local_requirements_disable_connector_applies_without_user_apps_table() 
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -733,6 +744,7 @@ async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
                 "connector_drive".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -773,12 +785,217 @@ fn app_tool_policy_honors_default_app_enabled_false() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
         policy,
         AppToolPolicy {
             enabled: false,
+            approval: AppToolApproval::Auto,
+        }
+    );
+}
+
+#[test]
+fn app_tool_policy_uses_managed_approval_without_apps_config() {
+    let policy = app_tool_policy_from_apps_config(
+        /*apps_config*/ None,
+        Some("calendar"),
+        "events/list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+        Some(AppToolApproval::Approve),
+    );
+
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
+            approval: AppToolApproval::Approve,
+        }
+    );
+}
+
+fn app_tool_requirements(
+    app_id: &str,
+    tool_name: &str,
+    approval_mode: AppToolApproval,
+) -> AppsRequirementsToml {
+    AppsRequirementsToml {
+        apps: BTreeMap::from([(
+            app_id.to_string(),
+            AppRequirementToml {
+                enabled: None,
+                tools: Some(AppToolsRequirementsToml {
+                    tools: BTreeMap::from([(
+                        tool_name.to_string(),
+                        AppToolRequirementToml {
+                            approval_mode: Some(approval_mode),
+                        },
+                    )]),
+                }),
+            },
+        )]),
+    }
+}
+
+#[test]
+fn managed_app_tool_approval_uses_raw_tool_name() {
+    let requirements_apps = app_tool_requirements(
+        "connector_123123",
+        "calendar/list_events",
+        AppToolApproval::Approve,
+    );
+
+    assert_eq!(
+        managed_app_tool_approval(
+            Some(&requirements_apps),
+            Some("connector_123123"),
+            "calendar/list_events",
+        ),
+        Some(AppToolApproval::Approve)
+    );
+    assert_eq!(
+        managed_app_tool_approval(
+            Some(&requirements_apps),
+            Some("connector_123123"),
+            "calendar/create_event",
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn cloud_requirements_tool_approval_overrides_user_apps_config() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[apps.connector_123123.tools."calendar/list_events"]
+approval_mode = "prompt"
+"#,
+    )
+    .expect("write config");
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await
+        .expect("config should build");
+
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "calendar/list_events",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
+            approval: AppToolApproval::Approve,
+        }
+    );
+}
+
+#[tokio::test]
+async fn local_requirements_tool_approval_overrides_user_apps_config() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let config_toml_path =
+        AbsolutePathBuf::try_from(codex_home.path().join(CONFIG_TOML_FILE)).expect("abs path");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("config should build");
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
+        ..Default::default()
+    };
+    config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack")
+            .with_user_config(
+                &config_toml_path,
+                toml::from_str::<toml::Value>(
+                    r#"
+[apps.connector_123123.tools."calendar/list_events"]
+approval_mode = "prompt"
+"#,
+                )
+                .expect("apps config"),
+            );
+
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "calendar/list_events",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+    );
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
+            approval: AppToolApproval::Approve,
+        }
+    );
+}
+
+#[tokio::test]
+async fn local_requirements_tool_approval_does_not_match_tool_title() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("config should build");
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
+        ..Default::default()
+    };
+    config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack");
+
+    let policy = app_tool_policy(
+        &config,
+        Some("connector_123123"),
+        "calendar/create_event",
+        Some("calendar/list_events"),
+        /*annotations*/ None,
+    );
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
             approval: AppToolApproval::Auto,
         }
     );
@@ -813,6 +1030,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -855,6 +1073,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -889,6 +1108,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -925,6 +1145,7 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -963,6 +1184,7 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1005,6 +1227,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
         "calendar_events/create",
         Some("events/create"),
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(

@@ -42,6 +42,7 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -892,6 +893,36 @@ pub async fn run_main(
     )
     .await;
 
+    let otel_originator = originator().value;
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::legacy_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
+        }
+    };
+    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
+    crate::legacy_core::otel_init::install_sqlite_telemetry(
+        otel.as_ref(),
+        otel_originator.as_str(),
+    );
     let state_db = match &app_server_target {
         AppServerTarget::Embedded => state_db::init(&config).await,
         AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
@@ -1033,31 +1064,6 @@ pub async fn run_main(
         };
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
-
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_analytics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            None
-        }
-    };
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 

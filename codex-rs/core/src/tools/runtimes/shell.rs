@@ -28,13 +28,11 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
-use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -210,8 +208,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
         ))
     }
 
-    fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+    fn sandbox_permissions(&self, req: &ShellRequest) -> SandboxPermissions {
+        req.sandbox_permissions
     }
 }
 

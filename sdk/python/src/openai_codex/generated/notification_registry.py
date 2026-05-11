@@ -35,6 +35,8 @@ from .v2_all import McpToolCallProgressNotification
 from .v2_all import ModelReroutedNotification
 from .v2_all import ModelVerificationNotification
 from .v2_all import PlanDeltaNotification
+from .v2_all import ProcessExitedNotification
+from .v2_all import ProcessOutputDeltaNotification
 from .v2_all import ReasoningSummaryPartAddedNotification
 from .v2_all import ReasoningSummaryTextDeltaNotification
 from .v2_all import ReasoningTextDeltaNotification
@@ -101,6 +103,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "mcpServer/startupStatus/updated": McpServerStatusUpdatedNotification,
     "model/rerouted": ModelReroutedNotification,
     "model/verification": ModelVerificationNotification,
+    "process/exited": ProcessExitedNotification,
+    "process/outputDelta": ProcessOutputDeltaNotification,
     "remoteControl/status/changed": RemoteControlStatusChangedNotification,
     "serverRequest/resolved": ServerRequestResolvedNotification,
     "skills/changed": SkillsChangedNotification,
@@ -165,6 +169,7 @@ NESTED_TURN_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
 
 
 def notification_turn_id(payload: BaseModel) -> str | None:
+    """Return the turn id carried by generated notification payload metadata."""
     if isinstance(payload, DIRECT_TURN_ID_NOTIFICATION_TYPES):
         return payload.turn_id if isinstance(payload.turn_id, str) else None
     if isinstance(payload, NESTED_TURN_NOTIFICATION_TYPES):

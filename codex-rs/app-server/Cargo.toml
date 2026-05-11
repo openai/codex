@@ -28,7 +28,6 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "json",
     "tokio",
-    "ws",
 ] }
 codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
@@ -100,22 +99,20 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 base64 = { workspace = true }
+codex-uds = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 flate2 = { workspace = true }
-hmac = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
 rmcp = { workspace = true, default-features = false, features = [
     "elicitation",
     "server",
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
-sha2 = { workspace = true }
 shlex = { workspace = true }
 tar = { workspace = true }
 tokio-tungstenite = { workspace = true }

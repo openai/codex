@@ -24,34 +24,13 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
-- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 - unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
-
-When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
-
-- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
-- `GET /healthz` returns `200 OK` when no `Origin` header is present.
-- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
-
-Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
 opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
 by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
 The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
-
-Security note:
-
-- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
-- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
-- Supported auth modes are app-server flags:
-  - `--ws-auth capability-token --ws-token-file /absolute/path`
-  - `--ws-auth capability-token --ws-token-sha256 HEX`
-  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
-- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
-- When starting `codex app-server` manually, prefer `--ws-token-file` over passing raw bearer tokens on the command line. Store a high-entropy token in a file readable only by your user, then have your client present that token in the websocket `Authorization` header.
-- `--ws-token-sha256` is intended for clients that keep the raw token in a separate local secret store and only need the server to know the SHA-256 verifier. The hash may appear in process listings, but it is not sufficient to authenticate; clients still need the original raw token. Only use this mode with randomly generated high-entropy tokens, not passwords or other guessable values.
 
 Tracing/log output:
 
@@ -154,7 +133,7 @@ Example with notification opt-out:
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
-- `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
+- `thread/goal/set` — create or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`.
 - `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
@@ -502,7 +481,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Set and update a thread goal
 
-Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Supplying a new objective resets `tokensUsed`, `timeUsedSeconds`, and `createdAt`. Supplying the current non-terminal objective, or omitting `objective`, updates the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+Use `thread/goal/set` to create or update the current goal for a materialized thread. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
 
 ```json
 { "method": "thread/goal/set", "id": 27, "params": {

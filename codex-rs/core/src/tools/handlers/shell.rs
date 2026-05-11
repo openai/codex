@@ -198,6 +198,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         &exec_params.command,
         &exec_params.cwd,
         fs.as_ref(),
+        turn_environment.clone(),
         session.clone(),
         turn.clone(),
         Some(&tracker),

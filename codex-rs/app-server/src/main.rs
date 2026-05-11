@@ -1,7 +1,6 @@
 use clap::Parser;
 use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
-use codex_app_server::AppServerWebsocketAuthArgs;
 use codex_app_server::PluginStartupTasks;
 use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
@@ -19,7 +18,7 @@ const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_C
 #[derive(Debug, Parser)]
 struct AppServerArgs {
     /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
+    /// `unix://`, `unix://PATH`, `off`.
     #[arg(
         long = "listen",
         value_name = "URL",
@@ -35,9 +34,6 @@ struct AppServerArgs {
         value_parser = SessionSource::from_startup_arg
     )]
     session_source: SessionSource,
-
-    #[command(flatten)]
-    auth: AppServerWebsocketAuthArgs,
 
     /// Hidden debug-only test hook used by integration tests that spawn the
     /// production app-server binary.
@@ -58,7 +54,6 @@ fn main() -> anyhow::Result<()> {
         };
         let transport = args.listen;
         let session_source = args.session_source;
-        let auth = args.auth.try_into_settings()?;
         let mut runtime_options = AppServerRuntimeOptions::default();
         #[cfg(debug_assertions)]
         if args.disable_plugin_startup_tasks_for_tests {
@@ -72,7 +67,6 @@ fn main() -> anyhow::Result<()> {
             /*default_analytics_enabled*/ false,
             transport,
             session_source,
-            auth,
             runtime_options,
         )
         .await?;

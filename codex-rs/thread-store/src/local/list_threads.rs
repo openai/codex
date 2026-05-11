@@ -267,6 +267,7 @@ mod tests {
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
+        metadata.preview = metadata.first_user_message.clone();
         runtime
             .upsert_thread(&metadata)
             .await

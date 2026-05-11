@@ -1926,6 +1926,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -1999,6 +2000,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),

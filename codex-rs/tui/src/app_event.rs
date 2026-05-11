@@ -60,6 +60,10 @@ pub(crate) enum RealtimeAudioDeviceKind {
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,
     ReplaceExisting,
+    UpdateExisting {
+        status: ThreadGoalStatus,
+        token_budget: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +246,11 @@ pub(crate) enum AppEvent {
     /// Open the current thread goal summary/action menu.
     OpenThreadGoalMenu {
         thread_id: ThreadId,
+    },
+
+    /// Open an editor for the current thread goal objective.
+    OpenThreadGoalEditor {
+        thread_id: Option<ThreadId>,
     },
 
     /// Set or replace the current thread goal objective.

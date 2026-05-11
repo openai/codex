@@ -32,12 +32,13 @@ use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
 #[tokio::test]
-async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Result<()> {
+async fn unix_socket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
         mut process,
         mut ws,
+        ..
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigint(&process)?;
@@ -57,12 +58,13 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
 }
 
 #[tokio::test]
-async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> Result<()> {
+async fn unix_socket_transport_second_ctrl_c_forces_exit_while_turn_running() -> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
         mut process,
         mut ws,
+        ..
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigint(&process)?;
@@ -83,12 +85,13 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
 }
 
 #[tokio::test]
-async fn websocket_transport_sigterm_waits_for_running_turn_before_exit() -> Result<()> {
+async fn unix_socket_transport_sigterm_waits_for_running_turn_before_exit() -> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
         mut process,
         mut ws,
+        ..
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigterm(&process)?;
@@ -108,12 +111,13 @@ async fn websocket_transport_sigterm_waits_for_running_turn_before_exit() -> Res
 }
 
 #[tokio::test]
-async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> Result<()> {
+async fn unix_socket_transport_second_sigterm_forces_exit_while_turn_running() -> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
         _server,
         mut process,
         mut ws,
+        ..
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigterm(&process)?;
@@ -140,6 +144,7 @@ async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() ->
         _server,
         mut process,
         mut ws,
+        ..
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sighup(&process)?;
@@ -163,6 +168,7 @@ async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() ->
 
 struct GracefulCtrlCFixture {
     _codex_home: TempDir,
+    _socket_dir: TempDir,
     _server: wiremock::MockServer,
     process: Child,
     ws: WsClient,
@@ -181,8 +187,8 @@ async fn start_ctrl_c_restart_fixture(turn_delay: Duration) -> Result<GracefulCt
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let (process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
-    let mut ws = connect_websocket(bind_addr).await?;
+    let (process, socket_path, socket_dir) = spawn_websocket_server(codex_home.path()).await?;
+    let mut ws = connect_websocket(&socket_path).await?;
 
     send_initialize_request(&mut ws, /*id*/ 1, "ws_graceful_shutdown").await?;
     let init_response = read_response_for_id(&mut ws, /*id*/ 1).await?;
@@ -200,6 +206,7 @@ async fn start_ctrl_c_restart_fixture(turn_delay: Duration) -> Result<GracefulCt
 
     Ok(GracefulCtrlCFixture {
         _codex_home: codex_home,
+        _socket_dir: socket_dir,
         _server: server,
         process,
         ws,
@@ -269,9 +276,7 @@ fn send_sighup(process: &Child) -> Result<()> {
 }
 
 fn send_signal(process: &Child, signal: &str) -> Result<()> {
-    let pid = process
-        .id()
-        .context("websocket app-server process has no pid")?;
+    let pid = process.id().context("app-server process has no pid")?;
     let status = StdCommand::new("kill")
         .arg(signal)
         .arg(pid.to_string())
@@ -299,7 +304,7 @@ async fn wait_for_process_exit_within(
     timeout(window, process.wait())
         .await
         .context(timeout_context)?
-        .context("failed waiting for websocket app-server process exit")
+        .context("failed waiting for app-server process exit")
 }
 
 async fn expect_websocket_disconnect(stream: &mut WsClient) -> Result<()> {

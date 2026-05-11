@@ -2333,6 +2333,8 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let redact_resume_payloads =
+            should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -2527,6 +2529,10 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
+                let token_usage_thread = include_turns.then(|| thread.clone());
+                if redact_resume_payloads {
+                    redact_thread_resume_payloads(&mut thread);
+                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2544,7 +2550,6 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -2664,6 +2669,8 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+            let redact_resume_payloads =
+                should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
                 .history
                 .as_ref()
@@ -2738,6 +2745,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    redact_resume_payloads,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3745,7 +3753,7 @@ pub(crate) fn thread_from_stored_thread(
         id: thread_id.clone(),
         session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         ephemeral: false,
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -3787,7 +3795,7 @@ fn summary_from_stored_thread(
     ConversationSummary {
         conversation_id: thread.thread_id,
         path,
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         // Preserve millisecond precision from the thread store so thread/list cursors
         // round-trip the same ordering key used by pagination queries.
         timestamp: Some(
@@ -3818,6 +3826,7 @@ fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
     first_user_message: Option<String>,
+    preview: Option<String>,
     timestamp: String,
     updated_at: String,
     model_provider: String,
@@ -3831,7 +3840,7 @@ fn summary_from_state_db_metadata(
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 ) -> ConversationSummary {
-    let preview = first_user_message.unwrap_or_default();
+    let preview = preview.or(first_user_message).unwrap_or_default();
     let source = serde_json::from_str(&source)
         .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
@@ -3865,6 +3874,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
         metadata.id,
         metadata.rollout_path.clone(),
         metadata.first_user_message.clone(),
+        metadata.preview.clone(),
         metadata
             .created_at
             .to_rfc3339_opts(SecondsFormat::Secs, true),

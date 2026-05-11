@@ -190,7 +190,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_write_stdin_tool(),
         create_update_plan_tool(),
         request_user_input_tool_spec(&request_user_input_available_modes(&features)),
-        create_apply_patch_freeform_tool(),
+        create_apply_patch_freeform_tool(/*include_environment_id*/ false),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -299,6 +299,40 @@ fn exec_command_spec_includes_environment_id_only_for_multiple_selected_environm
         "exec_command",
         /*expected_present*/ true,
     );
+}
+
+#[test]
+fn apply_patch_spec_includes_environment_id_only_for_multiple_selected_environments() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_apply_patch_environment_id(&single_environment_tools, /*expected_present*/ false);
+
+    let multi_environment_config =
+        tools_config.with_environment_mode(ToolEnvironmentMode::Multiple);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_apply_patch_environment_id(&multi_environment_tools, /*expected_present*/ true);
 }
 
 #[test]
@@ -2646,6 +2680,18 @@ fn assert_process_tool_environment_id(
         properties.contains_key("environment_id"),
         expected_present,
         "{expected_name} environment_id parameter presence"
+    );
+}
+
+fn assert_apply_patch_environment_id(tools: &[ConfiguredToolSpec], expected_present: bool) {
+    let tool = find_tool(tools, "apply_patch");
+    let ToolSpec::Freeform(FreeformTool { format, .. }) = &tool.spec else {
+        panic!("expected freeform apply_patch tool");
+    };
+    assert_eq!(
+        format.definition.contains("environment_id?"),
+        expected_present,
+        "apply_patch environment_id grammar presence"
     );
 }
 

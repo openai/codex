@@ -1145,7 +1145,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
- "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -1164,10 +1163,8 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
- "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1921,6 +1918,7 @@ dependencies = [
  "codex-state",
  "codex-thread-store",
  "codex-tools",
+ "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1929,16 +1927,13 @@ dependencies = [
  "core_test_support",
  "flate2",
  "futures",
- "hmac",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
- "reqwest",
  "rmcp",
  "serde",
  "serde_json",
  "serial_test",
- "sha2",
  "shlex",
  "tar",
  "tempfile",
@@ -1989,14 +1984,15 @@ dependencies = [
  "anyhow",
  "codex-app-server-protocol",
  "codex-app-server-transport",
- "codex-core",
  "codex-uds",
+ "codex-utils-home-dir",
  "futures",
  "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-tungstenite",
@@ -2054,11 +2050,8 @@ dependencies = [
 name = "codex-app-server-transport"
 version = "0.0.0"
 dependencies = [
- "anyhow",
- "axum",
  "base64 0.22.1",
  "chrono",
- "clap",
  "codex-api",
  "codex-app-server-protocol",
  "codex-config",
@@ -2069,18 +2062,12 @@ dependencies = [
  "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
- "constant_time_eq 0.3.1",
  "futures",
  "gethostname",
- "hmac",
- "jsonwebtoken",
- "owo-colors",
  "pretty_assertions",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
- "time",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -2174,17 +2161,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
-]
-
-[[package]]
-name = "codex-builtin-mcps"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-memories-mcp",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "tokio",
 ]
 
 [[package]]
@@ -3079,7 +3055,6 @@ dependencies = [
  "async-channel",
  "codex-api",
  "codex-async-utils",
- "codex-builtin-mcps",
  "codex-config",
  "codex-exec-server",
  "codex-login",

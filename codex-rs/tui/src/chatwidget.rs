@@ -4896,6 +4896,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
@@ -8711,6 +8712,9 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::MentionsV2 {
+            self.sync_mentions_v2_enabled();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_lifecycle.set_prevent_idle_sleep(enabled);
         }
@@ -8910,6 +8914,11 @@ impl ChatWidget {
     fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
+    }
+
+    fn sync_mentions_v2_enabled(&mut self) {
+        self.bottom_pane
+            .set_mentions_v2_enabled(self.config.features.enabled(Feature::MentionsV2));
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -10133,6 +10142,7 @@ impl ChatWidget {
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
+        self.sync_mentions_v2_enabled();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

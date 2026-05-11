@@ -1,7 +1,6 @@
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
-use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
@@ -9,6 +8,7 @@ use codex_state::StateRuntime;
 use gethostname::gethostname;
 use std::io;
 use std::io::ErrorKind;
+use tokio_tungstenite::tungstenite::http::HeaderMap;
 use tracing::info;
 use tracing::warn;
 

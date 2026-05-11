@@ -748,6 +748,27 @@ async fn goal_control_slash_commands_emit_goal_events() {
 }
 
 #[tokio::test]
+async fn goal_edit_slash_command_opens_goal_editor() {
+    for thread_id in [Some(ThreadId::new()), None] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+        chat.thread_id = thread_id;
+
+        submit_composer_text(&mut chat, "/goal edit");
+
+        let event = rx.try_recv().expect("expected goal editor event");
+        let AppEvent::OpenThreadGoalEditor {
+            thread_id: actual_thread_id,
+        } = event
+        else {
+            panic!("expected OpenThreadGoalEditor, got {event:?}");
+        };
+        assert_eq!(actual_thread_id, thread_id);
+        assert_no_submit_op(&mut op_rx);
+    }
+}
+
+#[tokio::test]
 async fn queued_goal_slash_command_emits_set_goal_event_after_thread_starts() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);

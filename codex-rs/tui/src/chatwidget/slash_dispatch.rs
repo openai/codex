@@ -662,6 +662,15 @@ impl ChatWidget {
                 }
                 let control_command = match trimmed.to_ascii_lowercase().as_str() {
                     "clear" => Some(GoalControlCommand::Clear),
+                    "edit" => {
+                        self.app_event_tx.send(AppEvent::OpenThreadGoalEditor {
+                            thread_id: self.thread_id,
+                        });
+                        if source == SlashCommandDispatchSource::Live {
+                            self.bottom_pane.drain_pending_submission_state();
+                        }
+                        return;
+                    }
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
                     "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
                     _ => None,
