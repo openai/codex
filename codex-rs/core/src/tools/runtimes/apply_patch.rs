@@ -170,7 +170,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 || async move {
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, None, /*grant_root*/ None,
+                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
