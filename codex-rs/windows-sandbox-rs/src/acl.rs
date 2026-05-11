@@ -174,44 +174,12 @@ pub fn path_mask_allows(
 }
 
 pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
-    if p_dacl.is_null() {
-        return false;
-    }
-    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
-    let ok = GetAclInformation(
-        p_dacl as *const ACL,
-        &mut info as *mut _ as *mut c_void,
-        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-        AclSizeInformation,
-    );
-    if ok == 0 {
-        return false;
-    }
-    let count = info.AceCount as usize;
-    for i in 0..count {
-        let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
-            continue;
-        }
-        let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 0 {
-            continue; // ACCESS_ALLOWED_ACE_TYPE
-        }
-        // Ignore ACEs that are inherit-only (do not apply to the current object)
-        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
-            continue;
-        }
-        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
-        let mask = ace.Mask;
-        let base = p_ace as usize;
-        let sid_ptr =
-            (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
-        let eq = EqualSid(sid_ptr, psid);
-        if eq != 0 && (mask & FILE_GENERIC_WRITE) != 0 {
-            return true;
-        }
-    }
-    false
+    dacl_mask_allows(
+        p_dacl,
+        &[psid],
+        WRITE_ALLOW_MASK,
+        /*require_all_bits*/ true,
+    )
 }
 
 pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
@@ -403,7 +371,8 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
-    // Already has write? Skip costly DACL rewrite.
+    // Keep the legacy path aligned with the elevated setup helper so atomic
+    // replace/delete flows keep working under the restricted-token backend.
     if dacl_has_write_allow_for_sid(p_dacl, psid) {
         if !p_sd.is_null() {
             LocalFree(p_sd as HLOCAL);
@@ -411,7 +380,8 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         return Ok(false);
     }
     let mut added = false;
-    // Always ensure write is present: if an allow ACE exists without write, add one with write+RX.
+    // Always ensure the full write mask is present, including delete semantics
+    // required by atomic rename patterns like `os.replace()`.
     let trustee = TRUSTEE_W {
         pMultipleTrustee: std::ptr::null_mut(),
         MultipleTrusteeOperation: 0,
@@ -420,7 +390,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         ptstrName: psid as *mut u16,
     };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    explicit.grfAccessPermissions = WRITE_ALLOW_MASK;
     explicit.grfAccessMode = 2; // SET_ACCESS
     explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     explicit.Trustee = trustee;
