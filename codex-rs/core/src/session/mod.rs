@@ -3190,7 +3190,7 @@ impl Session {
         }
 
         self.input_queue
-            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .push_pending_steer_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
                 input.into(),
             )
@@ -3206,6 +3206,30 @@ impl Session {
         self.input_queue
             .inject_response_items(&self.active_turn, input)
             .await
+    }
+
+    pub(crate) async fn mark_usage_limit_reached(&self, sub_id: &str) {
+        let turn_state = self
+            .input_queue
+            .turn_state_for_sub_id(&self.active_turn, sub_id)
+            .await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.mark_usage_limit_reached();
+    }
+
+    pub(crate) async fn usage_limit_reached_for_active_turn(&self) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .map(|active_turn| Arc::clone(&active_turn.turn_state))
+        };
+        let Some(turn_state) = turn_state else {
+            return false;
+        };
+        turn_state.lock().await.usage_limit_reached()
     }
 
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {

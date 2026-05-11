@@ -23,8 +23,35 @@ use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PendingInputItem {
+    TurnSteer(ResponseInputItem),
+    Injected(ResponseInputItem),
+}
+
+impl PendingInputItem {
+    pub(crate) fn turn_steer(input: ResponseInputItem) -> Self {
+        Self::TurnSteer(input)
+    }
+
+    pub(crate) fn injected(input: ResponseInputItem) -> Self {
+        Self::Injected(input)
+    }
+
+    pub(crate) fn is_turn_steer(&self) -> bool {
+        matches!(self, Self::TurnSteer(_))
+    }
+
+    pub(crate) fn into_response_input_item(self) -> ResponseInputItem {
+        match self {
+            Self::TurnSteer(input) | Self::Injected(input) => input,
+        }
+    }
+}
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -116,6 +143,7 @@ pub(crate) struct TurnState {
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
+    usage_limit_reached: bool,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
@@ -219,6 +247,17 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
+    pub(crate) fn mark_usage_limit_reached(&mut self) {
+        self.usage_limit_reached = true;
+    }
+
+    pub(crate) fn clear_usage_limit_reached(&mut self) {
+        self.usage_limit_reached = false;
+    }
+
+    pub(crate) fn usage_limit_reached(&self) -> bool {
+        self.usage_limit_reached
+    }
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }

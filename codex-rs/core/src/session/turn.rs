@@ -264,7 +264,9 @@ pub(crate) async fn run_turn(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = if can_drain_pending_input {
-            sess.input_queue.get_pending_input(&sess.active_turn).await
+            sess.input_queue
+                .get_pending_input_items(&sess.active_turn)
+                .await
         } else {
             Vec::new()
         };
@@ -276,7 +278,13 @@ pub(crate) async fn run_turn(
         if !pending_input.is_empty() {
             let mut pending_input_iter = pending_input.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
+                match inspect_pending_input(
+                    &sess,
+                    &turn_context,
+                    pending_input_item.into_response_input_item(),
+                )
+                .await
+                {
                     PendingInputHookDisposition::Accepted(pending_input) => {
                         accepted_pending_input.push(*pending_input);
                     }
@@ -287,7 +295,10 @@ pub(crate) async fn run_turn(
                         if !remaining_pending_input.is_empty() {
                             let _ = sess
                                 .input_queue
-                                .prepend_pending_input(&sess.active_turn, remaining_pending_input)
+                                .prepend_pending_input_items(
+                                    &sess.active_turn,
+                                    remaining_pending_input,
+                                )
                                 .await;
                             requeued_pending_input = true;
                         }
@@ -1103,12 +1114,18 @@ async fn run_sampling_request(
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
             }
-            Err(CodexErr::UsageLimitReached(e)) => {
-                let rate_limits = e.rate_limits.clone();
-                if let Some(rate_limits) = rate_limits {
+            Err(
+                err @ (CodexErr::UsageLimitReached(_)
+                | CodexErr::QuotaExceeded
+                | CodexErr::UsageNotIncluded),
+            ) => {
+                if let CodexErr::UsageLimitReached(e) = &err
+                    && let Some(rate_limits) = e.rate_limits.clone()
+                {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
-                return Err(CodexErr::UsageLimitReached(e));
+                sess.mark_usage_limit_reached(&turn_context.sub_id).await;
+                return Err(err);
             }
             Err(err) => err,
         };
