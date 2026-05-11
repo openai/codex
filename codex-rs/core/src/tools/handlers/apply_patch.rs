@@ -12,6 +12,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -37,7 +38,6 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::Hunk;
 use codex_apply_patch::StreamingPatchParser;
-use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -413,8 +413,7 @@ impl ToolHandler for ApplyPatchHandler {
                         emitter.begin(event_ctx).await;
 
                         let req = ApplyPatchRequest {
-                            environment_id: turn_environment.environment_id.clone(),
-                            environment: Arc::clone(&turn_environment.environment),
+                            turn_environment: turn_environment.clone(),
                             action: apply.action,
                             file_paths,
                             changes,
@@ -483,8 +482,7 @@ pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    environment_id: &str,
-    environment: Arc<Environment>,
+    turn_environment: TurnEnvironment,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
@@ -526,8 +524,7 @@ pub(crate) async fn intercept_apply_patch(
                     emitter.begin(event_ctx).await;
 
                     let req = ApplyPatchRequest {
-                        environment_id: environment_id.to_string(),
-                        environment,
+                        turn_environment,
                         action: apply.action,
                         file_paths: approval_keys,
                         changes,

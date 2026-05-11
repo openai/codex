@@ -15,10 +15,13 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::sync::Arc;
-
-fn test_environment() -> Arc<codex_exec_server::Environment> {
-    Arc::new(codex_exec_server::Environment::default_for_tests())
+fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::TurnEnvironment {
+    crate::session::turn_context::TurnEnvironment {
+        environment_id: environment_id.to_string(),
+        environment: std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
+        cwd: std::env::temp_dir().abs(),
+        shell: None,
+    }
 }
 
 #[test]
@@ -54,8 +57,7 @@ fn guardian_review_request_includes_patch_context() {
     let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         action,
         file_paths: vec![path.clone()],
         changes: HashMap::from([(
@@ -94,8 +96,7 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
     let expected_patch = action.patch.clone();
     let req = ApplyPatchRequest {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         action,
         file_paths: vec![path],
         changes: HashMap::new(),
@@ -129,8 +130,7 @@ fn approval_keys_include_environment_id() {
         .join("apply-patch-approval-key.txt")
         .abs();
     let req = ApplyPatchRequest {
-        environment_id: "remote".to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment("remote"),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -162,8 +162,7 @@ fn sandbox_cwd_uses_patch_action_cwd() {
         .join("apply-patch-runtime-sandbox-cwd.txt")
         .abs();
     let req = ApplyPatchRequest {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -191,8 +190,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
         )),
     };
     let req = ApplyPatchRequest {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -250,8 +248,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         .join("apply-patch-runtime-none.txt")
         .abs();
     let req = ApplyPatchRequest {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: test_environment(),
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),

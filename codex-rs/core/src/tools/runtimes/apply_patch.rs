@@ -6,6 +6,7 @@
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -19,7 +20,6 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
-use codex_exec_server::Environment;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -45,8 +45,7 @@ pub(crate) struct ApplyPatchApprovalKey {
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
-    pub environment_id: String,
-    pub environment: std::sync::Arc<Environment>,
+    pub turn_environment: TurnEnvironment,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
@@ -124,7 +123,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             .iter()
             .cloned()
             .map(|path| ApplyPatchApprovalKey {
-                environment_id: req.environment_id.clone(),
+                environment_id: req.turn_environment.environment_id.clone(),
                 path,
             })
             .collect()
@@ -225,7 +224,7 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         _ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
         let started_at = Instant::now();
-        let fs = req.environment.get_filesystem();
+        let fs = req.turn_environment.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
