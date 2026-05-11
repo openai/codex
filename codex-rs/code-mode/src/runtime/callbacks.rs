@@ -5,6 +5,7 @@ use super::RuntimeEvent;
 use super::RuntimeState;
 use super::timers;
 use super::value::json_to_v8;
+use super::value::normalize_forward_output_items;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
 use super::value::throw_type_error;
@@ -128,6 +129,31 @@ pub(super) fn image_callback(
     };
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
+    }
+    retval.set(v8::undefined(scope).into());
+}
+
+pub(super) fn forward_output_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    let mut content_items = Vec::new();
+    for index in 0..args.length() {
+        let mut items = match normalize_forward_output_items(scope, args.get(index)) {
+            Ok(items) => items,
+            Err(error_text) => {
+                throw_type_error(scope, &error_text);
+                return;
+            }
+        };
+        content_items.append(&mut items);
+    }
+
+    if let Some(state) = scope.get_slot::<RuntimeState>() {
+        for item in content_items {
+            let _ = state.event_tx.send(RuntimeEvent::ContentItem(item));
+        }
     }
     retval.set(v8::undefined(scope).into());
 }

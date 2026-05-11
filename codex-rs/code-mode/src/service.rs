@@ -671,7 +671,7 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
     }
 
     #[tokio::test]
-    async fn output_helpers_return_undefined() {
+    async fn global_helpers_return_undefined() {
         let service = CodeModeService::new();
 
         let response = service
@@ -681,6 +681,7 @@ const returnsUndefined = [
   text("first"),
   image("https://example.com/image.jpg"),
   notify("ping"),
+  forward_output(),
 ].map((value) => value === undefined);
 text(JSON.stringify(returnsUndefined));
 "#
@@ -704,11 +705,205 @@ text(JSON.stringify(returnsUndefined));
                         detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
                     FunctionCallOutputContentItem::InputText {
-                        text: "[true,true,true]".to_string(),
+                        text: "[true,true,true,true]".to_string(),
                     },
                 ],
                 stored_values: HashMap::new(),
                 error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_output_helper_forwards_mcp_text_and_image_content() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+forward_output({
+  content: [
+    { type: "text", text: "alpha" },
+    {
+      type: "image",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      mimeType: "image/png",
+      _meta: { "codex/imageDetail": "original" },
+    },
+    { type: "text", text: "omega" },
+  ],
+  isError: false,
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "alpha".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+                        detail: Some(crate::ImageDetail::Original),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "omega".to_string(),
+                    },
+                ],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_output_helper_allows_output_local_variable() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+const output = { content: [{ type: "text", text: "ok" }] };
+forward_output(output);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "ok".to_string(),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_output_helper_forwards_function_items_image_url_objects_and_string_output() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+forward_output(
+  {
+    content_items: [
+    { type: "input_text", text: "line 1" },
+    { type: "input_image", image_url: "https://example.com/one.jpg", detail: "low" },
+    ],
+  },
+  { image_url: "https://example.com/two.jpg", detail: "auto" },
+  { output: "command output" },
+);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "line 1".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "https://example.com/one.jpg".to_string(),
+                        detail: Some(crate::ImageDetail::Low),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "https://example.com/two.jpg".to_string(),
+                        detail: Some(crate::ImageDetail::Auto),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "command output".to_string(),
+                    },
+                ],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_output_helper_rejects_arrays_outside_tool_output_fields() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+forward_output([{ type: "text", text: "not forwarded directly" }]);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "forward_output expects a direct tool output with `content` or `content_items`, a text/image content item, an image_url object, or a string output".to_string(),
+                ),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_output_helper_rejects_unknown_content_types() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+forward_output({
+  content: [
+    { type: "audio", data: "AAA", mimeType: "audio/wav" },
+  ],
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "forward_output only supports text and image content blocks, got `audio`"
+                        .to_string(),
+                ),
             }
         );
     }

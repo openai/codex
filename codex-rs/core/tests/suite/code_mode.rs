@@ -2434,6 +2434,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "isNaN",
         "load",
         "notify",
+        "forward_output",
         "parseFloat",
         "parseInt",
         "setTimeout",
