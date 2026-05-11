@@ -17,9 +17,17 @@ pub(crate) fn default_thread_environment_selections(
     environment_manager
         .default_environment_ids()
         .into_iter()
-        .map(|environment_id| TurnEnvironmentSelection {
-            environment_id,
-            cwd: cwd.clone(),
+        .map(|environment_id| {
+            let environment = environment_manager
+                .get_environment(&environment_id)
+                .expect("default environment id should resolve");
+            TurnEnvironmentSelection {
+                environment_id,
+                cwd: environment
+                    .default_cwd()
+                    .cloned()
+                    .unwrap_or_else(|| cwd.clone()),
+            }
         })
         .collect()
 }
@@ -122,13 +130,17 @@ mod tests {
     #[tokio::test]
     async fn toml_default_thread_environment_selections_include_local_and_remote() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
+        let default_cwd = AbsolutePathBuf::from_absolute_path("/workspace").expect("cwd");
         std::fs::write(
             temp_dir.path().join("environments.toml"),
-            r#"
+            format!(
+                r#"
 [[environments]]
 id = "remote"
 url = "ws://127.0.0.1:8765"
-"#,
+default_cwd = "{default_cwd}"
+"#
+            ),
         )
         .expect("write environments.toml");
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
@@ -145,7 +157,7 @@ url = "ws://127.0.0.1:8765"
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd,
+                    cwd: default_cwd,
                 },
             ]
         );

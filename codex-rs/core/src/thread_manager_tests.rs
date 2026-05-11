@@ -351,17 +351,22 @@ async fn start_thread_uses_all_default_environments_from_codex_home() {
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
+    let local_cwd = config.cwd.display().to_string();
+    let dev_cwd = "/home/dev-user/code/codex";
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
     std::fs::write(
         config.codex_home.join("environments.toml"),
-        r#"
+        format!(
+            r#"
 default = "dev"
 
 [[environments]]
 id = "dev"
 program = "ssh"
 args = ["dev", "cd /tmp && true"]
-"#,
+default_cwd = "{dev_cwd}"
+"#
+        ),
     )
     .expect("write environments.toml");
 
@@ -416,15 +421,14 @@ args = ["dev", "cd /tmp && true"]
         })
         .expect("environment context prompt item");
     assert!(environment_context.contains("<environments>"));
-    let cwd = thread.session_configured.cwd.display().to_string();
     let dev_entry = format!(
         r#"<environment id="dev">
-      <cwd>{cwd}</cwd>
+      <cwd>{dev_cwd}</cwd>
       <shell>"#
     );
     let local_entry = format!(
         r#"<environment id="local">
-      <cwd>{cwd}</cwd>
+      <cwd>{local_cwd}</cwd>
       <shell>"#
     );
     let dev_position = environment_context

@@ -2,8 +2,10 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecParams;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::ProcessId;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
@@ -80,6 +82,74 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
             /*sandbox*/ None,
         )
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn environments_toml_default_cwd_runs_in_docker_remote_environment() -> Result<()> {
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let codex_home = TempDir::new()?;
+    let default_cwd = remote_test_file_path().join("default-cwd").abs();
+    let default_cwd_display = default_cwd.as_path().display();
+    remote_exec(&format!("mkdir -p {}", default_cwd.as_path().display()))?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            r#"
+default = "docker"
+
+[[environments]]
+id = "docker"
+url = "{}"
+default_cwd = "{default_cwd_display}"
+"#,
+            std::env::var("CODEX_TEST_REMOTE_EXEC_SERVER_URL")?
+        ),
+    )?;
+    let environment_manager = codex_exec_server::EnvironmentManager::from_codex_home(
+        codex_home.path(),
+        codex_exec_server::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?,
+    )
+    .await?;
+    let environment = environment_manager
+        .default_environment()
+        .context("default environment should resolve")?;
+    assert_eq!(environment.default_cwd(), Some(&default_cwd));
+
+    let started = environment
+        .get_exec_backend()
+        .start(ExecParams {
+            process_id: ProcessId::from("default-cwd-pwd"),
+            argv: vec!["pwd".to_string()],
+            cwd: default_cwd.to_path_buf(),
+            env_policy: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    let response = started
+        .process
+        .read(/*after_seq*/ None, None, Some(1_000))
+        .await?;
+    let stdout = response
+        .chunks
+        .into_iter()
+        .flat_map(|chunk| chunk.chunk.0)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        String::from_utf8(stdout)?,
+        format!("{default_cwd_display}\n")
+    );
 
     Ok(())
 }

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
+
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
@@ -289,6 +291,7 @@ impl EnvironmentManager {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
+    default_cwd: Option<AbsolutePathBuf>,
     exec_server_url: Option<String>,
     remote_transport: Option<ExecServerTransportParams>,
     exec_backend: Arc<dyn ExecBackend>,
@@ -301,6 +304,7 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
+            default_cwd: None,
             exec_server_url: None,
             remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
@@ -357,6 +361,7 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
+            default_cwd: None,
             exec_server_url: None,
             remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
@@ -382,6 +387,18 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
+        Self::remote_with_transport_and_default_cwd(
+            remote_transport,
+            local_runtime_paths,
+            /*default_cwd*/ None,
+        )
+    }
+
+    pub(crate) fn remote_with_transport_and_default_cwd(
+        remote_transport: ExecServerTransportParams,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+        default_cwd: Option<AbsolutePathBuf>,
+    ) -> Self {
         let exec_server_url = match &remote_transport {
             ExecServerTransportParams::WebSocketUrl {
                 websocket_url: exec_server_url,
@@ -395,6 +412,7 @@ impl Environment {
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
+            default_cwd,
             exec_server_url,
             remote_transport: Some(remote_transport),
             exec_backend,
@@ -406,6 +424,10 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_transport.is_some()
+    }
+
+    pub fn default_cwd(&self) -> Option<&AbsolutePathBuf> {
+        self.default_cwd.as_ref()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
