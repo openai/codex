@@ -18,6 +18,8 @@ pub(crate) enum UnifiedExecError {
     StdinClosed,
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
+    #[error("{message}")]
+    Rejected { message: String },
     #[error("Command denied by sandbox: {message}")]
     SandboxDenied {
         message: String,
@@ -32,6 +34,10 @@ impl UnifiedExecError {
 
     pub(crate) fn process_failed(message: String) -> Self {
         Self::ProcessFailed { message }
+    }
+
+    pub(crate) fn rejected(message: String) -> Self {
+        Self::Rejected { message }
     }
 
     pub(crate) fn sandbox_denied(message: String, output: ExecToolCallOutput) -> Self {
