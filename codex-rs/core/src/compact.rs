@@ -523,7 +523,7 @@ fn build_compacted_history_with_limit(
     history
 }
 
-fn user_message_text(message: &[UserInput]) -> String {
+pub(crate) fn user_message_text(message: &[UserInput]) -> String {
     message
         .iter()
         .filter_map(|item| match item {

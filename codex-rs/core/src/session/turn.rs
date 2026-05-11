@@ -15,6 +15,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
+use crate::compact::user_message_text;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
@@ -919,16 +920,7 @@ pub(super) fn filter_connectors_for_input(
 
     let user_message_texts = user_messages
         .iter()
-        .map(|message| {
-            message
-                .iter()
-                .filter_map(|item| match item {
-                    UserInput::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        })
+        .map(|message| user_message_text(message))
         .filter(|message| !message.is_empty())
         .collect::<Vec<_>>();
     let mentions = collect_tool_mentions_from_messages(&user_message_texts);
