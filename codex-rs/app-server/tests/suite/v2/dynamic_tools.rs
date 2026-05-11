@@ -1,6 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServerTestProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
@@ -51,7 +51,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Use a minimal JSON schema so we can assert the tool payload round-trips.
@@ -134,7 +134,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
@@ -206,7 +206,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
@@ -246,7 +246,7 @@ async fn thread_start_rejects_dynamic_tools_not_supported_by_responses() -> Resu
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
@@ -311,7 +311,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
@@ -486,7 +486,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
@@ -704,7 +704,7 @@ fn function_call_output_raw_output(body: &Value, call_id: &str) -> Option<Value>
 }
 
 async fn wait_for_dynamic_tool_started(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServerTestProcess,
     call_id: &str,
 ) -> Result<ItemStartedNotification> {
     loop {
@@ -724,7 +724,7 @@ async fn wait_for_dynamic_tool_started(
 }
 
 async fn wait_for_dynamic_tool_completed(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServerTestProcess,
     call_id: &str,
 ) -> Result<ItemCompletedNotification> {
     loop {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServerTestProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::ErrorNotification;
@@ -48,7 +48,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -114,7 +114,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -190,7 +190,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -258,7 +258,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -306,7 +306,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
 }
 
 async fn collect_turn_notifications_and_validate_no_warning_item(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServerTestProcess,
 ) -> Result<ModelReroutedNotification> {
     let mut rerouted = None;
 
@@ -348,7 +348,7 @@ async fn collect_turn_notifications_and_validate_no_warning_item(
 }
 
 async fn collect_model_verification_notifications_and_validate_no_warning_item(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServerTestProcess,
 ) -> Result<ModelVerificationNotification> {
     let mut verification = None;
 
@@ -399,7 +399,7 @@ async fn collect_model_verification_notifications_and_validate_no_warning_item(
 }
 
 async fn collect_cyber_policy_error_and_validate_no_reroute(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServerTestProcess,
 ) -> Result<ErrorNotification> {
     let mut error = None;
 

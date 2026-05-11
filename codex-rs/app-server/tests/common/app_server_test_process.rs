@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use tokio::io::AsyncBufReadExt;
@@ -9,12 +11,18 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
+use tokio::sync::mpsc;
 
 use anyhow::Context;
+use codex_app_server::PluginStartupTasks;
+use codex_app_server::in_process;
+use codex_app_server::in_process::InProcessClientHandle;
+use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
@@ -98,11 +106,36 @@ use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
+use codex_arg0::Arg0DispatchPaths;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
+use codex_core::config::ConfigBuilder;
+use codex_exec_server::EnvironmentManager;
+use codex_feedback::CodexFeedback;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use codex_protocol::protocol::SessionSource;
 use tokio::process::Command;
 
-pub struct McpProcess {
+pub struct AppServerTestProcess {
     next_request_id: AtomicI64,
+    backend: AppServerBackend,
+    pending_messages: VecDeque<JSONRPCMessage>,
+}
+
+enum AppServerBackend {
+    Child(Box<ChildAppServerProcess>),
+    InProcessPending {
+        codex_home: PathBuf,
+        loader_overrides: LoaderOverrides,
+    },
+    InProcessRunning {
+        client: Option<InProcessClientHandle>,
+        response_tx: mpsc::UnboundedSender<JSONRPCMessage>,
+        response_rx: mpsc::UnboundedReceiver<JSONRPCMessage>,
+    },
+}
+
+struct ChildAppServerProcess {
     /// Retain this child process until the client is dropped. The Tokio runtime
     /// will make a "best effort" to reap the process after it exits, but it is
     /// not a guarantee. See the `kill_on_drop` documentation for details.
@@ -110,16 +143,40 @@ pub struct McpProcess {
     process: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    pending_messages: VecDeque<JSONRPCMessage>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
-impl McpProcess {
+impl AppServerTestProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[DISABLE_PLUGIN_STARTUP_TASKS_ARG]).await
+    }
+
+    pub async fn new_in_process(codex_home: &Path) -> anyhow::Result<Self> {
+        let loader_overrides = LoaderOverrides::with_managed_config_path_for_tests(
+            codex_home.join("managed_config.toml"),
+        );
+        Ok(Self::new_pending_in_process(codex_home, loader_overrides))
+    }
+
+    pub async fn new_in_process_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
+        Ok(Self::new_pending_in_process(
+            codex_home,
+            LoaderOverrides::default(),
+        ))
+    }
+
+    fn new_pending_in_process(codex_home: &Path, loader_overrides: LoaderOverrides) -> Self {
+        Self {
+            next_request_id: AtomicI64::new(0),
+            backend: AppServerBackend::InProcessPending {
+                codex_home: codex_home.to_path_buf(),
+                loader_overrides,
+            },
+            pending_messages: VecDeque::new(),
+        }
     }
 
     pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
@@ -152,7 +209,7 @@ impl McpProcess {
         Self::new_with_env_and_args(codex_home, &[], &all_args).await
     }
 
-    /// Creates a new MCP process, allowing tests to override or remove
+    /// Creates a new app-server child process, allowing tests to override or remove
     /// specific environment variables for the child process only.
     ///
     /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
@@ -206,15 +263,15 @@ impl McpProcess {
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("codex-mcp-server proc should start")?;
+            .context("codex-app-server proc should start")?;
         let stdin = process
             .stdin
             .take()
-            .ok_or_else(|| anyhow::format_err!("mcp should have stdin fd"))?;
+            .ok_or_else(|| anyhow::format_err!("app-server should have stdin fd"))?;
         let stdout = process
             .stdout
             .take()
-            .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
+            .ok_or_else(|| anyhow::format_err!("app-server should have stdout fd"))?;
         let stdout = BufReader::new(stdout);
 
         // Forward child's stderr to our stderr so failures are visible even
@@ -223,20 +280,22 @@ impl McpProcess {
             let mut stderr_reader = BufReader::new(stderr).lines();
             tokio::spawn(async move {
                 while let Ok(Some(line)) = stderr_reader.next_line().await {
-                    eprintln!("[mcp stderr] {line}");
+                    eprintln!("[app-server stderr] {line}");
                 }
             });
         }
         Ok(Self {
             next_request_id: AtomicI64::new(0),
-            process,
-            stdin: Some(stdin),
-            stdout,
+            backend: AppServerBackend::Child(Box::new(ChildAppServerProcess {
+                process,
+                stdin: Some(stdin),
+                stdout,
+            })),
             pending_messages: VecDeque::new(),
         })
     }
 
-    /// Performs the initialization handshake with the MCP server.
+    /// Performs the initialization handshake with the app-server.
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let initialized = self
             .initialize_with_client_info(ClientInfo {
@@ -282,6 +341,37 @@ impl McpProcess {
         &mut self,
         params: InitializeParams,
     ) -> anyhow::Result<JSONRPCMessage> {
+        if let AppServerBackend::InProcessPending {
+            codex_home,
+            loader_overrides,
+        } = &self.backend
+        {
+            let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+            let start_args =
+                build_in_process_start_args(codex_home, loader_overrides, params).await?;
+            let (client, initialize_response) = in_process::start_with_initialize_response(
+                start_args,
+                RequestId::Integer(request_id),
+            )
+            .await?;
+            let (response_tx, response_rx) = mpsc::unbounded_channel();
+            self.backend = AppServerBackend::InProcessRunning {
+                client: Some(client),
+                response_tx,
+                response_rx,
+            };
+            return Ok(match initialize_response {
+                Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
+                    id: RequestId::Integer(request_id),
+                    result,
+                }),
+                Err(error) => JSONRPCMessage::Error(JSONRPCError {
+                    id: RequestId::Integer(request_id),
+                    error,
+                }),
+            });
+        }
+
         let params = Some(serde_json::to_value(params)?);
         let request_id = self.send_request("initialize", params).await?;
         let message = self.read_jsonrpc_message().await?;
@@ -1189,7 +1279,46 @@ impl McpProcess {
             params,
             trace: None,
         });
-        self.send_jsonrpc_message(message).await?;
+        match &mut self.backend {
+            AppServerBackend::Child(_) => self.send_jsonrpc_message(message).await?,
+            AppServerBackend::InProcessPending { .. } => {
+                anyhow::bail!("in-process app-server is not initialized");
+            }
+            AppServerBackend::InProcessRunning {
+                client,
+                response_tx,
+                ..
+            } => {
+                let JSONRPCMessage::Request(request) = message else {
+                    unreachable!("send_request always constructs a request");
+                };
+                let request =
+                    serde_json::from_value::<ClientRequest>(serde_json::to_value(request)?)?;
+                let response_rx = in_process_client(client)?.send_request(request)?;
+                let response_tx = response_tx.clone();
+                tokio::spawn(async move {
+                    let message = match response_rx.await {
+                        Ok(Ok(result)) => JSONRPCMessage::Response(JSONRPCResponse {
+                            id: RequestId::Integer(request_id),
+                            result,
+                        }),
+                        Ok(Err(error)) => JSONRPCMessage::Error(JSONRPCError {
+                            id: RequestId::Integer(request_id),
+                            error,
+                        }),
+                        Err(error) => JSONRPCMessage::Error(JSONRPCError {
+                            id: RequestId::Integer(request_id),
+                            error: JSONRPCErrorError {
+                                code: -32000,
+                                message: error.to_string(),
+                                data: None,
+                            },
+                        }),
+                    };
+                    let _ = response_tx.send(message);
+                });
+            }
+        }
         Ok(request_id)
     }
 
@@ -1228,9 +1357,33 @@ impl McpProcess {
     }
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
+        if let AppServerBackend::InProcessRunning { client, .. } = &self.backend {
+            let client = in_process_client(client)?;
+            match message {
+                JSONRPCMessage::Response(response) => {
+                    client.respond_to_server_request(response.id, response.result)?;
+                }
+                JSONRPCMessage::Error(error) => {
+                    client.fail_server_request(error.id, error.error)?;
+                }
+                JSONRPCMessage::Notification(notification) => {
+                    let notification = serde_json::from_value::<ClientNotification>(
+                        serde_json::to_value(notification)?,
+                    )?;
+                    client.notify(notification)?;
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("use send_request for in-process client requests");
+                }
+            }
+            return Ok(());
+        }
         eprintln!("writing message to stdin: {message:?}");
-        let Some(stdin) = self.stdin.as_mut() else {
-            anyhow::bail!("mcp stdin closed");
+        let AppServerBackend::Child(child) = &mut self.backend else {
+            unreachable!("in-process path returned above");
+        };
+        let Some(stdin) = child.stdin.as_mut() else {
+            anyhow::bail!("app-server stdin closed");
         };
         let payload = serde_json::to_string(&message)?;
         stdin.write_all(payload.as_bytes()).await?;
@@ -1240,8 +1393,45 @@ impl McpProcess {
     }
 
     async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+        if let AppServerBackend::InProcessRunning {
+            client,
+            response_rx,
+            ..
+        } = &mut self.backend
+        {
+            let client = client
+                .as_mut()
+                .ok_or_else(|| anyhow::format_err!("in-process app-server is closed"))?;
+            loop {
+                tokio::select! {
+                    response = response_rx.recv() => {
+                        let Some(message) = response else {
+                            anyhow::bail!("in-process response channel closed");
+                        };
+                        return Ok(message);
+                    }
+                    event = client.next_event() => {
+                        let Some(event) = event else {
+                            anyhow::bail!("in-process app-server event stream closed");
+                        };
+                        match event {
+                            InProcessServerEvent::ServerRequest(request) => {
+                                return Ok(serde_json::from_value(serde_json::to_value(request)?)?);
+                            }
+                            InProcessServerEvent::ServerNotification(notification) => {
+                                return Ok(serde_json::from_value(serde_json::to_value(notification)?)?);
+                            }
+                            InProcessServerEvent::Lagged { .. } => continue,
+                        }
+                    }
+                }
+            }
+        }
         let mut line = String::new();
-        self.stdout.read_line(&mut line).await?;
+        let AppServerBackend::Child(child) = &mut self.backend else {
+            unreachable!("in-process path returned above");
+        };
+        child.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
         eprintln!("read message from stdout: {message:?}");
         Ok(message)
@@ -1422,8 +1612,19 @@ impl McpProcess {
     }
 }
 
-impl Drop for McpProcess {
+impl Drop for AppServerTestProcess {
     fn drop(&mut self) {
+        let AppServerBackend::Child(child) = &mut self.backend else {
+            if let AppServerBackend::InProcessRunning { client, .. } = &mut self.backend
+                && let Some(client) = client.take()
+                && let Ok(handle) = tokio::runtime::Handle::try_current()
+            {
+                handle.spawn(async move {
+                    let _ = client.shutdown().await;
+                });
+            }
+            return;
+        };
         // These tests spawn a `codex-app-server` child process.
         //
         // We keep that child alive for the test and rely on Tokio's `kill_on_drop(true)` when this
@@ -1440,28 +1641,69 @@ impl Drop for McpProcess {
         // 2. Poll briefly for graceful exit.
         // 3. If still alive, request termination with `start_kill()`.
         // 4. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
-        drop(self.stdin.take());
+        drop(child.stdin.take());
 
         let graceful_start = std::time::Instant::now();
         let graceful_timeout = std::time::Duration::from_millis(200);
         while graceful_start.elapsed() < graceful_timeout {
-            match self.process.try_wait() {
+            match child.process.try_wait() {
                 Ok(Some(_)) => return,
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
                 Err(_) => return,
             }
         }
 
-        let _ = self.process.start_kill();
+        let _ = child.process.start_kill();
 
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(5);
         while start.elapsed() < timeout {
-            match self.process.try_wait() {
+            match child.process.try_wait() {
                 Ok(Some(_)) => return,
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
                 Err(_) => return,
             }
         }
     }
+}
+
+async fn build_in_process_start_args(
+    codex_home: &Path,
+    loader_overrides: &LoaderOverrides,
+    initialize: InitializeParams,
+) -> anyhow::Result<in_process::InProcessStartArgs> {
+    let codex_home = std::fs::canonicalize(codex_home)?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(codex_home))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    let state_db = codex_core::init_state_db(&config).await;
+    Ok(in_process::InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config: Arc::new(config),
+        cli_overrides: Vec::new(),
+        loader_overrides: loader_overrides.clone(),
+        cloud_requirements: CloudRequirementsLoader::default(),
+        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli,
+        enable_codex_api_key_env: false,
+        plugin_startup_tasks: PluginStartupTasks::Skip,
+        initialize,
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+}
+
+fn in_process_client(
+    client: &Option<InProcessClientHandle>,
+) -> anyhow::Result<&InProcessClientHandle> {
+    client
+        .as_ref()
+        .ok_or_else(|| anyhow::format_err!("in-process app-server is closed"))
 }

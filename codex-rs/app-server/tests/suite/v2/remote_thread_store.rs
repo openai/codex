@@ -84,6 +84,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
         enable_codex_api_key_env: false,
+        plugin_startup_tasks: codex_app_server::PluginStartupTasks::Start,
         initialize: InitializeParams {
             client_info: ClientInfo {
                 name: "codex-app-server-tests".to_string(),

@@ -409,6 +409,7 @@ impl InProcessClientStartArgs {
             config_warnings: self.config_warnings,
             session_source: self.session_source,
             enable_codex_api_key_env: self.enable_codex_api_key_env,
+            plugin_startup_tasks: codex_app_server::PluginStartupTasks::Start,
             initialize,
             channel_capacity: self.channel_capacity,
         }

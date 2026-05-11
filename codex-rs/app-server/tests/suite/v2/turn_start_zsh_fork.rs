@@ -7,7 +7,7 @@
 // network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServerTestProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -738,9 +738,12 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     Ok(())
 }
 
-async fn create_zsh_test_mcp_process(codex_home: &Path, zdotdir: &Path) -> Result<McpProcess> {
+async fn create_zsh_test_mcp_process(
+    codex_home: &Path,
+    zdotdir: &Path,
+) -> Result<AppServerTestProcess> {
     let zdotdir = zdotdir.to_string_lossy().into_owned();
-    McpProcess::new_with_env(codex_home, &[("ZDOTDIR", Some(zdotdir.as_str()))]).await
+    AppServerTestProcess::new_with_env(codex_home, &[("ZDOTDIR", Some(zdotdir.as_str()))]).await
 }
 
 fn create_config_toml(

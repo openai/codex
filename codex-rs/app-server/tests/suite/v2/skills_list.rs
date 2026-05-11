@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::AppServerTestProcess;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -222,7 +222,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
             .mount(&server)
             .await;
     }
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let stale_skills_list_request_id = mcp
@@ -346,7 +346,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -392,7 +392,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
     )?;
 
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = AppServerTestProcess::new_with_env(
         codex_home.path(),
         &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
     )
@@ -436,7 +436,7 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
     let relative_cwd = std::path::PathBuf::from("relative-cwd");
     std::fs::create_dir_all(codex_home.path().join(&relative_cwd))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -464,7 +464,7 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
     let first_cwd = TempDir::new()?;
     let second_cwd = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -500,7 +500,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     // Seed the cwd cache before the cwd-local skill exists.
@@ -584,9 +584,11 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     )?;
     write_skill(&codex_home, "demo")?;
 
-    let mut mcp =
-        McpProcess::new_with_env(codex_home.path(), &[(CODEX_EXEC_SERVER_URL_ENV_VAR, None)])
-            .await?;
+    let mut mcp = AppServerTestProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, None)],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let initial_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {

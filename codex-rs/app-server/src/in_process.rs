@@ -137,6 +137,8 @@ pub struct InProcessStartArgs {
     pub session_source: SessionSource,
     /// Whether auth loading should honor the `CODEX_API_KEY` environment variable.
     pub enable_codex_api_key_env: bool,
+    /// Whether plugin startup tasks should run when the embedded runtime starts.
+    pub plugin_startup_tasks: crate::PluginStartupTasks,
     /// Initialize params used for initial handshake.
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
@@ -194,13 +196,20 @@ pub struct InProcessClientSender {
 }
 
 impl InProcessClientSender {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    fn send_request(
+        &self,
+        request: ClientRequest,
+    ) -> IoResult<oneshot::Receiver<PendingClientRequestResponse>> {
         let (response_tx, response_rx) = oneshot::channel();
         self.try_send_client_message(InProcessClientMessage::Request {
             request: Box::new(request),
             response_tx,
         })?;
-        response_rx.await.map_err(|err| {
+        Ok(response_rx)
+    }
+
+    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+        self.send_request(request)?.await.map_err(|err| {
             IoError::new(
                 ErrorKind::BrokenPipe,
                 format!("in-process request response channel closed: {err}"),
@@ -259,6 +268,17 @@ pub struct InProcessClientHandle {
 }
 
 impl InProcessClientHandle {
+    /// Queues a typed client request and returns a receiver for its response.
+    ///
+    /// Use this when a caller must preserve request submission order while
+    /// awaiting responses later.
+    pub fn send_request(
+        &self,
+        request: ClientRequest,
+    ) -> IoResult<oneshot::Receiver<PendingClientRequestResponse>> {
+        self.client.send_request(request)
+    }
+
     /// Sends a typed client request into the in-process runtime.
     ///
     /// The returned value is a transport-level `IoResult` containing either a
@@ -343,15 +363,8 @@ impl InProcessClientHandle {
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
-    let initialize = args.initialize.clone();
-    let client = start_uninitialized(args).await?;
-
-    let initialize_response = client
-        .request(ClientRequest::Initialize {
-            request_id: RequestId::Integer(0),
-            params: initialize,
-        })
-        .await?;
+    let (client, initialize_response) =
+        start_with_initialize_response(args, RequestId::Integer(0)).await?;
     if let Err(error) = initialize_response {
         let _ = client.shutdown().await;
         return Err(IoError::new(
@@ -359,9 +372,35 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
             format!("in-process initialize failed: {}", error.message),
         ));
     }
-    client.notify(ClientNotification::Initialized)?;
 
     Ok(client)
+}
+
+/// Starts an in-process app-server runtime and returns the initialize result.
+///
+/// The returned client is only ready for normal requests when initialize
+/// succeeds. On success this sends `initialized` before returning; on failure
+/// the caller owns shutdown so tests can inspect the structured initialize
+/// error before dropping the runtime.
+pub async fn start_with_initialize_response(
+    args: InProcessStartArgs,
+    request_id: RequestId,
+) -> IoResult<(
+    InProcessClientHandle,
+    std::result::Result<Result, JSONRPCErrorError>,
+)> {
+    let initialize = args.initialize.clone();
+    let client = start_uninitialized(args).await?;
+    let initialize_response = client
+        .request(ClientRequest::Initialize {
+            request_id,
+            params: initialize,
+        })
+        .await?;
+    if initialize_response.is_ok() {
+        client.notify(ClientNotification::Initialized)?;
+    }
+    Ok((client, initialize_response))
 }
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
@@ -407,6 +446,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
+            Some(args.config.cwd.to_path_buf()),
             args.cli_overrides,
             args.loader_overrides,
             args.cloud_requirements,
@@ -431,7 +471,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
-                plugin_startup_tasks: crate::PluginStartupTasks::Start,
+                plugin_startup_tasks: args.plugin_startup_tasks,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());
@@ -512,8 +552,10 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             processor.drain_background_tasks().await;
             processor.shutdown_threads().await;
         });
-        let mut pending_request_responses =
-            HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
+        let mut pending_request_responses = HashMap::<
+            RequestId,
+            oneshot::Sender<std::result::Result<Result, JSONRPCErrorError>>,
+        >::new();
         let mut shutdown_ack = None;
 
         loop {
@@ -774,6 +816,7 @@ mod tests {
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
+            plugin_startup_tasks: crate::PluginStartupTasks::Start,
             initialize: InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-in-process-test".to_string(),

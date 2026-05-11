@@ -580,6 +580,7 @@ mod thread_processor_behavior_tests {
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
+            /*process_cwd*/ None,
             Vec::new(),
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),

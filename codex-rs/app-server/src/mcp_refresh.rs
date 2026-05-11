@@ -205,6 +205,7 @@ mod tests {
         });
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
+            /*process_cwd*/ None,
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),

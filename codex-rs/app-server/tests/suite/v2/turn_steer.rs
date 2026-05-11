@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServerTestProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
@@ -43,7 +43,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
     )?;
     mount_analytics_capture(&server, &codex_home).await?;
 
-    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
+    let mut mcp = AppServerTestProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -127,7 +127,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
     )?;
     mount_analytics_capture(&server, &codex_home).await?;
 
-    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
+    let mut mcp = AppServerTestProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -236,7 +236,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     )?;
     mount_analytics_capture(&server, &codex_home).await?;
 
-    let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
+    let mut mcp = AppServerTestProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp

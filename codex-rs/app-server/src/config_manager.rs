@@ -27,6 +27,7 @@ use tracing::warn;
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
     codex_home: PathBuf,
+    process_cwd: Option<PathBuf>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     loader_overrides: LoaderOverrides,
@@ -38,6 +39,7 @@ pub(crate) struct ConfigManager {
 impl ConfigManager {
     pub(crate) fn new(
         codex_home: PathBuf,
+        process_cwd: Option<PathBuf>,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
@@ -46,6 +48,7 @@ impl ConfigManager {
     ) -> Self {
         Self {
             codex_home,
+            process_cwd,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
             loader_overrides,
@@ -218,7 +221,7 @@ impl ConfigManager {
             .cli_overrides(merged_cli_overrides)
             .loader_overrides(self.loader_overrides.clone())
             .harness_overrides(typesafe_overrides)
-            .fallback_cwd(fallback_cwd)
+            .fallback_cwd(fallback_cwd.or_else(|| self.process_cwd.clone()))
             .cloud_requirements(self.current_cloud_requirements())
             .thread_config_loader(self.current_thread_config_loader())
             .build()
@@ -278,6 +281,7 @@ impl ConfigManager {
     ) -> Self {
         Self::new(
             codex_home,
+            /*process_cwd*/ None,
             cli_overrides,
             loader_overrides,
             cloud_requirements,

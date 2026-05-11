@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServerTestProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -93,7 +93,7 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
         ))?,
     );
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -158,6 +158,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
         enable_codex_api_key_env: false,
+        plugin_startup_tasks: codex_app_server::PluginStartupTasks::Start,
         initialize: InitializeParams {
             client_info: ClientInfo {
                 name: "codex-app-server-tests".to_string(),
@@ -210,7 +211,7 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
     let expected = expected_summary(thread_id, normalized_canonical_path(rollout_path)?);
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServerTestProcess::new_in_process(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
