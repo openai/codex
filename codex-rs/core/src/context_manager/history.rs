@@ -179,16 +179,6 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn remove_last_matching_item(&mut self, expected: &ResponseItem) -> bool {
-        let Some(index) = self.items.iter().rposition(|item| item == expected) else {
-            return false;
-        };
-        let removed = self.items.remove(index);
-        normalize::remove_corresponding_for(&mut self.items, &removed);
-        self.history_version = self.history_version.saturating_add(1);
-        true
-    }
-
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);

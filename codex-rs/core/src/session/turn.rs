@@ -12,8 +12,8 @@ use crate::client_common::ResponseEvent;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
-use crate::compact::PreservedCurrentUserTurn;
 use crate::compact::collect_user_messages;
+use crate::compact::is_summary_message;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -306,11 +306,11 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let (additional_contexts, preserved_current_user_turn) = if input.is_empty() {
-        (Vec::new(), PreservedCurrentUserTurn::None)
+    let additional_contexts = if input.is_empty() {
+        Vec::new()
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        let response_item: ResponseItem = initial_input_for_turn.into();
         let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
@@ -328,10 +328,7 @@ pub(crate) async fn run_turn(
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
-        (
-            user_prompt_submit_outcome.additional_contexts,
-            PreservedCurrentUserTurn::Exact(initial_input_for_turn.into()),
-        )
+        user_prompt_submit_outcome.additional_contexts
     };
     sess.services
         .analytics_events_client
@@ -461,7 +458,6 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            preserved_current_user_turn.clone(),
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
@@ -501,7 +497,6 @@ pub(crate) async fn run_turn(
                         &turn_context,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage,
-                        PreservedCurrentUserTurn::None,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -750,7 +745,6 @@ async fn run_pre_sampling_compact(
             turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
-            PreservedCurrentUserTurn::None,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
@@ -802,7 +796,6 @@ async fn maybe_run_previous_model_inline_compact(
             &previous_model_turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
-            PreservedCurrentUserTurn::None,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
         )
@@ -817,7 +810,6 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
-    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
@@ -828,7 +820,6 @@ async fn run_auto_compact(
                 Arc::clone(turn_context),
                 client_session,
                 initial_context_injection,
-                preserved_current_user_turn,
                 reason,
                 phase,
             )
@@ -839,7 +830,6 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
-            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -849,7 +839,6 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
-            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -1020,11 +1009,11 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    preserved_current_user_turn: PreservedCurrentUserTurn,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    let current_turn_input = latest_real_user_turn(&input);
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1060,9 +1049,11 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
+            let prompt_input = sess
+                .clone_history()
                 .await
-                .for_prompt(&turn_context.model_info.input_modalities)
+                .for_prompt(&turn_context.model_info.input_modalities);
+            restore_current_turn_for_sampling_retry(prompt_input, current_turn_input.as_ref())
         };
         let prompt = build_prompt(
             prompt_input,
@@ -1096,7 +1087,6 @@ async fn run_sampling_request(
                     &turn_context,
                     client_session,
                     InitialContextInjection::BeforeLastUserMessage,
-                    preserved_current_user_turn.clone(),
                     CompactionReason::ContextLimit,
                     CompactionPhase::MidTurn,
                 )
@@ -1174,6 +1164,61 @@ async fn run_sampling_request(
             return Err(err);
         }
     }
+}
+
+fn latest_real_user_turn(input: &[ResponseItem]) -> Option<ResponseItem> {
+    input
+        .iter()
+        .rev()
+        .find_map(|item| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
+                Some(item.clone())
+            }
+            _ => None,
+        })
+}
+
+fn restore_current_turn_for_sampling_retry(
+    mut prompt_input: Vec<ResponseItem>,
+    current_turn_input: Option<&ResponseItem>,
+) -> Vec<ResponseItem> {
+    let Some(current_turn_input) = current_turn_input else {
+        return prompt_input;
+    };
+
+    if let Some(index) = prompt_input
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, item)| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
+                Some(index)
+            }
+            _ => None,
+        })
+    {
+        prompt_input[index] = current_turn_input.clone();
+        return prompt_input;
+    }
+
+    let insertion_index = prompt_input
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, item)| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user)) if is_summary_message(&user.message()) => Some(index),
+            _ if matches!(
+                item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            ) =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .unwrap_or(prompt_input.len());
+    prompt_input.insert(insertion_index, current_turn_input.clone());
+    prompt_input
 }
 
 #[expect(

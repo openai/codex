@@ -18,7 +18,6 @@ async fn process_compacted_history_with_test_session(
         &turn_context,
         compacted_history,
         InitialContextInjection::BeforeLastUserMessage,
-        &PreservedCurrentUserTurn::None,
     )
     .await;
     (refreshed, initial_context)
