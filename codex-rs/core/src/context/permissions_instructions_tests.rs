@@ -56,7 +56,6 @@ fn builds_permissions_with_network_access_override() {
 #[test]
 fn builds_permissions_from_policy() {
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
