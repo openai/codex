@@ -411,7 +411,9 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         ptstrName: psid as *mut u16,
     };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    // Keep legacy one-shot ACL grants aligned with the stronger write mask used by
+    // setup refresh so atomic replace/delete patterns work on stamped paths too.
+    explicit.grfAccessPermissions = WRITE_ALLOW_MASK;
     explicit.grfAccessMode = 2; // SET_ACCESS
     explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     explicit.Trustee = trustee;

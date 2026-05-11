@@ -328,6 +328,43 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "del /q delme.txt"], WS_ROOT)
     add("WS: delete succeeds (expected on this host)", rc == 0 and not target.exists(), f"rc={rc}, err={err}")
 
+    # 12b. WS: atomic replace inside workspace succeeds
+    replace_target = WS_ROOT / "replace.txt"
+    write_file(replace_target, "old")
+    rc, out, err = run_sbx(
+        "workspace-write",
+        [
+            "python",
+            "-c",
+            "from pathlib import Path; import os; p=Path('replace.txt'); t=Path('replace.txt.tmp'); t.write_text('new', encoding='utf-8'); os.replace(t, p); print(p.read_text(encoding='utf-8'))",
+        ],
+        WS_ROOT,
+    )
+    add(
+        "WS: atomic replace in workspace allowed",
+        rc == 0 and replace_target.read_text(encoding='utf-8').strip() == "new",
+        f"rc={rc}, err={err}",
+    )
+
+    # 12c. WS: atomic replace in additional root succeeds
+    extra_replace_target = EXTRA_ROOT / "replace-extra.txt"
+    write_file(extra_replace_target, "old")
+    rc, out, err = run_sbx(
+        "workspace-write",
+        [
+            "python",
+            "-c",
+            f"from pathlib import Path; import os; p=Path(r'{extra_replace_target}'); t=Path(r'{extra_replace_target}.tmp'); t.write_text('new', encoding='utf-8'); os.replace(t, p); print(p.read_text(encoding='utf-8'))",
+        ],
+        WS_ROOT,
+        additional_root=EXTRA_ROOT,
+    )
+    add(
+        "WS: atomic replace in additional root allowed",
+        rc == 0 and extra_replace_target.read_text(encoding='utf-8').strip() == "new",
+        f"rc={rc}, err={err}",
+    )
+
     # 13. RO: python tries to write (denied)
     pyfile = WS_ROOT / "py_should_fail.txt"; remove_if_exists(pyfile)
     rc, out, err = run_sbx("read-only", ["python", "-c", "open('py_should_fail.txt','w').write('x')"], WS_ROOT)
