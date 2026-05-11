@@ -10,6 +10,7 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::Constrained;
 use codex_config::ConstrainedWithSource;
+use codex_config::HookCommandByPlatformConfig;
 use codex_config::HookCommandConfig;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig;
@@ -171,6 +172,95 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(!outcome.should_block);
     let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
+}
+
+#[tokio::test]
+async fn requirements_managed_hooks_execute_platform_specific_command() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_dir =
+        AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+    let unix_log_path = managed_dir.join("unix_pre_tool_use_log.jsonl");
+    let windows_log_path = managed_dir.join("windows_pre_tool_use_log.jsonl");
+
+    let python_command = |log_path: &Path| {
+        format!(
+            r#"python3 -c 'import json, pathlib, sys; payload = json.load(sys.stdin); pathlib.Path(r"{log_path}").write_text(json.dumps(payload), encoding="utf-8")'"#,
+            log_path = log_path.display()
+        )
+    };
+
+    let managed_hooks = managed_hooks_for_current_platform(
+        managed_dir,
+        HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
+                        unix: python_command(unix_log_path.as_path()),
+                        windows: python_command(windows_log_path.as_path()),
+                    }),
+                    timeout_sec: Some(10),
+                    r#async: false,
+                    status_message: Some("checking".to_string()),
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    let outcome = engine
+        .run_pre_tool_use(PreToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
+            tool_use_id: "tool-1".to_string(),
+            tool_input: serde_json::json!({ "command": "echo hello" }),
+        })
+        .await;
+
+    assert!(!outcome.should_block);
+    assert_eq!(
+        unix_log_path.exists(),
+        cfg!(not(windows)),
+        "only the Unix command should run off Windows"
+    );
+    assert_eq!(
+        windows_log_path.exists(),
+        cfg!(windows),
+        "only the Windows command should run on Windows"
+    );
 }
 
 #[test]
