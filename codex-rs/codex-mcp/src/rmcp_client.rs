@@ -148,6 +148,7 @@ impl AsyncManagedClient {
         runtime_environment: McpRuntimeEnvironment,
         codex_home: PathBuf,
         runtime_auth_provider: Option<SharedAuthProvider>,
+        client_elicitation_capability: ElicitationCapability,
     ) -> Self {
         let tool_filter = server
             .configured_config()
@@ -195,6 +196,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        client_elicitation_capability,
                     },
                 )
                 .await
@@ -329,14 +331,6 @@ impl From<anyhow::Error> for StartupOutcomeError {
             error: error.to_string(),
         }
     }
-}
-
-pub(crate) fn elicitation_capability_for_server(
-    _server_name: &str,
-) -> Option<ElicitationCapability> {
-    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-    // indicates this should be an empty object.
-    Some(ElicitationCapability::default())
 }
 
 pub(crate) async fn list_tools_for_client_uncached(
@@ -477,8 +471,8 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        client_elicitation_capability,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -486,7 +480,7 @@ async fn start_server_task(
             extensions: None,
             roots: None,
             sampling: None,
-            elicitation,
+            elicitation: Some(client_elicitation_capability),
             tasks: None,
         },
         client_info: Implementation {
@@ -562,6 +556,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    client_elicitation_capability: ElicitationCapability,
 }
 
 async fn make_rmcp_client(
