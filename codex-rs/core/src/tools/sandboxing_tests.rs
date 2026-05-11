@@ -4,7 +4,6 @@ use crate::tools::hook_names::HookToolName;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
-use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
 use pretty_assertions::assert_eq;
@@ -148,8 +147,8 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 #[test]
 fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::Root,
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
         },
         access: FileSystemAccessMode::None,
     }]);
