@@ -485,7 +485,8 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
     let mut builder = test_codex();
     let test = builder.build(&server).await?;
     let rel_path = "denied.png";
-    let denied_path = write_workspace_file(
+    let denied_path = test.config.cwd.join(rel_path);
+    write_workspace_file(
         &test,
         rel_path,
         png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?,
