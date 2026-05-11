@@ -118,6 +118,65 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
     Ok(())
 }
 
+fn collect_workspace_child_grant_targets(
+    root: &Path,
+    protected_children: &HashSet<PathBuf>,
+    log: &mut File,
+) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log_line(
+                log,
+                &format!(
+                    "workspace child enumeration failed on {}: {err}",
+                    root.display()
+                ),
+            )?;
+            return Ok(Vec::new());
+        }
+    };
+
+    let mut targets = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                log_line(
+                    log,
+                    &format!(
+                        "workspace child enumeration entry failed on {}: {err}",
+                        root.display()
+                    ),
+                )?;
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                log_line(
+                    log,
+                    &format!(
+                        "workspace child type lookup failed on {}: {err}",
+                        entry.path().display()
+                    ),
+                )?;
+                continue;
+            }
+        };
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let child = canonicalize_path(&entry.path());
+        if protected_children.contains(&child) {
+            continue;
+        }
+        targets.push(child);
+    }
+    Ok(targets)
+}
+
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
@@ -653,10 +712,20 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
+    let mut seen_grant_targets: HashSet<PathBuf> = HashSet::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
+    let protected_workspace_children: HashSet<PathBuf> = payload
+        .deny_write_paths
+        .iter()
+        .filter(|path| {
+            path.parent()
+                .is_some_and(|parent| canonicalize_path(parent) == canonical_command_cwd)
+        })
+        .cloned()
+        .collect();
 
     for root in &payload.write_roots {
         if !seen_write_roots.insert(root.clone()) {
@@ -717,7 +786,60 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     root.display()
                 ),
             )?;
-            grant_tasks.push(root.clone());
+            if seen_grant_targets.insert(root.clone()) {
+                grant_tasks.push(root.clone());
+            }
+        }
+        if refresh_only && is_command_cwd {
+            // Refresh newly created top-level workspace directories so repeated apply_patch calls
+            // do not depend on inherited ACL shape alone.
+            for child in
+                collect_workspace_child_grant_targets(root, &protected_workspace_children, log)?
+            {
+                let mut child_needs_grant = false;
+                for (label, psid) in [
+                    ("sandbox_group", sandbox_group_psid),
+                    ("workspace_cap", workspace_psid),
+                ] {
+                    let has = match path_mask_allows(
+                        &child,
+                        &[psid],
+                        write_mask,
+                        /*require_all_bits*/ true,
+                    ) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            refresh_errors.push(format!(
+                                "write mask check failed on {} for {label}: {}",
+                                child.display(),
+                                e
+                            ));
+                            log_line(
+                                log,
+                                &format!(
+                                    "write mask check failed on {} for {label}: {}; continuing",
+                                    child.display(),
+                                    e
+                                ),
+                            )?;
+                            false
+                        }
+                    };
+                    if !has {
+                        child_needs_grant = true;
+                    }
+                }
+                if child_needs_grant && seen_grant_targets.insert(child.clone()) {
+                    log_line(
+                        log,
+                        &format!(
+                            "granting write ACE to workspace child {} for sandbox group and workspace capability SID",
+                            child.display()
+                        ),
+                    )?;
+                    grant_tasks.push(child);
+                }
+            }
         }
     }
 
@@ -914,9 +1036,13 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::collect_workspace_child_grant_targets;
     use codex_otel::StatsigMetricsSettings;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashSet;
+    use std::fs;
+    use tempfile::tempdir;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -953,5 +1079,26 @@ mod tests {
                 environment: "prod".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn workspace_child_grant_targets_skip_protected_children() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let allowed_child = root.join("src");
+        let protected_child = root.join(".git");
+        fs::create_dir(&allowed_child).expect("create allowed child");
+        fs::create_dir(&protected_child).expect("create protected child");
+
+        let log_path = root.join("setup.log");
+        let mut log = fs::File::create(&log_path).expect("create log");
+        let targets = collect_workspace_child_grant_targets(
+            root,
+            &HashSet::from([protected_child.clone()]),
+            &mut log,
+        )
+        .expect("collect targets");
+
+        assert_eq!(targets, vec![allowed_child]);
     }
 }
