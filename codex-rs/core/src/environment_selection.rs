@@ -105,7 +105,7 @@ mod tests {
     async fn default_thread_environment_selections_use_manager_default_id() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = EnvironmentManager::create_for_tests(
-            Some("ws://127.0.0.1:8765/ws".to_string()),
+            Some("ws://127.0.0.1:8765".to_string()),
             test_runtime_paths(),
         )
         .await;
@@ -127,7 +127,7 @@ mod tests {
             r#"
 [[environments]]
 id = "remote"
-url = "ws://127.0.0.1:8765/ws"
+url = "ws://127.0.0.1:8765"
 "#,
         )
         .expect("write environments.toml");

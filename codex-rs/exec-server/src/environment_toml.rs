@@ -333,7 +333,7 @@ mod tests {
             environments: vec![
                 EnvironmentToml {
                     id: "devbox".to_string(),
-                    url: Some(" ws://127.0.0.1:8765/ws ".to_string()),
+                    url: Some(" ws://127.0.0.1:8765 ".to_string()),
                     ..Default::default()
                 },
                 EnvironmentToml {
@@ -370,7 +370,7 @@ mod tests {
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert_eq!(
             environments["devbox"].exec_server_url(),
-            Some("ws://127.0.0.1:8765/ws")
+            Some("ws://127.0.0.1:8765")
         );
         assert!(environments["ssh-dev"].is_remote());
         assert_eq!(environments["ssh-dev"].exec_server_url(), None);
@@ -411,7 +411,7 @@ mod tests {
             (
                 EnvironmentToml {
                     id: "local".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     ..Default::default()
                 },
                 "environment id `local` is reserved",
@@ -419,7 +419,7 @@ mod tests {
             (
                 EnvironmentToml {
                     id: " devbox ".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     ..Default::default()
                 },
                 "environment id ` devbox ` must not contain surrounding whitespace",
@@ -427,7 +427,7 @@ mod tests {
             (
                 EnvironmentToml {
                     id: "dev box".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     ..Default::default()
                 },
                 "environment id `dev box` must contain only ASCII letters, numbers, '-' or '_'",
@@ -443,7 +443,7 @@ mod tests {
             (
                 EnvironmentToml {
                     id: "devbox".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     program: Some("codex".to_string()),
                     ..Default::default()
                 },
@@ -528,7 +528,7 @@ mod tests {
             environments: vec![
                 EnvironmentToml {
                     id: "devbox".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     connect_timeout_sec: Some(Duration::from_secs(12)),
                     initialize_timeout_sec: Some(Duration::from_secs(34)),
                     ..Default::default()
@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(
             provider.environments[0].1,
             ExecServerTransportParams::WebSocketUrl {
-                websocket_url: "ws://127.0.0.1:8765/ws".to_string(),
+                websocket_url: "ws://127.0.0.1:8765".to_string(),
                 connect_timeout: Duration::from_secs(12),
                 initialize_timeout: Duration::from_secs(34),
             }
@@ -591,7 +591,7 @@ mod tests {
             environments: vec![
                 EnvironmentToml {
                     id: "devbox".to_string(),
-                    url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                    url: Some("ws://127.0.0.1:8765".to_string()),
                     ..Default::default()
                 },
                 EnvironmentToml {
@@ -616,7 +616,7 @@ mod tests {
             default: None,
             environments: vec![EnvironmentToml {
                 id: id.clone(),
-                url: Some("ws://127.0.0.1:8765/ws".to_string()),
+                url: Some("ws://127.0.0.1:8765".to_string()),
                 ..Default::default()
             }],
         })
@@ -655,7 +655,7 @@ default = "ssh-dev"
 
 [[environments]]
 id = "devbox"
-url = "ws://127.0.0.1:4512/ws"
+url = "ws://127.0.0.1:4512"
 connect_timeout_sec = 12.0
 initialize_timeout_sec = 34.0
 
@@ -678,7 +678,7 @@ CODEX_LOG = "debug"
             environments.environments[0],
             EnvironmentToml {
                 id: "devbox".to_string(),
-                url: Some("ws://127.0.0.1:4512/ws".to_string()),
+                url: Some("ws://127.0.0.1:4512".to_string()),
                 connect_timeout_sec: Some(Duration::from_secs(12)),
                 initialize_timeout_sec: Some(Duration::from_secs(34)),
                 ..Default::default()
@@ -712,7 +712,7 @@ CODEX_LOG = "debug"
                 r#"
 [[environments]]
 id = "devbox"
-url = "ws://127.0.0.1:4512/ws"
+url = "ws://127.0.0.1:4512"
 unknown = true
 "#,
                 "unknown field `unknown`",

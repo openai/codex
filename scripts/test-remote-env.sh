@@ -85,7 +85,7 @@ setup_remote_env() {
       return 1
     fi
     export CODEX_TEST_REMOTE_EXEC_SERVER_PID="${remote_exec_server_pid}"
-export CODEX_TEST_REMOTE_EXEC_SERVER_URL="ws://${container_ip}:${remote_exec_server_port}/ws"
+    export CODEX_TEST_REMOTE_EXEC_SERVER_URL="ws://${container_ip}:${remote_exec_server_port}"
   fi
 
   export CODEX_TEST_REMOTE_ENV="${container_name}"

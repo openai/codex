@@ -2,10 +2,8 @@ use axum::Router;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::any;
-use axum::routing::get;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
@@ -116,15 +114,12 @@ async fn run_websocket_listener(
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
     let processor = ConnectionProcessor::new(runtime_paths);
-    info!("codex-exec-server listening on ws://{local_addr}/ws");
-    println!("ws://{local_addr}/ws");
+    info!("codex-exec-server listening on ws://{local_addr}");
+    println!("ws://{local_addr}");
     std::io::stdout().flush()?;
 
     let router = Router::new()
-        .route("/", get(health_check_handler))
-        .route("/readyz", get(health_check_handler))
-        .route("/healthz", get(health_check_handler))
-        .route("/ws", any(websocket_upgrade_handler))
+        .route("/", any(websocket_upgrade_handler))
         .with_state(ExecServerWebSocketState { processor });
     axum::serve(
         listener,
@@ -137,10 +132,6 @@ async fn run_websocket_listener(
 #[derive(Clone)]
 struct ExecServerWebSocketState {
     processor: ConnectionProcessor,
-}
-
-async fn health_check_handler() -> StatusCode {
-    StatusCode::OK
 }
 
 async fn websocket_upgrade_handler(
