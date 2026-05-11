@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use crate::ApprovalInterceptorContributor;
-use crate::CodexExtension;
 use crate::ContextContributor;
 use crate::ThreadStartContributor;
 use crate::ToolContributor;
 use crate::TurnItemContributor;
 
-/// Mutable registry used while extensions install their typed contributions.
+/// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C> {
     thread_start_contributors: Vec<Arc<dyn ThreadStartContributor<C>>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
@@ -32,24 +31,6 @@ impl<C> ExtensionRegistryBuilder<C> {
     /// Creates an empty registry builder.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Installs one extension and returns the builder.
-    #[must_use]
-    pub fn with_extension<E>(mut self, extension: Arc<E>) -> Self
-    where
-        E: CodexExtension<C> + 'static,
-    {
-        self.install_extension(extension);
-        self
-    }
-
-    /// Installs one extension into the registry under construction.
-    pub fn install_extension<E>(&mut self, extension: Arc<E>)
-    where
-        E: CodexExtension<C> + 'static,
-    {
-        extension.install(self);
     }
 
     /// Registers one approval interceptor contributor.
@@ -128,7 +109,7 @@ impl<C> ExtensionRegistry<C> {
     }
 }
 
-/// Creates an empty shared registry for hosts that do not install extensions.
+/// Creates an empty shared registry for hosts that do not register contributions.
 pub fn empty_extension_registry<C>() -> Arc<ExtensionRegistry<C>> {
     Arc::new(ExtensionRegistryBuilder::new().build())
 }

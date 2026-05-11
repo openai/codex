@@ -72,15 +72,19 @@ pub trait ToolExecutor: Send + Sync {
     /// Returns whether the call may mutate user state.
     ///
     /// Hosts can use this conservative signal for serialization or approval
-    /// policy. Context-free read tools should keep the default.
+    /// policy. Read-only tools should override this default.
     fn is_mutating<'a>(&'a self, _call: &'a ToolCall) -> BoolFuture<'a> {
-        Box::pin(async { false })
+        Box::pin(async { true })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
 
     use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
@@ -95,6 +99,7 @@ mod tests {
     use crate::JsonSchema;
     use crate::JsonToolOutput;
     use crate::ToolCall;
+    use crate::ToolInput;
 
     struct StubExecutor;
 
@@ -106,6 +111,24 @@ mod tests {
                 )))
             })
         }
+    }
+
+    struct DefaultMutatingExecutor;
+
+    impl ToolExecutor for DefaultMutatingExecutor {
+        fn execute<'a>(&'a self, _call: ToolCall) -> ToolFuture<'a> {
+            Box::pin(async {
+                Ok::<Box<dyn crate::ToolOutput>, crate::ToolError>(Box::new(JsonToolOutput::new(
+                    json!(null),
+                )))
+            })
+        }
+    }
+
+    struct NoopWaker;
+
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
     }
 
     #[test]
@@ -145,5 +168,23 @@ mod tests {
         );
 
         assert_eq!(bundle.tool_name(), ToolName::plain("apply_patch"));
+    }
+
+    #[test]
+    fn contributed_tools_default_to_mutating() {
+        let call = ToolCall {
+            call_id: "call-default-mutating".to_string(),
+            input: ToolInput::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+        let mut future = DefaultMutatingExecutor.is_mutating(&call);
+        let waker = Waker::from(Arc::new(NoopWaker));
+        let mut context = Context::from_waker(&waker);
+
+        assert!(matches!(
+            future.as_mut().poll(&mut context),
+            Poll::Ready(true)
+        ));
     }
 }
