@@ -12,6 +12,7 @@ use crate::client_common::ResponseEvent;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
+use crate::compact::PreservedCurrentUserTurn;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -305,8 +306,8 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
+    let (additional_contexts, preserved_current_user_turn) = if input.is_empty() {
+        (Vec::new(), PreservedCurrentUserTurn::None)
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -327,7 +328,10 @@ pub(crate) async fn run_turn(
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
-        user_prompt_submit_outcome.additional_contexts
+        (
+            user_prompt_submit_outcome.additional_contexts,
+            PreservedCurrentUserTurn::Exact(initial_input_for_turn.into()),
+        )
     };
     sess.services
         .analytics_events_client
@@ -457,13 +461,14 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            preserved_current_user_turn.clone(),
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
         )
         .await
         {
-            Ok(sampling_request_output) => {
+            Ok(SamplingRequestLoopOutcome::Completed(sampling_request_output)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -496,6 +501,7 @@ pub(crate) async fn run_turn(
                         &turn_context,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage,
+                        PreservedCurrentUserTurn::None,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -631,29 +637,10 @@ pub(crate) async fn run_turn(
                 }
                 continue;
             }
+            Ok(SamplingRequestLoopOutcome::StopTurn) => return None,
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
-            }
-            Err(CodexErr::ContextWindowExceeded) => {
-                let reset_client_session = match run_auto_compact(
-                    &sess,
-                    &turn_context,
-                    &mut client_session,
-                    InitialContextInjection::BeforeLastUserMessage,
-                    CompactionReason::ContextLimit,
-                    CompactionPhase::MidTurn,
-                )
-                .await
-                {
-                    Ok(reset_client_session) => reset_client_session,
-                    Err(_) => return None,
-                };
-                if reset_client_session {
-                    client_session.reset_websocket_session();
-                }
-                can_drain_pending_input = false;
-                continue;
             }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
@@ -764,6 +751,7 @@ async fn run_pre_sampling_compact(
             turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            PreservedCurrentUserTurn::None,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
@@ -815,6 +803,7 @@ async fn maybe_run_previous_model_inline_compact(
             &previous_model_turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            PreservedCurrentUserTurn::None,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
         )
@@ -829,6 +818,7 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
@@ -839,6 +829,7 @@ async fn run_auto_compact(
                 Arc::clone(turn_context),
                 client_session,
                 initial_context_injection,
+                preserved_current_user_turn,
                 reason,
                 phase,
             )
@@ -849,6 +840,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -858,6 +850,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -1028,10 +1021,11 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
-) -> CodexResult<SamplingRequestResult> {
+) -> CodexResult<SamplingRequestLoopOutcome> {
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1060,6 +1054,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
         )
         .await;
+    let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
@@ -1089,11 +1084,32 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok(output);
+                return Ok(SamplingRequestLoopOutcome::Completed(output));
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                if retries >= max_retries {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                retries += 1;
+                let reset_client_session = match run_auto_compact(
+                    &sess,
+                    &turn_context,
+                    client_session,
+                    InitialContextInjection::BeforeLastUserMessage,
+                    preserved_current_user_turn.clone(),
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                )
+                .await
+                {
+                    Ok(reset_client_session) => reset_client_session,
+                    Err(_) => return Ok(SamplingRequestLoopOutcome::StopTurn),
+                };
+                if reset_client_session {
+                    client_session.reset_websocket_session();
+                }
+                continue;
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
@@ -1110,7 +1126,6 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,
@@ -1297,6 +1312,12 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Debug)]
+enum SamplingRequestLoopOutcome {
+    Completed(SamplingRequestResult),
+    StopTurn,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
