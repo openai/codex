@@ -357,6 +357,7 @@ impl TurnRequestProcessor {
         let turn_has_input = !mapped_items.is_empty();
 
         let has_any_overrides = params.cwd.is_some()
+            || params.workspace_roots.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -373,8 +374,14 @@ impl TurnRequestProcessor {
                 "`permissions` cannot be combined with `sandboxPolicy`",
             ));
         }
+        if params.sandbox_policy.is_some() {
+            return Err(invalid_request(
+                "`sandboxPolicy` cannot be used to change thread permissions",
+            ));
+        }
 
         let cwd = params.cwd;
+        let workspace_roots = params.workspace_roots;
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
@@ -383,38 +390,16 @@ impl TurnRequestProcessor {
         let (permission_profile, active_permission_profile) =
             if let Some(permissions) = params.permissions {
                 let snapshot = thread.config_snapshot().await;
-                let mut overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
-                let config = self
-                    .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
+                let selection = self
+                    .validate_active_permission_profile_selection(
+                        permissions,
+                        cwd.clone(),
                         Some(snapshot.cwd.to_path_buf()),
                     )
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
-                // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn request
-                // is different: reject it before accepting user input.
-                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
-                    warning.contains("Configured value for `permission_profile` is disallowed")
-                }) {
-                    return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
-                    )));
-                }
+                    .await?;
                 (
-                    Some(config.permissions.permission_profile()),
-                    config.permissions.active_permission_profile(),
+                    Some(selection.permission_profile),
+                    Some(selection.active_permission_profile),
                 )
             } else {
                 (None, None)
@@ -432,6 +417,9 @@ impl TurnRequestProcessor {
             thread
                 .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: workspace_roots
+                        .clone()
+                        .map(|roots| roots.into_iter().map(|root| root.to_path_buf()).collect()),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -457,6 +445,7 @@ impl TurnRequestProcessor {
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
                 cwd,
+                workspace_roots,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
@@ -514,6 +503,49 @@ impl TurnRequestProcessor {
         };
 
         Ok(TurnStartResponse { turn })
+    }
+
+    async fn validate_active_permission_profile_selection(
+        &self,
+        permissions: String,
+        cwd: Option<PathBuf>,
+        fallback_cwd: Option<PathBuf>,
+    ) -> Result<ResolvedPermissionProfileSelection, JSONRPCErrorError> {
+        let mut overrides = ConfigOverrides {
+            cwd,
+            codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+            ..Default::default()
+        };
+        apply_permission_profile_selection_to_config_overrides(&mut overrides, Some(permissions));
+        let config = self
+            .config_manager
+            .load_for_cwd(/*request_overrides*/ None, overrides, fallback_cwd)
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        // Startup config is allowed to fall back when requirements disallow a
+        // configured profile. An explicit turn request is different: reject it
+        // before accepting user input.
+        if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+            warning.contains("Configured value for `permission_profile` is disallowed")
+        }) {
+            return Err(invalid_request(format!(
+                "invalid turn context override: {warning}"
+            )));
+        }
+        let active_permission_profile =
+            config
+                .permissions
+                .active_permission_profile()
+                .ok_or_else(|| {
+                    invalid_request(
+                        "permission profile selection did not resolve to a named profile",
+                    )
+                })?;
+        Ok(ResolvedPermissionProfileSelection {
+            permission_profile: config.permissions.permission_profile(),
+            active_permission_profile,
+        })
     }
 
     async fn thread_inject_items_response_inner(

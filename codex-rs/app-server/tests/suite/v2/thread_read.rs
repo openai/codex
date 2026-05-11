@@ -1288,6 +1288,7 @@ async fn seed_pathless_store_thread(
             dynamic_tools: Vec::new(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
+                workspace_roots: Vec::new(),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
             },

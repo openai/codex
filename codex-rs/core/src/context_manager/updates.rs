@@ -49,7 +49,14 @@ fn build_permissions_update_item(
     }
 
     let prev = previous?;
-    if prev.permission_profile() == next.permission_profile()
+    let prev_permission_profile = prev
+        .permission_profile()
+        .materialize_project_roots_with_workspace_roots(&prev.workspace_roots);
+    let next_permission_profile = next
+        .permission_profile
+        .clone()
+        .materialize_project_roots_with_workspace_roots(&next.workspace_roots);
+    if prev_permission_profile == next_permission_profile
         && prev.approval_policy == next.approval_policy.value()
     {
         return None;
@@ -57,7 +64,7 @@ fn build_permissions_update_item(
 
     Some(
         PermissionsInstructions::from_permission_profile(
-            &next.permission_profile,
+            &next_permission_profile,
             next.approval_policy.value(),
             next.config.approvals_reviewer,
             exec_policy,
