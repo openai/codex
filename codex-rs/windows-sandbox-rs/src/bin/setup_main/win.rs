@@ -610,7 +610,13 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             |message| {
                 let _ = log_line(log, message);
             },
-        );
+        )
+        .map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("install WFP filters failed: {err}"),
+            ))
+        })?;
     }
 
     if payload.read_roots.is_empty() {
