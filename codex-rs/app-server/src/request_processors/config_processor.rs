@@ -18,6 +18,8 @@ use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ConfiguredHookCommand;
+use codex_app_server_protocol::ConfiguredHookCommandByPlatform;
 use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
@@ -32,6 +34,8 @@ use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_chatgpt::connectors;
 use codex_config::ConfigRequirementsToml;
+use codex_config::HookCommandByPlatformConfig;
+use codex_config::HookCommandConfig;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig as CoreHookHandlerConfig;
 use codex_config::ManagedHooksRequirementsToml;
@@ -518,13 +522,22 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             r#async,
             status_message,
         } => ConfiguredHookHandler::Command {
-            command,
+            command: map_hook_command_to_api(command),
             timeout_sec,
             r#async,
             status_message,
         },
         CoreHookHandlerConfig::Prompt {} => ConfiguredHookHandler::Prompt {},
         CoreHookHandlerConfig::Agent {} => ConfiguredHookHandler::Agent {},
+    }
+}
+
+fn map_hook_command_to_api(command: HookCommandConfig) -> ConfiguredHookCommand {
+    match command {
+        HookCommandConfig::Single(command) => ConfiguredHookCommand::Single(command),
+        HookCommandConfig::ByPlatform(HookCommandByPlatformConfig { unix, windows }) => {
+            ConfiguredHookCommand::ByPlatform(ConfiguredHookCommandByPlatform { unix, windows })
+        }
     }
 }
 

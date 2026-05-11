@@ -7714,6 +7714,31 @@
         "title": "ConfigWriteResponse",
         "type": "object"
       },
+      "ConfiguredHookCommand": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/definitions/v2/ConfiguredHookCommandByPlatform"
+          }
+        ]
+      },
+      "ConfiguredHookCommandByPlatform": {
+        "properties": {
+          "unix": {
+            "type": "string"
+          },
+          "windows": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unix",
+          "windows"
+        ],
+        "type": "object"
+      },
       "ConfiguredHookHandler": {
         "oneOf": [
           {
@@ -7722,7 +7747,7 @@
                 "type": "boolean"
               },
               "command": {
-                "type": "string"
+                "$ref": "#/definitions/v2/ConfiguredHookCommand"
               },
               "statusMessage": {
                 "type": [

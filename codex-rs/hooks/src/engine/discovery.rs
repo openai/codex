@@ -392,6 +392,7 @@ fn append_matcher_groups(
                     r#async,
                     status_message,
                 } => {
+                    let command = command.for_current_platform().to_string();
                     if r#async {
                         warnings.push(format!(
                             "skipping async hook in {}: async hooks are not supported yet",
@@ -408,7 +409,7 @@ fn append_matcher_groups(
                     }
                     let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                     let normalized_handler = HookHandlerConfig::Command {
-                        command: command.clone(),
+                        command: codex_config::HookCommandConfig::Single(command.clone()),
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
@@ -565,6 +566,8 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
 mod tests {
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
+    use codex_config::HookCommandByPlatformConfig;
+    use codex_config::HookCommandConfig;
     use codex_config::HookEventsToml;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
@@ -607,7 +610,7 @@ mod tests {
         MatcherGroup {
             matcher: matcher.map(str::to_string),
             hooks: vec![HookHandlerConfig::Command {
-                command: "echo hello".to_string(),
+                command: HookCommandConfig::Single("echo hello".to_string()),
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
@@ -752,13 +755,54 @@ mod tests {
                 session_start: vec![MatcherGroup {
                     matcher: None,
                     hooks: vec![HookHandlerConfig::Command {
-                        command: "echo hello".to_string(),
+                        command: HookCommandConfig::Single("echo hello".to_string()),
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
                     }],
                 }],
                 ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_resolves_platform_specific_command_during_discovery() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut Vec::new(),
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::PreToolUse,
+            vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
+                        unix: "echo unix".to_string(),
+                        windows: "echo windows".to_string(),
+                    }),
+                    timeout_sec: None,
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(
+            handlers[0].command,
+            if cfg!(windows) {
+                "echo windows"
+            } else {
+                "echo unix"
             }
         );
     }

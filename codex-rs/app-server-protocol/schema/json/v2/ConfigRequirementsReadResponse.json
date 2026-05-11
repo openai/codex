@@ -111,6 +111,31 @@
       },
       "type": "object"
     },
+    "ConfiguredHookCommand": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/ConfiguredHookCommandByPlatform"
+        }
+      ]
+    },
+    "ConfiguredHookCommandByPlatform": {
+      "properties": {
+        "unix": {
+          "type": "string"
+        },
+        "windows": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unix",
+        "windows"
+      ],
+      "type": "object"
+    },
     "ConfiguredHookHandler": {
       "oneOf": [
         {
@@ -119,7 +144,7 @@
               "type": "boolean"
             },
             "command": {
-              "type": "string"
+              "$ref": "#/definitions/ConfiguredHookCommand"
             },
             "statusMessage": {
               "type": [

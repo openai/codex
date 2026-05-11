@@ -1311,7 +1311,9 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
             group: codex_config::MatcherGroup {
                 matcher: None,
                 hooks: vec![codex_config::HookHandlerConfig::Command {
-                    command: "python3 /tmp/user.py".to_string(),
+                    command: codex_config::HookCommandConfig::Single(
+                        "python3 /tmp/user.py".to_string(),
+                    ),
                     timeout_sec: Some(600),
                     r#async: false,
                     status_message: None,
