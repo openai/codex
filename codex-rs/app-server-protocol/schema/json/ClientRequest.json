@@ -1850,31 +1850,6 @@
         }
       ]
     },
-    "PermissionProfileModificationParams": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootPermissionProfileModificationParams",
-          "type": "object"
-        }
-      ]
-    },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -1887,38 +1862,16 @@
       "type": "object"
     },
     "PermissionProfileSelectionParams": {
-      "oneOf": [
-        {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "modifications": {
-              "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "profile"
-              ],
-              "title": "ProfilePermissionProfileSelectionParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "type"
-          ],
-          "title": "ProfilePermissionProfileSelectionParams",
-          "type": "object"
+      "properties": {
+        "id": {
+          "description": "Select a named built-in or user-defined profile. This updates profile identity metadata only; it does not replace the thread's effective permissions profile.",
+          "type": "string"
         }
-      ]
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
     },
     "Personality": {
       "enum": [
@@ -3133,13 +3086,6 @@
               ],
               "title": "WorkspaceWriteSandboxPolicyType",
               "type": "string"
-            },
-            "writableRoots": {
-              "default": [],
-              "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
-              },
-              "type": "array"
             }
           },
           "required": [
@@ -3406,7 +3352,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Deprecated for fork. The server rejects this field because the source permission profile value is preserved across fork."
         },
         "serviceTier": {
           "type": [
@@ -3817,7 +3764,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Deprecated for resume. The server rejects this field because the persisted permission profile value is preserved across resume."
         },
         "serviceTier": {
           "type": [
@@ -4197,7 +4145,7 @@
               "type": "null"
             }
           ],
-          "description": "Override the sandbox policy for this turn and subsequent turns."
+          "description": "Deprecated for turns. The server rejects this field because the thread permission profile value is not mutable through `turn/start`."
         },
         "serviceTier": {
           "description": "Override the service tier for this turn and subsequent turns.",
