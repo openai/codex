@@ -193,6 +193,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod pets;
 mod platform_actions;
 mod replay_filter;
 mod resize_reflow;

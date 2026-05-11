@@ -86,6 +86,7 @@ pub(crate) fn render_pet_picker_preview_image(
 #[derive(Debug, Default)]
 pub(crate) struct PetImageRenderState {
     last_sixel_clear_area: Option<SixelClearArea>,
+    last_protocol: Option<image_protocol::ImageProtocol>,
 }
 
 fn render_pet_image(
@@ -101,7 +102,9 @@ fn render_pet_image(
     use image_protocol::ImageProtocol;
 
     let Some(request) = request else {
-        write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
+        if state.last_protocol.take().is_some_and(is_kitty_protocol) {
+            write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
+        }
         if let Some(area) = state.last_sixel_clear_area.take() {
             queue!(writer, SavePosition)?;
             clear_sixel_area(writer, area)?;
@@ -111,12 +114,12 @@ fn render_pet_image(
         return Ok(());
     };
 
-    if matches!(
-        request.protocol,
-        ImageProtocol::Kitty | ImageProtocol::KittyLocalFile
-    ) {
+    if state.last_protocol.take().is_some_and(is_kitty_protocol)
+        || is_kitty_protocol(request.protocol)
+    {
         write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
     }
+    state.last_protocol = Some(request.protocol);
 
     let payload = match request.protocol {
         ImageProtocol::Kitty => {
@@ -171,6 +174,13 @@ fn render_pet_image(
 enum AmbientPetPayload {
     Text(String),
     Bytes(Vec<u8>),
+}
+
+fn is_kitty_protocol(protocol: image_protocol::ImageProtocol) -> bool {
+    matches!(
+        protocol,
+        image_protocol::ImageProtocol::Kitty | image_protocol::ImageProtocol::KittyLocalFile
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,10 +253,26 @@ mod tests {
     }
 
     #[test]
-    fn ambient_pet_image_clear_deletes_without_moving_cursor() {
+    fn kitty_pet_image_clear_deletes_without_moving_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("frame.png");
+        std::fs::write(&frame, b"png").unwrap();
+        let request = AmbientPetDraw {
+            frame,
+            protocol: ImageProtocol::Kitty,
+            x: 2,
+            y: 3,
+            clear_top_y: 3,
+            columns: 4,
+            rows: 5,
+            height_px: 75,
+            sixel_dir: PathBuf::new(),
+        };
         let mut output = Vec::new();
         let mut state = PetImageRenderState::default();
 
+        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
+        output.clear();
         render_ambient_pet_image(&mut output, &mut state, /*request*/ None).unwrap();
 
         let output = String::from_utf8(output).unwrap();
@@ -344,7 +370,7 @@ mod tests {
         render_ambient_pet_image(&mut output, &mut state, /*request*/ None).unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Ga=d,d=I,i=49374,q=2;"));
+        assert!(!output.contains("Ga=d,d=I,i=49374,q=2;"));
         assert!(output.contains("\x1b7"));
         assert!(output.contains("\x1b[2;3H    \x1b[3;3H    \x1b[4;3H    \x1b[5;3H    "));
         assert!(output.contains("\x1b8"));

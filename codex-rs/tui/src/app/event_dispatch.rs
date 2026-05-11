@@ -385,94 +385,28 @@ impl App {
                 self.open_url_in_browser(url);
             }
             AppEvent::PetSelected { pet_id } => {
-                let request_id = self.chat_widget.show_pet_selection_loading_popup();
-                tui.frame_requester().schedule_frame();
-                let codex_home = self.config.codex_home.clone();
-                let frame_requester = tui.frame_requester();
-                let animations_enabled = self.config.animations;
-                let tx = self.app_event_tx.clone();
-                std::mem::drop(tokio::task::spawn_blocking(move || {
-                    let result = crate::pets::ensure_builtin_pack_for_pet(&pet_id, &codex_home)
-                        .and_then(|()| {
-                            crate::pets::AmbientPet::load(
-                                Some(&pet_id),
-                                &codex_home,
-                                frame_requester,
-                                animations_enabled,
-                            )
-                        })
-                        .map(Some)
-                        .map_err(|err| err.to_string());
-                    tx.send(AppEvent::PetSelectionLoaded {
-                        request_id,
-                        pet_id,
-                        result,
-                    });
-                }));
+                self.handle_pet_selected(tui, pet_id);
             }
             AppEvent::PetDisabled => {
-                let edit =
-                    crate::legacy_core::config::edit::tui_pet_edit(crate::pets::DISABLED_PET_ID);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
-                    .apply()
-                    .await;
-                match apply_result {
-                    Ok(()) => {
-                        self.sync_tui_pet_disabled();
-                        tui.frame_requester().schedule_frame();
-                    }
-                    Err(err) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to disable pets: {err}"));
-                    }
-                }
+                self.handle_pet_disabled(tui).await;
             }
             AppEvent::PetPreviewRequested { pet_id } => {
                 self.chat_widget.start_pet_picker_preview(pet_id);
             }
             AppEvent::PetPreviewLoaded { request_id, result } => {
-                self.chat_widget
-                    .finish_pet_picker_preview_load(request_id, result);
-                tui.frame_requester().schedule_frame();
+                self.handle_pet_preview_loaded(tui, request_id, result);
             }
             AppEvent::PetSelectionLoaded {
                 request_id,
                 pet_id,
                 result,
             } => {
-                if !self
-                    .chat_widget
-                    .finish_pet_selection_loading_popup(request_id)
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                match result {
-                    Ok(ambient_pet) => {
-                        let edit = crate::legacy_core::config::edit::tui_pet_edit(&pet_id);
-                        match ConfigEditsBuilder::new(&self.config.codex_home)
-                            .with_edits([edit])
-                            .apply()
-                            .await
-                        {
-                            Ok(()) => {
-                                self.config.tui_pet = Some(pet_id.clone());
-                                self.chat_widget
-                                    .set_tui_pet_loaded(Some(pet_id), ambient_pet);
-                            }
-                            Err(err) => {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to save pet selection: {err}"
-                                ));
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to load pet: {err}"));
-                    }
-                }
-                tui.frame_requester().schedule_frame();
+                return self
+                    .handle_pet_selection_loaded(tui, request_id, pet_id, result)
+                    .await;
+            }
+            AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+                self.handle_configured_pet_loaded(tui, pet_id, result);
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);

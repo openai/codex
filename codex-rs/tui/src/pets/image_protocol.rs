@@ -568,7 +568,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn kitty_file_png_transmission_encodes_local_file_reference() {
+        let _guard = EnvVarGuard::new("TMUX", /*value*/ None);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("frame.png");
         fs::write(&path, b"png").unwrap();
