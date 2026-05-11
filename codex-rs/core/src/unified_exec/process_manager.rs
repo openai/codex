@@ -1010,7 +1010,9 @@ impl UnifiedExecProcessManager {
                 approval_policy: context.turn.approval_policy.value(),
                 permission_profile: context.turn.permission_profile(),
                 file_system_sandbox_policy: &file_system_sandbox_policy,
-                sandbox_cwd: cwd.as_path(),
+                // The process cwd may be model-controlled, but policy resolution
+                // must stay anchored to the trusted turn cwd.
+                sandbox_cwd: context.turn.cwd.as_path(),
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
