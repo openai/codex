@@ -8,6 +8,7 @@ use codex_otel::TURN_TTFT_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::ResponseEvent;
 use crate::session::turn_context::TurnContext;
@@ -24,6 +25,13 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
     turn_context
         .session_telemetry
         .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+    if crate::startup_trace::enabled() {
+        warn!(
+            target: "startup_trace",
+            elapsed_ms = duration.as_millis(),
+            "turn recorded time to first token"
+        );
+    }
 }
 
 pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &TurnItem) {

@@ -139,6 +139,8 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use supports_color::Stream;
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -156,6 +158,21 @@ use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+
+fn exec_startup_trace_enabled() -> bool {
+    std::env::var_os("CODEX_STARTUP_TRACE").is_some()
+}
+
+#[allow(clippy::print_stderr)]
+fn exec_startup_trace(label: &str, elapsed: Duration, total_elapsed: Duration) {
+    if exec_startup_trace_enabled() {
+        eprintln!(
+            "startup_trace: {label} elapsed_ms={} total_elapsed_ms={}",
+            elapsed.as_millis(),
+            total_elapsed.as_millis()
+        );
+    }
+}
 
 enum InitialOperation {
     UserTurn {
@@ -231,6 +248,7 @@ fn exec_stderr_env_filter() -> EnvFilter {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    let run_main_started_at = Instant::now();
     #[allow(clippy::print_stderr)]
     if let Some(message) = cli.removed_full_auto_warning() {
         eprintln!("{message}");
@@ -324,6 +342,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ..Default::default()
     };
 
+    let config_toml_started_at = Instant::now();
     let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
         &codex_home,
         Some(&config_cwd),
@@ -349,12 +368,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
+    exec_startup_trace(
+        "exec run_main loaded config toml",
+        config_toml_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
 
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
+    let cloud_requirements_started_at = Instant::now();
     let cloud_requirements = cloud_requirements_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -362,6 +387,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         chatgpt_base_url,
     )
     .await;
+    exec_startup_trace(
+        "exec run_main loaded cloud requirements",
+        cloud_requirements_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_requirements = cloud_requirements.clone();
@@ -425,6 +455,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
     };
 
+    let config_started_at = Instant::now();
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
@@ -432,8 +463,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+    exec_startup_trace(
+        "exec run_main built config",
+        config_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
 
     #[allow(clippy::print_stderr)]
+    let execpolicy_started_at = Instant::now();
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
         Ok(None) => {}
         Ok(Some(err)) | Err(err) => {
@@ -444,9 +481,15 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     }
+    exec_startup_trace(
+        "exec run_main checked execpolicy",
+        execpolicy_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
+    let login_restrictions_started_at = Instant::now();
     if let Err(err) = enforce_login_restrictions(&AuthConfig {
         codex_home: config.codex_home.to_path_buf(),
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
@@ -459,7 +502,13 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         eprintln!("{err}");
         std::process::exit(1);
     }
+    exec_startup_trace(
+        "exec run_main enforced login restrictions",
+        login_restrictions_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
 
+    let otel_started_at = Instant::now();
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(
             &config,
@@ -478,6 +527,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             None
         }
     };
+    exec_startup_trace(
+        "exec run_main initialized otel",
+        otel_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
     codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
 
@@ -509,7 +563,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
+    let state_db_started_at = Instant::now();
     let state_db = codex_core::init_state_db(&config).await;
+    exec_startup_trace(
+        "exec run_main initialized state db",
+        state_db_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
+    let environment_manager_started_at = Instant::now();
     let environment_manager = if run_loader_overrides.ignore_user_config {
         EnvironmentManager::from_env(local_runtime_paths).await?
     } else {
@@ -534,7 +595,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     };
-    run_exec_session(ExecRunArgs {
+    exec_startup_trace(
+        "exec run_main built environment manager",
+        environment_manager_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
+    exec_startup_trace(
+        "exec run_main setup finished",
+        run_main_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
+    let run_exec_session_started_at = Instant::now();
+    let result = run_exec_session(ExecRunArgs {
         in_process_start_args,
         state_db,
         command,
@@ -552,10 +624,17 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         stderr_with_ansi,
     })
     .instrument(exec_span)
-    .await
+    .await;
+    exec_startup_trace(
+        "exec run_main finished exec session",
+        run_exec_session_started_at.elapsed(),
+        run_main_started_at.elapsed(),
+    );
+    result
 }
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
+    let run_exec_session_started_at = Instant::now();
     let ExecRunArgs {
         in_process_start_args,
         state_db,
@@ -574,6 +653,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         stderr_with_ansi,
     } = args;
 
+    let event_processor_started_at = Instant::now();
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
@@ -582,6 +662,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             last_message_file.clone(),
         )),
     };
+    exec_startup_trace(
+        "exec session built event processor",
+        event_processor_started_at.elapsed(),
+        run_exec_session_started_at.elapsed(),
+    );
     if oss {
         // We're in the oss section, so provider_id should be Some
         // Let's handle None case gracefully though just in case
@@ -603,6 +688,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_effort = config.model_reasoning_effort;
 
+    let initial_operation_started_at = Instant::now();
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
@@ -662,6 +748,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
         }
     };
+    exec_startup_trace(
+        "exec session prepared initial operation",
+        initial_operation_started_at.elapsed(),
+        run_exec_session_started_at.elapsed(),
+    );
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
@@ -674,14 +765,21 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     }
 
     let mut request_ids = RequestIdSequencer::new();
+    let app_server_client_started_at = Instant::now();
     let mut client = InProcessAppServerClient::start(in_process_start_args)
         .await
         .map_err(|err| {
             anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
         })?;
+    exec_startup_trace(
+        "exec session started app-server client",
+        app_server_client_started_at.elapsed(),
+        run_exec_session_started_at.elapsed(),
+    );
 
     // Handle resume subcommand through existing `thread/list` + `thread/resume`
     // APIs so exec no longer reaches into rollout storage directly.
+    let thread_start_started_at = Instant::now();
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
     {
@@ -733,6 +831,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?;
         (session_configured.thread_id, session_configured)
     };
+    exec_startup_trace(
+        "exec session completed thread start",
+        thread_start_started_at.elapsed(),
+        run_exec_session_started_at.elapsed(),
+    );
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
     // Use the start/resume response as the authoritative bootstrap payload.

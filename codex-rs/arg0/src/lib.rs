@@ -2,6 +2,8 @@ use std::fs::File;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
@@ -17,6 +19,21 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+fn startup_trace_enabled() -> bool {
+    std::env::var_os("CODEX_STARTUP_TRACE").is_some()
+}
+
+#[allow(clippy::print_stderr)]
+fn startup_trace(label: &str, elapsed: Duration, total_elapsed: Duration) {
+    if startup_trace_enabled() {
+        eprintln!(
+            "startup_trace: {label} elapsed_ms={} total_elapsed_ms={}",
+            elapsed.as_millis(),
+            total_elapsed.as_millis()
+        );
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
@@ -177,19 +194,46 @@ where
     F: FnOnce(Arg0DispatchPaths) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
+    let started_at = Instant::now();
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
+    let arg0_dispatch_started_at = Instant::now();
     let path_entry_guard = arg0_dispatch();
+    startup_trace(
+        "arg0 dispatch finished",
+        arg0_dispatch_started_at.elapsed(),
+        started_at.elapsed(),
+    );
 
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
+    let build_runtime_started_at = Instant::now();
     let runtime = build_runtime()?;
-    runtime.block_on(run_main_with_arg0_guard(
+    startup_trace(
+        "arg0 runtime built",
+        build_runtime_started_at.elapsed(),
+        started_at.elapsed(),
+    );
+    let block_on_started_at = Instant::now();
+    let result = runtime.block_on(run_main_with_arg0_guard(
         path_entry_guard,
         std::env::current_exe().ok(),
         main_fn,
-    ))
+    ));
+    startup_trace(
+        "arg0 runtime block_on finished",
+        block_on_started_at.elapsed(),
+        started_at.elapsed(),
+    );
+    let drop_runtime_started_at = Instant::now();
+    drop(runtime);
+    startup_trace(
+        "arg0 runtime dropped",
+        drop_runtime_started_at.elapsed(),
+        started_at.elapsed(),
+    );
+    result
 }
 
 async fn run_main_with_arg0_guard<F, Fut>(
