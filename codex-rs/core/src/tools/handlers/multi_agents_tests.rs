@@ -568,6 +568,52 @@ async fn spawn_agent_role_service_tier_persists_in_child_config() {
 }
 
 #[tokio::test]
+async fn spawn_agent_role_service_tier_overrides_spawn_argument() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_service_tier(&mut turn, "gpt-5.4").await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "service_tier": "turbo"
+            })),
+        ))
+        .await
+        .expect("role-configured service tier should win over the spawn argument");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_service_tier_override_rejects_unknown_tier() {
     let (session, turn) = make_session_and_context().await;
     let err = SpawnAgentHandler::default()

@@ -342,9 +342,13 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     parent_service_tier: Option<&str>,
     requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    let Some(candidate_service_tier) = requested_service_tier
-        .map(str::to_string)
-        .or_else(|| config.service_tier.clone())
+    let requested_service_tier_is_effective =
+        requested_service_tier.is_some_and(|requested_service_tier| {
+            config.service_tier.as_deref() == Some(requested_service_tier)
+        });
+    let Some(candidate_service_tier) = config
+        .service_tier
+        .clone()
         .or_else(|| parent_service_tier.map(str::to_string))
     else {
         config.service_tier = None;
@@ -366,7 +370,7 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         return Ok(());
     }
 
-    if requested_service_tier.is_none() {
+    if !requested_service_tier_is_effective {
         config.service_tier = None;
         return Ok(());
     }
