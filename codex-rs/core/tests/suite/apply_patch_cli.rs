@@ -741,6 +741,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Shell ; "shell")]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
