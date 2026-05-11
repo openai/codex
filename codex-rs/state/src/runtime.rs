@@ -25,6 +25,7 @@ use crate::model::datetime_to_epoch_millis;
 use crate::model::datetime_to_epoch_seconds;
 use crate::model::epoch_millis_to_datetime;
 use crate::paths::file_modified_time_utc;
+use crate::telemetry::DbKind;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -50,6 +51,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::warn;
 
 mod agent_jobs;
@@ -112,10 +114,30 @@ impl StateRuntime {
                 return Err(err);
             }
         };
-        let thread_updated_at_millis: Option<i64> =
+        let started = Instant::now();
+        let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
+        crate::telemetry::record_init_result(
+            None,
+            DbKind::State,
+            "ensure_backfill_state",
+            started.elapsed(),
+            &backfill_state_result,
+        );
+        backfill_state_result?;
+        let started = Instant::now();
+        let thread_updated_at_millis_result: anyhow::Result<Option<i64>> =
             sqlx::query_scalar("SELECT MAX(threads.updated_at_ms) FROM threads")
                 .fetch_one(pool.as_ref())
-                .await?;
+                .await
+                .map_err(anyhow::Error::from);
+        crate::telemetry::record_init_result(
+            None,
+            DbKind::State,
+            "post_init_query",
+            started.elapsed(),
+            &thread_updated_at_millis_result,
+        );
+        let thread_updated_at_millis = thread_updated_at_millis_result?;
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);
         let runtime = Arc::new(Self {
             pool,
@@ -153,23 +175,58 @@ async fn open_state_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<S
     // New state DBs should use incremental auto-vacuum, but retrofitting an
     // existing DB requires a full VACUUM. Do not attempt that during process
     // startup: it is maintenance work that can contend with foreground writers.
-    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await?;
-    migrator.run(&pool).await?;
-    Ok(pool)
+    open_sqlite(path, migrator, DbKind::State, "open_state", "migrate_state").await
 }
 
 async fn open_logs_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<SqlitePool> {
+    open_sqlite(path, migrator, DbKind::Logs, "open_logs", "migrate_logs").await
+}
+
+async fn open_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    db: DbKind,
+    open_phase: &'static str,
+    migrate_phase: &'static str,
+) -> anyhow::Result<SqlitePool> {
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
-    let pool = SqlitePoolOptions::new()
+    let started = Instant::now();
+    let pool_result = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
-        .await?;
-    migrator.run(&pool).await?;
+        .await
+        .map_err(anyhow::Error::from);
+    crate::telemetry::record_init_result(None, db, open_phase, started.elapsed(), &pool_result);
+    let pool = pool_result?;
+    let started = Instant::now();
+    let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
+    crate::telemetry::record_init_result(
+        None,
+        db,
+        migrate_phase,
+        started.elapsed(),
+        &migrate_result,
+    );
+    migrate_result?;
     Ok(pool)
+}
+
+pub(super) async fn ensure_backfill_state_row_in_pool(
+    pool: &sqlx::SqlitePool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
+VALUES (?, ?, NULL, NULL, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+    )
+    .bind(1_i64)
+    .bind(crate::BackfillStatus::Pending.as_str())
+    .bind(Utc::now().timestamp())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub fn state_db_filename() -> String {

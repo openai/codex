@@ -478,6 +478,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             None
         }
     };
+    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
+    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
