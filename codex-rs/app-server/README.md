@@ -24,34 +24,13 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
-- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 - unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
-
-When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
-
-- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
-- `GET /healthz` returns `200 OK` when no `Origin` header is present.
-- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
-
-Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
 opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
 by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
 The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
-
-Security note:
-
-- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
-- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
-- Supported auth modes are app-server flags:
-  - `--ws-auth capability-token --ws-token-file /absolute/path`
-  - `--ws-auth capability-token --ws-token-sha256 HEX`
-  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
-- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
-- When starting `codex app-server` manually, prefer `--ws-token-file` over passing raw bearer tokens on the command line. Store a high-entropy token in a file readable only by your user, then have your client present that token in the websocket `Authorization` header.
-- `--ws-token-sha256` is intended for clients that keep the raw token in a separate local secret store and only need the server to know the SHA-256 verifier. The hash may appear in process listings, but it is not sufficient to authenticate; clients still need the original raw token. Only use this mode with randomly generated high-entropy tokens, not passwords or other guessable values.
 
 Tracing/log output:
 
@@ -202,6 +181,7 @@ Example with notification opt-out:
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `memories`, `plugins`, `remote_control`, `tool_search`, `tool_suggest`, `tool_call_mcp_elicitation`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
+- `environment/add` — experimental; add or replace a named remote environment by `environmentId` and `execServerUrl` for later selection by `thread/start` or `turn/start`; returns `{}` and does not change the default environment.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `hooks/list` — list discovered hooks for one or more `cwd` values.
@@ -1336,6 +1316,10 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 ### request_user_input
 
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
+
+### Attestation generation
+
+Desktop hosts that provide upstream attestation should set `capabilities.requestAttestation` during `initialize` and handle the server-initiated `attestation/generate` request. App-server issues it just in time before ChatGPT Codex requests that forward `x-oai-attestation`; the client responds with `{ "token": "v1.<opaque>" }`, where `token` is an opaque client-owned value. When app-server receives a client response, it forwards a consistent outer envelope such as `{ "v": 1, "s": 0, "t": "v1.<opaque>" }`, where `t` contains the client token unchanged. If app-server attempts attestation but fails within its own boundary, it sends the same envelope shape with an app-server status code and without `t` (`1 = timeout`, `2 = request failed`, `3 = request canceled`, `4 = malformed response`). If no initialized client opted into attestation, app-server omits `x-oai-attestation` for that upstream request.
 
 ### MCP server elicitations
 

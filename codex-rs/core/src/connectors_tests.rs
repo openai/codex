@@ -19,6 +19,7 @@ use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::connector_mention_slug;
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1117,6 +1118,42 @@ disabled_tools = [
     assert_eq!(
         tool_suggest_connector_ids(&config).await,
         HashSet::from(["connector_gmail".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_uses_connector_id_fallback_when_directory_cache_is_empty() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+apps = true
+
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_gmail" }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let discoverable_tools =
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
+            .await
+            .expect("discoverable tools should load");
+
+    assert_eq!(
+        discoverable_tools,
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "connector_gmail".to_string(),
+        ))]
     );
 }
 

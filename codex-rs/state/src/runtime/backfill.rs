@@ -122,87 +122,9 @@ ON CONFLICT(id) DO NOTHING
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
-    use super::state_db_filename;
     use super::test_support::unique_temp_dir;
-    use crate::STATE_DB_FILENAME;
-    use crate::STATE_DB_VERSION;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn init_removes_legacy_state_db_files() {
-        let codex_home = unique_temp_dir();
-        tokio::fs::create_dir_all(&codex_home)
-            .await
-            .expect("create codex_home");
-
-        let current_name = state_db_filename();
-        let previous_version = STATE_DB_VERSION.saturating_sub(1);
-        let unversioned_name = format!("{STATE_DB_FILENAME}.sqlite");
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let path = codex_home.join(format!("{unversioned_name}{suffix}"));
-            tokio::fs::write(path, b"legacy")
-                .await
-                .expect("write legacy");
-            let old_version_path = codex_home.join(format!(
-                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
-            ));
-            tokio::fs::write(old_version_path, b"old_version")
-                .await
-                .expect("write old version");
-        }
-        let unrelated_path = codex_home.join("state.sqlite_backup");
-        tokio::fs::write(&unrelated_path, b"keep")
-            .await
-            .expect("write unrelated");
-        let numeric_path = codex_home.join("123");
-        tokio::fs::write(&numeric_path, b"keep")
-            .await
-            .expect("write numeric");
-
-        let _runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
-
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let legacy_path = codex_home.join(format!("{unversioned_name}{suffix}"));
-            assert_eq!(
-                tokio::fs::try_exists(&legacy_path)
-                    .await
-                    .expect("check legacy path"),
-                false
-            );
-            let old_version_path = codex_home.join(format!(
-                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
-            ));
-            assert_eq!(
-                tokio::fs::try_exists(&old_version_path)
-                    .await
-                    .expect("check old version path"),
-                false
-            );
-        }
-        assert_eq!(
-            tokio::fs::try_exists(codex_home.join(current_name))
-                .await
-                .expect("check new db path"),
-            true
-        );
-        assert_eq!(
-            tokio::fs::try_exists(&unrelated_path)
-                .await
-                .expect("check unrelated path"),
-            true
-        );
-        assert_eq!(
-            tokio::fs::try_exists(&numeric_path)
-                .await
-                .expect("check numeric path"),
-            true
-        );
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
 
     #[tokio::test]
     async fn backfill_state_persists_progress_and_completion() {

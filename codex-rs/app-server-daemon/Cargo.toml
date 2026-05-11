@@ -1,0 +1,39 @@
+[package]
+name = "codex-app-server-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_app_server_daemon"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-app-server-transport = { workspace = true }
+codex-core = { workspace = true }
+codex-uds = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+tokio-tungstenite = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

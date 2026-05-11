@@ -20,6 +20,8 @@ jobs:
       has_matches: ${{ steps.normalize-all.outputs.has_matches }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Prepare Codex inputs
         env:
@@ -156,6 +158,8 @@ jobs:
       has_matches: ${{ steps.normalize-open.outputs.has_matches }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Prepare Codex inputs
         env:

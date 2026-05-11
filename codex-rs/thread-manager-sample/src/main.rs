@@ -20,7 +20,6 @@ use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
 use codex_core_api::EnvironmentManager;
-use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
 use codex_core_api::Features;
@@ -54,6 +53,7 @@ use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
+use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
@@ -114,18 +114,21 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let environment_manager =
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?,
+    );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
         environment_manager,
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
         state_db,
         installation_id,
+        /*attestation_provider*/ None,
     );
 
     let NewThread {

@@ -49,7 +49,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
-pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -375,6 +374,7 @@ impl InProcessClientStartArgs {
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
+            request_attestation: false,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {

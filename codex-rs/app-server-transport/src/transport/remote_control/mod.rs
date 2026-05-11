@@ -28,6 +28,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+pub struct RemoteControlStartConfig {
+    pub remote_control_url: String,
+    pub installation_id: String,
+}
+
 pub(super) struct QueuedServerEnvelope {
     pub(super) event: ServerEvent,
     pub(super) client_id: ClientId,
@@ -62,7 +67,7 @@ impl RemoteControlHandle {
 }
 
 pub async fn start_remote_control(
-    remote_control_url: String,
+    config: RemoteControlStartConfig,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
@@ -77,7 +82,7 @@ pub async fn start_remote_control(
         warn!("remote control disabled because sqlite state db is unavailable");
     }
     let remote_control_target = if initial_enabled {
-        Some(normalize_remote_control_url(&remote_control_url)?)
+        Some(normalize_remote_control_url(&config.remote_control_url)?)
     } else {
         None
     };
@@ -89,14 +94,18 @@ pub async fn start_remote_control(
         } else {
             RemoteControlConnectionStatus::Disabled
         },
+        installation_id: config.installation_id.clone(),
         environment_id: None,
     };
     let (status_tx, _status_rx) = watch::channel(initial_status);
     let status_publisher = RemoteControlStatusPublisher::new(status_tx.clone());
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
-            remote_control_url,
-            remote_control_target,
+            websocket::RemoteControlWebsocketConfig {
+                remote_control_url: config.remote_control_url,
+                installation_id: config.installation_id,
+                remote_control_target,
+            },
             state_db,
             auth_manager,
             RemoteControlChannels {

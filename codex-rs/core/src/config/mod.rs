@@ -2734,10 +2734,7 @@ impl Config {
                 notices.fast_default_opt_out = Some(true);
                 None
             }
-            None => config_profile
-                .service_tier
-                .or(cfg.service_tier)
-                .map(|service_tier| service_tier.request_value().to_string()),
+            None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = service_tier.and_then(|service_tier| {
             match ServiceTier::from_request_value(&service_tier) {

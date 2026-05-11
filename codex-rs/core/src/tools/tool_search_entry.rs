@@ -1,3 +1,4 @@
+use crate::tools::flat_tool_name;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::LoadableToolSpec;
@@ -22,7 +23,7 @@ pub(crate) fn build_tool_search_entries(
     let mut mcp_tools = mcp_tools
         .map(|tools| tools.iter().collect::<Vec<_>>())
         .unwrap_or_default();
-    mcp_tools.sort_by_key(|info| info.canonical_tool_name().display());
+    mcp_tools.sort_by_key(|info| info.canonical_tool_name());
     for info in mcp_tools {
         match mcp_tool_search_entry(info) {
             Ok(entry) => entries.push(entry),
@@ -94,8 +95,9 @@ fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, 
 }
 
 fn build_mcp_search_text(info: &ToolInfo) -> String {
+    let tool_name = info.canonical_tool_name();
     let mut parts = vec![
-        info.canonical_tool_name().display(),
+        flat_tool_name(&tool_name).into_owned(),
         info.callable_name.clone(),
         info.tool.name.to_string(),
         info.server_name.clone(),

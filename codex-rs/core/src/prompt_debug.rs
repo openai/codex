@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthManager;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -20,6 +20,7 @@ use crate::session::turn::built_tools;
 use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
+use codex_extension_api::empty_extension_registry;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -44,11 +45,17 @@ pub async fn build_prompt_input(
         &config,
         Arc::clone(&auth_manager),
         SessionSource::Exec,
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await),
+        Arc::new(
+            EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
+                .await
+                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+        ),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
         installation_id,
+        /*attestation_provider*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
 

@@ -670,12 +670,8 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            }
-          ],
-          "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
+          "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+          "type": "string"
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
@@ -2220,13 +2216,6 @@
         }
       },
       "type": "object"
-    },
-    "ServiceTier": {
-      "enum": [
-        "fast",
-        "flex"
-      ],
-      "type": "string"
     },
     "SessionPickerViewMode": {
       "description": "Preferred layout for the resume/fork session picker.",
@@ -4502,12 +4491,8 @@
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
     "service_tier": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ServiceTier"
-        }
-      ],
-      "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
+      "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+      "type": "string"
     },
     "shell_environment_policy": {
       "allOf": [

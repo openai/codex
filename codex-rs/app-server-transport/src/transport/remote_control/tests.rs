@@ -1,4 +1,5 @@
 use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
+use super::enroll::REMOTE_CONTROL_INSTALLATION_ID_HEADER;
 use super::enroll::RemoteControlEnrollment;
 use super::enroll::load_persisted_remote_control_enrollment;
 use super::enroll::update_persisted_remote_control_enrollment;
@@ -55,6 +56,8 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
+
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn remote_control_auth_manager() -> Arc<AuthManager> {
     auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -131,6 +134,7 @@ async fn expect_remote_control_status(
     if let Some(expected_status) = expected_status {
         assert_eq!(status.status, expected_status);
     }
+    assert_eq!(status.installation_id, TEST_INSTALLATION_ID);
     assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
 
@@ -173,7 +177,10 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
@@ -449,7 +456,10 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
@@ -528,7 +538,10 @@ async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() 
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
-        "https://internal.example.com/backend-api/".to_string(),
+        RemoteControlStartConfig {
+            remote_control_url: "https://internal.example.com/backend-api/".to_string(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         /*state_db*/ None,
         remote_control_auth_manager(),
         transport_event_tx,
@@ -564,7 +577,10 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         auth_manager,
         transport_event_tx,
@@ -596,7 +612,10 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         /*state_db*/ None,
         remote_control_auth_manager(),
         transport_event_tx,
@@ -611,6 +630,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         status_rx.borrow().clone(),
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         }
     );
@@ -645,7 +665,10 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
@@ -672,6 +695,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connected,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: Some("env_test".to_string()),
         },
     )
@@ -682,6 +706,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         },
     )
@@ -698,6 +723,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: Some("env_test".to_string()),
         },
     )
@@ -729,7 +755,10 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
@@ -904,7 +933,10 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
@@ -930,6 +962,12 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         Some(&"account_id".to_string())
     );
     assert_eq!(
+        enroll_request
+            .headers
+            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        Some(&TEST_INSTALLATION_ID.to_string())
+    );
+    assert_eq!(
         serde_json::from_str::<serde_json::Value>(&enroll_request.body)
             .expect("enroll body should deserialize"),
         json!({
@@ -937,6 +975,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "app_server_version": env!("CARGO_PKG_VERSION"),
+            "installation_id": TEST_INSTALLATION_ID,
         })
     );
     respond_with_json(
@@ -966,6 +1005,12 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             .headers
             .get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
         Some(&"account_id".to_string())
+    );
+    assert_eq!(
+        handshake_request
+            .headers
+            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        Some(&TEST_INSTALLATION_ID.to_string())
     );
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
@@ -1128,7 +1173,10 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
@@ -1196,7 +1244,10 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
     let (app_server_client_name_tx, app_server_client_name_rx) = oneshot::channel::<String>();
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
@@ -1255,7 +1306,10 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(state_db.clone()),
         auth_manager,
         transport_event_tx,
@@ -1338,7 +1392,10 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
-        remote_control_url,
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,

@@ -206,10 +206,10 @@ impl ToolHandler for ShellCommandHandler {
             ..
         } = invocation;
 
+        let tool_name = self.tool_name();
         let ToolPayload::Function { arguments } = payload else {
             return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell_command handler: {}",
-                self.tool_name().display()
+                "unsupported payload for shell_command handler: {tool_name}"
             )));
         };
 
@@ -232,7 +232,7 @@ impl ToolHandler for ShellCommandHandler {
             turn.tools_config.allow_login_shell,
         )?;
         run_exec_like(RunExecLikeArgs {
-            tool_name: self.tool_name().display(),
+            tool_name,
             exec_params,
             hook_command: params.command,
             additional_permissions: params.additional_permissions.clone(),

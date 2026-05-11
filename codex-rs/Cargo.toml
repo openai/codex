@@ -11,6 +11,7 @@ members = [
     "async-utils",
     "app-server",
     "app-server-transport",
+    "app-server-daemon",
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
@@ -44,10 +45,13 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "ext/extension-api",
+    "ext/git-attribution",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
     "file-search",
+    "file-watcher",
     "linux-sandbox",
     "lmstudio",
     "login",
@@ -104,6 +108,7 @@ members = [
     "test-binary-support",
     "thread-manager-sample",
     "thread-store",
+    "tool-api",
     "uds",
     "codex-experimental-api-macros",
     "plugin",
@@ -131,6 +136,7 @@ codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
 codex-app-server-transport = { path = "app-server-transport" }
+codex-app-server-daemon = { path = "app-server-daemon" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -157,6 +163,8 @@ codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
+codex-extension-api = { path = "ext/extension-api" }
+codex-git-attribution = { path = "ext/git-attribution" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -164,6 +172,7 @@ codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
+codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
@@ -201,6 +210,7 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
+codex-tool-api = { path = "tool-api" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
@@ -257,7 +267,6 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
-constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.28.1"

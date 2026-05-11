@@ -433,15 +433,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         .function_call_output_content_and_success(call_id_success)
         .and_then(|(content, _)| content)
         .expect("success output string");
-    let output_json: Value = serde_json::from_str(&success_output)?;
-    assert_eq!(
-        output_json["metadata"]["exit_code"].as_i64(),
-        Some(0),
-        "expected exit code 0 after rerunning without escalation",
+    assert_regex_match(
+        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nshell ok\n?$",
+        &success_output,
     );
-    let stdout = output_json["output"].as_str().unwrap_or_default();
-    let stdout_pattern = r"(?s)^shell ok\n?$";
-    assert_regex_match(stdout_pattern, stdout);
 
     Ok(())
 }
@@ -772,6 +767,20 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
             "timeout output missing `command timed out`: {stdout}"
         );
     } else {
+        let normalized_output = output_str
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .trim_end_matches('\n')
+            .to_string();
+
+        let shell_output_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n(?:.*)?$";
+        if Regex::new(shell_output_pattern)
+            .expect("shell timeout output regex should compile")
+            .is_match(&normalized_output)
+        {
+            return Ok(());
+        }
+
         // Fallback: accept the signal classification path to deflake the test.
         let signal_pattern = r"(?is)^execution error:.*signal.*$";
         assert_regex_match(signal_pattern, output_str);
