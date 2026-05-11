@@ -31,6 +31,7 @@ pub struct ExecuteRequest {
     pub stored_values: HashMap<String, JsonValue>,
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
+    pub yield_on_blocked_tool_calls: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +46,7 @@ pub enum RuntimeResponse {
     Yielded {
         cell_id: String,
         content_items: Vec<FunctionCallOutputContentItem>,
+        pending_tool_call_count: usize,
     },
     Terminated {
         cell_id: String,
@@ -86,6 +88,9 @@ pub(crate) enum RuntimeEvent {
     Started,
     ContentItem(FunctionCallOutputContentItem),
     YieldRequested,
+    BlockedOnToolCalls {
+        pending_tool_call_count: usize,
+    },
     ToolCall {
         id: String,
         name: ToolName,
@@ -239,6 +244,7 @@ fn run_runtime(
         }
         CompletionState::Pending => {}
     }
+    send_blocked_on_tool_calls_if_needed(scope, &event_tx);
 
     let mut pending_promise = pending_promise;
     loop {
@@ -290,6 +296,22 @@ fn run_runtime(
                 pending_promise = None;
             }
         }
+        send_blocked_on_tool_calls_if_needed(scope, &event_tx);
+    }
+}
+
+fn send_blocked_on_tool_calls_if_needed(
+    scope: &mut v8::PinScope<'_, '_>,
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+) {
+    let pending_tool_call_count = scope
+        .get_slot::<RuntimeState>()
+        .map(|state| state.pending_tool_calls.len())
+        .unwrap_or(0);
+    if pending_tool_call_count > 0 {
+        let _ = event_tx.send(RuntimeEvent::BlockedOnToolCalls {
+            pending_tool_call_count,
+        });
     }
 }
 
@@ -322,8 +344,13 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use tokio::sync::mpsc;
+
+    use crate::description::CodeModeToolKind;
+    use crate::description::ToolDefinition;
 
     use super::ExecuteRequest;
     use super::RuntimeEvent;
@@ -337,6 +364,25 @@ mod tests {
             stored_values: HashMap::new(),
             yield_time_ms: Some(1),
             max_output_tokens: None,
+            yield_on_blocked_tool_calls: false,
+        }
+    }
+
+    fn resolve_city_alias_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "resolve_city_alias".to_string(),
+            tool_name: ToolName::plain("resolve_city_alias".to_string()),
+            description: "Resolve a city alias.".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "alias": {"type": "string"}
+                },
+                "required": ["alias"],
+                "additionalProperties": false,
+            })),
+            output_schema: None,
         }
     }
 
@@ -374,5 +420,59 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_tool_calls_emit_blocked_frontier_after_all_calls() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, _runtime_terminate_handle) = spawn_runtime(
+            ExecuteRequest {
+                enabled_tools: vec![resolve_city_alias_tool()],
+                source: r#"
+await Promise.all([1, 2, 3, 4, 5].map(id =>
+  tools.resolve_city_alias({ alias: String(id) })
+));
+"#
+                .to_string(),
+                ..execute_request("")
+            },
+            event_tx,
+        )
+        .unwrap();
+
+        let mut calls = Vec::new();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            match event {
+                RuntimeEvent::Started => {}
+                RuntimeEvent::ToolCall { name, input, .. } => {
+                    calls.push((name.display().to_string(), input));
+                }
+                RuntimeEvent::BlockedOnToolCalls {
+                    pending_tool_call_count,
+                } => {
+                    assert_eq!(pending_tool_call_count, 5);
+                    break;
+                }
+                other => panic!("unexpected runtime event before blocked frontier: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            calls,
+            (1..=5)
+                .map(|index| {
+                    (
+                        "resolve_city_alias".to_string(),
+                        Some(json!({"alias": index.to_string()})),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let _ = runtime_tx.send(super::RuntimeCommand::Terminate);
     }
 }

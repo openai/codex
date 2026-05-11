@@ -106,6 +106,7 @@ impl CodeModeService {
             control_rx,
             response_tx,
             request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS),
+            request.yield_on_blocked_tool_calls,
         ));
 
         response_rx
@@ -290,6 +291,7 @@ async fn run_session_control(
     mut control_rx: mpsc::UnboundedReceiver<SessionControlCommand>,
     initial_response_tx: oneshot::Sender<RuntimeResponse>,
     initial_yield_time_ms: u64,
+    yield_on_blocked_tool_calls: bool,
 ) {
     let SessionControlContext {
         cell_id,
@@ -353,7 +355,22 @@ async fn run_session_control(
                             let _ = response_tx.send(RuntimeResponse::Yielded {
                                 cell_id: cell_id.clone(),
                                 content_items: std::mem::take(&mut content_items),
+                                pending_tool_call_count: 0,
                             });
+                        }
+                    }
+                    RuntimeEvent::BlockedOnToolCalls {
+                        pending_tool_call_count,
+                    } => {
+                        if yield_on_blocked_tool_calls {
+                            yield_timer = None;
+                            if let Some(response_tx) = response_tx.take() {
+                                let _ = response_tx.send(RuntimeResponse::Yielded {
+                                    cell_id: cell_id.clone(),
+                                    content_items: std::mem::take(&mut content_items),
+                                    pending_tool_call_count,
+                                });
+                            }
                         }
                     }
                     RuntimeEvent::Notify { call_id, text } => {
@@ -454,6 +471,7 @@ async fn run_session_control(
                     let _ = response_tx.send(RuntimeResponse::Yielded {
                         cell_id: cell_id.clone(),
                         content_items: std::mem::take(&mut content_items),
+                        pending_tool_call_count: 0,
                     });
                 }
             }
@@ -496,6 +514,7 @@ mod tests {
             stored_values: HashMap::new(),
             yield_time_ms: Some(1),
             max_output_tokens: None,
+            yield_on_blocked_tool_calls: false,
         }
     }
 
@@ -712,6 +731,7 @@ text(JSON.stringify(returnsUndefined));
             control_rx,
             initial_response_tx,
             /*initial_yield_time_ms*/ 60_000,
+            false,
         ));
 
         event_tx.send(RuntimeEvent::Started).unwrap();
@@ -721,6 +741,7 @@ text(JSON.stringify(returnsUndefined));
             RuntimeResponse::Yielded {
                 cell_id: "cell-1".to_string(),
                 content_items: Vec::new(),
+                pending_tool_call_count: 0,
             }
         );
 
@@ -745,6 +766,56 @@ text(JSON.stringify(returnsUndefined));
             RuntimeResponse::Terminated {
                 cell_id: "cell-1".to_string(),
                 content_items: Vec::new(),
+            }
+        );
+
+        let _ = runtime_tx.send(RuntimeCommand::Terminate);
+    }
+
+    #[tokio::test]
+    async fn blocked_tool_call_frontier_yields_without_timer() {
+        let inner = test_inner();
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (_control_tx, control_rx) = mpsc::unbounded_channel();
+        let (initial_response_tx, initial_response_rx) = oneshot::channel();
+        let (runtime_event_tx, _runtime_event_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, runtime_terminate_handle) = spawn_runtime(
+            ExecuteRequest {
+                source: "await new Promise(() => {})".to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+            runtime_event_tx,
+        )
+        .unwrap();
+
+        tokio::spawn(run_session_control(
+            inner,
+            SessionControlContext {
+                cell_id: "cell-1".to_string(),
+                runtime_tx: runtime_tx.clone(),
+                runtime_terminate_handle,
+            },
+            event_rx,
+            control_rx,
+            initial_response_tx,
+            /*initial_yield_time_ms*/ 60_000,
+            true,
+        ));
+
+        event_tx.send(RuntimeEvent::Started).unwrap();
+        event_tx
+            .send(RuntimeEvent::BlockedOnToolCalls {
+                pending_tool_call_count: 5,
+            })
+            .unwrap();
+
+        assert_eq!(
+            initial_response_rx.await.unwrap(),
+            RuntimeResponse::Yielded {
+                cell_id: "cell-1".to_string(),
+                content_items: Vec::new(),
+                pending_tool_call_count: 5,
             }
         );
 
