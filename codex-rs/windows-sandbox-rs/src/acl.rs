@@ -383,70 +383,12 @@ pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Resu
     ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
 }
 
-/// Adds an allow ACE granting read/write/execute to the given SID on the target path.
+/// Adds an allow ACE granting the sandbox write mask to the given SID on the target path.
 ///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
 pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
-    let mut p_sd: *mut c_void = std::ptr::null_mut();
-    let mut p_dacl: *mut ACL = std::ptr::null_mut();
-    let code = GetNamedSecurityInfoW(
-        to_wide(path).as_ptr(),
-        1,
-        DACL_SECURITY_INFORMATION,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        &mut p_dacl,
-        std::ptr::null_mut(),
-        &mut p_sd,
-    );
-    if code != ERROR_SUCCESS {
-        return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
-    }
-    // Already has write? Skip costly DACL rewrite.
-    if dacl_has_write_allow_for_sid(p_dacl, psid) {
-        if !p_sd.is_null() {
-            LocalFree(p_sd as HLOCAL);
-        }
-        return Ok(false);
-    }
-    let mut added = false;
-    // Always ensure write is present: if an allow ACE exists without write, add one with write+RX.
-    let trustee = TRUSTEE_W {
-        pMultipleTrustee: std::ptr::null_mut(),
-        MultipleTrusteeOperation: 0,
-        TrusteeForm: TRUSTEE_IS_SID,
-        TrusteeType: TRUSTEE_IS_UNKNOWN,
-        ptstrName: psid as *mut u16,
-    };
-    let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
-    explicit.grfAccessMode = 2; // SET_ACCESS
-    explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
-    explicit.Trustee = trustee;
-    let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
-    let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-    if code2 == ERROR_SUCCESS {
-        let code3 = SetNamedSecurityInfoW(
-            to_wide(path).as_ptr() as *mut u16,
-            1,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            p_new_dacl,
-            std::ptr::null_mut(),
-        );
-        if code3 == ERROR_SUCCESS {
-            added = !dacl_has_write_allow_for_sid(p_dacl, psid);
-        }
-        if !p_new_dacl.is_null() {
-            LocalFree(p_new_dacl as HLOCAL);
-        }
-    }
-    if !p_sd.is_null() {
-        LocalFree(p_sd as HLOCAL);
-    }
-    Ok(added)
+    ensure_allow_write_aces(path, &[psid])
 }
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
@@ -636,3 +578,16 @@ pub unsafe fn allow_null_device(psid: *mut c_void) {
 }
 const CONTAINER_INHERIT_ACE: u32 = 0x2;
 const OBJECT_INHERIT_ACE: u32 = 0x1;
+
+#[cfg(test)]
+mod tests {
+    use super::WRITE_ALLOW_MASK;
+    use windows_sys::Win32::Storage::FileSystem::DELETE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
+
+    #[test]
+    fn write_allow_mask_preserves_delete_rights_for_atomic_rewrites() {
+        assert_ne!(WRITE_ALLOW_MASK & DELETE, 0);
+        assert_ne!(WRITE_ALLOW_MASK & FILE_DELETE_CHILD, 0);
+    }
+}
