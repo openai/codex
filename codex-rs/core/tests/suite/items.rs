@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -30,6 +31,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -368,7 +370,21 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
         ev_completed("resp-1"),
     ]);
-    mount_sse_once(&server, first_response).await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            first_response,
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-1",
+                    "The image is ready and the saved path is available.",
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
     codex
         .submit(Op::UserInput {
@@ -424,6 +440,97 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         end.saved_path.as_ref().map(AbsolutePathBuf::as_path),
         Some(expected_saved_path.as_path())
     );
+    let final_message = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let final_text = final_message
+        .content
+        .iter()
+        .map(|entry| match entry {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(
+        final_text,
+        "The image is ready and the saved path is available."
+    );
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let second_request_developer_texts = requests[1].message_input_texts("developer");
+    assert!(
+        second_request_developer_texts
+            .iter()
+            .any(|text| text.contains("The most recent image_generation_call completed"))
+    );
+    assert!(
+        second_request_developer_texts
+            .iter()
+            .any(|text| text.contains(&expected_saved_path.display().to_string()))
+    );
+    assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_follow_up_can_be_disabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::ImageGenerationContinuation)
+            .expect("test config should allow disabling image generation continuation");
+    });
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+    let call_id = "ig_no_follow_up";
+    let expected_saved_path = image_generation_artifact_path(
+        config.codex_home.as_path(),
+        &session_configured.thread_id.to_string(),
+        call_id,
+    );
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "generate a tiny blue square".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(responses.requests().len(), 1);
     assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
     let _ = std::fs::remove_file(&expected_saved_path);
 

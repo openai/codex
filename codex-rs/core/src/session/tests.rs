@@ -6594,9 +6594,11 @@ async fn handle_output_item_done_records_image_save_history_message() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should succeed");
+    let output =
+        handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
+            .await
+            .expect("image generation item should succeed");
+    assert!(output.image_generation_follow_up_requested);
 
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
@@ -6608,9 +6610,12 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .parent()
         .expect("generated image path should have a parent");
     let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
-        crate::context::ImageGenerationInstructions::new(
+        crate::context::ImageGenerationInstructions::for_generated_image(
             image_output_dir.display(),
             image_output_path.display(),
+            call_id,
+            expected_saved_path.display(),
+            Some("a tiny blue square"),
         ),
     );
     assert_eq!(history.raw_items(), &[image_message, item]);
@@ -6646,9 +6651,11 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
-        .await
-        .expect("image generation item should still complete");
+    let output =
+        handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
+            .await
+            .expect("image generation item should still complete");
+    assert!(!output.image_generation_follow_up_requested);
 
     let history = session.clone_history().await;
     assert_eq!(history.raw_items(), &[item]);

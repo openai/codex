@@ -424,6 +424,10 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.model = Some(image_model_slug.to_string());
+            config
+                .features
+                .disable(Feature::ImageGenerationContinuation)
+                .expect("test config should allow disabling image generation continuation");
         });
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
@@ -536,6 +540,10 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.model = Some(image_model_slug.to_string());
+            config
+                .features
+                .disable(Feature::ImageGenerationContinuation)
+                .expect("test config should allow disabling image generation continuation");
         });
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
@@ -650,6 +658,10 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.model = Some(image_model_slug.to_string());
+            config
+                .features
+                .disable(Feature::ImageGenerationContinuation)
+                .expect("test config should allow disabling image generation continuation");
         });
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(

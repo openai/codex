@@ -460,6 +460,9 @@
             "image_generation": {
               "type": "boolean"
             },
+            "image_generation_continuation": {
+              "type": "boolean"
+            },
             "in_app_browser": {
               "type": "boolean"
             },
@@ -4100,6 +4103,9 @@
           "type": "boolean"
         },
         "image_generation": {
+          "type": "boolean"
+        },
+        "image_generation_continuation": {
           "type": "boolean"
         },
         "in_app_browser": {

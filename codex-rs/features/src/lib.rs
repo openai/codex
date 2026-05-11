@@ -192,6 +192,9 @@ pub enum Feature {
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
+    /// Continue sampling after image generation so workflows can return text
+    /// and artifact metadata alongside the generated image.
+    ImageGenerationContinuation,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -1019,6 +1022,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ImageGenerationContinuation,
+        key: "image_generation_continuation",
         stage: Stage::Stable,
         default_enabled: true,
     },

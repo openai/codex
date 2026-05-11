@@ -119,6 +119,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+const MAX_IMAGE_GENERATION_FOLLOW_UPS_PER_TURN: usize = 1;
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -380,6 +382,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
+    let mut image_generation_follow_ups = 0usize;
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -466,10 +469,20 @@ pub(crate) async fn run_turn(
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up: model_needs_follow_up,
+                    needs_follow_up: sampling_needs_follow_up,
+                    image_generation_follow_up_requested,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
                 can_drain_pending_input = true;
+                let image_generation_follow_up = image_generation_follow_up_requested
+                    && turn_context
+                        .features
+                        .enabled(Feature::ImageGenerationContinuation)
+                    && image_generation_follow_ups < MAX_IMAGE_GENERATION_FOLLOW_UPS_PER_TURN;
+                if image_generation_follow_up {
+                    image_generation_follow_ups += 1;
+                }
+                let model_needs_follow_up = sampling_needs_follow_up || image_generation_follow_up;
                 let has_pending_input = sess.has_pending_input().await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let total_usage_tokens = sess.get_total_token_usage().await;
@@ -485,6 +498,9 @@ pub(crate) async fn run_turn(
                     auto_compact_limit,
                     token_limit_reached,
                     model_needs_follow_up,
+                    sampling_needs_follow_up,
+                    image_generation_follow_up_requested,
+                    image_generation_follow_up,
                     has_pending_input,
                     needs_follow_up,
                     "post sampling token usage"
@@ -1278,6 +1294,7 @@ pub(crate) async fn built_tools(
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
+    image_generation_follow_up_requested: bool,
     last_agent_message: Option<String>,
 }
 
@@ -1867,6 +1884,7 @@ async fn try_run_sampling_request(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
+    let mut image_generation_follow_up_requested = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -1998,10 +2016,13 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                image_generation_follow_up_requested |=
+                    output_result.image_generation_follow_up_requested;
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
+                        image_generation_follow_up_requested: false,
                         last_agent_message,
                     });
                 }
@@ -2127,6 +2148,7 @@ async fn try_run_sampling_request(
                 completed_response_id = Some(response_id);
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
+                    image_generation_follow_up_requested,
                     last_agent_message,
                 });
             }

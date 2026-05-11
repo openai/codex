@@ -209,6 +209,7 @@ pub(crate) type InFlightFuture<'f> =
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
+    pub image_generation_follow_up_requested: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
@@ -266,6 +267,10 @@ pub(crate) async fn handle_output_item_done(
             )
             .await;
             if let Some(turn_item) = turn_item {
+                let image_generation_follow_up_requested = matches!(
+                    &turn_item,
+                    TurnItem::ImageGeneration(item) if item.saved_path.is_some()
+                );
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -282,6 +287,7 @@ pub(crate) async fn handle_output_item_done(
                 ctx.sess
                     .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
+                output.image_generation_follow_up_requested |= image_generation_follow_up_requested;
             }
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
@@ -387,7 +393,7 @@ pub(crate) async fn handle_non_tool_response_item(
                 .await
                 {
                     Ok(path) => {
-                        image_item.saved_path = Some(path);
+                        image_item.saved_path = Some(path.clone());
                         let image_output_path = image_generation_artifact_path(
                             &turn_context.config.codex_home,
                             &session_id,
@@ -396,11 +402,15 @@ pub(crate) async fn handle_non_tool_response_item(
                         let image_output_dir = image_output_path
                             .parent()
                             .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let message: ResponseItem =
-                            ContextualUserFragment::into(ImageGenerationInstructions::new(
+                        let message: ResponseItem = ContextualUserFragment::into(
+                            ImageGenerationInstructions::for_generated_image(
                                 image_output_dir.display(),
                                 image_output_path.display(),
-                            ));
+                                &image_item.id,
+                                path.display(),
+                                image_item.revised_prompt.as_deref(),
+                            ),
+                        );
                         sess.record_conversation_items(turn_context, &[message])
                             .await;
                     }
