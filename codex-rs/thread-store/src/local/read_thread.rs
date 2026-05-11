@@ -26,6 +26,11 @@ use crate::StoredThreadHistory;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+#[cfg(not(test))]
+const MAX_HISTORY_ROLLOUT_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(test)]
+const MAX_HISTORY_ROLLOUT_BYTES: u64 = 1024;
+
 pub(super) async fn read_thread(
     store: &LocalThreadStore,
     params: ReadThreadParams,
@@ -151,9 +156,31 @@ async fn attach_history_if_requested(
             message: format!("failed to load thread history for thread {thread_id}"),
         });
     };
+    ensure_rollout_history_size_is_safe(&path).await?;
     let items = load_history_items(&path).await?;
     thread.history = Some(StoredThreadHistory { thread_id, items });
     Ok(())
+}
+
+async fn ensure_rollout_history_size_is_safe(path: &std::path::Path) -> ThreadStoreResult<()> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to stat thread history {}: {err}", path.display()),
+        })?;
+    let len = metadata.len();
+    if len <= MAX_HISTORY_ROLLOUT_BYTES {
+        return Ok(());
+    }
+
+    Err(ThreadStoreError::InvalidRequest {
+        message: format!(
+            "rollout history {} is too large to resume safely ({} bytes > {} bytes); move or archive the file before reopening this thread",
+            path.display(),
+            len,
+            MAX_HISTORY_ROLLOUT_BYTES,
+        ),
+    })
 }
 
 async fn resolve_rollout_path(
@@ -434,6 +461,49 @@ mod tests {
             thread.history.expect("history should load").thread_id,
             thread_id
         );
+    }
+
+    #[tokio::test]
+    async fn read_thread_rejects_oversized_history_but_keeps_summary_reads_available() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(225);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&active_path)
+            .expect("open rollout");
+        file.set_len(MAX_HISTORY_ROLLOUT_BYTES + 1)
+            .expect("extend rollout");
+
+        let err = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect_err("oversized history should fail");
+        let ThreadStoreError::InvalidRequest { message } = err else {
+            panic!("expected invalid request error");
+        };
+        assert!(message.contains("too large to resume safely"));
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("summary read should still succeed");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(active_path));
+        assert_eq!(thread.preview, "Hello from user");
+        assert!(thread.history.is_none());
     }
 
     #[tokio::test]
