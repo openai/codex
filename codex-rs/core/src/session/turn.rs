@@ -921,7 +921,6 @@ pub(super) fn filter_connectors_for_input(
     let user_message_texts = user_messages
         .iter()
         .map(|message| user_message_text(message))
-        .filter(|message| !message.is_empty())
         .collect::<Vec<_>>();
     let mentions = collect_tool_mentions_from_messages(&user_message_texts);
     let mention_names_lower = mentions
