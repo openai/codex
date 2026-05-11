@@ -1808,7 +1808,7 @@ mod tests {
             request_id: request_id(),
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
-                exec_server_url: "ws://127.0.0.1:8765/ws".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
             },
         };
         assert_eq!(
@@ -2603,7 +2603,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
-                exec_server_url: "ws://127.0.0.1:8765/ws".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
             },
         };
         assert_eq!(
@@ -2612,7 +2612,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "environmentId": "remote-a",
-                    "execServerUrl": "ws://127.0.0.1:8765/ws"
+                    "execServerUrl": "ws://127.0.0.1:8765"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2898,7 +2898,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::EnvironmentAddParams {
                 environment_id: "remote-a".to_string(),
-                exec_server_url: "ws://127.0.0.1:8765/ws".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);

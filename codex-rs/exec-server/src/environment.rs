@@ -506,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_reports_remote_url() {
         let manager = EnvironmentManager::create_for_tests(
-            Some("ws://127.0.0.1:8765/ws".to_string()),
+            Some("ws://127.0.0.1:8765".to_string()),
             test_runtime_paths(),
         )
         .await;
@@ -517,10 +517,7 @@ mod tests {
             Some(REMOTE_ENVIRONMENT_ID)
         );
         assert!(environment.is_remote());
-        assert_eq!(
-            environment.exec_server_url(),
-            Some("ws://127.0.0.1:8765/ws")
-        );
+        assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
         assert!(Arc::ptr_eq(
             &environment,
             &manager
@@ -551,7 +548,7 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
                     REMOTE_ENVIRONMENT_ID.to_string(),
-                    Environment::create_for_tests(Some("ws://127.0.0.1:8765/ws".to_string()))
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
@@ -623,7 +620,7 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
                     "devbox".to_string(),
-                    Environment::create_for_tests(Some("ws://127.0.0.1:8765/ws".to_string()))
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
@@ -648,7 +645,7 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
                     "devbox".to_string(),
-                    Environment::create_for_tests(Some("ws://127.0.0.1:8765/ws".to_string()))
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::Disabled,
@@ -675,7 +672,7 @@ mod tests {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
                     "devbox".to_string(),
-                    Environment::create_for_tests(Some("ws://127.0.0.1:8765/ws".to_string()))
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
                 default: EnvironmentDefault::EnvironmentId("missing".to_string()),
@@ -769,29 +766,23 @@ mod tests {
         let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
 
         manager
-            .upsert_environment(
-                "executor-a".to_string(),
-                "ws://127.0.0.1:8765/ws".to_string(),
-            )
+            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:8765".to_string())
             .expect("remote environment");
         let first = manager
             .get_environment("executor-a")
             .expect("first remote environment");
         assert!(first.is_remote());
-        assert_eq!(first.exec_server_url(), Some("ws://127.0.0.1:8765/ws"));
+        assert_eq!(first.exec_server_url(), Some("ws://127.0.0.1:8765"));
         assert_eq!(manager.default_environment_id(), None);
 
         manager
-            .upsert_environment(
-                "executor-a".to_string(),
-                "ws://127.0.0.1:9876/ws".to_string(),
-            )
+            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:9876".to_string())
             .expect("updated remote environment");
         let second = manager
             .get_environment("executor-a")
             .expect("second remote environment");
         assert!(second.is_remote());
-        assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876/ws"));
+        assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876"));
         assert!(!Arc::ptr_eq(&first, &second));
     }
 

@@ -162,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_provider_adds_remote_environment_for_websocket_url() {
-        let provider = DefaultEnvironmentProvider::new(Some("ws://127.0.0.1:8765/ws".to_string()));
+        let provider = DefaultEnvironmentProvider::new(Some("ws://127.0.0.1:8765".to_string()));
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
@@ -177,7 +177,7 @@ mod tests {
         assert!(remote_environment.is_remote());
         assert_eq!(
             remote_environment.exec_server_url(),
-            Some("ws://127.0.0.1:8765/ws")
+            Some("ws://127.0.0.1:8765")
         );
         assert_eq!(
             default,
@@ -187,14 +187,13 @@ mod tests {
 
     #[tokio::test]
     async fn default_provider_normalizes_exec_server_url() {
-        let provider =
-            DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765/ws ".to_string()));
+        let provider = DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765 ".to_string()));
         let snapshot = provider.snapshot().await.expect("environments");
         let environments: HashMap<_, _> = snapshot.environments.into_iter().collect();
 
         assert_eq!(
             environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
-            Some("ws://127.0.0.1:8765/ws")
+            Some("ws://127.0.0.1:8765")
         );
     }
 }
