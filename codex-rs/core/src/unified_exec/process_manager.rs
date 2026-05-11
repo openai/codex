@@ -19,6 +19,7 @@ use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
@@ -381,6 +382,7 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
+                emit_startup_failure_events(context, &request, cwd.clone(), &err).await;
                 self.release_process_id(request.process_id).await;
                 return Err(err);
             }
@@ -1086,6 +1088,10 @@ impl UnifiedExecProcessManager {
                     };
                     UnifiedExecError::sandbox_denied(message, output)
                 }
+                ToolError::Rejected(message) if message == "rejected by user" => {
+                    UnifiedExecError::rejected(message)
+                }
+                ToolError::Rejected(message) => UnifiedExecError::create_process(message),
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
     }
@@ -1279,6 +1285,40 @@ impl UnifiedExecProcessManager {
             entry.process.terminate();
         }
     }
+}
+
+async fn emit_startup_failure_events(
+    context: &UnifiedExecContext,
+    request: &ExecCommandRequest,
+    cwd: AbsolutePathBuf,
+    err: &UnifiedExecError,
+) {
+    let event_ctx = ToolEventCtx::new(
+        context.session.as_ref(),
+        context.turn.as_ref(),
+        &context.call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let emitter = ToolEmitter::unified_exec(
+        &request.command,
+        cwd,
+        ExecCommandSource::UnifiedExecStartup,
+        Some(request.process_id.to_string()),
+    );
+    emitter.emit(event_ctx, ToolEventStage::Begin).await;
+    let failure = match err {
+        UnifiedExecError::MissingCommandLine => {
+            ToolEventFailure::Message("missing command line for unified exec request".to_string())
+        }
+        UnifiedExecError::Rejected { message } => ToolEventFailure::Rejected {
+            message: message.clone(),
+            applied_patch_delta: None,
+        },
+        _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
+    };
+    emitter
+        .emit(event_ctx, ToolEventStage::Failure(failure))
+        .await;
 }
 
 enum ProcessStatus {

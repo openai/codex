@@ -232,6 +232,77 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     );
 }
 
+#[tokio::test]
+async fn startup_create_process_failure_emits_begin_then_failed_end() {
+    let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
+    let context = UnifiedExecContext::new(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        "call-unified-empty".to_string(),
+    );
+    let process_id = session
+        .services
+        .unified_exec_manager
+        .allocate_process_id()
+        .await;
+    let request = ExecCommandRequest {
+        command: Vec::new(),
+        shell_type: crate::shell::ShellType::Sh,
+        hook_command: String::new(),
+        process_id,
+        yield_time_ms: 1000,
+        max_output_tokens: None,
+        #[allow(deprecated)]
+        cwd: turn.cwd.clone(),
+        #[allow(deprecated)]
+        sandbox_cwd: turn.cwd.clone(),
+        environment: turn
+            .environments
+            .primary_environment()
+            .expect("primary environment"),
+        network: None,
+        tty: true,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    };
+
+    let err = crate::unified_exec::UnifiedExecError::create_process(
+        "missing command line for PTY".to_string(),
+    );
+    let selected_cwd = turn
+        .environments
+        .primary()
+        .expect("primary turn environment")
+        .cwd
+        .clone();
+    emit_startup_failure_events(&context, &request, selected_cwd, &err).await;
+
+    let begin_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("timed out waiting for begin event")
+        .expect("event channel closed");
+    let codex_protocol::protocol::EventMsg::ExecCommandBegin(begin_event) = begin_event.msg else {
+        panic!("expected ExecCommandBegin event");
+    };
+    assert_eq!(begin_event.call_id, "call-unified-empty");
+
+    let end_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("timed out waiting for end event")
+        .expect("event channel closed");
+    let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = end_event.msg else {
+        panic!("expected ExecCommandEnd event");
+    };
+    assert_eq!(end_event.call_id, "call-unified-empty");
+    assert_eq!(
+        end_event.status,
+        codex_protocol::protocol::ExecCommandStatus::Failed
+    );
+}
+
 #[test]
 fn pruning_prefers_exited_processes_outside_recently_used() {
     let now = Instant::now();
