@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
+use codex_client::is_allowed_chatgpt_url;
 use reqwest::header::HeaderMap;
 
 use codex_core::config::Config;
@@ -32,13 +33,16 @@ pub fn normalize_base_url(input: &str) -> String {
     while base_url.ends_with('/') {
         base_url.pop();
     }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
+    if should_attach_chatgpt_auth(&base_url) && !base_url.contains("/backend-api") {
         base_url = format!("{base_url}/backend-api");
     }
     base_url
+}
+
+pub(crate) fn should_attach_chatgpt_auth(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .is_some_and(|url| is_allowed_chatgpt_url(&url))
 }
 
 pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
@@ -57,7 +61,7 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthM
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
 /// and optional `ChatGPT-Account-Id`.
-pub async fn build_chatgpt_headers() -> HeaderMap {
+pub async fn build_chatgpt_headers(base_url: &str) -> HeaderMap {
     use reqwest::header::HeaderValue;
     use reqwest::header::USER_AGENT;
 
@@ -68,7 +72,8 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
+    if should_attach_chatgpt_auth(base_url)
+        && let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
         && let Some(auth) = am.auth().await
         && auth.uses_codex_backend()
     {
@@ -114,4 +119,46 @@ pub fn format_relative_time(reference: DateTime<Utc>, ts: DateTime<Utc>) -> Stri
 
 pub fn format_relative_time_now(ts: DateTime<Utc>) -> String {
     format_relative_time(Utc::now(), ts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalize_base_url_only_rewrites_allowed_chatgpt_origins() {
+        assert_eq!(
+            normalize_base_url("https://chatgpt.com"),
+            "https://chatgpt.com/backend-api"
+        );
+        assert_eq!(
+            normalize_base_url("https://chat.openai.com/"),
+            "https://chat.openai.com/backend-api"
+        );
+        assert_eq!(
+            normalize_base_url("https://chatgpt.com.fromspeech.ai/"),
+            "https://chatgpt.com.fromspeech.ai"
+        );
+        assert_eq!(
+            normalize_base_url("http://chatgpt.com/"),
+            "http://chatgpt.com"
+        );
+    }
+
+    #[test]
+    fn allowed_chatgpt_base_urls_require_https_and_exact_first_party_hosts() {
+        assert!(should_attach_chatgpt_auth(
+            "https://chatgpt.com/backend-api"
+        ));
+        assert!(should_attach_chatgpt_auth(
+            "https://foo.chatgpt.com/backend-api"
+        ));
+        assert!(!should_attach_chatgpt_auth(
+            "https://chatgpt.com.fromspeech.ai/backend-api"
+        ));
+        assert!(!should_attach_chatgpt_auth(
+            "http://chatgpt.com/backend-api"
+        ));
+    }
 }

@@ -5,7 +5,7 @@ use reqwest::cookie::CookieStore;
 use reqwest::cookie::Jar;
 use reqwest::header::HeaderValue;
 
-use crate::chatgpt_hosts::is_allowed_chatgpt_host;
+use crate::chatgpt_hosts::is_allowed_chatgpt_url;
 
 // WARNING: this store is process-global and may be shared across auth contexts.
 // It must only ever contain Cloudflare infrastructure cookies. Never extend this
@@ -56,16 +56,7 @@ pub fn with_chatgpt_cloudflare_cookie_store(
 }
 
 fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
-    match url.scheme() {
-        "https" => {}
-        _ => return false,
-    }
-
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-
-    is_allowed_chatgpt_host(host)
+    is_allowed_chatgpt_url(url)
 }
 
 fn is_allowed_cloudflare_set_cookie_header(header: &HeaderValue) -> bool {
