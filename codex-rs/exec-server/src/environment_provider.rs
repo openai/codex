@@ -5,6 +5,7 @@ use crate::ExecServerError;
 use crate::environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment::REMOTE_ENVIRONMENT_ID;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Lists the concrete environments available to Codex.
 ///
@@ -14,9 +15,14 @@ use crate::environment::REMOTE_ENVIRONMENT_ID;
 /// `include_local` controls whether `EnvironmentManager` should add the local
 /// environment to the snapshot.
 #[async_trait]
-pub trait EnvironmentProvider: Send + Sync {
+pub trait EnvironmentProvider: Send + Sync + std::fmt::Debug {
     /// Returns the provider-owned environment startup snapshot.
     async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError>;
+
+    /// Returns the configured default cwd for one provider-owned environment.
+    fn default_cwd(&self, _environment_id: &str) -> Option<AbsolutePathBuf> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]

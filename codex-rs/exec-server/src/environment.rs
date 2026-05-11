@@ -20,6 +20,7 @@ use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
@@ -43,6 +44,7 @@ pub struct EnvironmentManager {
     default_environment: Option<String>,
     environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Arc<Environment>,
+    environment_provider: Box<dyn EnvironmentProvider>,
 }
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -64,6 +66,9 @@ impl EnvironmentManagerArgs {
 impl EnvironmentManager {
     /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
+        let environment_provider: Box<dyn EnvironmentProvider> = Box::new(
+            DefaultEnvironmentProvider::new(/*exec_server_url*/ None),
+        );
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::from([(
@@ -71,15 +76,19 @@ impl EnvironmentManager {
                 Arc::new(Environment::default_for_tests()),
             )])),
             local_environment: Arc::new(Environment::default_for_tests()),
+            environment_provider,
         }
     }
 
     /// Builds a test-only manager with environment access disabled.
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
+        let environment_provider: Box<dyn EnvironmentProvider> =
+            Box::new(DefaultEnvironmentProvider::new(Some("none".to_string())));
         Self {
             default_environment: None,
             environments: RwLock::new(HashMap::new()),
             local_environment: Arc::new(Environment::local(local_runtime_paths)),
+            environment_provider,
         }
     }
 
@@ -112,7 +121,7 @@ impl EnvironmentManager {
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Result<Self, ExecServerError> {
         let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
-        Self::from_provider(provider.as_ref(), local_runtime_paths).await
+        Self::from_provider(provider, local_runtime_paths).await
     }
 
     /// Builds a manager from the legacy environment-variable provider without
@@ -120,35 +129,35 @@ impl EnvironmentManager {
     pub async fn from_env(
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Result<Self, ExecServerError> {
-        let provider = DefaultEnvironmentProvider::from_env();
-        Self::from_provider(&provider, local_runtime_paths).await
+        let provider: Box<dyn EnvironmentProvider> =
+            Box::new(DefaultEnvironmentProvider::from_env());
+        Self::from_provider(provider, local_runtime_paths).await
     }
 
     async fn from_default_provider_url(
         exec_server_url: Option<String>,
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
-        let provider = DefaultEnvironmentProvider::new(exec_server_url);
-        match Self::from_provider(&provider, local_runtime_paths).await {
+        let provider: Box<dyn EnvironmentProvider> =
+            Box::new(DefaultEnvironmentProvider::new(exec_server_url));
+        match Self::from_provider(provider, local_runtime_paths).await {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
     }
 
     /// Builds a manager from a provider-supplied startup snapshot.
-    pub async fn from_provider<P>(
-        provider: &P,
+    pub async fn from_provider(
+        provider: Box<dyn EnvironmentProvider>,
         local_runtime_paths: ExecServerRuntimePaths,
-    ) -> Result<Self, ExecServerError>
-    where
-        P: EnvironmentProvider + ?Sized,
-    {
-        Self::from_provider_snapshot(provider.snapshot().await?, local_runtime_paths)
+    ) -> Result<Self, ExecServerError> {
+        Self::from_provider_snapshot(provider.snapshot().await?, local_runtime_paths, provider)
     }
 
     fn from_provider_snapshot(
         snapshot: EnvironmentProviderSnapshot,
         local_runtime_paths: ExecServerRuntimePaths,
+        environment_provider: Box<dyn EnvironmentProvider>,
     ) -> Result<Self, ExecServerError> {
         let EnvironmentProviderSnapshot {
             environments,
@@ -199,6 +208,7 @@ impl EnvironmentManager {
             default_environment,
             environments: RwLock::new(environment_map),
             local_environment,
+            environment_provider,
         })
     }
 
@@ -212,6 +222,11 @@ impl EnvironmentManager {
     /// Returns the id of the default environment.
     pub fn default_environment_id(&self) -> Option<&str> {
         self.default_environment.as_deref()
+    }
+
+    /// Returns the configured default cwd for one provider-owned environment.
+    pub fn default_cwd(&self, environment_id: &str) -> Option<AbsolutePathBuf> {
+        self.environment_provider.default_cwd(environment_id)
     }
 
     /// Returns the ordered environment ids used for new thread startup.
@@ -446,6 +461,7 @@ mod tests {
     use crate::environment_provider::EnvironmentProviderSnapshot;
     use pretty_assertions::assert_eq;
 
+    #[derive(Debug)]
     struct TestEnvironmentProvider {
         snapshot: EnvironmentProviderSnapshot,
     }
@@ -555,7 +571,7 @@ mod tests {
                 include_local: false,
             },
         };
-        let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let manager = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect("environment manager");
 
@@ -582,7 +598,7 @@ mod tests {
                 include_local: false,
             },
         };
-        let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let err = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect_err("empty id should fail");
 
@@ -604,7 +620,7 @@ mod tests {
                 include_local: false,
             },
         };
-        let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let err = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect_err("local id should fail");
 
@@ -627,7 +643,7 @@ mod tests {
                 include_local: true,
             },
         };
-        let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let manager = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect("manager");
 
@@ -652,7 +668,7 @@ mod tests {
                 include_local: true,
             },
         };
-        let manager = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let manager = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect("manager");
 
@@ -679,7 +695,7 @@ mod tests {
                 include_local: true,
             },
         };
-        let err = EnvironmentManager::from_provider(&provider, test_runtime_paths())
+        let err = EnvironmentManager::from_provider(Box::new(provider), test_runtime_paths())
             .await
             .expect_err("unknown default should fail");
 

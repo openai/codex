@@ -1033,9 +1033,10 @@ impl ThreadRequestProcessor {
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
-            listener_task_context
-                .thread_manager
-                .default_environment_selections(&config.cwd)
+            Self::default_environment_selections_with_provider_cwds(
+                listener_task_context.thread_manager.as_ref(),
+                &config.cwd,
+            )
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -1247,6 +1248,23 @@ impl ThreadRequestProcessor {
                 .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
         }
         Ok(environment_selections)
+    }
+
+    fn default_environment_selections_with_provider_cwds(
+        thread_manager: &ThreadManager,
+        cwd: &AbsolutePathBuf,
+    ) -> Vec<TurnEnvironmentSelection> {
+        let environment_manager = thread_manager.environment_manager();
+        environment_manager
+            .default_environment_ids()
+            .into_iter()
+            .map(|environment_id| TurnEnvironmentSelection {
+                cwd: environment_manager
+                    .default_cwd(&environment_id)
+                    .unwrap_or_else(|| cwd.clone()),
+                environment_id,
+            })
+            .collect()
     }
 
     async fn thread_archive_inner(

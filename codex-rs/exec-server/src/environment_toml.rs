@@ -19,6 +19,7 @@ use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProviderSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 const ENVIRONMENTS_TOML_FILE: &str = "environments.toml";
 const MAX_ENVIRONMENT_ID_LEN: usize = 64;
@@ -41,6 +42,7 @@ struct EnvironmentToml {
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     cwd: Option<PathBuf>,
+    default_cwd: Option<PathBuf>,
     #[serde(default, with = "option_duration_secs")]
     connect_timeout_sec: Option<Duration>,
     #[serde(default, with = "option_duration_secs")]
@@ -48,9 +50,16 @@ struct EnvironmentToml {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfiguredEnvironment {
+    id: String,
+    transport: ExecServerTransportParams,
+    default_cwd: Option<AbsolutePathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct TomlEnvironmentProvider {
     default: EnvironmentDefault,
-    environments: Vec<(String, ExecServerTransportParams)>,
+    environments: Vec<ConfiguredEnvironment>,
 }
 
 impl TomlEnvironmentProvider {
@@ -66,13 +75,14 @@ impl TomlEnvironmentProvider {
         let mut ids = HashSet::from([LOCAL_ENVIRONMENT_ID.to_string()]);
         let mut environments = Vec::with_capacity(config.environments.len());
         for item in config.environments {
-            let (id, transport) = parse_environment_toml(item, config_dir)?;
-            if !ids.insert(id.clone()) {
+            let environment = parse_environment_toml(item, config_dir)?;
+            if !ids.insert(environment.id.clone()) {
                 return Err(ExecServerError::Protocol(format!(
-                    "environment id `{id}` is duplicated"
+                    "environment id `{}` is duplicated",
+                    environment.id
                 )));
             }
-            environments.push((id, transport));
+            environments.push(environment);
         }
         let default = normalize_default_environment_id(config.default.as_deref(), &ids)?;
         Ok(Self {
@@ -86,11 +96,11 @@ impl TomlEnvironmentProvider {
 impl EnvironmentProvider for TomlEnvironmentProvider {
     async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
         let mut environments = Vec::with_capacity(self.environments.len());
-        for (id, transport_params) in &self.environments {
+        for environment in &self.environments {
             environments.push((
-                id.clone(),
+                environment.id.clone(),
                 Environment::remote_with_transport(
-                    transport_params.clone(),
+                    environment.transport.clone(),
                     /*local_runtime_paths*/ None,
                 ),
             ));
@@ -102,12 +112,19 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
             include_local: true,
         })
     }
+
+    fn default_cwd(&self, environment_id: &str) -> Option<AbsolutePathBuf> {
+        self.environments
+            .iter()
+            .find(|environment| environment.id == environment_id)
+            .and_then(|environment| environment.default_cwd.clone())
+    }
 }
 
 fn parse_environment_toml(
     item: EnvironmentToml,
     config_dir: Option<&Path>,
-) -> Result<(String, ExecServerTransportParams), ExecServerError> {
+) -> Result<ConfiguredEnvironment, ExecServerError> {
     let EnvironmentToml {
         id,
         url,
@@ -115,6 +132,7 @@ fn parse_environment_toml(
         args,
         env,
         cwd,
+        default_cwd,
         connect_timeout_sec,
         initialize_timeout_sec,
     } = item;
@@ -133,6 +151,7 @@ fn parse_environment_toml(
     let connect_timeout = connect_timeout_sec.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT);
     let initialize_timeout =
         initialize_timeout_sec.unwrap_or(DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT);
+    let default_cwd = normalize_default_cwd(&id, default_cwd)?;
 
     let transport_params = match (url, program) {
         (Some(url), None) => {
@@ -168,7 +187,11 @@ fn parse_environment_toml(
         }
     };
 
-    Ok((id, transport_params))
+    Ok(ConfiguredEnvironment {
+        id,
+        transport: transport_params,
+        default_cwd,
+    })
 }
 
 fn normalize_stdio_cwd(
@@ -188,6 +211,21 @@ fn normalize_stdio_cwd(
         )));
     };
     Ok(Some(config_dir.join(cwd)))
+}
+
+fn normalize_default_cwd(
+    id: &str,
+    default_cwd: Option<PathBuf>,
+) -> Result<Option<AbsolutePathBuf>, ExecServerError> {
+    default_cwd
+        .map(|default_cwd| {
+            AbsolutePathBuf::from_absolute_path_checked(default_cwd).map_err(|err| {
+                ExecServerError::Protocol(format!(
+                    "environment `{id}` default_cwd must be absolute: {err}"
+                ))
+            })
+        })
+        .transpose()
 }
 
 pub(crate) fn environment_provider_from_codex_home(
@@ -347,6 +385,7 @@ mod tests {
                         "CODEX_LOG".to_string(),
                         "debug".to_string(),
                     )])),
+                    default_cwd: Some(PathBuf::from("/home/dev-user/code/codex")),
                     ..Default::default()
                 },
             ],
@@ -378,6 +417,10 @@ mod tests {
             default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
         );
+        assert_eq!(
+            provider.default_cwd("ssh-dev"),
+            Some(AbsolutePathBuf::try_from("/home/dev-user/code/codex").expect("absolute cwd"))
+        );
     }
 
     #[tokio::test]
@@ -403,6 +446,25 @@ mod tests {
 
         assert!(snapshot.include_local);
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
+    }
+
+    #[test]
+    fn toml_provider_rejects_relative_default_cwd() {
+        let err = TomlEnvironmentProvider::new(EnvironmentsToml {
+            default: None,
+            environments: vec![EnvironmentToml {
+                id: "ssh-dev".to_string(),
+                program: Some("ssh".to_string()),
+                default_cwd: Some(PathBuf::from("repo")),
+                ..Default::default()
+            }],
+        })
+        .expect_err("relative default cwd should fail");
+
+        assert!(
+            err.to_string().contains("default_cwd must be absolute"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
