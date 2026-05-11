@@ -13,6 +13,7 @@ pub(crate) struct TurnRequestProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
+    skills_watcher: Arc<SkillsWatcher>,
 }
 
 impl TurnRequestProcessor {
@@ -29,6 +30,7 @@ impl TurnRequestProcessor {
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
+        skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
         Self {
             auth_manager,
@@ -42,6 +44,7 @@ impl TurnRequestProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
+            skills_watcher,
         }
     }
 
@@ -354,6 +357,7 @@ impl TurnRequestProcessor {
         let turn_has_input = !mapped_items.is_empty();
 
         let has_any_overrides = params.cwd.is_some()
+            || params.workspace_roots.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -370,52 +374,55 @@ impl TurnRequestProcessor {
                 "`permissions` cannot be combined with `sandboxPolicy`",
             ));
         }
+        if params.sandbox_policy.is_some() {
+            return Err(invalid_request(
+                "`sandboxPolicy` cannot be used to change thread permissions",
+            ));
+        }
 
         let cwd = params.cwd;
+        let workspace_roots = params.workspace_roots;
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
             .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile) =
-            if let Some(permissions) = params.permissions {
-                let snapshot = thread.config_snapshot().await;
-                let mut overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
-                let config = self
-                    .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
-                        Some(snapshot.cwd.to_path_buf()),
-                    )
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
-                // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn request
-                // is different: reject it before accepting user input.
-                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
-                    warning.contains("Configured value for `permission_profile` is disallowed")
-                }) {
-                    return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
-                    )));
-                }
-                (
-                    Some(config.permissions.permission_profile()),
-                    config.permissions.active_permission_profile(),
-                )
-            } else {
-                (None, None)
+        let active_permission_profile = if let Some(permissions) = params.permissions {
+            let snapshot = thread.config_snapshot().await;
+            let mut overrides = ConfigOverrides {
+                cwd: cwd.clone(),
+                codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                ..Default::default()
             };
+            apply_permission_profile_selection_to_config_overrides(
+                &mut overrides,
+                Some(permissions),
+            );
+            let config = self
+                .config_manager
+                .load_for_cwd(
+                    /*request_overrides*/ None,
+                    overrides,
+                    Some(snapshot.cwd.to_path_buf()),
+                )
+                .await
+                .map_err(|err| config_load_error(&err))?;
+            // Startup config is allowed to fall back when requirements
+            // disallow a configured profile. An explicit turn request
+            // is different: reject it before accepting user input.
+            if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                warning.contains("Configured value for `permission_profile` is disallowed")
+            }) {
+                return Err(invalid_request(format!(
+                    "invalid turn context override: {warning}"
+                )));
+            }
+            config.permissions.active_permission_profile()
+        } else {
+            None
+        };
+        let permission_profile = None;
         let model = params.model;
         let effort = params.effort.map(Some);
         let summary = params.summary;
@@ -429,6 +436,9 @@ impl TurnRequestProcessor {
             thread
                 .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: workspace_roots
+                        .clone()
+                        .map(|roots| roots.into_iter().map(|root| root.to_path_buf()).collect()),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -454,6 +464,7 @@ impl TurnRequestProcessor {
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
                 cwd,
+                workspace_roots,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
@@ -1087,6 +1098,7 @@ impl TurnRequestProcessor {
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            skills_watcher: Arc::clone(&self.skills_watcher),
         }
     }
 

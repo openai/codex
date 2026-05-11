@@ -462,6 +462,10 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
 
+        /// Updated workspace roots for sandbox/tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_roots: Option<Vec<AbsolutePathBuf>>,
+
         /// Updated command approval policy.
         #[serde(skip_serializing_if = "Option::is_none")]
         approval_policy: Option<AskForApproval>,
@@ -1004,14 +1008,9 @@ pub enum SandboxPolicy {
     },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
-    /// working directory ("workspace").
+    /// thread workspace roots.
     #[serde(rename = "workspace-write")]
     WorkspaceWrite {
-        /// Additional folders (beyond cwd and possibly TMPDIR) that should be
-        /// writable from within the sandbox.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<AbsolutePathBuf>,
-
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
         #[serde(default)]
@@ -1121,7 +1120,6 @@ impl SandboxPolicy {
     /// not allow network access.
     pub fn new_workspace_write_policy() -> Self {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -1159,13 +1157,11 @@ impl SandboxPolicy {
             SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
             SandboxPolicy::ReadOnly { .. } => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
-                writable_roots,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
             } => {
-                // Start from explicitly configured writable roots.
-                let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
+                let mut roots: Vec<AbsolutePathBuf> = Vec::new();
 
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
@@ -1400,9 +1396,6 @@ pub enum EventMsg {
 
     /// List of voices supported by realtime conversation streams.
     RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
-
-    /// Notification that skill data may have been updated and clients may want to reload.
-    SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -2707,6 +2700,8 @@ pub struct SessionMeta {
     pub forked_from_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub originator: String,
     pub cli_version: String,
     #[serde(default)]
@@ -2741,6 +2736,7 @@ impl Default for SessionMeta {
             forked_from_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
+            workspace_roots: Vec::new(),
             originator: String::new(),
             cli_version: String::new(),
             source: SessionSource::default(),
@@ -2811,6 +2807,8 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2819,6 +2817,8 @@ pub struct TurnContextItem {
     pub sandbox_policy: SandboxPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3451,6 +3451,10 @@ pub struct SessionConfiguredEvent {
     /// session.
     pub cwd: AbsolutePathBuf,
 
+    /// Workspace roots used to realize symbolic `:project_roots` entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
+
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
@@ -3499,6 +3503,8 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             #[serde(default)]
             active_permission_profile: Option<ActivePermissionProfile>,
             cwd: AbsolutePathBuf,
+            #[serde(default)]
+            workspace_roots: Vec<AbsolutePathBuf>,
             reasoning_effort: Option<ReasoningEffortConfig>,
             initial_messages: Option<Vec<EventMsg>>,
             network_proxy: Option<SessionNetworkProxyRuntime>,
@@ -3516,6 +3522,11 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
                 return Err(serde::de::Error::missing_field("permission_profile"));
             }
         };
+        let workspace_roots = if wire.workspace_roots.is_empty() {
+            vec![wire.cwd.clone()]
+        } else {
+            wire.workspace_roots
+        };
 
         Ok(Self {
             session_id: wire.session_id,
@@ -3531,6 +3542,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             permission_profile,
             active_permission_profile: wire.active_permission_profile,
             cwd: wire.cwd,
+            workspace_roots,
             reasoning_effort: wire.reasoning_effort,
             initial_messages: wire.initial_messages,
             network_proxy: wire.network_proxy,
@@ -4480,7 +4492,6 @@ mod tests {
     #[test]
     fn legacy_sandbox_policy_semantics_survive_split_bridge() {
         let cwd = TempDir::new().expect("tempdir");
-        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path());
         let policies = [
             SandboxPolicy::DangerFullAccess,
             SandboxPolicy::ExternalSandbox {
@@ -4493,13 +4504,11 @@ mod tests {
                 network_access: false,
             },
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable_root],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: true,
@@ -5183,11 +5192,13 @@ mod tests {
             turn_id: None,
             trace_id: None,
             cwd: test_path_buf("/tmp"),
+            workspace_roots: Vec::new(),
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             permission_profile: None,
+            active_permission_profile: None,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
@@ -5260,6 +5271,7 @@ mod tests {
                 permission_profile: permission_profile.clone(),
                 active_permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
+                workspace_roots: Vec::new(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 initial_messages: None,
                 network_proxy: None,

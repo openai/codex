@@ -331,7 +331,7 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
     assert_eq!(
         warning.message,
-        "Exceeded skills context budget of 2%. All skill descriptions were removed and 7 additional skills were not included in the model-visible skills list."
+        "Exceeded skills context budget of 2%. All skill descriptions were removed and 12 additional skills were not included in the model-visible skills list."
     );
 
     timeout(
@@ -781,7 +781,6 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
             }],
             permissions: Some(PermissionProfileSelectionParams::Profile {
                 id: ":danger-no-sandbox".to_string(),
-                modifications: None,
             }),
             ..Default::default()
         })
@@ -1657,7 +1656,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1825,7 +1823,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
+async fn turn_start_updates_cwd_without_replacing_workspace_roots_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -1879,7 +1877,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // first turn with workspace-write sandbox and first_cwd
+    // first turn with first_cwd as the thread's workspace root
     let first_turn = mcp
         .send_turn_start_request(TurnStartParams {
             environments: None,
@@ -1890,14 +1888,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
+            workspace_roots: Some(vec![first_cwd.try_into()?]),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![first_cwd.try_into()?],
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }),
+            sandbox_policy: None,
             permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
@@ -1920,7 +1914,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     mcp.clear_message_buffer();
 
-    // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
+    // second turn changes cwd only; workspace roots stay on first_cwd while
+    // exec begins in second_cwd.
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
             environments: None,
@@ -1931,9 +1926,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(second_cwd.clone()),
+            workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            sandbox_policy: None,
             permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
@@ -1991,7 +1987,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> Result<()> {
+async fn turn_start_resolves_sticky_thread_local_environment_and_turn_overrides() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -2000,12 +1996,16 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
 
     let server = create_mock_responses_server_repeating_assistant("done").await;
     create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
+    std::fs::write(
+        codex_home.join("environments.toml"),
+        r#"
+[[environments]]
+id = "remote"
+url = "ws://127.0.0.1:1"
+"#,
+    )?;
 
-    let mut mcp = McpProcess::new_with_env(
-        &codex_home,
-        &[("CODEX_EXEC_SERVER_URL", Some("http://127.0.0.1:1"))],
-    )
-    .await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     for case in [
@@ -2025,16 +2025,6 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
             turn: None,
         },
         EnvironmentSelectionCase {
-            name: "sticky_remote_turn_unset",
-            sticky: Some(&["remote"]),
-            turn: None,
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_local_remote_turn_unset",
-            sticky: Some(&["local", "remote"]),
-            turn: None,
-        },
-        EnvironmentSelectionCase {
             name: "sticky_local_turn_empty",
             sticky: Some(&["local"]),
             turn: Some(&[]),
@@ -2043,21 +2033,6 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
             name: "sticky_empty_turn_local",
             sticky: Some(&[]),
             turn: Some(&["local"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_local_turn_remote",
-            sticky: Some(&["local"]),
-            turn: Some(&["remote"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_remote_turn_local",
-            sticky: Some(&["remote"]),
-            turn: Some(&["local"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_unset_turn_local_remote",
-            sticky: None,
-            turn: Some(&["local", "remote"]),
         },
     ] {
         run_environment_selection_case(&mut mcp, &workspace, case).await?;
@@ -3327,7 +3302,6 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
                 text: "run a command".to_string(),
                 text_elements: Vec::new(),
             }],
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             ..Default::default()
         })
         .await?;
@@ -3423,7 +3397,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+async fn turn_start_rejects_sandbox_policy_and_does_not_persist_project_trust() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -3465,16 +3439,25 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
             ..Default::default()
         })
         .await?;
-    timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_request)),
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_request)),
     )
     .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        "`sandboxPolicy` cannot be used to change thread permissions"
+    );
+    let turn_started = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("turn/started"),
     )
-    .await??;
+    .await;
+    assert!(
+        turn_started.is_err(),
+        "did not expect a turn/started notification after rejected sandboxPolicy"
+    );
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config_toml.contains("trust_level = \"trusted\""));

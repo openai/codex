@@ -217,29 +217,19 @@ impl App {
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
-            AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
-                let end = self.transcript_cells.len();
-                let start =
-                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-                if start < end {
-                    let consolidated: Arc<dyn HistoryCell> =
-                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
-                    self.transcript_cells
-                        .splice(start..end, std::iter::once(consolidated.clone()));
-
-                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.consolidate_cells(start..end, consolidated.clone());
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    self.maybe_finish_stream_reflow(tui)?;
-                } else {
-                    self.maybe_finish_stream_reflow(tui)?;
-                }
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                scrollback_reflow,
+                deferred_history_cell,
+            } => {
+                self.handle_consolidate_agent_message(
+                    tui,
+                    source,
+                    cwd,
+                    scrollback_reflow,
+                    deferred_history_cell,
+                )?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
@@ -671,6 +661,9 @@ impl App {
             }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
+            }
+            AppEvent::OpenThreadGoalEditor { thread_id } => {
+                self.open_thread_goal_editor(app_server, thread_id).await;
             }
             AppEvent::SetThreadGoalObjective {
                 thread_id,
@@ -1712,6 +1705,9 @@ impl App {
             }
             AppEvent::TrustHook { key, current_hash } => {
                 self.trust_hook(app_server, key, current_hash);
+            }
+            AppEvent::TrustHooks { updates } => {
+                self.trust_hooks(app_server, updates);
             }
             AppEvent::HookEnabledSet {
                 key,

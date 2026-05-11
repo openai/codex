@@ -13,7 +13,6 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
@@ -29,7 +28,6 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         use_legacy_landlock: false,
         apps_enabled: false,
         configured_mcp_servers: HashMap::new(),
-        builtin_mcp_servers: Vec::new(),
         plugin_capability_summaries: Vec::new(),
     }
 }
@@ -346,54 +344,4 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }
-}
-
-#[test]
-fn effective_mcp_servers_preserve_builtin_runtime_shape() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    config.builtin_mcp_servers = vec![codex_builtin_mcps::BuiltinMcpServer::Memories];
-
-    let effective = effective_mcp_servers(&config, /*auth*/ None);
-    let memories = effective
-        .get(codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME)
-        .expect("memories server should exist");
-
-    assert!(!crate::server::McpServerMetadata::from(memories).pollutes_memory);
-    assert!(matches!(
-        memories.launch(),
-        crate::server::McpServerLaunch::Builtin(codex_builtin_mcps::BuiltinMcpServer::Memories)
-    ));
-}
-
-#[tokio::test]
-async fn builtin_memories_server_runs_in_process() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let mut config = test_mcp_config(codex_home.path().to_path_buf());
-    config.builtin_mcp_servers = vec![codex_builtin_mcps::BuiltinMcpServer::Memories];
-
-    let snapshot = collect_mcp_server_status_snapshot_with_detail(
-        &config,
-        /*auth*/ None,
-        "builtin-memories-test".to_string(),
-        McpRuntimeEnvironment::new(
-            Arc::new(codex_exec_server::Environment::default_for_tests()),
-            codex_home.path().to_path_buf(),
-        ),
-        McpSnapshotDetail::ToolsAndAuthOnly,
-    )
-    .await;
-
-    let tools = snapshot
-        .tools_by_server
-        .get(codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME)
-        .expect("memories tools should be listed");
-    assert_eq!(
-        tools
-            .keys()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>(),
-        ["list".to_string(), "read".to_string(), "search".to_string()]
-            .into_iter()
-            .collect()
-    );
 }

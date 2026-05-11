@@ -23,6 +23,7 @@ use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -437,6 +438,7 @@ impl TestCodexBuilder {
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
+            empty_extension_registry(),
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
@@ -517,6 +519,7 @@ impl TestCodexBuilder {
             load_default_config_for_test(home).await
         };
         config.cwd = cwd_override;
+        config.workspace_roots = vec![config.cwd.clone()];
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
@@ -541,6 +544,7 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+        config.workspace_roots = vec![config.cwd.clone()];
         ensure_test_model_catalog(&mut config)?;
 
         if config.include_apply_patch_tool {

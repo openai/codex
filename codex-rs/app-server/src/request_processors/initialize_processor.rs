@@ -13,6 +13,8 @@ use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
+const DAEMON_PROBE_CLIENT_NAME: &str = "codex_app_server_daemon";
+
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -90,6 +92,7 @@ impl InitializeRequestProcessor {
         }
         let originator = name.clone();
         let user_agent_suffix = format!("{name}; {version}");
+        let mutates_global_identity = name != DAEMON_PROBE_CLIENT_NAME;
         let codex_home = self.config.codex_home.clone();
         if session
             .initialize(InitializedConnectionSessionState {
@@ -104,21 +107,22 @@ impl InitializeRequestProcessor {
             return Err(invalid_request("Already initialized"));
         }
 
-        // Only the request that wins session initialization may mutate
-        // process-global client metadata.
-        if let Err(error) = set_default_originator(originator.clone()) {
-            match error {
-                SetOriginatorError::InvalidHeaderValue => {
-                    tracing::warn!(
-                        client_info_name = %name,
-                        "validated clientInfo.name was rejected while setting originator"
-                    );
-                }
-                SetOriginatorError::AlreadyInitialized => {
-                    // No-op. This is expected to happen if the originator is already set via env var.
-                    // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
-                    // this will be an unexpected state and we can return a JSON-RPC error indicating
-                    // internal server error.
+        if mutates_global_identity {
+            // Only real client initialization may mutate process-global client metadata.
+            if let Err(error) = set_default_originator(originator.clone()) {
+                match error {
+                    SetOriginatorError::InvalidHeaderValue => {
+                        tracing::warn!(
+                            client_info_name = %name,
+                            "validated clientInfo.name was rejected while setting originator"
+                        );
+                    }
+                    SetOriginatorError::AlreadyInitialized => {
+                        // No-op. This is expected to happen if the originator is already set via env var.
+                        // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                        // this will be an unexpected state and we can return a JSON-RPC error indicating
+                        // internal server error.
+                    }
                 }
             }
         }
@@ -129,7 +133,7 @@ impl InitializeRequestProcessor {
             self.rpc_transport,
         );
         set_default_client_residency_requirement(self.config.enforce_residency.value());
-        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+        if mutates_global_identity && let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
             *suffix = Some(user_agent_suffix);
         }
 

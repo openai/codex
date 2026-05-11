@@ -794,8 +794,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) steer_count: Option<usize>,
-    // TODO(rhan-oai): Populate these once tool-call accounting is emitted from
-    // core; the schema is reserved but these fields are currently always None.
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
     pub(crate) file_change_count: Option<usize>,

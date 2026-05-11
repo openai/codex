@@ -10,6 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -18,8 +19,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "base=$(git rev-parse HEAD^1)" >> "$GITHUB_OUTPUT"
-          echo "head=$(git rev-parse HEAD^2)" >> "$GITHUB_OUTPUT"
+          echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          echo "head=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Check changed blob sizes
         env:

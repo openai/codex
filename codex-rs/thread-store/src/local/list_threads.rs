@@ -44,6 +44,7 @@ pub(super) async fn list_threads(
         codex_home: store.config.codex_home.clone(),
         sqlite_home: store.config.sqlite_home.clone(),
         cwd: store.config.codex_home.clone(),
+        workspace_roots: Vec::new(),
         model_provider_id: store.config.default_model_provider_id.clone(),
         generate_memories: false,
     };
@@ -267,6 +268,7 @@ mod tests {
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
+        metadata.preview = metadata.first_user_message.clone();
         runtime
             .upsert_thread(&metadata)
             .await

@@ -379,9 +379,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "builtin_mcp": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -3933,9 +3930,6 @@
           "type": "boolean"
         },
         "browser_use_external": {
-          "type": "boolean"
-        },
-        "builtin_mcp": {
           "type": "boolean"
         },
         "child_agents_md": {

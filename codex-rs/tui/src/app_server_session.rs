@@ -5,7 +5,6 @@
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
-use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
@@ -34,7 +33,6 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
@@ -105,7 +103,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -525,7 +522,6 @@ impl AppServerSession {
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
-        permission_profile: PermissionProfile,
         active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -536,12 +532,8 @@ impl AppServerSession {
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &permission_profile,
-            active_permission_profile,
-            cwd.as_path(),
-            self.thread_params_mode(),
-        );
+        let permissions =
+            turn_permissions_selection(active_permission_profile, self.thread_params_mode());
         self.client
             .request_typed(ClientRequest::TurnStart {
                 request_id,
@@ -551,9 +543,10 @@ impl AppServerSession {
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
+                    workspace_roots: None,
                     approval_policy: Some(approval_policy),
                     approvals_reviewer: Some(approvals_reviewer.into()),
-                    sandbox_policy,
+                    sandbox_policy: None,
                     permissions,
                     model: Some(model),
                     service_tier,
@@ -1076,12 +1069,50 @@ fn approvals_reviewer_override_from_config(
 fn config_request_overrides_from_config(
     config: &Config,
 ) -> Option<HashMap<String, serde_json::Value>> {
-    config.active_profile.as_ref().map(|profile| {
-        HashMap::from([(
-            "profile".to_string(),
-            serde_json::Value::String(profile.clone()),
-        )])
-    })
+    let mut overrides = HashMap::new();
+    let mut insert = |key: &str, value: Option<String>| {
+        if let Some(value) = value {
+            overrides.insert(key.to_string(), serde_json::Value::String(value));
+        }
+    };
+    insert("profile", config.active_profile.clone());
+    insert(
+        "model_reasoning_effort",
+        config
+            .model_reasoning_effort
+            .map(|effort| effort.to_string()),
+    );
+    insert(
+        "model_reasoning_summary",
+        config
+            .model_reasoning_summary
+            .map(|summary| summary.to_string()),
+    );
+    insert(
+        "model_verbosity",
+        config
+            .model_verbosity
+            .map(|verbosity| verbosity.to_string()),
+    );
+    insert(
+        "personality",
+        config
+            .personality
+            .map(|personality| personality.to_string()),
+    );
+    insert(
+        "web_search",
+        Some(config.web_search_mode.value().to_string()),
+    );
+    Some(overrides)
+}
+
+fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
+    config
+        .service_tier
+        .clone()
+        .map(Some)
+        .or_else(|| (config.notices.fast_default_opt_out == Some(true)).then_some(None))
 }
 
 fn sandbox_mode_from_permission_profile(
@@ -1112,47 +1143,18 @@ fn sandbox_mode_from_permission_profile(
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
 ) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
-        .collect::<Vec<_>>();
-    PermissionProfileSelectionParams::Profile {
-        id: active.id,
-        modifications: (!modifications.is_empty()).then_some(modifications),
-    }
+    PermissionProfileSelectionParams::Profile { id: active.id }
 }
 
-fn turn_permissions_overrides(
-    permission_profile: &PermissionProfile,
+fn turn_permissions_selection(
     active_permission_profile: Option<ActivePermissionProfile>,
-    cwd: &std::path::Path,
     thread_params_mode: ThreadParamsMode,
-) -> (
-    Option<codex_app_server_protocol::SandboxPolicy>,
-    Option<PermissionProfileSelectionParams>,
-) {
-    let permissions = if matches!(thread_params_mode, ThreadParamsMode::Embedded) {
-        active_permission_profile.map(permissions_selection_from_active_profile)
-    } else {
-        None
-    };
-    let sandbox_policy = (matches!(thread_params_mode, ThreadParamsMode::Remote)
-        || permissions.is_none())
-    .then(|| {
-        let legacy_profile = legacy_compatible_permission_profile(permission_profile, cwd);
-        let policy = legacy_profile
-            .to_legacy_sandbox_policy(cwd)
-            .unwrap_or_else(|err| {
-                unreachable!("legacy-compatible permissions must project to legacy policy: {err}")
-            });
-        policy.into()
-    });
-    (sandbox_policy, permissions)
+) -> Option<PermissionProfileSelectionParams> {
+    if matches!(thread_params_mode, ThreadParamsMode::Remote) {
+        return None;
+    }
+
+    active_permission_profile.map(permissions_selection_from_active_profile)
 }
 
 fn permissions_selection_from_config(
@@ -1188,7 +1190,9 @@ fn thread_start_params_from_config(
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(config),
+        service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
+        workspace_roots: thread_start_workspace_roots_from_config(config, thread_params_mode),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox,
@@ -1209,23 +1213,16 @@ fn thread_resume_params_from_config(
     remote_cwd_override: Option<&std::path::Path>,
 ) -> ThreadResumeParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
-    let sandbox = permissions
-        .is_none()
-        .then(|| {
-            sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
-                config.cwd.as_path(),
-            )
-        })
-        .flatten();
     ThreadResumeParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
+        service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
+        workspace_roots: None,
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
-        sandbox,
+        sandbox: None,
         permissions,
         config: config_request_overrides_from_config(&config),
         persist_extended_history: false,
@@ -1240,23 +1237,15 @@ fn thread_fork_params_from_config(
     remote_cwd_override: Option<&std::path::Path>,
 ) -> ThreadForkParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
-    let sandbox = permissions
-        .is_none()
-        .then(|| {
-            sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
-                config.cwd.as_path(),
-            )
-        })
-        .flatten();
     ThreadForkParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
+        service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
-        sandbox,
+        sandbox: None,
         permissions,
         config: config_request_overrides_from_config(&config),
         base_instructions: config.base_instructions.clone(),
@@ -1265,6 +1254,16 @@ fn thread_fork_params_from_config(
         thread_source: Some(ThreadSource::User),
         persist_extended_history: false,
         ..ThreadForkParams::default()
+    }
+}
+
+fn thread_start_workspace_roots_from_config(
+    config: &Config,
+    thread_params_mode: ThreadParamsMode,
+) -> Option<Vec<AbsolutePathBuf>> {
+    match thread_params_mode {
+        ThreadParamsMode::Embedded => Some(config.workspace_roots.clone()),
+        ThreadParamsMode::Remote => None,
     }
 }
 
@@ -1521,6 +1520,12 @@ mod tests {
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
+    use codex_protocol::config_types::Personality;
+    use codex_protocol::config_types::ReasoningSummary;
+    use codex_protocol::config_types::ServiceTier;
+    use codex_protocol::config_types::Verbosity;
+    use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -1555,6 +1560,7 @@ mod tests {
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
+        assert_eq!(params.workspace_roots, Some(config.workspace_roots.clone()));
         assert_eq!(params.sandbox, None);
         assert_eq!(
             params.permissions,
@@ -1584,59 +1590,33 @@ mod tests {
 
     #[test]
     fn embedded_turn_permissions_use_active_profile_selection() {
-        let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile = ActivePermissionProfile::new(":workspace");
         let expected_permissions =
             permissions_selection_from_active_profile(active_permission_profile.clone());
 
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::workspace_write(),
-            Some(active_permission_profile),
-            cwd.as_path(),
-            ThreadParamsMode::Embedded,
-        );
+        let permissions =
+            turn_permissions_selection(Some(active_permission_profile), ThreadParamsMode::Embedded);
 
-        assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, Some(expected_permissions));
     }
 
     #[test]
-    fn embedded_turn_permissions_fall_back_to_sandbox_without_active_profile() {
-        let cwd = test_path_buf("/workspace/project").abs();
-
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::read_only(),
+    fn embedded_turn_permissions_omit_overrides_without_active_profile() {
+        let permissions = turn_permissions_selection(
             /*active_permission_profile*/ None,
-            cwd.as_path(),
             ThreadParamsMode::Embedded,
         );
 
-        assert_eq!(
-            sandbox_policy,
-            Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                network_access: false
-            })
-        );
         assert_eq!(permissions, None);
     }
 
     #[test]
-    fn remote_turn_permissions_use_sandbox_even_with_active_profile() {
-        let cwd = test_path_buf("/workspace/project").abs();
-
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::read_only(),
+    fn remote_turn_permissions_omit_overrides_even_with_active_profile() {
+        let permissions = turn_permissions_selection(
             Some(ActivePermissionProfile::new(":read-only")),
-            cwd.as_path(),
             ThreadParamsMode::Remote,
         );
 
-        assert_eq!(
-            sandbox_policy,
-            Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                network_access: false
-            })
-        );
         assert_eq!(permissions, None);
     }
 
@@ -1672,12 +1652,15 @@ mod tests {
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
+        assert_eq!(start.workspace_roots, None);
+        assert_eq!(resume.workspace_roots, None);
+        assert_eq!(fork.workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
         assert_eq!(start.sandbox, expected_sandbox);
-        assert_eq!(resume.sandbox, expected_sandbox);
-        assert_eq!(fork.sandbox, expected_sandbox);
+        assert_eq!(resume.sandbox, None);
+        assert_eq!(fork.sandbox, None);
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
@@ -1779,17 +1762,92 @@ mod tests {
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(resume.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(fork.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(start.workspace_roots, None);
+        assert_eq!(resume.workspace_roots, None);
+        assert_eq!(fork.workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
         assert_eq!(start.sandbox, expected_sandbox);
-        assert_eq!(resume.sandbox, expected_sandbox);
-        assert_eq!(fork.sandbox, expected_sandbox);
+        assert_eq!(resume.sandbox, None);
+        assert_eq!(fork.sandbox, None);
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
         assert_eq!(start.thread_source, Some(ThreadSource::User));
         assert_eq!(fork.thread_source, Some(ThreadSource::User));
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_params_forward_model_reasoning_and_service_tier() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+        config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+        config.model_verbosity = Some(Verbosity::Low);
+        config.personality = Some(Personality::Pragmatic);
+        config
+            .web_search_mode
+            .set(WebSearchMode::Disabled)
+            .expect("test web search mode should be allowed");
+        config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        let expected_service_tier = Some(Some(ServiceTier::Fast.request_value().to_string()));
+        assert_eq!(start.service_tier, expected_service_tier);
+        assert_eq!(resume.service_tier, expected_service_tier);
+        assert_eq!(fork.service_tier, expected_service_tier);
+        let string = |value: &str| serde_json::Value::String(value.to_string());
+        let expected_config = HashMap::from([
+            ("model_reasoning_effort".to_string(), string("high")),
+            ("model_reasoning_summary".to_string(), string("detailed")),
+            ("model_verbosity".to_string(), string("low")),
+            ("personality".to_string(), string("pragmatic")),
+            ("web_search".to_string(), string("disabled")),
+        ]);
+        assert_eq!(start.config, Some(expected_config.clone()));
+        assert_eq!(resume.config, Some(expected_config.clone()));
+        assert_eq!(fork.config, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn config_request_overrides_preserve_implicit_personality_default() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.personality = None;
+
+        let implicit_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+
+        assert!(!implicit_overrides.contains_key("personality"));
+
+        config.personality = Some(Personality::None);
+        let explicit_overrides =
+            config_request_overrides_from_config(&config).expect("config overrides");
+
+        assert_eq!(
+            explicit_overrides.get("personality"),
+            Some(&serde_json::Value::String("none".to_string()))
+        );
     }
 
     #[tokio::test]
@@ -1870,6 +1928,7 @@ mod tests {
             model_provider: "openai".to_string(),
             service_tier: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            workspace_roots: Vec::new(),
             instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
             approval_policy: codex_app_server_protocol::AskForApproval::Never,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,

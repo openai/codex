@@ -697,6 +697,7 @@ impl RolloutRecorder {
                         forked_from_id,
                         timestamp,
                         cwd: config.cwd().to_path_buf(),
+                        workspace_roots: config.workspace_roots().to_vec(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
@@ -1065,6 +1066,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         path: _state_path,
         thread_id: _state_thread_id,
         first_user_message,
+        preview,
         cwd,
         git_branch,
         git_sha,
@@ -1080,6 +1082,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
 
     if item.first_user_message.is_none() {
         item.first_user_message = first_user_message;
+    }
+    if item.preview.is_none() {
+        item.preview = preview;
     }
     if item.cwd.is_none() {
         item.cwd = cwd;
@@ -1889,6 +1894,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         path: item.rollout_path,
         thread_id: Some(item.id),
         first_user_message: item.first_user_message,
+        preview: item.preview,
         cwd: Some(item.cwd),
         git_branch: item.git_branch,
         git_sha: item.git_sha,

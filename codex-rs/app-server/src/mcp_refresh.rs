@@ -99,6 +99,7 @@ async fn queue_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::thread_extensions;
     use async_trait::async_trait;
     use codex_arg0::Arg0DispatchPaths;
     use codex_config::CloudRequirementsLoader;
@@ -183,6 +184,7 @@ mod tests {
             auth_manager,
             SessionSource::Exec,
             Arc::new(EnvironmentManager::default_for_tests()),
+            thread_extensions(),
             /*analytics_events_client*/ None,
             thread_store,
             Some(state_db.clone()),

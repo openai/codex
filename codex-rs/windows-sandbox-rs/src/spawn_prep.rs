@@ -350,7 +350,6 @@ mod tests {
     fn no_network_env_rewrite_skips_when_network_access_is_allowed() {
         assert!(!should_apply_network_block(
             &SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,

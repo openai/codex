@@ -88,7 +88,7 @@ impl ChatWidget {
                             .into_iter()
                             .map(|tier| ServiceTierCommand {
                                 id: tier.id,
-                                name: tier.name,
+                                name: tier.name.to_lowercase(),
                                 description: tier.description,
                             })
                             .collect()

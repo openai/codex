@@ -1,8 +1,8 @@
-use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
+use codex_app_server_protocol::HooksListEntry;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -10,6 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -25,10 +26,13 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::render_menu_surface;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::hooks_rpc::HookTrustUpdate;
+use crate::hooks_rpc::hook_needs_review;
 use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
+use crate::style::accent_style;
 
 const EVENT_COLUMN_WIDTH: usize = 22;
 const COUNT_COLUMN_WIDTH: usize = 12;
@@ -41,9 +45,7 @@ enum HooksBrowserPage {
 }
 
 pub(crate) struct HooksBrowserView {
-    hooks: Vec<HookMetadata>,
-    warnings: Vec<String>,
-    errors: Vec<HookErrorInfo>,
+    entry: HooksListEntry,
     page: HooksBrowserPage,
     state: ScrollState,
     complete: bool,
@@ -51,17 +53,28 @@ pub(crate) struct HooksBrowserView {
 }
 
 impl HooksBrowserView {
+    #[cfg(test)]
     pub(crate) fn new(
-        mut hooks: Vec<HookMetadata>,
+        hooks: Vec<HookMetadata>,
         warnings: Vec<String>,
-        errors: Vec<HookErrorInfo>,
+        errors: Vec<codex_app_server_protocol::HookErrorInfo>,
         app_event_tx: AppEventSender,
     ) -> Self {
-        hooks.sort_by_key(|hook| hook.display_order);
+        Self::from_entry(
+            HooksListEntry {
+                cwd: std::path::PathBuf::new(),
+                hooks,
+                warnings,
+                errors,
+            },
+            app_event_tx,
+        )
+    }
+
+    pub(crate) fn from_entry(mut entry: HooksListEntry, app_event_tx: AppEventSender) -> Self {
+        entry.hooks.sort_by_key(|hook| hook.display_order);
         let mut view = Self {
-            hooks,
-            warnings,
-            errors,
+            entry,
             page: HooksBrowserPage::Events,
             state: ScrollState::new(),
             complete: false,
@@ -83,16 +96,19 @@ impl HooksBrowserView {
             .map(|event_name| {
                 let event_name: HookEventName = event_name.into();
                 let installed = self
+                    .entry
                     .hooks
                     .iter()
                     .filter(|hook| hook.event_name == event_name)
                     .count();
                 let active = self
+                    .entry
                     .hooks
                     .iter()
                     .filter(|hook| hook.event_name == event_name && hook_is_active(hook))
                     .count();
                 let needs_review = self
+                    .entry
                     .hooks
                     .iter()
                     .filter(|hook| hook.event_name == event_name && hook_needs_review(hook))
@@ -108,7 +124,8 @@ impl HooksBrowserView {
     }
 
     fn handlers_for_event(&self, event_name: HookEventName) -> impl Iterator<Item = &HookMetadata> {
-        self.hooks
+        self.entry
+            .hooks
             .iter()
             .filter(move |hook| hook.event_name == event_name)
     }
@@ -122,7 +139,8 @@ impl HooksBrowserView {
 
     fn selected_hook_index(&self, event_name: HookEventName) -> Option<usize> {
         let selected_visible_idx = self.state.selected_idx?;
-        self.hooks
+        self.entry
+            .hooks
             .iter()
             .enumerate()
             .filter(|(_, hook)| hook.event_name == event_name)
@@ -132,7 +150,7 @@ impl HooksBrowserView {
 
     fn selected_hook(&self, event_name: HookEventName) -> Option<&HookMetadata> {
         self.selected_hook_index(event_name)
-            .and_then(|idx| self.hooks.get(idx))
+            .and_then(|idx| self.entry.hooks.get(idx))
     }
 
     fn move_up(&mut self) {
@@ -173,7 +191,7 @@ impl HooksBrowserView {
         let Some(idx) = self.selected_hook_index(event_name) else {
             return;
         };
-        let Some(hook) = self.hooks.get_mut(idx) else {
+        let Some(hook) = self.entry.hooks.get_mut(idx) else {
             return;
         };
         if hook.is_managed {
@@ -194,7 +212,7 @@ impl HooksBrowserView {
         let Some(idx) = self.selected_hook_index(event_name) else {
             return;
         };
-        let Some(hook) = self.hooks.get_mut(idx) else {
+        let Some(hook) = self.entry.hooks.get_mut(idx) else {
             return;
         };
         if !hook_needs_review(hook) {
@@ -206,6 +224,24 @@ impl HooksBrowserView {
             key: hook.key.clone(),
             current_hash: hook.current_hash.clone(),
         });
+    }
+
+    fn trust_all_hooks(&mut self) {
+        let mut updates = Vec::new();
+        for hook in &mut self.entry.hooks {
+            if !hook_needs_review(hook) {
+                continue;
+            }
+
+            hook.trust_status = HookTrustStatus::Trusted;
+            updates.push(HookTrustUpdate {
+                key: hook.key.clone(),
+                current_hash: hook.current_hash.clone(),
+            });
+        }
+        if !updates.is_empty() {
+            self.app_event_tx.send(AppEvent::TrustHooks { updates });
+        }
     }
 
     fn close(&mut self) {
@@ -236,23 +272,27 @@ impl HooksBrowserView {
         ]
     }
 
+    fn review_needed_total_count(&self) -> usize {
+        self.entry
+            .hooks
+            .iter()
+            .filter(|hook| hook_needs_review(hook))
+            .count()
+    }
+
+    #[allow(clippy::disallowed_methods)]
     fn handler_header_lines(
         event_name: HookEventName,
         review_needed_count: usize,
     ) -> Vec<Line<'static>> {
         let mut lines = vec![format!("{} hooks", event_label(event_name)).bold().into()];
-        match review_needed_count {
-            0 => lines.push(
+        match review_needed_message(review_needed_count) {
+            None => lines.push(
                 "Turn hooks on or off. Your changes are saved automatically."
                     .dim()
                     .into(),
             ),
-            1 => lines.push("1 hook needs review before it can run.".dim().into()),
-            count => lines.push(
-                format!("{count} hooks need review before they can run.")
-                    .dim()
-                    .into(),
-            ),
+            Some(message) => lines.push(message.yellow().into()),
         }
         lines
     }
@@ -263,6 +303,7 @@ impl HooksBrowserView {
             .count()
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn event_table_lines(&self) -> Vec<Line<'static>> {
         let rows = self.event_rows();
         let show_review = rows.iter().any(|row| row.needs_review > 0);
@@ -278,64 +319,59 @@ impl HooksBrowserView {
         header.push("Description".into());
         lines.push(Line::from(header));
         for (idx, row) in rows.into_iter().enumerate() {
-            if self.state.selected_idx == Some(idx) {
-                let mut row_line = vec![
-                    Span::from(format!(
-                        "{:<EVENT_COLUMN_WIDTH$}",
-                        event_label(row.event_name)
-                    ))
-                    .cyan()
-                    .bold(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed))
-                        .cyan()
-                        .bold(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active))
-                        .cyan()
-                        .bold(),
-                ];
-                if show_review {
-                    row_line.push(
-                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review))
-                            .cyan()
-                            .bold(),
-                    );
-                }
-                row_line.push(Span::from(event_description(row.event_name)).cyan().bold());
-                lines.push(Line::from(row_line));
-            } else {
-                let mut row_line = vec![
-                    Span::from(format!(
-                        "{:<EVENT_COLUMN_WIDTH$}",
-                        event_label(row.event_name)
-                    )),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed)).dim(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active)).dim(),
-                ];
-                if show_review {
-                    row_line.push(
-                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review)).dim(),
-                    );
-                }
-                row_line.push(Span::from(event_description(row.event_name)).dim());
-                lines.push(Line::from(row_line));
+            let selected = self.state.selected_idx == Some(idx);
+            let needs_review = row.needs_review > 0;
+            let mut row_line = vec![
+                Span::from(format!(
+                    "{:<EVENT_COLUMN_WIDTH$}",
+                    event_label(row.event_name)
+                )),
+                Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed)),
+                Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active)),
+            ];
+            if show_review {
+                let review_count = Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review));
+                row_line.push(if needs_review {
+                    review_count.yellow()
+                } else {
+                    review_count
+                });
             }
+            row_line.push(Span::from(event_description(row.event_name)));
+
+            if selected {
+                let style = accent_style();
+                for span in &mut row_line {
+                    *span = span.clone().set_style(style);
+                }
+            } else {
+                row_line[1] = row_line[1].clone().dim();
+                row_line[2] = row_line[2].clone().dim();
+                if show_review && !needs_review {
+                    row_line[3] = row_line[3].clone().dim();
+                }
+                let description_idx = row_line.len() - 1;
+                row_line[description_idx] = row_line[description_idx].clone().dim();
+            }
+            lines.push(Line::from(row_line));
         }
         lines
     }
 
     fn event_issue_lines(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        if self.warnings.is_empty() && self.errors.is_empty() {
+        if self.entry.warnings.is_empty() && self.entry.errors.is_empty() {
             return lines;
         }
 
         lines.push("Issues".bold().into());
         lines.extend(
-            self.warnings
+            self.entry
+                .warnings
                 .iter()
                 .map(|warning| format!("⚠ {warning}").into()),
         );
-        lines.extend(self.errors.iter().map(|error| {
+        lines.extend(self.entry.errors.iter().map(|error| {
             format!("■ {}: {}", error.path.display(), error.message)
                 .red()
                 .into()
@@ -343,9 +379,15 @@ impl HooksBrowserView {
         lines
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn event_page_lines(&self) -> Vec<Line<'static>> {
         let mut lines = Self::event_header_lines();
         lines.push(Line::default());
+
+        if let Some(message) = review_needed_message(self.review_needed_total_count()) {
+            lines.push(format!("⚠ {message}").yellow().into());
+            lines.push(Line::default());
+        }
 
         let issue_lines = self.event_issue_lines();
         if !issue_lines.is_empty() {
@@ -357,6 +399,7 @@ impl HooksBrowserView {
         lines
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn handler_row_lines(&self, event_name: HookEventName, width: usize) -> Vec<Line<'static>> {
         self.handlers_for_event(event_name)
             .enumerate()
@@ -379,11 +422,17 @@ impl HooksBrowserView {
                 };
                 let mut line = Line::from(row);
                 line = truncate_line_with_ellipsis_if_overflow(line, width);
-                if hook.is_managed {
-                    line = line.dim();
-                }
+                let needs_review = hook_needs_review(hook);
                 if self.state.selected_idx == Some(idx) {
-                    line = line.cyan().bold();
+                    if needs_review {
+                        line = line.yellow().bold();
+                    } else {
+                        line = line.patch_style(accent_style());
+                    }
+                } else if needs_review {
+                    line = line.yellow();
+                } else if hook.is_managed {
+                    line = line.dim();
                 }
                 line
             })
@@ -426,6 +475,15 @@ impl HooksBrowserView {
             height: area.height,
         };
         let footer = match self.page {
+            HooksBrowserPage::Events if self.review_needed_total_count() > 0 => Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Char('t')).into(),
+                " to trust all; ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to review hooks; ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to close".into(),
+            ]),
             HooksBrowserPage::Events => Line::from(vec![
                 "Press ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
@@ -519,11 +577,10 @@ impl BottomPaneView for HooksBrowserView {
                 code: KeyCode::Char('t'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
-                if let HooksBrowserPage::Handlers(event_name) = self.page {
-                    self.trust_selected_hook(event_name);
-                }
-            }
+            } => match self.page {
+                HooksBrowserPage::Events => self.trust_all_hooks(),
+                HooksBrowserPage::Handlers(event_name) => self.trust_selected_hook(event_name),
+            },
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => match self.page {
@@ -634,18 +691,19 @@ fn hook_is_active(hook: &HookMetadata) -> bool {
         )
 }
 
+fn review_needed_message(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("1 hook needs review before it can run.".to_string()),
+        count => Some(format!("{count} hooks need review before they can run.")),
+    }
+}
+
 struct EventRow {
     event_name: HookEventName,
     installed: usize,
     active: usize,
     needs_review: usize,
-}
-
-fn hook_needs_review(hook: &HookMetadata) -> bool {
-    matches!(
-        hook.trust_status,
-        HookTrustStatus::Untrusted | HookTrustStatus::Modified
-    )
 }
 
 fn hook_trust_label(status: HookTrustStatus) -> &'static str {
@@ -787,6 +845,7 @@ mod tests {
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use crate::test_support::test_path_display;
+    use codex_app_server_protocol::HookErrorInfo;
     use codex_app_server_protocol::HookEventName;
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
@@ -797,6 +856,8 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn render_lines(view: &HooksBrowserView, width: u16) -> String {
@@ -824,6 +885,14 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn render_buffer(view: &HooksBrowserView, width: u16) -> Buffer {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        buf
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -909,6 +978,26 @@ mod tests {
     }
 
     #[test]
+    fn selected_event_rows_use_the_shared_accent_style() {
+        let view = view();
+        let buf = render_buffer(&view, /*width*/ 112);
+        let expected = accent_style();
+
+        let selected_cell = buf
+            .content
+            .iter()
+            .find(|cell| {
+                let style = cell.style();
+                cell.symbol() == "P"
+                    && style.fg == expected.fg
+                    && style.add_modifier.contains(Modifier::BOLD)
+            })
+            .expect("selected event row should use the shared accent style");
+
+        assert_eq!(selected_cell.style().fg, expected.fg);
+    }
+
+    #[test]
     fn renders_event_browser_with_review_column_when_needed() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let mut untrusted_hook = hook(
@@ -932,6 +1021,16 @@ mod tests {
         assert_snapshot!(
             "hooks_browser_events_with_review_column",
             render_lines(&view, /*width*/ 112)
+        );
+        assert_eq!(
+            view.event_table_lines()[1].spans[3].style.fg,
+            Some(Color::Cyan)
+        );
+        assert!(
+            view.event_table_lines()[1].spans[3]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
         );
     }
 
@@ -986,6 +1085,62 @@ mod tests {
         assert_snapshot!(
             "hooks_browser_untrusted_enabled_handler",
             render_lines(&view, /*width*/ 112)
+        );
+    }
+
+    #[test]
+    fn review_needed_handler_rows_use_warning_color() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "~/bin/untrusted.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 1,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let mut view = HooksBrowserView::new(
+            vec![
+                hook(
+                    "path:trusted",
+                    HookEventName::PreToolUse,
+                    HookSource::User,
+                    /*plugin_id*/ None,
+                    "~/bin/trusted.sh",
+                    /*enabled*/ true,
+                    /*is_managed*/ false,
+                    /*display_order*/ 0,
+                ),
+                untrusted_hook,
+            ],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(
+            view.handler_row_lines(HookEventName::PreToolUse, /*width*/ 112)[1]
+                .style
+                .fg,
+            Some(Color::Yellow)
+        );
+    }
+
+    #[test]
+    fn review_needed_handler_header_uses_warning_color() {
+        assert_eq!(
+            HooksBrowserView::handler_header_lines(
+                HookEventName::PreToolUse,
+                /*review_needed_count*/ 1,
+            )[1]
+            .spans[0]
+                .style
+                .fg,
+            Some(Color::Yellow)
         );
     }
 
@@ -1347,7 +1502,7 @@ mod tests {
         view.handle_key_event(KeyEvent::from(KeyCode::Enter));
         view.handle_key_event(KeyEvent::from(KeyCode::Char('t')));
 
-        let hook = view.hooks.first().expect("trusted hook");
+        let hook = view.entry.hooks.first().expect("trusted hook");
         assert!(!hook.enabled);
         assert_eq!(hook.trust_status, HookTrustStatus::Trusted);
         match rx.try_recv().expect("trust event") {
@@ -1360,6 +1515,84 @@ mod tests {
             }
             other => panic!("expected hook trust event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn trust_key_on_event_page_trusts_all_review_needed_hooks() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let mut modified_hook = hook(
+            "path:modified",
+            HookEventName::Stop,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/stop-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 1,
+        );
+        modified_hook.trust_status = HookTrustStatus::Modified;
+        let mut view = HooksBrowserView::new(
+            vec![
+                untrusted_hook,
+                modified_hook,
+                hook(
+                    "path:trusted",
+                    HookEventName::PreToolUse,
+                    HookSource::User,
+                    /*plugin_id*/ None,
+                    "/tmp/trusted.sh",
+                    /*enabled*/ true,
+                    /*is_managed*/ false,
+                    /*display_order*/ 2,
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Char('t')));
+
+        assert_eq!(
+            view.entry
+                .hooks
+                .iter()
+                .map(|hook| hook.trust_status)
+                .collect::<Vec<_>>(),
+            vec![
+                HookTrustStatus::Trusted,
+                HookTrustStatus::Trusted,
+                HookTrustStatus::Trusted,
+            ]
+        );
+        match rx.try_recv().expect("trust event") {
+            AppEvent::TrustHooks { updates } => assert_eq!(
+                updates,
+                vec![
+                    HookTrustUpdate {
+                        key: "path:untrusted".to_string(),
+                        current_hash: "sha256:current".to_string(),
+                    },
+                    HookTrustUpdate {
+                        key: "path:modified".to_string(),
+                        current_hash: "sha256:current".to_string(),
+                    },
+                ]
+            ),
+            other => panic!("expected hook trust event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

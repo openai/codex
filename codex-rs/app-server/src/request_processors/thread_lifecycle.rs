@@ -12,6 +12,7 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
     pub(super) codex_home: PathBuf,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
 struct UnloadingState {
@@ -226,12 +227,22 @@ pub(super) async fn ensure_listener_task_running(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
     };
+    let config = conversation.config().await;
+    let environments = conversation.environment_selections().await;
+    let watch_registration = listener_task_context
+        .skills_watcher
+        .register_thread_config(
+            config.as_ref(),
+            listener_task_context.thread_manager.as_ref(),
+            &environments,
+        )
+        .await;
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(cancel_tx, &conversation)
+        thread_state.set_listener(cancel_tx, &conversation, watch_registration)
     };
     let ListenerTaskContext {
         outgoing,
@@ -242,6 +253,7 @@ pub(super) async fn ensure_listener_task_running(
         thread_list_state_permit,
         fallback_model_provider,
         codex_home,
+        ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
@@ -588,11 +600,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         permission_profile,
         active_permission_profile,
         cwd,
+        workspace_roots,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
+    let sandbox =
+        thread_response_sandbox_policy(&permission_profile, &workspace_roots, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
     let session_id = conversation.session_configured().session_id.to_string();
@@ -608,6 +622,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
+        workspace_roots,
         permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,

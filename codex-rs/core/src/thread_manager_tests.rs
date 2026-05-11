@@ -7,6 +7,7 @@ use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
@@ -293,7 +294,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
-async fn start_thread_accepts_explicit_environment_when_default_environment_is_disabled() {
+async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -319,7 +320,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
         environment_manager,
     );
 
-    let thread = manager
+    let result = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
             initial_history: InitialHistory::New,
@@ -334,10 +335,14 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
                 cwd: config.cwd.clone(),
             }],
         })
-        .await
-        .expect("explicit sticky environment should resolve by id");
+        .await;
+    let err = match result {
+        Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
+        Err(err) => err,
+    };
 
-    assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
+    assert_eq!(err.to_string(), "unknown turn environment id `local`");
+    assert!(manager.list_thread_ids().await.is_empty());
 }
 
 #[tokio::test]
@@ -491,6 +496,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -608,6 +614,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         auth_manager,
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
@@ -646,6 +653,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -702,6 +710,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -765,6 +774,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
@@ -854,6 +864,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store.clone(),
         state_db,
@@ -956,6 +967,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         auth_manager,
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -1171,6 +1183,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -1278,6 +1291,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -1374,6 +1388,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
@@ -1516,6 +1531,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
         auth_manager.clone(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),

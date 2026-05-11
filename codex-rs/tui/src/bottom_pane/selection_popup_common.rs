@@ -2,8 +2,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
-use ratatui::style::Color;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -17,6 +15,7 @@ use crate::key_hint::KeyBinding;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt as _;
+use crate::style::accent_style;
 use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
@@ -318,7 +317,7 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
     if selected {
         for line in lines.iter_mut() {
             line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = accent_style();
             });
         }
     }
@@ -725,7 +724,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
         let mut full_line = build_full_line(row, desc_col);
         if Some(i) == state.selected_idx && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = accent_style();
             });
         }
         if row.is_disabled {
@@ -839,6 +838,9 @@ fn measure_rows_height_inner(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
 
     #[test]
     fn one_cell_width_falls_back_without_panic_for_wrapped_two_column_rows() {
@@ -851,5 +853,28 @@ mod tests {
 
         let two_col = wrap_two_column_row(&row, /*desc_col*/ 0, /*width*/ 1);
         assert_eq!(two_col.len(), 0);
+    }
+
+    #[test]
+    fn selected_rows_use_the_shared_accent_style() {
+        let rows = vec![GenericDisplayRow {
+            name: "selected".to_string(),
+            ..Default::default()
+        }];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, 16, 1);
+        let mut buf = Buffer::empty(area);
+
+        render_rows(
+            area, &mut buf, &rows, &state, /*max_results*/ 1, "no rows",
+        );
+
+        let style = buf[(0, 0)].style();
+        let expected = accent_style();
+        assert_eq!(style.fg, expected.fg);
+        assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 }
