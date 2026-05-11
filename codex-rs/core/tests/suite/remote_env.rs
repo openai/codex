@@ -58,7 +58,7 @@ async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
             "unified exec should enable for test: {result:?}",
         );
     });
-    builder.build_remote_aware(server).await
+    builder.build_remote_and_local_aware(server).await
 }
 
 async fn submit_turn_with_approval_and_environments(

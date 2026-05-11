@@ -37,7 +37,6 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -422,7 +421,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
     )
     .await?;
     let call_id = "call-view-image-local-env";
-    let response_mock = mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -562,7 +561,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_remote_and_local_aware(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
     let local_selection = TurnEnvironmentSelection {
@@ -582,18 +581,19 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             /*sandbox*/ None,
         )
         .await?;
-    let png = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    )?;
     test.fs()
-        .write_file(&image_path, png, /*sandbox*/ None)
+        .write_file(
+            &image_path,
+            png_bytes(/*width*/ 1, /*height*/ 1, [255, 0, 0, 255])?,
+            /*sandbox*/ None,
+        )
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd.clone(),
     };
     let call_id = "call-view-image-multi-env";
-    let response_mock = mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -626,9 +626,8 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     let output = response_mock
         .last_request()
-        .context("missing request containing view_image output")?
-        .function_call_output(call_id)
-        .clone();
+        .context("missing request containing remote view_image output")?
+        .function_call_output(call_id);
     let output_items = output
         .get("output")
         .and_then(Value::as_array)
