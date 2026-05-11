@@ -24,6 +24,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -1271,6 +1272,7 @@ stream_max_retries = 0
         forked_from_id: None,
         timestamp: "2025-01-05T12:00:00Z".to_string(),
         cwd: repo_path.clone(),
+        workspace_roots: Vec::new(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
@@ -2022,6 +2024,124 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         ThreadStatus::Idle => {}
         status => panic!("unexpected thread status after running resume: {status:?}"),
     }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_running_applies_workspace_roots_and_active_profile_name() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let first_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]));
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
+    let _response_mock =
+        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let workspace_root = codex_home.path().join("replacement-root");
+    std::fs::create_dir_all(&workspace_root)?;
+    let workspace_root = AbsolutePathBuf::from_absolute_path(workspace_root.canonicalize()?)?;
+
+    let mut primary = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let start_id = primary
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    primary.clear_message_buffer();
+
+    let running_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "keep running".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            workspace_roots: Some(vec![workspace_root.clone()]),
+            permissions: Some(PermissionProfileSelectionParams::Profile {
+                id: ":workspace".to_string(),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        workspace_roots,
+        active_permission_profile,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(workspace_roots, vec![workspace_root]);
+    assert_eq!(
+        active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(":workspace")
+    );
 
     timeout(
         DEFAULT_READ_TIMEOUT,

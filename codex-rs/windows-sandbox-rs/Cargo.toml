@@ -29,7 +29,6 @@ chrono = { version = "0.4.42", default-features = false, features = [
     "std",
 ] }
 codex-utils-pty = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-otel = { workspace = true }
 dunce = "1.0"
