@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -68,8 +69,10 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::get_git_repo_root_with_fs;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -101,6 +104,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -367,8 +371,11 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let display_root = get_git_repo_root(turn_context.cwd.as_path())
-        .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
+    let display_root = turn_diff_display_root(
+        &turn_context.cwd,
+        turn_context.environments.primary_filesystem(),
+    )
+    .await;
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
         display_root,
     )));
@@ -2263,6 +2270,19 @@ async fn try_run_sampling_request(
     outcome
 }
 
+async fn turn_diff_display_root(
+    cwd: &AbsolutePathBuf,
+    fs: Option<Arc<dyn ExecutorFileSystem>>,
+) -> PathBuf {
+    match fs {
+        Some(fs) => get_git_repo_root_with_fs(fs.as_ref(), cwd)
+            .await
+            .map(AbsolutePathBuf::into_path_buf),
+        None => get_git_repo_root(cwd.as_path()),
+    }
+    .unwrap_or_else(|| cwd.clone().into_path_buf())
+}
+
 pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     for item in responses.iter().rev() {
         if let Some(message) = last_assistant_message_from_item(item, /*plan_mode*/ false) {
@@ -2270,4 +2290,30 @@ pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_exec_server::LOCAL_FS;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn turn_diff_display_root_uses_selected_filesystem_or_local_fallback() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        std::fs::create_dir(repo.path().join(".git")).expect("create git dir");
+        let nested = repo.path().join("nested");
+        std::fs::create_dir(&nested).expect("create nested dir");
+        let nested = AbsolutePathBuf::try_from(nested).expect("absolute nested path");
+        let repo_root = repo.path().to_path_buf();
+
+        assert_eq!(
+            turn_diff_display_root(&nested, Some(Arc::clone(&LOCAL_FS))).await,
+            repo_root
+        );
+        assert_eq!(
+            turn_diff_display_root(&nested, /*fs*/ None).await,
+            repo_root
+        );
+    }
 }
