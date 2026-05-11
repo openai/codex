@@ -64,6 +64,12 @@ pub(crate) struct LiveAgent {
     pub(crate) status: AgentStatus,
 }
 
+#[derive(Clone, Copy)]
+enum LiveAgentShutdownMode {
+    SubmitOnly,
+    WaitForTermination,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
@@ -233,32 +239,31 @@ impl AgentControl {
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref()) {
             (Some(session_source), Some(_)) => {
-                self.spawn_forked_thread(
+                Box::pin(self.spawn_forked_thread(
                     &state,
                     config,
                     session_source,
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
-                )
+                ))
                 .await?
             }
             (Some(session_source), None) => {
-                state
-                    .spawn_new_thread_with_source(
-                        config.clone(),
-                        self.clone(),
-                        session_source,
-                        /*thread_source*/ Some(ThreadSource::Subagent),
-                        /*persist_extended_history*/ false,
-                        /*metrics_service_name*/ None,
-                        inherited_shell_snapshot,
-                        inherited_exec_policy,
-                        options.environments.clone(),
-                    )
-                    .await?
+                Box::pin(state.spawn_new_thread_with_source(
+                    config,
+                    self.clone(),
+                    session_source,
+                    /*thread_source*/ Some(ThreadSource::Subagent),
+                    /*persist_extended_history*/ false,
+                    /*metrics_service_name*/ None,
+                    inherited_shell_snapshot,
+                    inherited_exec_policy,
+                    options.environments.clone(),
+                ))
+                .await?
             }
-            (None, _) => state.spawn_new_thread(config.clone(), self.clone()).await?,
+            (None, _) => Box::pin(state.spawn_new_thread(config, self.clone())).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -713,22 +718,42 @@ impl AgentControl {
     /// Submit a shutdown request for a live agent without marking it explicitly closed in
     /// persisted spawn-edge state.
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        self.shutdown_live_agent_with_mode(agent_id, LiveAgentShutdownMode::SubmitOnly)
+            .await
+    }
+
+    async fn shutdown_live_agent_and_wait(&self, agent_id: ThreadId) -> CodexResult<String> {
+        self.shutdown_live_agent_with_mode(agent_id, LiveAgentShutdownMode::WaitForTermination)
+            .await
+    }
+
+    async fn shutdown_live_agent_with_mode(
+        &self,
+        agent_id: ThreadId,
+        mode: LiveAgentShutdownMode,
+    ) -> CodexResult<String> {
         let state = self.upgrade()?;
+        let mut thread_to_wait = None;
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread.codex.session.ensure_rollout_materialized().await;
             thread.codex.session.flush_rollout().await?;
-            let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
-                state.send_op(agent_id, Op::Shutdown {}).await
-            };
-            thread.wait_until_terminated().await;
-            result
+                let result = state.send_op(agent_id, Op::Shutdown {}).await;
+                if result.is_ok() && matches!(mode, LiveAgentShutdownMode::WaitForTermination) {
+                    thread_to_wait = Some(thread);
+                }
+                result
+            }
         } else {
             state.send_op(agent_id, Op::Shutdown {}).await
         };
         let _ = state.remove_thread(&agent_id).await;
         self.state.release_spawned_thread(agent_id);
+        if let Some(thread) = thread_to_wait {
+            thread.wait_until_terminated().await;
+        }
         result
     }
 
@@ -750,9 +775,9 @@ impl AgentControl {
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
     async fn shutdown_agent_tree(&self, agent_id: ThreadId) -> CodexResult<String> {
         let descendant_ids = self.live_thread_spawn_descendants(agent_id).await?;
-        let result = self.shutdown_live_agent(agent_id).await;
+        let result = self.shutdown_live_agent_and_wait(agent_id).await;
         for descendant_id in descendant_ids {
-            match self.shutdown_live_agent(descendant_id).await {
+            match self.shutdown_live_agent_and_wait(descendant_id).await {
                 Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {}
                 Err(err) => return Err(err),
             }
