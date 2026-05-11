@@ -205,7 +205,7 @@ def test_real_initialize_and_model_list(runtime_env: PreparedRuntimeEnv) -> None
         textwrap.dedent(
             """
             import json
-            from codex_app_server import Codex
+            from openai_codex import Codex
 
             with Codex() as codex:
                 models = codex.models(include_hidden=True)
@@ -234,7 +234,7 @@ def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> No
         textwrap.dedent(
             """
             import json
-            from codex_app_server import Codex, TextInput
+            from openai_codex import Codex, TextInput
 
             with Codex() as codex:
                 thread = codex.thread_start(
@@ -271,7 +271,7 @@ def test_real_thread_run_convenience_smoke(runtime_env: PreparedRuntimeEnv) -> N
         textwrap.dedent(
             """
             import json
-            from codex_app_server import Codex
+            from openai_codex import Codex
 
             with Codex() as codex:
                 thread = codex.thread_start(
@@ -304,7 +304,7 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
             """
             import asyncio
             import json
-            from codex_app_server import AsyncCodex, TextInput
+            from openai_codex import AsyncCodex, TextInput
 
             async def main():
                 async with AsyncCodex() as codex:
@@ -347,7 +347,7 @@ def test_real_async_thread_run_convenience_smoke(
             """
             import asyncio
             import json
-            from codex_app_server import AsyncCodex
+            from openai_codex import AsyncCodex
 
             async def main():
                 async with AsyncCodex() as codex:
@@ -436,7 +436,7 @@ def test_real_streaming_smoke_turn_completed(runtime_env: PreparedRuntimeEnv) ->
         textwrap.dedent(
             """
             import json
-            from codex_app_server import Codex, TextInput
+            from openai_codex import Codex, TextInput
 
             with Codex() as codex:
                 thread = codex.thread_start(
@@ -469,7 +469,7 @@ def test_real_turn_interrupt_smoke(runtime_env: PreparedRuntimeEnv) -> None:
         textwrap.dedent(
             """
             import json
-            from codex_app_server import Codex, TextInput
+            from openai_codex import Codex, TextInput
 
             with Codex() as codex:
                 thread = codex.thread_start(
@@ -539,7 +539,9 @@ def test_real_examples_run_and_assert(
         assert "actions:" in out
         assert "Items:" in out
     elif folder == "13_model_select_and_turn_params":
-        assert "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
+        assert (
+            "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
+        )
     elif folder == "14_turn_controls":
         assert "steer.result:" in out and "steer.final.status:" in out
         assert "interrupt.result:" in out and "interrupt.final.status:" in out

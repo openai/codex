@@ -329,6 +329,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             host_owned_codex_apps_enabled,
+            mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,

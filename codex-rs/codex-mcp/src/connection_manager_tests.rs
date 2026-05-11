@@ -10,7 +10,6 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
-use crate::rmcp_client::elicitation_capability_for_server;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -844,15 +843,27 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 }
 
 #[test]
-fn elicitation_capability_uses_2025_06_18_shape_for_all_servers() {
-    for server_name in [CODEX_APPS_MCP_SERVER_NAME, "custom_mcp"] {
-        let capability = elicitation_capability_for_server(server_name);
-        assert_eq!(capability, Some(ElicitationCapability::default()));
-        assert_eq!(
-            serde_json::to_value(capability).expect("serialize elicitation capability"),
-            serde_json::json!({})
-        );
-    }
+fn elicitation_capability_uses_2025_06_18_shape_for_form_only_support() {
+    let capability = Some(ElicitationCapability::default());
+    assert_eq!(
+        serde_json::to_value(capability).expect("serialize elicitation capability"),
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn elicitation_capability_advertises_url_support_when_enabled() {
+    let capability = Some(ElicitationCapability {
+        form: Some(rmcp::model::FormElicitationCapability::default()),
+        url: Some(rmcp::model::UrlElicitationCapability::default()),
+    });
+    assert_eq!(
+        serde_json::to_value(capability).expect("serialize elicitation capability"),
+        serde_json::json!({
+            "form": {},
+            "url": {},
+        })
+    );
 }
 
 #[test]

@@ -22,6 +22,7 @@ class MessageRouter:
     """
 
     def __init__(self) -> None:
+        """Create empty response, turn, and global notification queues."""
         self._lock = threading.Lock()
         self._response_waiters: dict[str, queue.Queue[ResponseQueueItem]] = {}
         self._turn_notifications: dict[str, queue.Queue[NotificationQueueItem]] = {}
@@ -121,9 +122,7 @@ class MessageRouter:
                 if notification.method == "turn/completed":
                     self._pending_turn_notifications.pop(turn_id, None)
                     return
-                self._pending_turn_notifications.setdefault(turn_id, deque()).append(
-                    notification
-                )
+                self._pending_turn_notifications.setdefault(turn_id, deque()).append(notification)
                 return
         turn_queue.put(notification)
 
@@ -144,6 +143,7 @@ class MessageRouter:
         self._global_notifications.put(exc)
 
     def _notification_turn_id(self, notification: Notification) -> str | None:
+        """Extract routing ids from known generated payloads or raw unknown payloads."""
         payload = notification.payload
         if isinstance(payload, UnknownNotification):
             raw_turn_id = payload.params.get("turnId")

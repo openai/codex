@@ -12,6 +12,8 @@ from typing import Callable, Iterator, TypeVar
 
 from pydantic import BaseModel
 
+from ._message_router import MessageRouter
+from ._version import __version__ as SDK_VERSION
 from .errors import AppServerError, TransportClosedError
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
@@ -43,9 +45,7 @@ from .models import (
     Notification,
     UnknownNotification,
 )
-from ._message_router import MessageRouter
 from .retry import retry_on_overload
-from ._version import __version__ as SDK_VERSION
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
@@ -76,9 +76,7 @@ def _params_dict(
         return dumped
     if isinstance(params, dict):
         return params
-    raise TypeError(
-        f"Expected generated params model or dict, got {type(params).__name__}"
-    )
+    raise TypeError(f"Expected generated params model or dict, got {type(params).__name__}")
 
 
 def _installed_codex_path() -> Path:
@@ -243,13 +241,12 @@ class AppServerClient:
         return response_model.model_validate(result)
 
     def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
+        """Send a JSON-RPC request and wait for the reader thread to route its response."""
         request_id = str(uuid.uuid4())
         waiter = self._router.create_response_waiter(request_id)
 
         try:
-            self._write_message(
-                {"id": request_id, "method": method, "params": params or {}}
-            )
+            self._write_message({"id": request_id, "method": method, "params": params or {}})
         except BaseException:
             self._router.discard_response_waiter(request_id)
             raise
@@ -260,18 +257,23 @@ class AppServerClient:
         return item
 
     def notify(self, method: str, params: JsonObject | None = None) -> None:
+        """Send a JSON-RPC notification without waiting for a response."""
         self._write_message({"method": method, "params": params or {}})
 
     def next_notification(self) -> Notification:
+        """Return the next notification that is not scoped to an active turn."""
         return self._router.next_global_notification()
 
     def register_turn_notifications(self, turn_id: str) -> None:
+        """Start routing notifications for one turn into its dedicated queue."""
         self._router.register_turn(turn_id)
 
     def unregister_turn_notifications(self, turn_id: str) -> None:
+        """Stop routing notifications for one turn into its dedicated queue."""
         self._router.unregister_turn(turn_id)
 
     def next_turn_notification(self, turn_id: str) -> Notification:
+        """Return the next routed notification for the requested turn id."""
         return self._router.next_turn_notification(turn_id)
 
     def thread_start(
@@ -287,20 +289,14 @@ class AppServerClient:
         params: V2ThreadResumeParams | JsonObject | None = None,
     ) -> ThreadResumeResponse:
         payload = {"threadId": thread_id, **_params_dict(params)}
-        return self.request(
-            "thread/resume", payload, response_model=ThreadResumeResponse
-        )
+        return self.request("thread/resume", payload, response_model=ThreadResumeResponse)
 
     def thread_list(
         self, params: V2ThreadListParams | JsonObject | None = None
     ) -> ThreadListResponse:
-        return self.request(
-            "thread/list", _params_dict(params), response_model=ThreadListResponse
-        )
+        return self.request("thread/list", _params_dict(params), response_model=ThreadListResponse)
 
-    def thread_read(
-        self, thread_id: str, include_turns: bool = False
-    ) -> ThreadReadResponse:
+    def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         return self.request(
             "thread/read",
             {"threadId": thread_id, "includeTurns": include_turns},
@@ -349,6 +345,7 @@ class AppServerClient:
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
+        """Start a turn and register its notification queue as early as possible."""
         payload = {
             **_params_dict(params),
             "threadId": thread_id,
@@ -406,6 +403,7 @@ class AppServerClient:
         )
 
     def wait_for_turn_completed(self, turn_id: str) -> TurnCompletedNotification:
+        """Block on the routed turn stream until the matching completion arrives."""
         self.register_turn_notifications(turn_id)
         try:
             while True:
@@ -425,6 +423,7 @@ class AppServerClient:
         text: str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> Iterator[AgentMessageDeltaNotification]:
+        """Start a text turn and yield only its agent-message delta payloads."""
         started = self.turn_start(thread_id, text, params=params)
         turn_id = started.turn.id
         self.register_turn_notifications(turn_id)
@@ -452,16 +451,12 @@ class AppServerClient:
 
         model = NOTIFICATION_MODELS.get(method)
         if model is None:
-            return Notification(
-                method=method, payload=UnknownNotification(params=params_dict)
-            )
+            return Notification(method=method, payload=UnknownNotification(params=params_dict))
 
         try:
             payload = model.model_validate(params_dict)
         except Exception:  # noqa: BLE001
-            return Notification(
-                method=method, payload=UnknownNotification(params=params_dict)
-            )
+            return Notification(method=method, payload=UnknownNotification(params=params_dict))
         return Notification(method=method, payload=payload)
 
     def _normalize_input_items(
@@ -474,9 +469,8 @@ class AppServerClient:
             return [input_items]
         return input_items
 
-    def _default_approval_handler(
-        self, method: str, params: JsonObject | None
-    ) -> JsonObject:
+    def _default_approval_handler(self, method: str, params: JsonObject | None) -> JsonObject:
+        """Accept approval requests when the caller did not provide a handler."""
         if method == "item/commandExecution/requestApproval":
             return {"decision": "accept"}
         if method == "item/fileChange/requestApproval":
@@ -498,6 +492,7 @@ class AppServerClient:
         self._stderr_thread.start()
 
     def _start_reader_thread(self) -> None:
+        """Start the sole stdout reader that fans messages into router queues."""
         if self._proc is None or self._proc.stdout is None:
             return
 
@@ -505,6 +500,7 @@ class AppServerClient:
         self._reader_thread.start()
 
     def _reader_loop(self) -> None:
+        """Continuously classify transport messages into requests, responses, and events."""
         try:
             while True:
                 msg = self._read_message()
