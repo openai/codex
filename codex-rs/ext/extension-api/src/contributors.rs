@@ -1,17 +1,14 @@
 use std::future::Future;
 
 use codex_protocol::items::TurnItem;
+use codex_tool_api::ToolBundle;
 
 use crate::ExtensionData;
 
 mod prompt;
-mod tool;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
-pub use tool::ToolCallError;
-pub use tool::ToolContribution;
-pub use tool::ToolHandler;
 
 /// Contributor that receives host-owned thread-start input before later
 /// contributors read from extension stores.
@@ -30,8 +27,9 @@ pub trait ContextContributor: Send + Sync {
 
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
-    /// Returns the native tools visible for the supplied runtime context.
-    fn tools(&self, thread_store: &ExtensionData) -> Vec<ToolContribution>;
+    /// Returns the native tools visible for the supplied extension stores.
+    fn tools(&self, session_store: &ExtensionData, thread_store: &ExtensionData)
+    -> Vec<ToolBundle>;
 }
 
 /// Future returned by one ordered turn-item contribution.
