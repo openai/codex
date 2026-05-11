@@ -22,10 +22,12 @@ class RustyV8BazelTest(unittest.TestCase):
 
         for selector in [
             "aarch64_apple_darwin_bazel",
+            "aarch64_pc_windows_gnullvm",
             "aarch64_pc_windows_msvc",
             "aarch64_unknown_linux_gnu_bazel",
             "aarch64_unknown_linux_musl_release_base",
             "x86_64_apple_darwin_bazel",
+            "x86_64_pc_windows_gnullvm",
             "x86_64_pc_windows_msvc",
             "x86_64_unknown_linux_gnu_bazel",
             "x86_64_unknown_linux_musl_release",
@@ -37,10 +39,12 @@ class RustyV8BazelTest(unittest.TestCase):
 
         for selector in [
             "aarch64_apple_darwin",
+            "aarch64_pc_windows_gnullvm",
             "aarch64_pc_windows_msvc",
             "aarch64_unknown_linux_gnu",
             "aarch64_unknown_linux_musl",
             "x86_64_apple_darwin",
+            "x86_64_pc_windows_gnullvm",
             "x86_64_pc_windows_msvc",
             "x86_64_unknown_linux_gnu",
             "x86_64_unknown_linux_musl",
