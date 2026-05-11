@@ -945,6 +945,31 @@
         }
       ]
     },
+    "HookCommandByPlatformConfig": {
+      "properties": {
+        "unix": {
+          "type": "string"
+        },
+        "windows": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unix",
+        "windows"
+      ],
+      "type": "object"
+    },
+    "HookCommandConfig": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/HookCommandByPlatformConfig"
+        }
+      ]
+    },
     "HookHandlerConfig": {
       "oneOf": [
         {
@@ -954,7 +979,7 @@
               "type": "boolean"
             },
             "command": {
-              "type": "string"
+              "$ref": "#/definitions/HookCommandConfig"
             },
             "statusMessage": {
               "default": null,
