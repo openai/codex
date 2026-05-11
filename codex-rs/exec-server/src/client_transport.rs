@@ -57,21 +57,17 @@ impl ExecServerClient {
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
-        let websocket_connect_url = websocket_connect_url(&websocket_url);
         let connect_timeout = args.connect_timeout;
-        let (stream, _) = timeout(
-            connect_timeout,
-            connect_async(websocket_connect_url.as_str()),
-        )
-        .await
-        .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-            url: websocket_url.clone(),
-            timeout: connect_timeout,
-        })?
-        .map_err(|source| ExecServerError::WebSocketConnect {
-            url: websocket_url.clone(),
-            source,
-        })?;
+        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
+            .await
+            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+                url: websocket_url.clone(),
+                timeout: connect_timeout,
+            })?
+            .map_err(|source| ExecServerError::WebSocketConnect {
+                url: websocket_url.clone(),
+                source,
+            })?;
 
         Self::connect(
             JsonRpcConnection::from_websocket(
@@ -122,12 +118,6 @@ impl ExecServerClient {
         )
         .await
     }
-}
-
-fn websocket_connect_url(websocket_url: &str) -> String {
-    websocket_url
-        .strip_prefix("ws+http://")
-        .map_or_else(|| websocket_url.to_string(), |url| format!("ws://{url}"))
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {

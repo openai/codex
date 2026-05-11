@@ -276,15 +276,12 @@ fn validate_websocket_url(url: String) -> Result<String, ExecServerError> {
             "environment url cannot be empty".to_string(),
         ));
     }
-    if !url.starts_with("ws://") && !url.starts_with("wss://") && !url.starts_with("ws+http://") {
+    if !url.starts_with("ws://") && !url.starts_with("wss://") {
         return Err(ExecServerError::Protocol(format!(
-            "environment url `{url}` must use ws://, wss://, or ws+http://"
+            "environment url `{url}` must use ws:// or wss://"
         )));
     }
-    let websocket_connect_url = url
-        .strip_prefix("ws+http://")
-        .map_or_else(|| url.to_string(), |url| format!("ws://{url}"));
-    websocket_connect_url.into_client_request().map_err(|err| {
+    url.into_client_request().map_err(|err| {
         ExecServerError::Protocol(format!("environment url `{url}` is invalid: {err}"))
     })?;
     Ok(url.to_string())
@@ -441,7 +438,7 @@ mod tests {
                     url: Some("http://127.0.0.1:8765".to_string()),
                     ..Default::default()
                 },
-                "environment url `http://127.0.0.1:8765` must use ws://, wss://, or ws+http://",
+                "environment url `http://127.0.0.1:8765` must use ws:// or wss://",
             ),
             (
                 EnvironmentToml {
