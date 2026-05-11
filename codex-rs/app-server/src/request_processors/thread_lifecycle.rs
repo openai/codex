@@ -557,6 +557,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
+    let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    if pending.redact_resume_payloads {
+        redact_thread_resume_payloads(&mut thread);
+    }
 
     {
         let pending_thread_unloads = pending_thread_unloads.lock().await;
@@ -624,7 +628,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         active_permission_profile,
         reasoning_effort,
     };
-    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.

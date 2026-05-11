@@ -2333,6 +2333,8 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let redact_resume_payloads =
+            should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -2527,6 +2529,10 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
+                let token_usage_thread = include_turns.then(|| thread.clone());
+                if redact_resume_payloads {
+                    redact_thread_resume_payloads(&mut thread);
+                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2544,7 +2550,6 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -2664,6 +2669,8 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+            let redact_resume_payloads =
+                should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
                 .history
                 .as_ref()
@@ -2738,6 +2745,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    redact_resume_payloads,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
