@@ -386,7 +386,7 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     }
 }
 
-pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<Vec<UserInput>> {
+pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
         .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
@@ -394,7 +394,7 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<Vec<UserInput
                 if is_summary_message(&user.message()) {
                     None
                 } else {
-                    Some(user.content)
+                    Some(user.message())
                 }
             }
             _ => None,
@@ -465,7 +465,7 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
 
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
-    user_messages: &[Vec<UserInput>],
+    user_messages: &[String],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
@@ -478,24 +478,23 @@ pub(crate) fn build_compacted_history(
 
 fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
-    user_messages: &[Vec<UserInput>],
+    user_messages: &[String],
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
-    let mut selected_messages: Vec<Vec<UserInput>> = Vec::new();
+    let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
         let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
             if remaining == 0 {
                 break;
             }
-            let message_text = user_message_text(message);
-            let tokens = approx_token_count(&message_text);
+            let tokens = approx_token_count(message);
             if tokens <= remaining {
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let truncated = truncate_user_message(message, remaining);
+                let truncated = truncate_text(message, TruncationPolicy::Tokens(remaining));
                 selected_messages.push(truncated);
                 break;
             }
@@ -503,8 +502,15 @@ fn build_compacted_history_with_limit(
         selected_messages.reverse();
     }
 
-    for message in selected_messages {
-        history.push(ResponseItem::from(ResponseInputItem::from(message)));
+    for message in &selected_messages {
+        history.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: message.clone(),
+            }],
+            phase: None,
+        });
     }
 
     let summary_text = if summary_text.is_empty() {
@@ -521,42 +527,6 @@ fn build_compacted_history_with_limit(
     });
 
     history
-}
-
-pub(crate) fn user_message_text(message: &[UserInput]) -> String {
-    message
-        .iter()
-        .filter_map(|item| match item {
-            UserInput::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn truncate_user_message(message: &[UserInput], remaining_tokens: usize) -> Vec<UserInput> {
-    let mut remaining_tokens = remaining_tokens;
-    let mut truncated = Vec::with_capacity(message.len());
-    for item in message {
-        match item {
-            UserInput::Text { text, .. } if remaining_tokens > 0 => {
-                let token_count = approx_token_count(text);
-                if token_count <= remaining_tokens {
-                    truncated.push(item.clone());
-                    remaining_tokens = remaining_tokens.saturating_sub(token_count);
-                } else {
-                    truncated.push(UserInput::Text {
-                        text: truncate_text(text, TruncationPolicy::Tokens(remaining_tokens)),
-                        text_elements: Vec::new(),
-                    });
-                    remaining_tokens = 0;
-                }
-            }
-            UserInput::Text { .. } => {}
-            _ => truncated.push(item.clone()),
-        }
-    }
-    truncated
 }
 
 async fn drain_to_completed(

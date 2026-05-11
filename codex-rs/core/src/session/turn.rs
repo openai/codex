@@ -15,7 +15,6 @@ use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
-use crate::compact::user_message_text;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
@@ -311,7 +310,7 @@ pub(crate) async fn run_turn(
         Vec::new()
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.into();
+        let response_item: ResponseItem = initial_input_for_turn.clone().into();
         let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
@@ -919,11 +918,7 @@ pub(super) fn filter_connectors_for_input(
         return Vec::new();
     }
 
-    let user_message_texts = user_messages
-        .iter()
-        .map(|message| user_message_text(message))
-        .collect::<Vec<_>>();
-    let mentions = collect_tool_mentions_from_messages(&user_message_texts);
+    let mentions = collect_tool_mentions_from_messages(&user_messages);
     let mention_names_lower = mentions
         .plain_names
         .iter()
@@ -1046,7 +1041,6 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
         )
         .await;
-    let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
@@ -1080,27 +1074,7 @@ async fn run_sampling_request(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                if retries >= max_retries {
-                    return Err(CodexErr::ContextWindowExceeded);
-                }
-                retries += 1;
-                let reset_client_session = match run_auto_compact(
-                    &sess,
-                    &turn_context,
-                    client_session,
-                    InitialContextInjection::BeforeLastUserMessage,
-                    CompactionReason::ContextLimit,
-                    CompactionPhase::MidTurn,
-                )
-                .await
-                {
-                    Ok(reset_client_session) => reset_client_session,
-                    Err(_) => return Err(CodexErr::TurnAborted),
-                };
-                if reset_client_session {
-                    client_session.reset_websocket_session();
-                }
-                continue;
+                return Err(CodexErr::ContextWindowExceeded);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
@@ -1117,6 +1091,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
+        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,

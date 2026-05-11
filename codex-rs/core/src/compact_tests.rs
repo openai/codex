@@ -55,7 +55,7 @@ fn content_items_to_text_ignores_image_only_content() {
 }
 
 #[test]
-fn collect_user_messages_preserves_user_content() {
+fn collect_user_messages_extracts_user_text_only() {
     let items = vec![
         ResponseItem::Message {
             id: Some("assistant".to_string()),
@@ -68,15 +68,9 @@ fn collect_user_messages_preserves_user_content() {
         ResponseItem::Message {
             id: Some("user".to_string()),
             role: "user".to_string(),
-            content: vec![
-                ContentItem::InputImage {
-                    image_url: "file://image.png".to_string(),
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
-                },
-                ContentItem::InputText {
-                    text: "first".to_string(),
-                },
-            ],
+            content: vec![ContentItem::InputText {
+                text: "first".to_string(),
+            }],
             phase: None,
         },
         ResponseItem::Other,
@@ -84,18 +78,7 @@ fn collect_user_messages_preserves_user_content() {
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(
-        vec![vec![
-            UserInput::Image {
-                image_url: "file://image.png".to_string(),
-            },
-            UserInput::Text {
-                text: "first".to_string(),
-                text_elements: Vec::new(),
-            },
-        ]],
-        collected
-    );
+    assert_eq!(vec!["first".to_string()], collected);
 }
 
 #[test]
@@ -134,13 +117,7 @@ do things
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(
-        vec![vec![UserInput::Text {
-            text: "real user message".to_string(),
-            text_elements: Vec::new(),
-        }]],
-        collected
-    );
+    assert_eq!(vec!["real user message".to_string()], collected);
 }
 
 #[test]
@@ -149,13 +126,9 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
     // that oversized user content is truncated.
     let max_tokens = 16;
     let big = "word ".repeat(200);
-    let user_message = vec![UserInput::Text {
-        text: big.clone(),
-        text_elements: Vec::new(),
-    }];
     let history = super::build_compacted_history_with_limit(
         Vec::new(),
-        std::slice::from_ref(&user_message),
+        std::slice::from_ref(&big),
         "SUMMARY",
         max_tokens,
     );
@@ -190,56 +163,9 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
 }
 
 #[test]
-fn truncate_user_message_preserves_text_segment_order_around_images() {
-    let before_image = "before ".repeat(8);
-    let after_image = "after ".repeat(200);
-    let before_image_tokens = approx_token_count(&before_image);
-    let after_image_token_budget = 16;
-    let remaining_tokens = before_image_tokens + after_image_token_budget;
-    let user_message = vec![
-        UserInput::Text {
-            text: before_image.clone(),
-            text_elements: Vec::new(),
-        },
-        UserInput::Image {
-            image_url: "file://image.png".to_string(),
-        },
-        UserInput::Text {
-            text: after_image.clone(),
-            text_elements: Vec::new(),
-        },
-    ];
-
-    let truncated = super::truncate_user_message(&user_message, remaining_tokens);
-
-    assert_eq!(
-        vec![
-            UserInput::Text {
-                text: before_image,
-                text_elements: Vec::new(),
-            },
-            UserInput::Image {
-                image_url: "file://image.png".to_string(),
-            },
-            UserInput::Text {
-                text: truncate_text(
-                    &after_image,
-                    TruncationPolicy::Tokens(after_image_token_budget)
-                ),
-                text_elements: Vec::new(),
-            },
-        ],
-        truncated
-    );
-}
-
-#[test]
 fn build_token_limited_compacted_history_appends_summary_message() {
     let initial_context: Vec<ResponseItem> = Vec::new();
-    let user_messages = vec![vec![UserInput::Text {
-        text: "first user message".to_string(),
-        text_elements: Vec::new(),
-    }]];
+    let user_messages = vec!["first user message".to_string()];
     let summary_text = "summary text";
 
     let history = build_compacted_history(initial_context, &user_messages, summary_text);
