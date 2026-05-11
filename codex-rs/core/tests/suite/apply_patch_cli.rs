@@ -30,6 +30,7 @@ use codex_protocol::user_input::UserInput;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -63,6 +64,13 @@ async fn apply_patch_harness_with(
     // Box harness construction so apply_patch_cli tests do not inline the
     // full test-thread startup path into each test future.
     Box::pin(TestCodexHarness::with_remote_env_builder(builder)).await
+}
+
+async fn local_apply_patch_harness_with(
+    configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
+) -> Result<TestCodexHarness> {
+    let builder = configure(test_codex());
+    Box::pin(TestCodexHarness::with_builder(builder)).await
 }
 
 async fn submit_without_wait(harness: &TestCodexHarness, prompt: &str) -> Result<()> {
@@ -1348,40 +1356,9 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = apply_patch_harness_with(|builder| {
-        builder
-            .with_model("gpt-5.4")
-            .with_config(|config| {
-                config.cwd = config.cwd.join("subdir");
-            })
-            .with_workspace_setup(|cwd, fs| async move {
-                fs.create_directory(
-                    &cwd,
-                    CreateDirectoryOptions { recursive: true },
-                    /*sandbox*/ None,
-                )
-                .await?;
-                let repo_root = cwd.parent().expect("nested cwd should have parent");
-                fs.write_file(
-                    &repo_root.join(".git"),
-                    b"gitdir: /tmp/fake-worktree\n".to_vec(),
-                    /*sandbox*/ None,
-                )
-                .await?;
-                fs.write_file(
-                    &repo_root.join("repo.txt"),
-                    b"before\n".to_vec(),
-                    /*sandbox*/ None,
-                )
-                .await?;
-                Ok(())
-            })
-    })
-    .await?;
+async fn assert_apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested(
+    harness: TestCodexHarness,
+) -> Result<()> {
     let test = harness.test();
     let codex = test.codex.clone();
     let repo_root = harness
@@ -1425,6 +1402,54 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
         "diff should not leak absolute repo paths: {diff:?}"
     );
     Ok(())
+}
+
+fn nested_repo_relative_diff_builder(builder: TestCodexBuilder) -> TestCodexBuilder {
+    builder
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config.cwd = config.cwd.join("subdir");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.create_directory(
+                &cwd,
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+            let repo_root = cwd.parent().expect("nested cwd should have parent");
+            fs.write_file(
+                &repo_root.join(".git"),
+                b"gitdir: /tmp/fake-worktree\n".to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            fs.write_file(
+                &repo_root.join("repo.txt"),
+                b"before\n".to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested() -> Result<()> {
+    let harness = local_apply_patch_harness_with(nested_repo_relative_diff_builder).await?;
+    assert_apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested(harness).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_paths_stay_repo_relative_for_remote_nested_session_cwd() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let harness = apply_patch_harness_with(nested_repo_relative_diff_builder).await?;
+    assert_apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested(harness).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
