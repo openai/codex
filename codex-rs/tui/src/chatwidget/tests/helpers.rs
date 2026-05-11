@@ -1,6 +1,8 @@
 use super::*;
 use codex_app_server_protocol::PluginAvailability;
 use pretty_assertions::assert_eq;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 pub(super) async fn test_config() -> Config {
     // Start from the built-in defaults so tests do not inherit host/system config.
@@ -16,7 +18,7 @@ pub(super) async fn test_config() -> Config {
     config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
-    config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
+    config.cwd = test_project_path().abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
     config.user_instructions = None;
@@ -24,7 +26,22 @@ pub(super) async fn test_config() -> Config {
 }
 
 pub(super) fn test_project_path() -> PathBuf {
-    PathBuf::from(test_path_display("/tmp/project"))
+    let project = tempfile::Builder::new()
+        .rand_bytes("project".len())
+        .tempdir_in(std::env::temp_dir())
+        .expect("tempdir")
+        .keep();
+    std::fs::create_dir_all(project.join(".git")).expect("create test project git marker");
+    isolated_test_project_paths()
+        .lock()
+        .expect("test project path registry")
+        .push(project.clone());
+    project
+}
+
+fn isolated_test_project_paths() -> &'static Mutex<Vec<PathBuf>> {
+    static TEST_PROJECT_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+    TEST_PROJECT_PATHS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 pub(super) fn truncated_path_variants(path: &str) -> Vec<String> {
@@ -36,6 +53,14 @@ pub(super) fn truncated_path_variants(path: &str) -> Vec<String> {
 
 pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
     let mut text = text.into();
+
+    for isolated_project in isolated_test_project_paths()
+        .lock()
+        .expect("test project path registry")
+        .iter()
+    {
+        text = text.replace(isolated_project.to_string_lossy().as_ref(), "/tmp/project");
+    }
 
     for unix_path in ["/tmp/project", "/tmp/hooks.json"] {
         let platform_path = test_path_display(unix_path);
@@ -68,7 +93,7 @@ pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> St
     let rendered = format!("{value}");
 
     if platform_test_cwd == "/tmp/project" {
-        return rendered;
+        return normalize_snapshot_paths(rendered);
     }
 
     rendered

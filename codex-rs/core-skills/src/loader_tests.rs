@@ -1726,16 +1726,49 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
     fs::create_dir_all(&nested_dir).unwrap();
 
     write_skill_at(
-        &outer_dir
-            .path()
-            .join(REPO_ROOT_CONFIG_DIR_NAME)
-            .join(SKILLS_DIR_NAME),
+        &outer_dir.path().join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
         "outer",
         "outer-skill",
         "from outer",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
+    let mut system_config = toml::map::Map::new();
+    system_config.insert(
+        "project_root_markers".to_string(),
+        TomlValue::Array(vec![TomlValue::String(
+            "__codex_test_project_root_marker_that_does_not_exist__".to_string(),
+        )]),
+    );
+    let user_config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let system_config_path = codex_home.path().join("etc/codex/config.toml");
+    fs::create_dir_all(
+        system_config_path
+            .parent()
+            .expect("system config path should have a parent"),
+    )
+    .expect("create fake system config dir");
+    let cfg = TestConfig {
+        cwd: nested_dir.abs(),
+        config_layer_stack: ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::System {
+                        file: config_file(system_config_path),
+                    },
+                    TomlValue::Table(system_config),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: config_file(user_config_path),
+                    },
+                    TomlValue::Table(toml::map::Map::new()),
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("valid config layer stack"),
+    };
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(

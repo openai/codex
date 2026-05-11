@@ -1917,10 +1917,10 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
     chat.refresh_status_line();
-    let test_cwd = test_path_display("/tmp/project");
+    let test_cwd = normalize_snapshot_paths(test_path_display("/tmp/project"));
 
     assert_eq!(
-        status_line_text(&chat),
+        status_line_text(&chat).map(normalize_snapshot_paths),
         Some(format!("gpt-5.4 xhigh fast · Context 0% used · {test_cwd}"))
     );
 
@@ -1928,7 +1928,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     chat.refresh_status_line();
 
     assert_eq!(
-        status_line_text(&chat),
+        status_line_text(&chat).map(normalize_snapshot_paths),
         Some(format!(
             "gpt-5.3-codex xhigh · Context 0% used · {test_cwd}"
         ))
