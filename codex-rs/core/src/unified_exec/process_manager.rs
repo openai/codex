@@ -19,6 +19,7 @@ use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
@@ -372,27 +373,6 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request.cwd.clone();
-        let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
-            .await;
-
-        let (process, mut deferred_network_approval) = match process {
-            Ok((process, deferred_network_approval)) => {
-                (Arc::new(process), deferred_network_approval)
-            }
-            Err(err) => {
-                self.release_process_id(request.process_id).await;
-                return Err(err);
-            }
-        };
-        if let Some(deferred) = deferred_network_approval.as_ref() {
-            terminate_process_on_network_denial(
-                Arc::clone(&process),
-                Arc::downgrade(&context.session),
-                deferred.clone(),
-            );
-        }
-
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
@@ -407,6 +387,41 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.to_string()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
+
+        let process = self
+            .open_session_with_sandbox(&request, cwd.clone(), context)
+            .await;
+
+        let (process, mut deferred_network_approval) = match process {
+            Ok((process, deferred_network_approval)) => {
+                (Arc::new(process), deferred_network_approval)
+            }
+            Err(err) => {
+                let failure = match &err {
+                    UnifiedExecError::MissingCommandLine => ToolEventFailure::Rejected {
+                        message: "missing command line for unified exec request".to_string(),
+                        applied_patch_delta: None,
+                    },
+                    UnifiedExecError::Rejected { message } => ToolEventFailure::Rejected {
+                        message: message.clone(),
+                        applied_patch_delta: None,
+                    },
+                    _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
+                };
+                emitter
+                    .emit(event_ctx, ToolEventStage::Failure(failure))
+                    .await;
+                self.release_process_id(request.process_id).await;
+                return Err(err);
+            }
+        };
+        if let Some(deferred) = deferred_network_approval.as_ref() {
+            terminate_process_on_network_denial(
+                Arc::clone(&process),
+                Arc::downgrade(&context.session),
+                deferred.clone(),
+            );
+        }
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
         let start = Instant::now();
@@ -1085,6 +1100,7 @@ impl UnifiedExecProcessManager {
                     };
                     UnifiedExecError::sandbox_denied(message, output)
                 }
+                ToolError::Rejected(message) => UnifiedExecError::rejected(message),
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
     }
