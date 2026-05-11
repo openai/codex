@@ -813,24 +813,36 @@ fn app_tool_policy_honors_default_app_enabled_false() {
     );
 }
 
-#[test]
-fn managed_app_tool_approval_uses_raw_tool_name() {
-    let requirements_apps = AppsRequirementsToml {
+fn app_tool_requirements(
+    app_id: &str,
+    tool_name: &str,
+    approval_mode: AppToolApproval,
+) -> AppsRequirementsToml {
+    AppsRequirementsToml {
         apps: BTreeMap::from([(
-            "connector_123123".to_string(),
+            app_id.to_string(),
             AppRequirementToml {
                 enabled: None,
                 tools: Some(AppToolsRequirementsToml {
                     tools: BTreeMap::from([(
-                        "calendar/list_events".to_string(),
+                        tool_name.to_string(),
                         AppToolRequirementToml {
-                            approval_mode: Some(AppToolApproval::Approve),
+                            approval_mode: Some(approval_mode),
                         },
                     )]),
                 }),
             },
         )]),
-    };
+    }
+}
+
+#[test]
+fn managed_app_tool_approval_uses_raw_tool_name() {
+    let requirements_apps = app_tool_requirements(
+        "connector_123123",
+        "calendar/list_events",
+        AppToolApproval::Approve,
+    );
 
     assert_eq!(
         managed_app_tool_approval(
@@ -863,22 +875,11 @@ approval_mode = "prompt"
     .expect("write config");
 
     let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: None,
-                    tools: Some(AppToolsRequirementsToml {
-                        tools: BTreeMap::from([(
-                            "calendar/list_events".to_string(),
-                            AppToolRequirementToml {
-                                approval_mode: Some(AppToolApproval::Approve),
-                            },
-                        )]),
-                    }),
-                },
-            )]),
-        }),
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
         ..Default::default()
     };
 
@@ -921,22 +922,11 @@ async fn local_requirements_tool_approval_overrides_user_apps_config() {
         .expect("config should build");
 
     let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: None,
-                    tools: Some(AppToolsRequirementsToml {
-                        tools: BTreeMap::from([(
-                            "calendar/list_events".to_string(),
-                            AppToolRequirementToml {
-                                approval_mode: Some(AppToolApproval::Approve),
-                            },
-                        )]),
-                    }),
-                },
-            )]),
-        }),
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
         ..Default::default()
     };
     config.config_layer_stack =
@@ -980,22 +970,11 @@ async fn local_requirements_tool_approval_does_not_match_tool_title() {
         .expect("config should build");
 
     let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: None,
-                    tools: Some(AppToolsRequirementsToml {
-                        tools: BTreeMap::from([(
-                            "calendar/list_events".to_string(),
-                            AppToolRequirementToml {
-                                approval_mode: Some(AppToolApproval::Approve),
-                            },
-                        )]),
-                    }),
-                },
-            )]),
-        }),
+        apps: Some(app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        )),
         ..Default::default()
     };
     config.config_layer_stack =
