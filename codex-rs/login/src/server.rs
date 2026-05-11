@@ -25,7 +25,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::auth::AuthDotJson;
-use crate::auth::load_auth_from_storage;
+use crate::auth::load_auth_dot_json;
 use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
@@ -796,8 +796,8 @@ pub(crate) async fn persist_tokens_async(
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
-    let previous_auth = tokio::task::spawn_blocking(move || {
-        let previous_auth = match load_auth_from_storage(&codex_home, auth_credentials_store_mode) {
+    let (previous_auth, auth) = tokio::task::spawn_blocking(move || {
+        let previous_auth = match load_auth_dot_json(&codex_home, auth_credentials_store_mode) {
             Ok(auth) => auth,
             Err(err) => {
                 warn!("failed to load previous auth before saving new login: {err}");
@@ -824,15 +824,14 @@ pub(crate) async fn persist_tokens_async(
             agent_identity: None,
         };
         save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
-        Ok::<_, io::Error>(
-            previous_auth
-                .filter(|previous_auth| should_revoke_auth_tokens(Some(previous_auth), &auth)),
-        )
+        Ok::<_, io::Error>((previous_auth, auth))
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
 
-    if let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await {
+    if should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
+        && let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await
+    {
         warn!("failed to revoke superseded auth tokens after login: {err}");
     }
 

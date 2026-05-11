@@ -594,27 +594,15 @@ pub fn save_auth(
 
 /// Load the raw stored auth payload without applying environment overrides.
 ///
-/// Prefer `AuthManager` for ordinary production reads. This helper exists for
-/// write-side maintenance that must inspect the exact payload about to be
-/// replaced in storage, such as revoking superseded tokens after re-login.
-pub(crate) fn load_auth_from_storage(
+/// Returns `None` when no credentials are stored. Prefer `AuthManager` for
+/// ordinary production reads; this helper is for tests and write-side
+/// maintenance that must inspect the exact payload in storage.
+pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<AuthDotJson>> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     storage.load()
-}
-
-/// Load CLI auth data using the configured credential store backend.
-/// Returns `None` when no credentials are stored. This function is
-/// provided only for tests. Production code should not directly load
-/// from the auth.json storage. It should use the AuthManager abstraction
-/// instead.
-pub fn load_auth_dot_json(
-    codex_home: &Path,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> std::io::Result<Option<AuthDotJson>> {
-    load_auth_from_storage(codex_home, auth_credentials_store_mode)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
