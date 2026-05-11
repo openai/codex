@@ -146,13 +146,6 @@ fn responses_websocket_response_processed_is_under_development() {
 }
 
 #[test]
-fn builtin_mcp_is_under_development() {
-    assert_eq!(Feature::BuiltInMcp.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::BuiltInMcp.default_enabled(), false);
-    assert_eq!(feature_for_key("builtin_mcp"), Some(Feature::BuiltInMcp));
-}
-
-#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),

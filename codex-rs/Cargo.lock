@@ -2177,17 +2177,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-builtin-mcps"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-memories-mcp",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "tokio",
-]
-
-[[package]]
 name = "codex-bwrap"
 version = "0.0.0"
 dependencies = [
@@ -3079,7 +3068,6 @@ dependencies = [
  "async-channel",
  "codex-api",
  "codex-async-utils",
- "codex-builtin-mcps",
  "codex-config",
  "codex-exec-server",
  "codex-login",

@@ -66,9 +66,7 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
-use codex_mcp::BuiltinMcpServerOptions;
 use codex_mcp::McpConfig;
-use codex_mcp::enabled_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -707,7 +705,7 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
-    /// Optional path override for the built-in apps MCP server.
+    /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
@@ -1086,11 +1084,6 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
-        let builtin_mcp_servers = enabled_builtin_mcp_servers(BuiltinMcpServerOptions {
-            memories_enabled: self.features.enabled(Feature::BuiltInMcp)
-                && self.features.enabled(Feature::MemoryTool)
-                && self.memories.use_memories,
-        });
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()
@@ -1111,12 +1104,8 @@ impl Config {
             && mcp_requirements.value.is_empty()
         {
             // A present empty allowlist bans configurable MCPs, including plugin MCPs merged
-            // above. Built-ins are product-owned and stay available regardless of admin
-            // allowlists.
+            // above.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
-        }
-        for builtin_server in &builtin_mcp_servers {
-            configured_mcp_servers.remove(builtin_server.name());
         }
 
         McpConfig {
@@ -1134,7 +1123,6 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             configured_mcp_servers,
-            builtin_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }

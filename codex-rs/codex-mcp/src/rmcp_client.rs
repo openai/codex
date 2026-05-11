@@ -10,14 +10,12 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::builtin::BuiltinMcpServerFactory;
 use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::filter_disallowed_codex_apps_tools;
@@ -51,7 +49,6 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
-use codex_rmcp_client::InProcessTransportFactory;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
@@ -146,7 +143,6 @@ impl AsyncManagedClient {
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
-        codex_home: PathBuf,
         runtime_auth_provider: Option<SharedAuthProvider>,
     ) -> Self {
         let tool_filter = server
@@ -174,7 +170,6 @@ impl AsyncManagedClient {
                         server.clone(),
                         store_mode,
                         runtime_environment,
-                        codex_home,
                         runtime_auth_provider,
                     )
                     .await?,
@@ -569,18 +564,10 @@ async fn make_rmcp_client(
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
     runtime_environment: McpRuntimeEnvironment,
-    codex_home: PathBuf,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
-        McpServerLaunch::Builtin(builtin_server) => {
-            let factory: Arc<dyn InProcessTransportFactory> =
-                Arc::new(BuiltinMcpServerFactory::new(*builtin_server, codex_home));
-            return RmcpClient::new_in_process_client(factory)
-                .await
-                .map_err(|err| StartupOutcomeError::from(anyhow!(err)));
-        }
     };
     let McpServerConfig {
         transport,

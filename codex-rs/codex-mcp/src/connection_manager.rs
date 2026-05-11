@@ -246,7 +246,6 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
-                codex_home.clone(),
                 runtime_auth_provider,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
