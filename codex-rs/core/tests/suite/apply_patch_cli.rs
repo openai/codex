@@ -139,6 +139,27 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
     )
 }
 
+fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> PermissionProfile {
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: unreadable_path,
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
 #[cfg(unix)]
 fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, link)
@@ -731,12 +752,11 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
     skip_if_remote!(Ok(()), "symlink setup needs local filesystem link creation");
 
     let harness = apply_patch_harness().await?;
-    let outside_dir = tempfile::tempdir()?;
-    let outside_file = outside_dir.path().join("victim.txt");
-    std::fs::write(&outside_file, "outside content\n")?;
+    let denied_target = harness.path("denied-target.txt");
+    std::fs::write(&denied_target, "outside content\n")?;
 
     let link_rel = "soft-link.txt";
-    create_file_symlink(&outside_file, &harness.path(link_rel))?;
+    create_file_symlink(&denied_target, &harness.path(link_rel))?;
 
     let patch = format!(
         r#"*** Begin Patch
@@ -751,8 +771,8 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
 
     harness
         .submit_with_permission_profile(
-            "attempt to read outside workspace via intercepted apply_patch",
-            restrictive_workspace_write_profile(),
+            "attempt to read denied target via intercepted apply_patch",
+            workspace_write_with_unreadable_path(AbsolutePathBuf::try_from(denied_target.clone())?),
         )
         .await?;
 
@@ -766,9 +786,9 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
         "expected read failure: {out}"
     );
     assert_eq!(
-        std::fs::read_to_string(&outside_file)?,
+        std::fs::read_to_string(&denied_target)?,
         "outside content\n",
-        "verification failure should leave the outside target unchanged"
+        "verification failure should leave the denied target unchanged"
     );
     Ok(())
 }
