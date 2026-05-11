@@ -50,6 +50,8 @@ const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
+const WRITE_ALLOW_MASK: u32 =
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
 ///
@@ -174,44 +176,7 @@ pub fn path_mask_allows(
 }
 
 pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
-    if p_dacl.is_null() {
-        return false;
-    }
-    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
-    let ok = GetAclInformation(
-        p_dacl as *const ACL,
-        &mut info as *mut _ as *mut c_void,
-        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-        AclSizeInformation,
-    );
-    if ok == 0 {
-        return false;
-    }
-    let count = info.AceCount as usize;
-    for i in 0..count {
-        let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
-            continue;
-        }
-        let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 0 {
-            continue; // ACCESS_ALLOWED_ACE_TYPE
-        }
-        // Ignore ACEs that are inherit-only (do not apply to the current object)
-        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
-            continue;
-        }
-        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
-        let mask = ace.Mask;
-        let base = p_ace as usize;
-        let sid_ptr =
-            (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
-        let eq = EqualSid(sid_ptr, psid);
-        if eq != 0 && (mask & FILE_GENERIC_WRITE) != 0 {
-            return true;
-        }
-    }
-    false
+    dacl_mask_allows(p_dacl, &[psid], WRITE_ALLOW_MASK, /*require_all_bits*/ true)
 }
 
 pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
@@ -258,13 +223,6 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
     }
     false
 }
-
-const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ
-    | FILE_GENERIC_WRITE
-    | FILE_GENERIC_EXECUTE
-    | DELETE
-    | FILE_DELETE_CHILD;
-
 
 unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     path: &Path,
@@ -403,7 +361,9 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
-    // Already has write? Skip costly DACL rewrite.
+    // Existing legacy ACEs may grant FILE_GENERIC_WRITE without the DELETE
+    // rights required by atomic replace patterns. Treat those as incomplete so
+    // we upgrade the ACE instead of preserving a partially writable root.
     if dacl_has_write_allow_for_sid(p_dacl, psid) {
         if !p_sd.is_null() {
             LocalFree(p_sd as HLOCAL);
@@ -420,7 +380,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         ptstrName: psid as *mut u16,
     };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    explicit.grfAccessPermissions = WRITE_ALLOW_MASK;
     explicit.grfAccessMode = 2; // SET_ACCESS
     explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     explicit.Trustee = trustee;
@@ -437,7 +397,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
             std::ptr::null_mut(),
         );
         if code3 == ERROR_SUCCESS {
-            added = !dacl_has_write_allow_for_sid(p_dacl, psid);
+            added = true;
         }
         if !p_new_dacl.is_null() {
             LocalFree(p_new_dacl as HLOCAL);
