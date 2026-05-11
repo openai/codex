@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RuntimeInstallManifest": {
+      "properties": {
+        "archiveName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archiveSha256": {
+          "type": "string"
+        },
+        "archiveSizeBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "archiveUrl": {
+          "type": "string"
+        },
+        "bundleFormatVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "bundleVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtimeRootDirectoryName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "archiveSha256",
+        "archiveUrl"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manifest": {
+      "$ref": "#/definitions/RuntimeInstallManifest"
+    },
+    "release": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "manifest",
+    "release"
+  ],
+  "title": "RuntimeInstallParams",
+  "type": "object"
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "RuntimeInstallPaths": {
+      "properties": {
+        "bundledPluginMarketplacePaths": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "bundledSkillPaths": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "nodeModulesPath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "nodePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pythonPath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "skillsToRemove": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bundledPluginMarketplacePaths",
+        "bundledSkillPaths",
+        "nodeModulesPath",
+        "nodePath",
+        "pythonPath",
+        "skillsToRemove"
+      ],
+      "type": "object"
+    },
+    "RuntimeInstallStatus": {
+      "enum": [
+        "already-current",
+        "installed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "bundleVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "paths": {
+      "$ref": "#/definitions/RuntimeInstallPaths"
+    },
+    "status": {
+      "$ref": "#/definitions/RuntimeInstallStatus"
+    }
+  },
+  "required": [
+    "paths",
+    "status"
+  ],
+  "title": "RuntimeInstallResponse",
+  "type": "object"
+}
