@@ -68,7 +68,10 @@ async fn service_tier_commands_lowercase_catalog_names() {
     let mut preset = get_available_model(&chat, "gpt-5.4");
     let expected_description = preset.service_tiers[0].description.clone();
     preset.service_tiers[0].name = "Fast".to_string();
-    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(
+        vec![preset],
+        test_collaboration_mode_presets(),
+    ));
 
     assert_eq!(
         chat.current_model_service_tier_commands(),

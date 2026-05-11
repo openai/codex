@@ -141,7 +141,7 @@ pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     ))
 }
 
-fn test_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
+pub(super) fn test_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     crate::legacy_core::test_support::builtin_collaboration_mode_presets()
         .into_iter()
         .map(|mut preset| {
