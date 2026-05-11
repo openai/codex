@@ -70,6 +70,11 @@ pub(super) async fn read_thread(
         })?;
 
     let mut thread = read_thread_from_rollout_path(store, path).await?;
+    if !params.include_archived && thread.archived_at.is_some() {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!("thread {} is archived", thread.thread_id),
+        });
+    }
     attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
 }
@@ -270,15 +275,21 @@ async fn stored_thread_from_sqlite_metadata(
             .ok()
             .flatten(),
     };
-    let forked_from_id = read_session_meta_line(metadata.rollout_path.as_path())
+    let session_meta = read_session_meta_line(metadata.rollout_path.as_path())
         .await
         .ok()
-        .and_then(|meta_line| meta_line.meta.forked_from_id);
+        .map(|meta_line| meta_line.meta);
+    let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let preview = metadata
+        .preview
+        .clone()
+        .or_else(|| metadata.first_user_message.clone())
+        .unwrap_or_default();
     StoredThread {
         thread_id: metadata.id,
         rollout_path: Some(metadata.rollout_path),
         forked_from_id,
-        preview: metadata.first_user_message.clone().unwrap_or_default(),
+        preview,
         name,
         model_provider: if metadata.model_provider.is_empty() {
             store.config.default_model_provider_id.clone()
@@ -293,6 +304,7 @@ async fn stored_thread_from_sqlite_metadata(
         cwd: metadata.cwd,
         cli_version: metadata.cli_version,
         source: parse_session_source(&metadata.source),
+        thread_source: metadata.thread_source,
         agent_nickname: metadata.agent_nickname,
         agent_role: metadata.agent_role,
         agent_path: metadata.agent_path,
@@ -358,6 +370,7 @@ fn stored_thread_from_meta_line(
         cwd: meta_line.meta.cwd,
         cli_version: meta_line.meta.cli_version,
         source: meta_line.meta.source,
+        thread_source: meta_line.meta.thread_source,
         agent_nickname: meta_line.meta.agent_nickname,
         agent_role: meta_line.meta.agent_role,
         agent_path: meta_line.meta.agent_path,
@@ -1001,8 +1014,9 @@ mod tests {
         builder.cwd = external.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.title = "SQLite title".to_string();
-        metadata.first_user_message = Some("SQLite preview".to_string());
+        metadata.preview = Some("optimize the benchmark".to_string());
+        metadata.first_user_message = Some("next normal prompt".to_string());
+        metadata.title = "next normal prompt".to_string();
         metadata.model = Some("sqlite-model".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -1020,9 +1034,12 @@ mod tests {
 
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.rollout_path, Some(rollout_path));
-        assert_eq!(thread.preview, "SQLite preview");
-        assert_eq!(thread.first_user_message.as_deref(), Some("SQLite preview"));
-        assert_eq!(thread.name.as_deref(), Some("SQLite title"));
+        assert_eq!(thread.preview, "optimize the benchmark");
+        assert_eq!(
+            thread.first_user_message.as_deref(),
+            Some("next normal prompt")
+        );
+        assert_eq!(thread.name, None);
         assert_eq!(thread.model_provider, "sqlite-provider");
         assert_eq!(thread.model.as_deref(), Some("sqlite-model"));
         assert_eq!(thread.cwd, external.path().join("workspace"));

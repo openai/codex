@@ -74,6 +74,7 @@ struct SearchArgs {
     #[schemars(range(min = 0))]
     context_lines: Option<usize>,
     case_sensitive: Option<bool>,
+    normalized: Option<bool>,
     #[schemars(range(min = 1))]
     max_results: Option<usize>,
 }
@@ -184,17 +185,25 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
     }
 }
 
-pub async fn run_stdio_server(codex_home: &AbsolutePathBuf) -> anyhow::Result<()> {
+pub async fn run_server<T, E, A>(codex_home: &AbsolutePathBuf, transport: T) -> anyhow::Result<()>
+where
+    T: rmcp::transport::IntoTransport<rmcp::RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     let backend = LocalMemoriesBackend::from_codex_home(codex_home);
     tokio::fs::create_dir_all(backend.root())
         .await
         .with_context(|| format!("create memories root at {}", backend.root().display()))?;
     MemoriesMcpServer::new(backend)
-        .serve((tokio::io::stdin(), tokio::io::stdout()))
+        .serve(transport)
         .await?
         .waiting()
         .await?;
     Ok(())
+}
+
+pub async fn run_stdio_server(codex_home: &AbsolutePathBuf) -> anyhow::Result<()> {
+    run_server(codex_home, (tokio::io::stdin(), tokio::io::stdout())).await
 }
 
 fn list_tool() -> Tool {
@@ -227,7 +236,7 @@ fn search_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(SEARCH_TOOL_NAME),
         Cow::Borrowed(
-            "Search Codex memory files for line-based substring matches, optionally requiring any or all query substrings on the same line.",
+            "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
         ),
         Arc::new(schema::input_schema_for::<SearchArgs>()),
     );
@@ -251,6 +260,7 @@ impl SearchArgs {
             cursor: self.cursor,
             context_lines: self.context_lines.unwrap_or(0),
             case_sensitive: self.case_sensitive.unwrap_or(true),
+            normalized: self.normalized.unwrap_or(false),
             max_results: clamp_max_results(
                 self.max_results,
                 DEFAULT_SEARCH_MAX_RESULTS,
@@ -273,7 +283,10 @@ fn backend_error_to_mcp(err: MemoriesBackendError) -> McpError {
         | MemoriesBackendError::InvalidMaxLines
         | MemoriesBackendError::LineOffsetExceedsFileLength
         | MemoriesBackendError::NotFile { .. }
-        | MemoriesBackendError::EmptyQuery => McpError::invalid_params(err.to_string(), None),
+        | MemoriesBackendError::EmptyQuery
+        | MemoriesBackendError::InvalidMatchWindow => {
+            McpError::invalid_params(err.to_string(), None)
+        }
         MemoriesBackendError::Io(_) => McpError::internal_error(err.to_string(), None),
     }
 }
@@ -303,6 +316,61 @@ mod tests {
                 cursor: None,
                 context_lines: 0,
                 case_sensitive: false,
+                normalized: false,
+                max_results: DEFAULT_SEARCH_MAX_RESULTS,
+            }
+        );
+    }
+
+    #[test]
+    fn search_args_accept_windowed_all_match_mode() {
+        let args: SearchArgs = parse_args(json!({
+            "queries": ["alpha", "needle"],
+            "match_mode": {
+                "type": "all_within_lines",
+                "line_count": 3
+            }
+        }))
+        .expect("windowed all args should parse");
+
+        let request = args.into_request();
+
+        assert_eq!(
+            request,
+            SearchMemoriesRequest {
+                queries: vec!["alpha".to_string(), "needle".to_string()],
+                match_mode: SearchMatchMode::AllWithinLines { line_count: 3 },
+                path: None,
+                cursor: None,
+                context_lines: 0,
+                case_sensitive: true,
+                normalized: false,
+                max_results: DEFAULT_SEARCH_MAX_RESULTS,
+            }
+        );
+    }
+
+    #[test]
+    fn search_args_accept_normalized_matching() {
+        let args: SearchArgs = parse_args(json!({
+            "queries": ["multi agent v2"],
+            "case_sensitive": false,
+            "normalized": true
+        }))
+        .expect("normalized args should parse");
+
+        let request = args.into_request();
+
+        assert_eq!(
+            request,
+            SearchMemoriesRequest {
+                queries: vec!["multi agent v2".to_string()],
+                match_mode: SearchMatchMode::Any,
+                path: None,
+                cursor: None,
+                context_lines: 0,
+                case_sensitive: false,
+                normalized: true,
                 max_results: DEFAULT_SEARCH_MAX_RESULTS,
             }
         );

@@ -9,6 +9,29 @@ impl ChatWidget {
         self.add_plain_history_lines(goal_summary_lines(&goal));
     }
 
+    pub(crate) fn show_goal_edit_prompt(&mut self, thread_id: ThreadId, goal: AppThreadGoal) {
+        let tx = self.app_event_tx.clone();
+        let status = edited_goal_status(goal.status);
+        let token_budget = goal.token_budget;
+        let view = CustomPromptView::new(
+            "Edit goal".to_string(),
+            "Type a goal objective and press Enter".to_string(),
+            goal.objective,
+            /*context_label*/ None,
+            Box::new(move |objective: String| {
+                tx.send(AppEvent::SetThreadGoalObjective {
+                    thread_id,
+                    objective,
+                    mode: crate::app_event::ThreadGoalSetMode::UpdateExisting {
+                        status,
+                        token_budget,
+                    },
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn show_resume_paused_goal_prompt(
         &mut self,
         thread_id: ThreadId,
@@ -79,10 +102,10 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
         ]));
     }
     let command_hint = match goal.status {
-        AppThreadGoalStatus::Active => "Commands: /goal pause, /goal clear",
-        AppThreadGoalStatus::Paused => "Commands: /goal resume, /goal clear",
+        AppThreadGoalStatus::Active => "Commands: /goal edit, /goal pause, /goal clear",
+        AppThreadGoalStatus::Paused => "Commands: /goal edit, /goal resume, /goal clear",
         AppThreadGoalStatus::BudgetLimited | AppThreadGoalStatus::Complete => {
-            "Commands: /goal clear"
+            "Commands: /goal edit, /goal clear"
         }
     };
     lines.push(Line::default());
@@ -96,5 +119,15 @@ fn goal_status_label(status: AppThreadGoalStatus) -> &'static str {
         AppThreadGoalStatus::Paused => "paused",
         AppThreadGoalStatus::BudgetLimited => "limited by budget",
         AppThreadGoalStatus::Complete => "complete",
+    }
+}
+
+fn edited_goal_status(status: AppThreadGoalStatus) -> AppThreadGoalStatus {
+    match status {
+        AppThreadGoalStatus::Active => AppThreadGoalStatus::Active,
+        AppThreadGoalStatus::Paused => AppThreadGoalStatus::Paused,
+        AppThreadGoalStatus::BudgetLimited | AppThreadGoalStatus::Complete => {
+            AppThreadGoalStatus::Active
+        }
     }
 }

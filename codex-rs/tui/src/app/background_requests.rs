@@ -14,6 +14,9 @@ use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
 use codex_app_server_protocol::RequestId;
 
+use crate::hooks_rpc::fetch_hooks_list;
+use crate::hooks_rpc::write_hook_trust;
+use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -322,6 +325,39 @@ impl App {
         });
     }
 
+    pub(super) fn trust_hook(
+        &mut self,
+        app_server: &AppServerSession,
+        key: String,
+        current_hash: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = write_hook_trust(request_handle, key, current_hash)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to trust hook: {err}"));
+            app_event_tx.send(AppEvent::HookTrusted { result });
+        });
+    }
+
+    pub(super) fn trust_hooks(
+        &mut self,
+        app_server: &AppServerSession,
+        updates: Vec<HookTrustUpdate>,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = write_hook_trusts(request_handle, updates)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to trust hooks: {err}"));
+            app_event_tx.send(AppEvent::HookTrusted { result });
+        });
+    }
+
     pub(super) fn refresh_plugin_mentions(&mut self) {
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
@@ -589,7 +625,6 @@ pub(super) async fn fetch_skills_list(
             params: SkillsListParams {
                 cwds: vec![cwd],
                 force_reload: true,
-                per_cwd_extra_user_roots: None,
             },
         })
         .await
@@ -607,26 +642,13 @@ pub(super) async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
+                marketplace_kinds: None,
             },
         })
         .await
         .wrap_err("plugin/list failed in TUI")?;
     hide_cli_only_plugin_marketplaces(&mut response);
     Ok(response)
-}
-
-pub(super) async fn fetch_hooks_list(
-    request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
-) -> Result<HooksListResponse> {
-    let request_id = RequestId::String(format!("hooks-list-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::HooksList {
-            request_id,
-            params: HooksListParams { cwds: vec![cwd] },
-        })
-        .await
-        .wrap_err("hooks/list failed in TUI")
 }
 
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];

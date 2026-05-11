@@ -30,6 +30,8 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::runtime::McpRuntimeEnvironment;
 use crate::runtime::emit_duration;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerLaunch;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -133,7 +135,7 @@ impl AsyncManagedClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         server_name: String,
-        config: McpServerConfig,
+        server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
@@ -142,8 +144,12 @@ impl AsyncManagedClient {
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
         runtime_auth_provider: Option<SharedAuthProvider>,
+        client_elicitation_capability: ElicitationCapability,
     ) -> Self {
-        let tool_filter = ToolFilter::from_config(&config);
+        let tool_filter = server
+            .configured_config()
+            .map(ToolFilter::from_config)
+            .unwrap_or_default();
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
@@ -162,7 +168,7 @@ impl AsyncManagedClient {
                 let client = Arc::new(
                     make_rmcp_client(
                         &server_name,
-                        config.clone(),
+                        server.clone(),
                         store_mode,
                         runtime_environment,
                         runtime_auth_provider,
@@ -173,14 +179,19 @@ impl AsyncManagedClient {
                     server_name,
                     client,
                     StartServerTaskParams {
-                        startup_timeout: config
-                            .startup_timeout_sec
+                        startup_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.startup_timeout_sec)
                             .or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                        tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                        tool_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.tool_timeout_sec)
+                            .unwrap_or(DEFAULT_TOOL_TIMEOUT),
                         tool_filter: startup_tool_filter,
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        client_elicitation_capability,
                     },
                 )
                 .await
@@ -315,14 +326,6 @@ impl From<anyhow::Error> for StartupOutcomeError {
             error: error.to_string(),
         }
     }
-}
-
-pub(crate) fn elicitation_capability_for_server(
-    _server_name: &str,
-) -> Option<ElicitationCapability> {
-    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-    // indicates this should be an empty object.
-    Some(ElicitationCapability::default())
 }
 
 pub(crate) async fn list_tools_for_client_uncached(
@@ -463,8 +466,8 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        client_elicitation_capability,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -472,7 +475,7 @@ async fn start_server_task(
             extensions: None,
             roots: None,
             sampling: None,
-            elicitation,
+            elicitation: Some(client_elicitation_capability),
             tasks: None,
         },
         client_info: Implementation {
@@ -548,15 +551,19 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    client_elicitation_capability: ElicitationCapability,
 }
 
 async fn make_rmcp_client(
     server_name: &str,
-    config: McpServerConfig,
+    server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
     runtime_environment: McpRuntimeEnvironment,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
+    let config = match server.launch() {
+        McpServerLaunch::Configured(config) => config.as_ref().clone(),
+    };
     let McpServerConfig {
         transport,
         experimental_environment,

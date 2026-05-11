@@ -3,6 +3,7 @@ use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
@@ -32,7 +33,7 @@ pub enum ConfigEdit {
         effort: Option<ReasoningEffort>,
     },
     /// Update the service tier preference for future turns.
-    SetServiceTier { service_tier: Option<ServiceTier> },
+    SetServiceTier { service_tier: Option<String> },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
@@ -88,6 +89,14 @@ pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
         value: value(name.to_string()),
+    }
+}
+
+/// Produces a config edit that sets `[tui].session_picker_view = "<mode>"`.
+pub fn session_picker_view_edit(mode: SessionPickerViewMode) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "session_picker_view".to_string()],
+        value: value(mode.to_string()),
     }
 }
 
@@ -527,7 +536,14 @@ impl ConfigDocument {
             }),
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
                 &["service_tier"],
-                service_tier.map(|service_tier| value(service_tier.to_string())),
+                service_tier.as_ref().map(|service_tier| {
+                    let config_value = match ServiceTier::from_request_value(service_tier) {
+                        Some(ServiceTier::Fast) => "fast",
+                        Some(ServiceTier::Flex) => "flex",
+                        None => service_tier.as_str(),
+                    };
+                    value(config_value)
+                }),
             )),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
@@ -1105,7 +1121,7 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+    pub fn set_service_tier(mut self, service_tier: Option<String>) -> Self {
         self.edits.push(ConfigEdit::SetServiceTier { service_tier });
         self
     }
@@ -1313,6 +1329,25 @@ impl ConfigEditsBuilder {
             }
             self.edits.push(ConfigEdit::ClearPath { segments });
         }
+        self
+    }
+
+    pub fn set_session_picker_view(mut self, mode: SessionPickerViewMode) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "tui".to_string(),
+                "session_picker_view".to_string(),
+            ]
+        } else {
+            vec!["tui".to_string(), "session_picker_view".to_string()]
+        };
+
+        self.edits.push(ConfigEdit::SetPath {
+            segments,
+            value: value(mode.to_string()),
+        });
         self
     }
 

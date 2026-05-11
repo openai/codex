@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "openai-codex-cli-bin"
-SDK_PACKAGE_NAME = "openai-codex-app-server-sdk"
+SDK_PACKAGE_NAME = "openai-codex"
 REPO_SLUG = "openai/codex"
 
 
@@ -27,16 +27,22 @@ class RuntimeSetupError(RuntimeError):
 
 
 def pinned_runtime_version() -> str:
-    source_version = _source_tree_project_version()
-    if source_version is not None:
-        return _normalized_package_version(source_version)
+    """Return the exact runtime version pinned by the SDK package dependency."""
+    source_pin = _source_tree_runtime_dependency_version()
+    if source_pin is not None:
+        return _normalized_package_version(source_pin)
 
     try:
-        return _normalized_package_version(importlib.metadata.version(SDK_PACKAGE_NAME))
+        installed_pin = _installed_sdk_runtime_dependency_version()
     except importlib.metadata.PackageNotFoundError as exc:
         raise RuntimeSetupError(
-            f"Unable to resolve {SDK_PACKAGE_NAME} version for runtime pinning."
+            f"Unable to resolve {SDK_PACKAGE_NAME} metadata for runtime pinning."
         ) from exc
+    if installed_pin is None:
+        raise RuntimeSetupError(
+            f"Unable to resolve {PACKAGE_NAME} dependency pin from {SDK_PACKAGE_NAME}."
+        )
+    return _normalized_package_version(installed_pin)
 
 
 def ensure_runtime_package_installed(
@@ -191,15 +197,9 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
-        raise RuntimeSetupError(
-            f"Release {release_tag} returned malformed assets metadata."
-        )
+        raise RuntimeSetupError(f"Release {release_tag} returned malformed assets metadata.")
     asset = next(
-        (
-            item
-            for item in assets
-            if isinstance(item, dict) and item.get("name") == asset_name
-        ),
+        (item for item in assets if isinstance(item, dict) and item.get("name") == asset_name),
         None,
     )
     if asset is None:
@@ -273,9 +273,7 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         with zipfile.ZipFile(archive_path) as zip_file:
             zip_file.extractall(extract_dir)
     else:
-        raise RuntimeSetupError(
-            f"Unsupported release archive format: {archive_path.name}"
-        )
+        raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
 
     binary_name = runtime_binary_name()
     archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
@@ -284,9 +282,7 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         for path in extract_dir.rglob("*")
         if path.is_file()
         and (
-            path.name == binary_name
-            or path.name == archive_stem
-            or path.name.startswith("codex-")
+            path.name == binary_name or path.name == archive_stem or path.name.startswith("codex-")
         )
     ]
     if not candidates:
@@ -399,18 +395,31 @@ def _release_tag(version: str) -> str:
     return f"rust-v{_codex_release_version(version)}"
 
 
-def _source_tree_project_version() -> str | None:
+def _source_tree_runtime_dependency_version() -> str | None:
+    """Read the runtime dependency pin when the SDK is running from a checkout."""
     pyproject_path = Path(__file__).resolve().parent / "pyproject.toml"
     if not pyproject_path.exists():
         return None
 
-    match = re.search(
-        r'(?m)^version = "([^"]+)"$',
-        pyproject_path.read_text(encoding="utf-8"),
-    )
+    match = re.search(_runtime_dependency_pin_pattern(), pyproject_path.read_text())
     if match is None:
         return None
     return match.group(1)
+
+
+def _installed_sdk_runtime_dependency_version() -> str | None:
+    """Read the runtime dependency pin from installed package metadata."""
+    requirements = importlib.metadata.requires(SDK_PACKAGE_NAME) or []
+    for requirement in requirements:
+        match = re.search(_runtime_dependency_pin_pattern(), requirement)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _runtime_dependency_pin_pattern() -> str:
+    """Match the exact runtime dependency pin in TOML and wheel metadata."""
+    return rf'{re.escape(PACKAGE_NAME)}\s*==\s*"?([^",;\s]+)"?'
 
 
 __all__ = [

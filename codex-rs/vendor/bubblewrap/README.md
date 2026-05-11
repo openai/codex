@@ -12,23 +12,24 @@ on the host.
 User namespaces
 ---------------
 
-There is an effort in the Linux kernel called
+There is an feature in the Linux kernel called
 [user namespaces](https://www.google.com/search?q=user+namespaces+site%3Ahttps%3A%2F%2Flwn.net)
-which attempts to allow unprivileged users to use container features.
-While significant progress has been made, there are
-[still concerns](https://lwn.net/Articles/673597/) about it, and
-it is not available to unprivileged users in several production distributions
-such as CentOS/Red Hat Enterprise Linux 7, Debian Jessie, etc.
+which allows unprivileged users to use container features. Bubblewrap uses these to
+build the sandbox, allowing any user to use the tool.
 
-See for example
-[CVE-2016-3135](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-3135)
-which is a local root vulnerability introduced by userns.
-[This March 2016 post](https://lkml.org/lkml/2016/3/9/555) has some
-more discussion.
+Historically, not all Linux distributions supported (at least by
+default) unprivileged user namespaces, so bubblewrap supports a second
+mode of operation when the binary is setuid root. In that setup
+bubblewrap could be viewed as setuid implementation of a *subset* of
+user namespaces. However, not all features of bubblewrap work in
+this mode.
 
-Bubblewrap could be viewed as setuid implementation of a *subset* of
-user namespaces.  Emphasis on subset - specifically relevant to the
-above CVE, bubblewrap does not allow control over iptables.
+However, setuid mode is deprecated, as most recent Linux distributions
+support unprivileged user namespaces, and setuid binaries carry
+significant risks. By default, bubblewrap binaries refuse to work if
+setuid, and you must build explicitly with ` -Dsupport_setuid=true` to
+enable it to work. Later versions of bubblewrap aims to completely
+remove this support.
 
 The original bubblewrap code existed before user namespaces - it inherits code from
 [xdg-app helper](https://cgit.freedesktop.org/xdg-app/xdg-app/tree/common/xdg-app-helper.c?id=4c3bf179e2e4a2a298cd1db1d045adaf3f564532)
@@ -151,7 +152,7 @@ sandbox. You can also change what the value of uid/gid should be in the sandbox.
 IPC namespaces ([CLONE_NEWIPC](https://linux.die.net/man/2/clone)): The sandbox will get its own copy of all the
 different forms of IPCs, like SysV shared memory and semaphores.
 
-PID namespaces ([CLONE_NEWPID](https://linux.die.net/man/2/clone)): The sandbox will not see any processes outside the sandbox. Additionally, bubblewrap will run a trivial pid1 inside your container to handle the requirements of reaping children in the sandbox. This avoids what is known now as the [Docker pid 1 problem](https://blog.phusion.nl/2015/01/20/docker-and-the-pid-1-zombie-reaping-problem/).
+PID namespaces ([CLONE_NEWPID](https://linux.die.net/man/2/clone)): The sandbox will not see any processes outside the sandbox. Additionally, bubblewrap will run a trivial pid1 inside your container to handle the requirements of reaping children in the sandbox. This avoids what is known now as the [Docker pid 1 problem](https://blog.phusion.nl/docker-and-the-pid-1-zombie-reaping-problem/).
 
 
 Network namespaces ([CLONE_NEWNET](https://linux.die.net/man/2/clone)): The sandbox will not see the network. Instead it will have its own network namespace with only a loopback device.

@@ -6,11 +6,32 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
+use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
-pub(crate) struct Handler;
+#[derive(Default)]
+pub(crate) struct Handler {
+    options: SpawnAgentToolOptions,
+}
+
+impl Handler {
+    pub(crate) fn new(options: SpawnAgentToolOptions) -> Self {
+        Self { options }
+    }
+}
 
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("spawn_agent")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_spawn_agent_tool_v1(self.options.clone()))
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -50,6 +71,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
                     model: args.model.clone().unwrap_or_default(),
@@ -146,6 +168,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,

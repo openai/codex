@@ -27,6 +27,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        client_elicitation_capability: ElicitationCapability::default(),
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
@@ -217,7 +218,10 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
-    let url = match &server.transport {
+    let config = server
+        .configured_config()
+        .expect("codex apps should use configured transport");
+    let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
         _ => panic!("expected streamable http transport for codex apps"),
     };
@@ -236,7 +240,10 @@ fn codex_apps_server_config_uses_configured_apps_mcp_path_override() {
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
-    let url = match &server.transport {
+    let config = server
+        .configured_config()
+        .expect("codex apps should use configured transport");
+    let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
         _ => panic!("expected streamable http transport for codex apps"),
     };
@@ -309,6 +316,16 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
     let codex_apps = effective
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps server should exist");
+
+    let sample = sample
+        .configured_config()
+        .expect("configured server should retain transport");
+    let docs = docs
+        .configured_config()
+        .expect("configured server should retain transport");
+    let codex_apps = codex_apps
+        .configured_config()
+        .expect("codex apps should use configured transport");
 
     match &sample.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => {

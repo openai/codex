@@ -16,6 +16,7 @@ pub(crate) struct SessionStartOutput {
 pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
     pub invalid_reason: Option<String>,
 }
 
@@ -59,12 +60,26 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PreCompactOutput {
+    pub universal: UniversalOutput,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StatelessHookOutput {
+    pub universal: UniversalOutput,
+    pub invalid_reason: Option<String>,
+}
+
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PermissionRequestDecisionWire;
+use crate::schema::PostCompactCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
+use crate::schema::PreCompactCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
@@ -92,11 +107,12 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     } = parse_json(stdout)?;
     let universal = UniversalOutput::from(universal_wire);
     let hook_specific_output = hook_specific_output.as_ref();
+    let additional_context =
+        hook_specific_output.and_then(|output| output.additional_context.clone());
     let use_hook_specific_decision = hook_specific_output.is_some_and(|output| {
         output.permission_decision.is_some()
             || output.permission_decision_reason.is_some()
             || output.updated_input.is_some()
-            || output.additional_context.is_some()
     });
     let invalid_reason = unsupported_pre_tool_use_universal(&universal).or_else(|| {
         if use_hook_specific_decision {
@@ -127,6 +143,7 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     Some(PreToolUseOutput {
         universal,
         block_reason,
+        additional_context,
         invalid_reason,
     })
 }
@@ -185,6 +202,24 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
         invalid_block_reason,
         additional_context,
         invalid_reason,
+    })
+}
+
+pub(crate) fn parse_pre_compact(stdout: &str) -> Option<PreCompactOutput> {
+    let wire: PreCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    Some(PreCompactOutput {
+        universal,
+        invalid_reason: None,
+    })
+}
+
+pub(crate) fn parse_post_compact(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PostCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason: None,
     })
 }
 
@@ -256,6 +291,11 @@ where
         return None;
     }
     serde_json::from_value(value).ok()
+}
+
+pub(crate) fn looks_like_json(stdout: &str) -> bool {
+    let trimmed = stdout.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
 }
 
 fn invalid_block_message(event_name: &str) -> String {
@@ -339,13 +379,6 @@ fn unsupported_pre_tool_use_hook_specific_output(
 ) -> Option<String> {
     if output.updated_input.is_some() {
         Some("PreToolUse hook returned unsupported updatedInput".to_string())
-    } else if output
-        .additional_context
-        .as_deref()
-        .and_then(trimmed_reason)
-        .is_some()
-    {
-        Some("PreToolUse hook returned unsupported additionalContext".to_string())
     } else {
         match output.permission_decision {
             Some(PreToolUsePermissionDecisionWire::Allow) => {

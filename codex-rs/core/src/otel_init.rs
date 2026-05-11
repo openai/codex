@@ -89,6 +89,8 @@ pub fn build_provider(
         trace_exporter,
         metrics_exporter,
         runtime_metrics,
+        span_attributes: config.otel.span_attributes.clone(),
+        tracestate: config.otel.tracestate.clone(),
     })
 }
 
@@ -96,4 +98,19 @@ pub fn build_provider(
 /// Keeps events that originated from codex_otel module
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
     meta.target().starts_with("codex_otel")
+}
+
+pub fn record_process_start(otel: Option<&OtelProvider>, originator: &str) {
+    let Some(metrics) = otel.and_then(OtelProvider::metrics) else {
+        return;
+    };
+    let _ = codex_otel::record_process_start_once(metrics, originator);
+}
+
+pub fn install_sqlite_telemetry(otel: Option<&OtelProvider>, originator: &str) {
+    let Some(metrics) = otel.and_then(OtelProvider::metrics) else {
+        return;
+    };
+    let telemetry = codex_rollout::sqlite_telemetry_recorder(metrics.clone(), originator);
+    let _ = codex_state::install_process_db_telemetry(telemetry);
 }

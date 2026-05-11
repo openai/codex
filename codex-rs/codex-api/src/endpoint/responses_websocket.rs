@@ -1,5 +1,6 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
+use crate::common::ResponseProcessedWsRequest;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
@@ -202,6 +203,40 @@ impl ResponsesWebsocketConnection {
 
     pub async fn is_closed(&self) -> bool {
         self.stream.lock().await.is_none()
+    }
+
+    #[instrument(
+        name = "responses_websocket.send_response_processed",
+        level = "info",
+        skip_all,
+        fields(transport = "responses_websocket", api.path = "responses")
+    )]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the guard serializes exclusive use of the websocket while sending a request frame"
+    )]
+    pub async fn send_response_processed(&self, response_id: String) -> Result<(), ApiError> {
+        let request =
+            ResponsesWsRequest::ResponseProcessed(ResponseProcessedWsRequest { response_id });
+        let request_body = serde_json::to_value(&request).map_err(|err| {
+            ApiError::Stream(format!("failed to encode websocket request: {err}"))
+        })?;
+
+        let mut guard = self.stream.lock().await;
+        let Some(ws_stream) = guard.as_mut() else {
+            return Err(ApiError::Stream(
+                "websocket connection is closed".to_string(),
+            ));
+        };
+
+        send_websocket_request(
+            ws_stream,
+            request_body,
+            self.idle_timeout,
+            self.telemetry.as_ref(),
+            /*connection_reused*/ true,
+        )
+        .await
     }
 
     #[instrument(
@@ -545,36 +580,14 @@ async fn run_websocket_response_stream(
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
-    let request_text = match serde_json::to_string(&request_body) {
-        Ok(text) => text,
-        Err(err) => {
-            return Err(ApiError::Stream(format!(
-                "failed to encode websocket request: {err}"
-            )));
-        }
-    };
-    trace!("websocket request: {request_text}");
-
-    let request_start = Instant::now();
-    let result = tokio::time::timeout(
+    send_websocket_request(
+        ws_stream,
+        request_body,
         idle_timeout,
-        ws_stream.send(Message::Text(request_text.into())),
+        telemetry.as_ref(),
+        connection_reused,
     )
-    .await
-    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-    .and_then(|result| {
-        result.map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")))
-    });
-
-    if let Some(t) = telemetry.as_ref() {
-        t.on_ws_request(
-            request_start.elapsed(),
-            result.as_ref().err(),
-            connection_reused,
-        );
-    }
-
-    result?;
+    .await?;
 
     loop {
         let poll_start = Instant::now();
@@ -667,6 +680,47 @@ async fn run_websocket_response_stream(
             Message::Ping(_) | Message::Pong(_) => {}
         }
     }
+
+    Ok(())
+}
+
+async fn send_websocket_request(
+    ws_stream: &WsStream,
+    request_body: Value,
+    idle_timeout: Duration,
+    telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
+    connection_reused: bool,
+) -> Result<(), ApiError> {
+    let request_text = match serde_json::to_string(&request_body) {
+        Ok(text) => text,
+        Err(err) => {
+            return Err(ApiError::Stream(format!(
+                "failed to encode websocket request: {err}"
+            )));
+        }
+    };
+    trace!("websocket request: {request_text}");
+
+    let request_start = Instant::now();
+    let result = tokio::time::timeout(
+        idle_timeout,
+        ws_stream.send(Message::Text(request_text.into())),
+    )
+    .await
+    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+    .and_then(|result| {
+        result.map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")))
+    });
+
+    if let Some(t) = telemetry.as_ref() {
+        t.on_ws_request(
+            request_start.elapsed(),
+            result.as_ref().err(),
+            connection_reused,
+        );
+    }
+
+    result?;
 
     Ok(())
 }

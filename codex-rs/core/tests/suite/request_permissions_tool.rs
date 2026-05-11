@@ -17,7 +17,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -394,7 +394,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         ]),
         sse(vec![
             ev_response_created(&format!("{response_prefix}-2")),
-            ev_apply_patch_function_call("apply-patch-call", &patch),
+            ev_apply_patch_custom_tool_call("apply-patch-call", &patch),
             ev_completed(&format!("{response_prefix}-2")),
         ]),
     ];
@@ -475,7 +475,22 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     }
 
     let patch_output = responses
-        .function_call_output_text("apply-patch-call")
+        .requests()
+        .into_iter()
+        .find_map(|request| {
+            request
+                .input()
+                .into_iter()
+                .find(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                        && item.get("call_id").and_then(Value::as_str) == Some("apply-patch-call")
+                })
+                .and_then(|item| {
+                    item.get("output")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+        })
         .map(|output| json!({ "output": output }))
         .unwrap_or_else(|| panic!("expected apply-patch-call output"));
     let (exit_code, stdout) = parse_result(&patch_output);

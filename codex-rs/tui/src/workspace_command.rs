@@ -1,14 +1,14 @@
 //! App-server-backed workspace command execution for TUI-owned background lookups.
 //!
-//! This module is the TUI boundary for short, non-interactive commands that need to run wherever
+//! This module is the TUI boundary for non-interactive commands that need to run wherever
 //! the active workspace lives. Callers describe a command in terms of argv, cwd, environment
 //! overrides, timeout, and output cap; the runner translates that request to app-server
 //! `command/exec`. Keeping this as a TUI-local abstraction lets status surfaces avoid knowing
 //! whether the current app-server is embedded or remote.
 //!
-//! Commands sent through this path are best-effort metadata probes. They should not prompt for
-//! stdin, should tolerate failure by omitting optional UI, and should keep output bounded so a
-//! status-line refresh cannot grow into an unbounded background process.
+//! Commands sent through this path should not prompt for stdin. Most callers should keep output
+//! bounded so metadata refreshes cannot grow into unbounded background processes; callers that own a
+//! full user-visible payload, such as `/diff`, can explicitly opt out of output capping.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -45,17 +45,20 @@ pub(crate) struct WorkspaceCommand {
     pub(crate) timeout: Duration,
     /// Maximum captured stdout/stderr bytes returned by app-server.
     pub(crate) output_bytes_cap: usize,
+    /// Whether app-server should return uncapped stdout/stderr.
+    pub(crate) disable_output_cap: bool,
 }
 
 impl WorkspaceCommand {
-    /// Creates a workspace command with conservative defaults for status-style metadata probes.
+    /// Creates a workspace command with conservative defaults for metadata probes.
     pub(crate) fn new(argv: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             argv: argv.into_iter().map(Into::into).collect(),
             cwd: None,
             env: HashMap::new(),
-            timeout: Duration::from_secs(5),
+            timeout: Duration::from_secs(/*secs*/ 5),
             output_bytes_cap: 64 * 1024,
+            disable_output_cap: false,
         }
     }
 
@@ -68,6 +71,18 @@ impl WorkspaceCommand {
     /// Adds or replaces one environment variable override.
     pub(crate) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.insert(key.into(), Some(value.into()));
+        self
+    }
+
+    /// Sets the maximum wall-clock duration before app-server cancels the command.
+    pub(crate) fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Requests uncapped stdout/stderr capture from app-server.
+    pub(crate) fn disable_output_cap(mut self) -> Self {
+        self.disable_output_cap = true;
         self
     }
 }
@@ -176,8 +191,9 @@ impl WorkspaceCommandExecutor for AppServerWorkspaceCommandRunner {
                         tty: false,
                         stream_stdin: false,
                         stream_stdout_stderr: false,
-                        output_bytes_cap: Some(command.output_bytes_cap),
-                        disable_output_cap: false,
+                        output_bytes_cap: (!command.disable_output_cap)
+                            .then_some(command.output_bytes_cap),
+                        disable_output_cap: command.disable_output_cap,
                         disable_timeout: false,
                         timeout_ms: Some(timeout_ms),
                         cwd: command.cwd,

@@ -1,427 +1,330 @@
 use super::*;
+use codex_apply_patch::AppliedPatchDelta;
+use codex_apply_patch::MaybeApplyPatchVerified;
+use codex_exec_server::LOCAL_FS;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
-/// Compute the Git SHA-1 blob object ID for the given content (string).
-/// This delegates to the bytes version to avoid UTF-8 lossy conversions here.
 fn git_blob_sha1_hex(data: &str) -> String {
     format!("{:x}", git_blob_sha1_hex_bytes(data.as_bytes()))
 }
 
-fn normalize_diff_for_test(input: &str, root: &Path) -> String {
-    let root_str = root.display().to_string().replace('\\', "/");
-    let replaced = input.replace(&root_str, "<TMP>");
-    // Split into blocks on lines starting with "diff --git ", sort blocks for determinism, and rejoin
-    let mut blocks: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for line in replaced.lines() {
-        if line.starts_with("diff --git ") && !current.is_empty() {
-            blocks.push(current);
-            current = String::new();
-        }
-        if !current.is_empty() {
-            current.push('\n');
-        }
-        current.push_str(line);
+async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
+    let cwd = AbsolutePathBuf::from_absolute_path(root).expect("absolute tempdir path");
+    let argv = vec!["apply_patch".to_string(), patch.to_string()];
+    match codex_apply_patch::maybe_parse_apply_patch_verified(
+        &argv,
+        &cwd,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    {
+        MaybeApplyPatchVerified::Body(_) => {}
+        other => panic!("expected verified patch action, got {other:?}"),
     }
-    if !current.is_empty() {
-        blocks.push(current);
-    }
-    blocks.sort();
-    let mut out = blocks.join("\n");
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    codex_apply_patch::apply_patch(
+        patch,
+        &cwd,
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .expect("patch should apply")
 }
 
-#[test]
-fn accumulates_add_and_update() {
-    let mut acc = TurnDiffTracker::new();
+#[tokio::test]
+async fn accumulates_add_then_update_as_single_add() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
 
-    let dir = tempdir().unwrap();
-    let file = dir.path().join("a.txt");
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add);
 
-    // First patch: add file (baseline should be /dev/null).
-    let add_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Add {
-            content: "foo\n".to_string(),
-        },
-    )]);
-    acc.on_patch_begin(&add_changes);
+    let update = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Update File: a.txt\n@@\n foo\n+bar\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&update);
 
-    // Simulate apply: create the file on disk.
-    fs::write(&file, "foo\n").unwrap();
-    let first = acc.get_unified_diff().unwrap().unwrap();
-    let first = normalize_diff_for_test(&first, dir.path());
-    let expected_first = {
-        let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
-        let right_oid = git_blob_sha1_hex("foo\n");
-        format!(
-            r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
-new file mode {mode}
+    let right_oid = git_blob_sha1_hex("foo\nbar\n");
+    let expected = format!(
+        r#"diff --git a/a.txt b/a.txt
+new file mode {REGULAR_FILE_MODE}
 index {ZERO_OID}..{right_oid}
 --- {DEV_NULL}
-+++ b/<TMP>/a.txt
-@@ -0,0 +1 @@
-+foo
-"#,
-        )
-    };
-    assert_eq!(first, expected_first);
-
-    // Second patch: update the file on disk.
-    let update_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: None,
-        },
-    )]);
-    acc.on_patch_begin(&update_changes);
-
-    // Simulate apply: append a new line.
-    fs::write(&file, "foo\nbar\n").unwrap();
-    let combined = acc.get_unified_diff().unwrap().unwrap();
-    let combined = normalize_diff_for_test(&combined, dir.path());
-    let expected_combined = {
-        let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
-        let right_oid = git_blob_sha1_hex("foo\nbar\n");
-        format!(
-            r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
-new file mode {mode}
-index {ZERO_OID}..{right_oid}
---- {DEV_NULL}
-+++ b/<TMP>/a.txt
++++ b/a.txt
 @@ -0,0 +1,2 @@
 +foo
 +bar
 "#,
-        )
-    };
-    assert_eq!(combined, expected_combined);
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
 
-#[test]
-fn accumulates_delete() {
-    let dir = tempdir().unwrap();
-    let file = dir.path().join("b.txt");
-    fs::write(&file, "x\n").unwrap();
+#[tokio::test]
+async fn invalidated_tracker_suppresses_existing_diff() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
 
-    let mut acc = TurnDiffTracker::new();
-    let del_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Delete {
-            content: "x\n".to_string(),
-        },
-    )]);
-    acc.on_patch_begin(&del_changes);
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add);
 
-    // Simulate apply: delete the file from disk.
-    let baseline_mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
-    fs::remove_file(&file).unwrap();
-    let diff = acc.get_unified_diff().unwrap().unwrap();
-    let diff = normalize_diff_for_test(&diff, dir.path());
-    let expected = {
-        let left_oid = git_blob_sha1_hex("x\n");
-        format!(
-            r#"diff --git a/<TMP>/b.txt b/<TMP>/b.txt
-deleted file mode {baseline_mode}
+    tracker.invalidate();
+
+    assert_eq!(tracker.get_unified_diff(), None);
+}
+
+#[tokio::test]
+async fn accumulates_delete() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("b.txt"), "x\n").expect("seed file");
+
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let delete = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Delete File: b.txt\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&delete);
+
+    let left_oid = git_blob_sha1_hex("x\n");
+    let expected = format!(
+        r#"diff --git a/b.txt b/b.txt
+deleted file mode {REGULAR_FILE_MODE}
 index {left_oid}..{ZERO_OID}
---- a/<TMP>/b.txt
+--- a/b.txt
 +++ {DEV_NULL}
 @@ -1 +0,0 @@
 -x
 "#,
-        )
-    };
-    assert_eq!(diff, expected);
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
 
-#[test]
-fn accumulates_move_and_update() {
-    let dir = tempdir().unwrap();
-    let src = dir.path().join("src.txt");
-    let dest = dir.path().join("dst.txt");
-    fs::write(&src, "line\n").unwrap();
+#[tokio::test]
+async fn accumulates_move_and_update() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("src.txt"), "line\n").expect("seed file");
 
-    let mut acc = TurnDiffTracker::new();
-    let mv_changes = HashMap::from([(
-        src.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: Some(dest.clone()),
-        },
-    )]);
-    acc.on_patch_begin(&mv_changes);
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let update = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Update File: src.txt\n*** Move to: dst.txt\n@@\n-line\n+line2\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&update);
 
-    // Simulate apply: move and update content.
-    fs::rename(&src, &dest).unwrap();
-    fs::write(&dest, "line2\n").unwrap();
-
-    let out = acc.get_unified_diff().unwrap().unwrap();
-    let out = normalize_diff_for_test(&out, dir.path());
-    let expected = {
-        let left_oid = git_blob_sha1_hex("line\n");
-        let right_oid = git_blob_sha1_hex("line2\n");
-        format!(
-            r#"diff --git a/<TMP>/src.txt b/<TMP>/dst.txt
+    let left_oid = git_blob_sha1_hex("line\n");
+    let right_oid = git_blob_sha1_hex("line2\n");
+    let expected = format!(
+        r#"diff --git a/src.txt b/dst.txt
 index {left_oid}..{right_oid}
---- a/<TMP>/src.txt
-+++ b/<TMP>/dst.txt
+--- a/src.txt
++++ b/dst.txt
 @@ -1 +1 @@
 -line
 +line2
-"#
-        )
-    };
-    assert_eq!(out, expected);
-}
-
-#[test]
-fn move_without_1change_yields_no_diff() {
-    let dir = tempdir().unwrap();
-    let src = dir.path().join("moved.txt");
-    let dest = dir.path().join("renamed.txt");
-    fs::write(&src, "same\n").unwrap();
-
-    let mut acc = TurnDiffTracker::new();
-    let mv_changes = HashMap::from([(
-        src.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: Some(dest.clone()),
-        },
-    )]);
-    acc.on_patch_begin(&mv_changes);
-
-    // Simulate apply: move only, no content change.
-    fs::rename(&src, &dest).unwrap();
-
-    let diff = acc.get_unified_diff().unwrap();
-    assert_eq!(diff, None);
-}
-
-#[test]
-fn move_declared_but_file_only_appears_at_dest_is_add() {
-    let dir = tempdir().unwrap();
-    let src = dir.path().join("src.txt");
-    let dest = dir.path().join("dest.txt");
-    let mut acc = TurnDiffTracker::new();
-    let mv = HashMap::from([(
-        src,
-        FileChange::Update {
-            unified_diff: "".into(),
-            move_path: Some(dest.clone()),
-        },
-    )]);
-    acc.on_patch_begin(&mv);
-    // No file existed initially; create only dest
-    fs::write(&dest, "hello\n").unwrap();
-    let diff = acc.get_unified_diff().unwrap().unwrap();
-    let diff = normalize_diff_for_test(&diff, dir.path());
-    let expected = {
-        let mode = file_mode_for_path(&dest).unwrap_or(FileMode::Regular);
-        let right_oid = git_blob_sha1_hex("hello\n");
-        format!(
-            r#"diff --git a/<TMP>/src.txt b/<TMP>/dest.txt
-new file mode {mode}
-index {ZERO_OID}..{right_oid}
---- {DEV_NULL}
-+++ b/<TMP>/dest.txt
-@@ -0,0 +1 @@
-+hello
 "#,
-        )
-    };
-    assert_eq!(diff, expected);
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
 
-#[test]
-fn update_persists_across_new_baseline_for_new_file() {
-    let dir = tempdir().unwrap();
-    let a = dir.path().join("a.txt");
-    let b = dir.path().join("b.txt");
-    fs::write(&a, "foo\n").unwrap();
-    fs::write(&b, "z\n").unwrap();
+#[tokio::test]
+async fn pure_rename_yields_no_diff() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("old.txt"), "same\n").expect("seed file");
 
-    let mut acc = TurnDiffTracker::new();
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let rename = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n same\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&rename);
 
-    // First: update existing a.txt (baseline snapshot is created for a).
-    let update_a = HashMap::from([(
-        a.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: None,
-        },
-    )]);
-    acc.on_patch_begin(&update_a);
-    // Simulate apply: modify a.txt on disk.
-    fs::write(&a, "foo\nbar\n").unwrap();
-    let first = acc.get_unified_diff().unwrap().unwrap();
-    let first = normalize_diff_for_test(&first, dir.path());
-    let expected_first = {
-        let left_oid = git_blob_sha1_hex("foo\n");
-        let right_oid = git_blob_sha1_hex("foo\nbar\n");
-        format!(
-            r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
+    assert_eq!(tracker.get_unified_diff(), None);
+}
+
+#[tokio::test]
+async fn add_over_existing_file_becomes_update() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("dup.txt"), "before\n").expect("seed file");
+
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: dup.txt\n+after\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add);
+
+    let left_oid = git_blob_sha1_hex("before\n");
+    let right_oid = git_blob_sha1_hex("after\n");
+    let expected = format!(
+        r#"diff --git a/dup.txt b/dup.txt
 index {left_oid}..{right_oid}
---- a/<TMP>/a.txt
-+++ b/<TMP>/a.txt
-@@ -1 +1,2 @@
- foo
-+bar
-"#
-        )
-    };
-    assert_eq!(first, expected_first);
+--- a/dup.txt
++++ b/dup.txt
+@@ -1 +1 @@
+-before
++after
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
+}
 
-    // Next: introduce a brand-new path b.txt into baseline snapshots via a delete change.
-    let del_b = HashMap::from([(
-        b.clone(),
-        FileChange::Delete {
-            content: "z\n".to_string(),
-        },
-    )]);
-    acc.on_patch_begin(&del_b);
-    // Simulate apply: delete b.txt.
-    let baseline_mode = file_mode_for_path(&b).unwrap_or(FileMode::Regular);
-    fs::remove_file(&b).unwrap();
+#[tokio::test]
+async fn delete_then_readd_same_path_becomes_update() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("cycle.txt"), "before\n").expect("seed file");
 
-    let combined = acc.get_unified_diff().unwrap().unwrap();
-    let combined = normalize_diff_for_test(&combined, dir.path());
-    let expected = {
-        let left_oid_a = git_blob_sha1_hex("foo\n");
-        let right_oid_a = git_blob_sha1_hex("foo\nbar\n");
-        let left_oid_b = git_blob_sha1_hex("z\n");
-        format!(
-            r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
-index {left_oid_a}..{right_oid_a}
---- a/<TMP>/a.txt
-+++ b/<TMP>/a.txt
-@@ -1 +1,2 @@
- foo
-+bar
-diff --git a/<TMP>/b.txt b/<TMP>/b.txt
-deleted file mode {baseline_mode}
-index {left_oid_b}..{ZERO_OID}
---- a/<TMP>/b.txt
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let delete = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Delete File: cycle.txt\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&delete);
+
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: cycle.txt\n+after\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&add);
+
+    let left_oid = git_blob_sha1_hex("before\n");
+    let right_oid = git_blob_sha1_hex("after\n");
+    let expected = format!(
+        r#"diff --git a/cycle.txt b/cycle.txt
+index {left_oid}..{right_oid}
+--- a/cycle.txt
++++ b/cycle.txt
+@@ -1 +1 @@
+-before
++after
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
+}
+
+#[tokio::test]
+async fn move_over_existing_destination_without_content_change_deletes_source_only() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("a.txt"), "same\n").expect("seed source");
+    fs::write(dir.path().join("b.txt"), "same\n").expect("seed destination");
+
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let move_overwrite = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n same\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&move_overwrite);
+
+    let left_oid = git_blob_sha1_hex("same\n");
+    let expected = format!(
+        r#"diff --git a/a.txt b/a.txt
+deleted file mode {REGULAR_FILE_MODE}
+index {left_oid}..{ZERO_OID}
+--- a/a.txt
 +++ {DEV_NULL}
 @@ -1 +0,0 @@
--z
+-same
 "#,
-        )
-    };
-    assert_eq!(combined, expected);
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
 
-#[test]
-fn binary_files_differ_update() {
-    let dir = tempdir().unwrap();
-    let file = dir.path().join("bin.dat");
+#[tokio::test]
+async fn move_over_existing_destination_with_content_change_deletes_source_and_updates_destination()
+{
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
+    fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");
 
-    // Initial non-UTF8 bytes
-    let left_bytes: Vec<u8> = vec![0xff, 0xfe, 0xfd, 0x00];
-    // Updated non-UTF8 bytes
-    let right_bytes: Vec<u8> = vec![0x01, 0x02, 0x03, 0x00];
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let move_overwrite = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&move_overwrite);
 
-    fs::write(&file, &left_bytes).unwrap();
-
-    let mut acc = TurnDiffTracker::new();
-    let update_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: None,
-        },
-    )]);
-    acc.on_patch_begin(&update_changes);
-
-    // Apply update on disk
-    fs::write(&file, &right_bytes).unwrap();
-
-    let diff = acc.get_unified_diff().unwrap().unwrap();
-    let diff = normalize_diff_for_test(&diff, dir.path());
-    let expected = {
-        let left_oid = format!("{:x}", git_blob_sha1_hex_bytes(&left_bytes));
-        let right_oid = format!("{:x}", git_blob_sha1_hex_bytes(&right_bytes));
-        format!(
-            r#"diff --git a/<TMP>/bin.dat b/<TMP>/bin.dat
-index {left_oid}..{right_oid}
---- a/<TMP>/bin.dat
-+++ b/<TMP>/bin.dat
-Binary files differ
-"#
-        )
-    };
-    assert_eq!(diff, expected);
+    let left_oid_a = git_blob_sha1_hex("from\n");
+    let left_oid_b = git_blob_sha1_hex("existing\n");
+    let right_oid_b = git_blob_sha1_hex("new\n");
+    let expected = format!(
+        r#"diff --git a/a.txt b/a.txt
+deleted file mode {REGULAR_FILE_MODE}
+index {left_oid_a}..{ZERO_OID}
+--- a/a.txt
++++ {DEV_NULL}
+@@ -1 +0,0 @@
+-from
+diff --git a/b.txt b/b.txt
+index {left_oid_b}..{right_oid_b}
+--- a/b.txt
++++ b/b.txt
+@@ -1 +1 @@
+-existing
++new
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
 
-#[test]
-fn filenames_with_spaces_add_and_update() {
-    let mut acc = TurnDiffTracker::new();
+#[tokio::test]
+async fn preserves_committed_change_order_with_delete_then_move_overwrite() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
+    fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");
 
-    let dir = tempdir().unwrap();
-    let file = dir.path().join("name with spaces.txt");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let ordered_patch = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Delete File: b.txt\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta(&ordered_patch);
 
-    // First patch: add file (baseline should be /dev/null).
-    let add_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Add {
-            content: "foo\n".to_string(),
-        },
-    )]);
-    acc.on_patch_begin(&add_changes);
-
-    // Simulate apply: create the file on disk.
-    fs::write(&file, "foo\n").unwrap();
-    let first = acc.get_unified_diff().unwrap().unwrap();
-    let first = normalize_diff_for_test(&first, dir.path());
-    let expected_first = {
-        let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
-        let right_oid = git_blob_sha1_hex("foo\n");
-        format!(
-            r#"diff --git a/<TMP>/name with spaces.txt b/<TMP>/name with spaces.txt
-new file mode {mode}
-index {ZERO_OID}..{right_oid}
---- {DEV_NULL}
-+++ b/<TMP>/name with spaces.txt
-@@ -0,0 +1 @@
-+foo
+    let left_oid_a = git_blob_sha1_hex("from\n");
+    let left_oid_b = git_blob_sha1_hex("existing\n");
+    let right_oid_b = git_blob_sha1_hex("new\n");
+    let expected = format!(
+        r#"diff --git a/a.txt b/a.txt
+deleted file mode {REGULAR_FILE_MODE}
+index {left_oid_a}..{ZERO_OID}
+--- a/a.txt
++++ {DEV_NULL}
+@@ -1 +0,0 @@
+-from
+diff --git a/b.txt b/b.txt
+index {left_oid_b}..{right_oid_b}
+--- a/b.txt
++++ b/b.txt
+@@ -1 +1 @@
+-existing
++new
 "#,
-        )
-    };
-    assert_eq!(first, expected_first);
-
-    // Second patch: update the file on disk.
-    let update_changes = HashMap::from([(
-        file.clone(),
-        FileChange::Update {
-            unified_diff: "".to_owned(),
-            move_path: None,
-        },
-    )]);
-    acc.on_patch_begin(&update_changes);
-
-    // Simulate apply: append a new line with a space.
-    fs::write(&file, "foo\nbar baz\n").unwrap();
-    let combined = acc.get_unified_diff().unwrap().unwrap();
-    let combined = normalize_diff_for_test(&combined, dir.path());
-    let expected_combined = {
-        let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
-        let right_oid = git_blob_sha1_hex("foo\nbar baz\n");
-        format!(
-            r#"diff --git a/<TMP>/name with spaces.txt b/<TMP>/name with spaces.txt
-new file mode {mode}
-index {ZERO_OID}..{right_oid}
---- {DEV_NULL}
-+++ b/<TMP>/name with spaces.txt
-@@ -0,0 +1,2 @@
-+foo
-+bar baz
-"#,
-        )
-    };
-    assert_eq!(combined, expected_combined);
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
 }

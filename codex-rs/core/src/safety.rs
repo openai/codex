@@ -159,8 +159,8 @@ fn is_write_patch_constrained_to_writable_paths(
     // Determine whether `path` is inside **any** writable root. Both `path`
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
-    let is_path_writable = |p: &PathBuf| {
-        let abs = resolve_path(cwd, p);
+    let is_path_writable = |p: &Path| {
+        let abs = resolve_path(cwd, &p.to_path_buf());
         let abs = match normalize(&abs) {
             Some(v) => v,
             None => return false,

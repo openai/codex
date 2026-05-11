@@ -1,14 +1,19 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 
+use crate::tools::flat_tool_name;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolName;
 
 pub(crate) fn collect_unavailable_called_tools(
     input: &[ResponseItem],
-    exposed_tool_names: &HashSet<&str>,
+    exposed_tool_names: &HashSet<ToolName>,
 ) -> Vec<ToolName> {
     let mut unavailable_tools = BTreeMap::new();
+    let exposed_flat_names = exposed_tool_names
+        .iter()
+        .map(flat_tool_name)
+        .collect::<HashSet<_>>();
 
     for item in input {
         let ResponseItem::FunctionCall {
@@ -25,13 +30,13 @@ pub(crate) fn collect_unavailable_called_tools(
             Some(namespace) => ToolName::namespaced(namespace.clone(), name.clone()),
             None => ToolName::plain(name.clone()),
         };
-        let display_name = tool_name.display();
-        if exposed_tool_names.contains(display_name.as_str()) {
+        let tool_name_flat = flat_tool_name(&tool_name).into_owned();
+        if exposed_flat_names.contains(tool_name_flat.as_str()) {
             continue;
         }
 
         unavailable_tools
-            .entry(display_name)
+            .entry(tool_name_flat)
             .or_insert_with(|| tool_name);
     }
 
@@ -78,7 +83,10 @@ mod tests {
 
     #[test]
     fn collect_unavailable_called_tools_skips_currently_available_tools() {
-        let exposed_tool_names = HashSet::from(["mcp__server__lookup", "mcp__server__search"]);
+        let exposed_tool_names = HashSet::from([
+            ToolName::plain("mcp__server__lookup"),
+            ToolName::plain("mcp__server__search"),
+        ]);
         let input = vec![
             function_call("mcp__server__lookup", /*namespace*/ None),
             function_call("mcp__server__search", /*namespace*/ None),
@@ -88,5 +96,18 @@ mod tests {
         let tools = collect_unavailable_called_tools(&input, &exposed_tool_names);
 
         assert_eq!(tools, vec![ToolName::plain("mcp__server__missing")]);
+    }
+
+    #[test]
+    fn collect_unavailable_called_tools_matches_exposed_display_names() {
+        let exposed_tool_names = HashSet::from([ToolName::namespaced("mcp__server__", "lookup")]);
+        let input = vec![function_call(
+            "mcp__server__lookup",
+            /*namespace*/ None,
+        )];
+
+        let tools = collect_unavailable_called_tools(&input, &exposed_tool_names);
+
+        assert_eq!(tools, Vec::new());
     }
 }

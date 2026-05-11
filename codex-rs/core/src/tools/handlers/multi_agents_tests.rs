@@ -15,6 +15,7 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -180,7 +181,7 @@ async fn handler_rejects_non_function_payloads() {
             input: "hello".to_string(),
         },
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("payload should be rejected");
     };
     assert_eq!(
@@ -200,7 +201,7 @@ async fn spawn_agent_rejects_empty_message() {
         "spawn_agent",
         function_payload(json!({"message": "   "})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("empty message should be rejected");
     };
     assert_eq!(
@@ -221,7 +222,7 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
             "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
         })),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("message+items should be rejected");
     };
     assert_eq!(
@@ -268,7 +269,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
             "agent_type": "explorer"
         })),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -303,7 +304,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let err = SpawnAgentHandler
+    let err = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -336,7 +337,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
 
-    let err = SpawnAgentHandler
+    let err = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -380,7 +381,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
         ..turn
     };
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -420,7 +421,7 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -464,7 +465,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         ..turn
     };
 
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -506,7 +507,7 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
 
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -552,7 +553,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
             "message": "inspect this repo"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("missing task_name should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -588,7 +589,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
             "task_name": "worker"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("legacy items field should be rejected");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -606,7 +607,7 @@ async fn spawn_agent_errors_when_manager_dropped() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("spawn should fail without a manager");
     };
     assert_eq!(
@@ -640,7 +641,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -735,7 +736,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -774,7 +775,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -813,7 +814,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandlerV2
+    let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1008,7 +1009,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1189,7 +1190,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1253,7 +1254,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1309,7 +1310,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1382,7 +1383,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1517,7 +1518,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1570,7 +1571,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1648,7 +1649,7 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1696,7 +1697,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
             "task_name": "BadName"
         })),
     );
-    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
         panic!("invalid agent name should be rejected");
     };
     assert_eq!(
@@ -1754,7 +1755,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             "agent_type": "explorer"
         })),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -1815,7 +1816,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
         panic!("spawn should fail when depth limit exceeded");
     };
     assert_eq!(
@@ -1855,7 +1856,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandler::default()
         .handle(invocation)
         .await
         .expect("spawn should succeed within configured depth");
@@ -1914,7 +1915,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
             "fork_turns": "none"
         })),
     );
-    let output = SpawnAgentHandlerV2
+    let output = SpawnAgentHandlerV2::default()
         .handle(invocation)
         .await
         .expect("multi-agent v2 spawn should ignore max depth");
@@ -2306,7 +2307,7 @@ async fn wait_agent_rejects_non_positive_timeout() {
             "timeout_ms": 0
         })),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("non-positive timeout should be rejected");
     };
     assert_eq!(
@@ -2324,7 +2325,7 @@ async fn wait_agent_rejects_invalid_target() {
         "wait_agent",
         function_payload(json!({"targets": ["invalid"]})),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -2342,7 +2343,7 @@ async fn wait_agent_rejects_empty_targets() {
         "wait_agent",
         function_payload(json!({"targets": []})),
     );
-    let Err(err) = WaitAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
         panic!("empty ids should be rejected");
     };
     assert_eq!(
@@ -2370,7 +2371,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2400,7 +2401,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2452,7 +2453,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 
     let early = timeout(
         Duration::from_millis(/*millis*/ 20),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session.clone(),
             turn.clone(),
             "wait_agent",
@@ -2467,7 +2468,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 
     let output = timeout(
         Duration::from_secs(/*secs*/ 1),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
             "wait_agent",
@@ -2506,7 +2507,7 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
             "timeout_ms": 1000
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2546,7 +2547,7 @@ async fn wait_agent_times_out_when_status_is_not_final() {
             "timeout_ms": MIN_WAIT_TIMEOUT_MS
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2592,7 +2593,7 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
 
     let early = timeout(
         Duration::from_millis(50),
-        WaitAgentHandler.handle(invocation),
+        WaitAgentHandler::default().handle(invocation),
     )
     .await;
     assert!(
@@ -2642,7 +2643,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
             "timeout_ms": 1000
         })),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
@@ -2678,7 +2679,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2
+    let spawn_output = SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2713,7 +2714,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2769,7 +2770,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2805,7 +2806,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
 
     let output = timeout(
         Duration::from_millis(500),
-        WaitAgentHandlerV2.handle(invocation(
+        WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
             "wait_agent",
@@ -2848,7 +2849,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     let turn = Arc::new(turn);
 
     for task_name in ["worker_a", "worker_b"] {
-        SpawnAgentHandlerV2
+        SpawnAgentHandlerV2::default()
             .handle(invocation(
                 session.clone(),
                 turn.clone(),
@@ -2879,7 +2880,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -2935,7 +2936,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -2964,7 +2965,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         let session = session.clone();
         let turn = turn.clone();
         async move {
-            WaitAgentHandlerV2
+            WaitAgentHandlerV2::default()
                 .handle(invocation(
                     session,
                     turn,
@@ -3021,7 +3022,7 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    SpawnAgentHandlerV2
+    SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -3163,9 +3164,12 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        /*attestation_provider*/ None,
     );
 
     let parent = manager
@@ -3175,7 +3179,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.codex.session.clone();
 
-    let child_spawn_output = SpawnAgentHandler
+    let child_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             parent_session.clone(),
             parent_session.new_default_turn().await,
@@ -3200,7 +3204,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .await
         .expect("child thread should exist");
     let child_session = child_thread.codex.session.clone();
-    let grandchild_spawn_output = SpawnAgentHandler
+    let grandchild_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             child_session.clone(),
             child_session.new_default_turn().await,

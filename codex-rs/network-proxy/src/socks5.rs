@@ -40,6 +40,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -290,7 +291,20 @@ async fn handle_socks5_tcp(
         }
     }
 
-    tcp_connector.serve(req).await
+    info!("SOCKS upstream dial started (host={host}, port={port})");
+    let connect_started_at = Instant::now();
+    let result = tcp_connector.serve(req).await;
+    match &result {
+        Ok(_) => info!(
+            "SOCKS upstream dial established (host={host}, port={port}, elapsed_ms={})",
+            connect_started_at.elapsed().as_millis()
+        ),
+        Err(_) => warn!(
+            "SOCKS upstream dial failed (host={host}, port={port}, elapsed_ms={})",
+            connect_started_at.elapsed().as_millis()
+        ),
+    }
+    result
 }
 
 async fn inspect_socks5_udp(

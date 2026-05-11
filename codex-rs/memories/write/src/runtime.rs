@@ -15,15 +15,16 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::InferenceTraceContext;
@@ -44,7 +45,7 @@ pub(crate) struct StageOneRequestContext {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) reasoning_summary: ReasoningSummary,
-    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) service_tier: Option<String>,
     pub(crate) turn_metadata_header: Option<String>,
 }
 
@@ -173,6 +174,7 @@ impl MemoryStartupContext {
         let session_source = self.thread.config_snapshot().await.session_source;
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
+            SessionId::from(self.thread_id), // We use thread_id to detach this query from the foreground user session.
             self.thread_id,
             installation_id,
             config.model_provider.clone(),
@@ -181,6 +183,7 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            /*attestation_provider*/ None,
         );
 
         let mut client_session = model_client.new_session();
@@ -191,7 +194,7 @@ impl MemoryStartupContext {
                 &context.session_telemetry,
                 context.reasoning_effort,
                 context.reasoning_summary,
-                context.service_tier,
+                context.service_tier.clone(),
                 context.turn_metadata_header.as_deref(),
                 &InferenceTraceContext::disabled(),
             )
@@ -241,6 +244,7 @@ impl MemoryStartupContext {
                 session_source: Some(SessionSource::Internal(
                     InternalSessionSource::MemoryConsolidation,
                 )),
+                thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
                 persist_extended_history: false,
                 metrics_service_name: None,

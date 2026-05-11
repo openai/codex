@@ -157,6 +157,23 @@ async fn status_line_git_summary_items_render_values() {
 }
 
 #[tokio::test]
+async fn raw_output_status_line_value_only_shows_when_enabled() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::RawOutput),
+        None
+    );
+
+    chat.set_raw_output_mode(/*enabled*/ true);
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::RawOutput),
+        Some("raw output".to_string())
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_changes_render_no_changes() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_git_summary = Some(StatusLineGitSummary {
@@ -196,6 +213,184 @@ async fn stale_status_line_git_summary_update_is_ignored() {
     assert!(chat.status_line_git_summary.is_none());
     assert!(!chat.status_line_git_summary_pending);
 }
+
+#[tokio::test]
+async fn raw_output_mode_can_change_without_inserting_notice() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_raw_output_mode(/*enabled*/ true);
+
+    assert!(chat.raw_output_mode());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.set_raw_output_mode_and_notify(/*enabled*/ false);
+
+    assert!(!chat.raw_output_mode());
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        history.contains("Raw output mode off: rich transcript rendering restored."),
+        "expected raw output notice, got {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    assert!(controller.push("plain response line\n"));
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+                assert!(deferred_history_cell.is_none());
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        saw_insert_history,
+        "plain text should still insert history before consolidation"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("| Name | Notes |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| alpha | tail held until final table render |\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected table holdback to leave a live tail for this regression",
+    );
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+                assert!(
+                    deferred_history_cell.is_some(),
+                    "live table tail should be staged for consolidation",
+                );
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        !saw_insert_history,
+        "live table tail should not be inserted before canonical reflow"
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_table_tail_skips_provisional_history_insert() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("| Step | Owner |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| Verify | Codex |\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected plan table holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+    chat.transcript.plan_delta_buffer =
+        "| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n".to_string();
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_plan_item_completed(String::new());
+
+    let mut saw_source_backed_plan = false;
+    let mut saw_stream_plan = false;
+    let mut rendered_plan = String::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            if cell.as_any().is::<history_cell::ProposedPlanCell>() {
+                saw_source_backed_plan = true;
+                rendered_plan = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            }
+            saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
+        }
+    }
+
+    assert!(saw_source_backed_plan, "expected source-backed plan insert");
+    assert!(
+        rendered_plan.contains('│') || rendered_plan.contains('┌'),
+        "expected completed plan table to render as a boxed table, got: {rendered_plan:?}"
+    );
+    assert!(
+        !saw_stream_plan,
+        "live plan table tail should not be inserted provisionally"
+    );
+}
+
 #[tokio::test]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -205,6 +400,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         workspace_command_runner: None,
@@ -958,9 +1154,9 @@ async fn streaming_final_answer_keeps_task_running_state() {
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -1017,7 +1213,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -1046,7 +1242,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
         "Please summarize the rest more briefly.",
     );
 
-    assert!(chat.pending_steers.is_empty());
+    assert!(chat.input_queue.pending_steers.is_empty());
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 }
@@ -1083,7 +1279,7 @@ async fn fast_status_indicator_requires_chatgpt_auth() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
 
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 
@@ -1099,7 +1295,7 @@ async fn fast_status_indicator_is_hidden_for_models_without_fast_support() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     set_fast_mode_test_catalog(&mut chat);
     assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
@@ -1280,6 +1476,34 @@ async fn warning_event_adds_warning_history_cell() {
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn repeated_model_metadata_warning_is_hidden_for_same_slug() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let warning = "Model metadata for `unknown-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+
+    handle_warning(&mut chat, warning);
+    handle_warning(&mut chat, warning);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("unknown-model"),
+        "warning cell missing model slug: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn repeated_generic_warning_is_not_hidden() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_warning(&mut chat, "test warning message");
+    handle_warning(&mut chat, "test warning message");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 2, "expected both warning history cells");
 }
 
 #[tokio::test]
@@ -1464,7 +1688,7 @@ async fn status_line_fast_mode_renders_on_and_off() {
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
 
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
 }
@@ -1477,7 +1701,7 @@ async fn status_line_fast_mode_footer_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     chat.refresh_status_line();
 
     let width = 80;
@@ -1504,7 +1728,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1652,7 +1876,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1686,7 +1910,7 @@ async fn status_line_model_with_reasoning_context_remaining_footer_snapshot() {
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1804,7 +2028,9 @@ async fn session_configured_clears_goal_status_footer() {
             usage: Some("40K / 50K".to_string())
         })
     );
-    chat.budget_limited_turn_ids.insert("turn-1".to_string());
+    chat.turn_lifecycle
+        .budget_limited_turn_ids
+        .insert("turn-1".to_string());
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
@@ -1822,14 +2048,13 @@ async fn session_configured_clears_goal_status_footer() {
         cwd: test_path_buf("/home/user/project").abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     });
 
     assert_eq!(chat.current_goal_status_indicator, None);
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[tokio::test]
@@ -1858,7 +2083,7 @@ async fn thread_goal_update_for_other_thread_is_ignored() {
 
     assert_eq!(chat.current_goal_status_indicator, None);
     assert!(chat.current_goal_status.is_none());
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[test]
@@ -2515,7 +2740,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Some("checking command policy"),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let first_running_snapshot = hook_live_and_history_snapshot(&chat, "pre running", "");
 
@@ -2527,7 +2752,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Some("checking output policy"),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let second_running_snapshot = hook_live_and_history_snapshot(&chat, "post running", "");
 
@@ -2540,7 +2765,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Vec::new(),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     let older_completed_snapshot =
         hook_live_and_history_snapshot(&chat, "pre completed lingering", "");
     expire_quiet_hook_linger(&mut chat);
@@ -2556,7 +2781,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
             Vec::new(),
         ),
     );
-    assert_eq!(chat.current_status.header, "Thinking");
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     assert!(chat.bottom_pane.status_indicator_visible());
     assert!(drain_insert_history(&mut rx).is_empty());
     let all_completed_lingering_snapshot =

@@ -24,34 +24,13 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
-- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 - unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
-
-When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
-
-- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
-- `GET /healthz` returns `200 OK` when no `Origin` header is present.
-- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
-
-Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
 opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
 by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
 The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
-
-Security note:
-
-- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
-- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
-- Supported auth modes are app-server flags:
-  - `--ws-auth capability-token --ws-token-file /absolute/path`
-  - `--ws-auth capability-token --ws-token-sha256 HEX`
-  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
-- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
-- When starting `codex app-server` manually, prefer `--ws-token-file` over passing raw bearer tokens on the command line. Store a high-entropy token in a file readable only by your user, then have your client present that token in the websocket `Authorization` header.
-- `--ws-token-sha256` is intended for clients that keep the raw token in a separate local secret store and only need the server to know the SHA-256 verifier. The hash may appear in process listings, but it is not sufficient to authenticate; clients still need the original raw token. Only use this mode with randomly generated high-entropy tokens, not passwords or other guessable values.
 
 Tracing/log output:
 
@@ -149,11 +128,12 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
-- `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
+- `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
+- `thread/turns/items/list` — experimental; reserved for paging full items for one turn. The API shape is present, but app-server currently returns an unsupported-method JSON-RPC error.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
-- `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
+- `thread/goal/set` — create or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`.
 - `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
@@ -181,6 +161,12 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `process/spawn` — experimental; spawn a standalone process without the Codex sandbox on the host where the app server is running; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
+- `process/writeStdin` — experimental; write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
+- `process/resizePty` — experimental; resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
+- `process/kill` — experimental; terminate a running `process/spawn` session by `processHandle`; returns `{}`.
+- `process/outputDelta` — experimental; notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
+- `process/exited` — experimental; notification emitted when a `process/spawn` session exits.
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
@@ -195,6 +181,7 @@ Example with notification opt-out:
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `memories`, `plugins`, `remote_control`, `tool_search`, `tool_suggest`, `tool_call_mcp_elicitation`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
+- `environment/add` — experimental; add or replace a named remote environment by `environmentId` and `execServerUrl` for later selection by `thread/start` or `turn/start`; returns `{}` and does not change the default environment.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `hooks/list` — list discovered hooks for one or more `cwd` values.
@@ -202,13 +189,10 @@ Example with notification opt-out:
 - `marketplace/remove` — remove a configured marketplace by name from the user marketplace config, and delete its installed marketplace root when one exists.
 - `marketplace/upgrade` — upgrade all configured Git plugin marketplaces, or one named marketplace when `marketplaceName` is provided. Returns selected marketplace names, upgraded roots, and per-marketplace errors.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, plugin `availability` (`AVAILABLE` by default or `DISABLED_BY_ADMIN` for remote plugins blocked upstream), fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category (**under development; do not call from production clients yet**).
-- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
+- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/hooks/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering; bundled hooks are returned as lightweight declaration summaries keyed for correlation with `hooks/list`. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
 - `plugin/skill/read` — read remote plugin skill markdown on demand by `remoteMarketplaceName`, `remotePluginId`, and `skillName`. This lets clients preview uninstalled remote plugin skills without downloading the plugin bundle.
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
-- `device/key/create` — create or load a controller-local device signing key for an account/client binding. This local-key API is available only over local transports such as stdio and in-process; remote transports reject it. Hardware-backed providers are the target protection class; an OS-protected non-extractable fallback is allowed only with `protectionPolicy: "allow_os_protected_nonextractable"` and returns the reported `protectionClass`.
-- `device/key/public` — return a device key's SPKI DER public key as base64 plus its `algorithm` and `protectionClass`.
-- `device/key/sign` — sign one of the accepted structured payload variants with a controller-local device key. The only accepted payload today is `remoteControlClientConnection`, which binds a server-issued `/client` websocket challenge to the enrolled controller device without signing the bearer token itself; this is intentionally not an arbitrary-byte signing API.
 - `remoteControl/status/changed` — notification emitted when the remote-control status or client-visible environment id changes. `status` is one of `disabled`, `connecting`, `connected`, or `errored`; `environmentId` is a string when the app-server has a current enrollment and `null` when that enrollment is cleared, invalidated, or remote control is disabled. Newly initialized app-server clients always receive the current status snapshot.
 - `skills/config/write` — write user-level skill config by name or absolute path.
 - `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, install MCPs if any, and return the effective plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
@@ -297,11 +281,11 @@ Example:
 { "id": 12, "result": { "thread": { "id": "thr_123", "turns": [], … } } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. The returned `thread.sessionId` identifies the current live session tree root. Root threads use their own `thread.id` as `thread.sessionId`; stored threads that are not loaded also report their own `thread.id`, because resuming one makes it the root of a new live session tree. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
 { "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
-{ "id": 12, "result": { "thread": { "id": "thr_456", … } } }
+{ "id": 12, "result": { "thread": { "id": "thr_456", "sessionId": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
@@ -421,11 +405,14 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 
 Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a stored thread’s turn history without resuming it. By default, results are sorted descending so clients can start at the present and fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` on a later request with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
 
+Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Pass `itemsView` to choose the returned detail level; omitted `itemsView` defaults to `"summary"`.
+
 ```json
 { "method": "thread/turns/list", "id": 24, "params": {
     "threadId": "thr_123",
     "limit": 50,
-    "sortDirection": "desc"
+    "sortDirection": "desc",
+    "itemsView": "summary"
 } }
 { "id": 24, "result": {
     "data": [ ... ],
@@ -433,6 +420,19 @@ Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a sto
     "backwardsCursor": "newer-turns-cursor-or-null"
 } }
 ```
+
+`thread/turns/items/list` is the planned hydration API for fetching full items for one turn:
+
+```json
+{ "method": "thread/turns/items/list", "id": 25, "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_456",
+    "limit": 100,
+    "sortDirection": "asc"
+} }
+```
+
+This method currently returns JSON-RPC `-32601` with message `thread/turns/items/list is not supported yet`.
 
 ### Example: Update stored thread metadata
 
@@ -481,7 +481,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Set and update a thread goal
 
-Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Supplying a new objective resets `tokensUsed`, `timeUsedSeconds`, and `createdAt`. Supplying the current non-terminal objective, or omitting `objective`, updates the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+Use `thread/goal/set` to create or update the current goal for a materialized thread. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
 
 ```json
 { "method": "thread/goal/set", "id": 27, "params": {
@@ -930,6 +930,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 } }
 ```
 
+- Prefer using `process/spawn` when you want an explicitly unsandboxed process execution API with immediate spawn acknowledgement, handle-based control, output notifications, and an exit notification.
 - For clients that are already sandboxed externally, set the legacy `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
 
 Notes:
@@ -1000,6 +1001,83 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 - `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
 - `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
 - `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+
+### Example: Process lifecycle execution
+
+Use `process/spawn` to start a standalone argv-based process without the Codex sandbox on the host where the app server is running. The `process/*` API is experimental and requires `initialize.params.capabilities.experimentalApi: true`. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
+
+```json
+{ "method": "process/spawn", "id": 40, "params": {
+    "command": ["cargo", "check"],
+    "processHandle": "cargo-check-1",
+    "cwd": "/Users/me/project",                    // required absolute path
+    "env": { "RUST_LOG": null },                    // optional; override or unset app-server env vars
+    "outputBytesCap": 1048576,                     // optional; omit for default, null disables
+    "timeoutMs": 10000                             // optional; omit for default, null disables
+} }
+{ "id": 40, "result": {} }
+{ "method": "process/exited", "params": {
+    "processHandle": "cargo-check-1",
+    "exitCode": 0,
+    "stdout": "...",
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
+} }
+```
+
+For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: true` and route output notifications by `processHandle`:
+
+```json
+{ "method": "process/spawn", "id": 41, "params": {
+    "command": ["bash", "-i"],
+    "processHandle": "bash-1",
+    "cwd": "/Users/me/project",
+    "tty": true,
+    "size": { "rows": 40, "cols": 120 },
+    "outputBytesCap": null,
+    "timeoutMs": null
+} }
+{ "id": 41, "result": {} }
+{ "method": "process/outputDelta", "params": {
+    "processHandle": "bash-1",
+    "stream": "stdout",
+    "deltaBase64": "YmFzaC00LjQkIA==",
+    "capReached": false
+} }
+{ "method": "process/writeStdin", "id": 42, "params": {
+    "processHandle": "bash-1",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 42, "result": {} }
+{ "method": "process/resizePty", "id": 43, "params": {
+    "processHandle": "bash-1",
+    "size": { "rows": 48, "cols": 160 }
+} }
+{ "id": 43, "result": {} }
+{ "method": "process/kill", "id": 44, "params": {
+    "processHandle": "bash-1"
+} }
+{ "id": 44, "result": {} }
+{ "method": "process/exited", "params": {
+    "processHandle": "bash-1",
+    "exitCode": 137,
+    "stdout": "",
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
+} }
+```
+
+- Empty `command` arrays and empty `processHandle` strings are rejected.
+- `cwd` is required and must be absolute.
+- `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
+- Duplicate active `processHandle` values are rejected on the same connection; the same handle can be reused after the prior process exits.
+- `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
+- `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
+- When omitted, `timeoutMs` and `outputBytesCap` fall back to server defaults. Set either field to `null` to disable that limit for terminal-style sessions.
+- `outputBytesCap` applies independently to `stdout` and `stderr`; `process/exited.stdoutCapReached` and `stderrCapReached` report whether each stream reached the cap. Streamed bytes are not duplicated into `process/exited`.
+- `process/outputDelta` and `process/exited` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
 
 ### Example: Filesystem utilities
 
@@ -1239,6 +1317,10 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
+### Attestation generation
+
+Desktop hosts that provide upstream attestation should set `capabilities.requestAttestation` during `initialize` and handle the server-initiated `attestation/generate` request. App-server issues it just in time before ChatGPT Codex requests that forward `x-oai-attestation`; the client responds with `{ "token": "v1.<opaque>" }`, where `token` is an opaque client-owned value. When app-server receives a client response, it forwards a consistent outer envelope such as `{ "v": 1, "s": 0, "t": "v1.<opaque>" }`, where `t` contains the client token unchanged. If app-server attempts attestation but fails within its own boundary, it sends the same envelope shape with an app-server status code and without `t` (`1 = timeout`, `2 = request failed`, `3 = request canceled`, `4 = malformed response`). If no initialized client opted into attestation, app-server omits `x-oai-attestation` for that upstream request.
+
 ### MCP server elicitations
 
 MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.
@@ -1306,6 +1388,12 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+Dynamic tool identifiers follow the same constraints as Responses function tools:
+
+- `name` must match `^[a-zA-Z0-9_-]+$` and be between 1 and 128 characters.
+- `namespace`, when present, must match `^[a-zA-Z0-9_-]+$` and be between 1 and 64 characters.
+- `namespace` must not collide with reserved Responses runtime namespaces such as `functions`, `multi_tool_use`, `file_search`, `web`, `browser`, `image_gen`, `computer`, `container`, `terminal`, `python`, `python_user_visible`, `api_tool`, `tool_search`, or `submodel_delegator`.
 
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `code_mode`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 
@@ -1381,21 +1469,13 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
-You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
-Entries whose `cwd` is not present in `cwds` are ignored.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
     "cwds": ["/Users/me/project", "/Users/me/other-project"],
-    "forceReload": true,
-    "perCwdExtraUserRoots": [
-      {
-        "cwd": "/Users/me/project",
-        "extraUserRoots": ["/Users/me/shared-skills"]
-      }
-    ]
+    "forceReload": true
 } }
 { "id": 25, "result": {
     "data": [{
@@ -1455,7 +1535,11 @@ To enable or disable a skill by name:
 }
 ```
 
-Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Use `hooks/list` to fetch discovered hooks for one or more `cwds`. Each result is evaluated with that `cwd`'s effective config, so feature gates and discovered config layers can differ within a single response.
+
+Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
+
+For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {
@@ -1486,7 +1570,9 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entr
         "source": "user",
         "pluginId": null,
         "displayOrder": 0,
-        "enabled": true
+        "enabled": true,
+        "currentHash": "sha256:...",
+        "trustStatus": "untrusted"
       }],
       "warnings": [],
       "errors": []

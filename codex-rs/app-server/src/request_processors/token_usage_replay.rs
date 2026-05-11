@@ -112,3 +112,62 @@ fn latest_token_usage_turn_id(thread: &Thread) -> String {
         .map(|turn| turn.id.clone())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::build_turns_from_rollout_items;
+    use codex_protocol::protocol::AgentMessageEvent;
+    use codex_protocol::protocol::TokenCountEvent;
+    use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn replay_attribution_uses_already_loaded_history() {
+        let rollout_items = token_usage_history();
+        let turns = build_turns_from_rollout_items(&rollout_items);
+
+        assert_eq!(
+            latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns.as_slice()),
+            Some(turns[0].id.clone())
+        );
+    }
+
+    #[test]
+    fn replay_attribution_falls_back_to_rebuilt_turn_position() {
+        let rollout_items = token_usage_history();
+        let mut turns = build_turns_from_rollout_items(&rollout_items);
+        turns[0].id = "rebuilt-turn-id".to_string();
+
+        assert_eq!(
+            latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns.as_slice()),
+            Some("rebuilt-turn-id".to_string())
+        );
+    }
+
+    fn token_usage_history() -> Vec<RolloutItem> {
+        vec![
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "first turn".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "first answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "second turn".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            })),
+        ]
+    }
+}

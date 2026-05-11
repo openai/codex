@@ -16,6 +16,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -75,15 +76,17 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
+        installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
         environment_manager: Arc::clone(&parent_session.services.environment_manager),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
+        extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -96,6 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
         environment_selections: parent_ctx.environments.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
+        attestation_provider: parent_session.services.attestation_provider.clone(),
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -264,10 +268,6 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::SessionConfigured(_),
-                    } => {}
-                    Event {
-                        id: _,
-                        msg: EventMsg::ThreadNameUpdated(_),
                     } => {}
                     Event {
                         id,

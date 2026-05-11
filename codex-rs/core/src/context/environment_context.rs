@@ -1,4 +1,6 @@
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
+use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -30,15 +32,16 @@ impl EnvironmentContextEnvironment {
         }
     }
 
-    fn from_turn_environments(
-        environments: &[crate::session::turn_context::TurnEnvironment],
-    ) -> Vec<Self> {
+    fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
         environments
             .iter()
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd.clone(),
-                shell: environment.shell.clone(),
+                shell: environment
+                    .shell
+                    .clone()
+                    .unwrap_or_else(|| shell.name().to_string()),
             })
             .collect()
     }
@@ -92,6 +95,24 @@ impl NetworkContext {
             allowed_domains,
             denied_domains,
         }
+    }
+
+    fn render(&self) -> String {
+        let mut rendered = "<network enabled=\"true\">".to_string();
+        Self::push_rendered_domain_element(&mut rendered, "allowed", &self.allowed_domains);
+        Self::push_rendered_domain_element(&mut rendered, "denied", &self.denied_domains);
+        rendered.push_str("</network>");
+        rendered
+    }
+
+    fn push_rendered_domain_element(rendered_network: &mut String, name: &str, domains: &[String]) {
+        if domains.is_empty() {
+            return;
+        }
+
+        rendered_network.push_str(&format!("<{name}>"));
+        rendered_network.push_str(&domains.join(","));
+        rendered_network.push_str(&format!("</{name}>"));
     }
 }
 
@@ -174,10 +195,11 @@ impl EnvironmentContext {
         )
     }
 
-    pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
+                shell,
             ),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
@@ -284,14 +306,7 @@ impl ContextualUserFragment for EnvironmentContext {
         }
         match &self.network {
             Some(network) => {
-                lines.push("  <network enabled=\"true\">".to_string());
-                for allowed in &network.allowed_domains {
-                    lines.push(format!("    <allowed>{allowed}</allowed>"));
-                }
-                for denied in &network.denied_domains {
-                    lines.push(format!("    <denied>{denied}</denied>"));
-                }
-                lines.push("  </network>".to_string());
+                lines.push(format!("  {}", network.render()));
             }
             None => {
                 // TODO(mbolin): Include this line if it helps the model.

@@ -3,9 +3,8 @@
 //!
 //! The app-server startup path should honor `experimental_thread_store`
 //! by routing all thread persistence through the configured store. This suite uses
-//! the thread-store crate's test-only in-memory store, which exercises the same
-//! config-driven selection path as a remote store without requiring the real gRPC
-//! service.
+//! the thread-store crate's test-only in-memory store to exercise the non-local
+//! config-driven selection path without touching local rollout or sqlite storage.
 //!
 //! The important failure mode is accidentally materializing local persistence
 //! while a non-local store is configured. After `thread/start` and a simple turn,

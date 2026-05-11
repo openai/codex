@@ -8,6 +8,9 @@ import type { NetworkApprovalContext } from "./NetworkApprovalContext";
 import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 
 export type CommandExecutionRequestApprovalParams = {threadId: string, turnId: string, itemId: string, /**
+ * Unix timestamp (in milliseconds) when this approval request started.
+ */
+startedAtMs: number, /**
  * Unique identifier for this specific approval callback.
  *
  * For regular shell/unified_exec approvals, this is null.

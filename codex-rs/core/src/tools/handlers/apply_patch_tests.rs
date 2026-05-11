@@ -43,31 +43,13 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
 }
 
 #[tokio::test]
-async fn pre_tool_use_payload_uses_json_patch_input() {
-    let patch = sample_patch();
-    let payload = ToolPayload::Function {
-        arguments: json!({ "input": patch }).to_string(),
-    };
-    let invocation = invocation_for_payload(payload).await;
-    let handler = ApplyPatchHandler;
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&invocation),
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: json!({ "command": patch }),
-        })
-    );
-}
-
-#[tokio::test]
 async fn pre_tool_use_payload_uses_freeform_patch_input() {
     let patch = sample_patch();
     let payload = ToolPayload::Custom {
         input: patch.to_string(),
     };
     let invocation = invocation_for_payload(payload).await;
-    let handler = ApplyPatchHandler;
+    let handler = ApplyPatchHandler::default();
 
     assert_eq!(
         handler.pre_tool_use_payload(&invocation),
@@ -86,7 +68,7 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
     };
     let invocation = invocation_for_payload(payload).await;
     let output = ApplyPatchToolOutput::from_text("Success. Updated files.".to_string());
-    let handler = ApplyPatchHandler;
+    let handler = ApplyPatchHandler::default();
 
     assert_eq!(
         handler.post_tool_use_payload(&invocation, &output),
@@ -96,24 +78,6 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })
-    );
-}
-
-#[test]
-fn diff_consumer_does_not_stream_json_tool_call_arguments() {
-    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
-    assert!(
-        consumer
-            .push_delta("call-1".to_string(), r#"{"input":"*** Begin Patch\n"#)
-            .is_none()
-    );
-    assert!(
-        consumer
-            .push_delta(
-                "call-1".to_string(),
-                r#"*** Add File: hello.txt\n+hello\n*** End Patch\n"}"#
-            )
-            .is_none()
     );
 }
 
@@ -172,6 +136,32 @@ fn diff_consumer_streams_apply_patch_changes() {
 }
 
 #[test]
+fn diff_consumer_streams_apply_patch_changes_with_environment_header() {
+    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
+    assert!(
+        consumer
+            .push_delta(
+                "call-1".to_string(),
+                "*** Begin Patch\n*** Environment ID: remote\n",
+            )
+            .is_none()
+    );
+
+    let event = consumer
+        .push_delta("call-1".to_string(), "*** Add File: hello.txt\n+hello")
+        .expect("progress event");
+    assert_eq!(
+        event.changes,
+        HashMap::from([(
+            PathBuf::from("hello.txt"),
+            FileChange::Add {
+                content: String::new(),
+            },
+        )])
+    );
+}
+
+#[test]
 fn diff_consumer_sends_next_update_after_buffer_interval() {
     let mut consumer = ApplyPatchArgumentDiffConsumer::default();
     consumer.push_delta("call-1".to_string(), "*** Begin Patch\n");
@@ -201,6 +191,22 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
                 content: "hello\n".to_string(),
             },
         )])
+    );
+}
+
+#[test]
+fn reconcile_environment_id_requires_selection_when_enabled() {
+    assert_eq!(
+        require_environment_id(Some("remote"), /*allow_environment_id*/ false),
+        Err(FunctionCallError::RespondToModel(
+            "apply_patch environment selection is unavailable for this turn".to_string(),
+        ))
+    );
+    assert_eq!(
+        require_environment_id(
+            /*parsed_environment_id*/ None, /*allow_environment_id*/ true
+        ),
+        Ok(None)
     );
 }
 

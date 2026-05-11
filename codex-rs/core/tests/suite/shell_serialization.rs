@@ -472,7 +472,6 @@ $"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_output_is_structured(
@@ -518,7 +517,6 @@ A {file_name}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_creates_file(
@@ -566,7 +564,6 @@ A {file_name}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_updates_existing_file(
@@ -619,7 +616,6 @@ M {file_name}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_reports_failure_output(
@@ -664,20 +660,17 @@ async fn apply_patch_custom_tool_call_reports_failure_output(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-async fn apply_patch_function_call_output_is_structured(
-    output_type: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_tool_output_is_structured(output_type: ApplyPatchModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
 
     let call_id = "apply-patch-function";
-    let file_name = "function_apply_patch.txt";
+    let file_name = "freeform_apply_patch.txt";
     let patch =
-        format!("*** Begin Patch\n*** Add File: {file_name}\n+via function call\n*** End Patch\n");
+        format!("*** Begin Patch\n*** Add File: {file_name}\n+via apply_patch\n*** End Patch\n");
     mount_apply_patch(
         &harness,
         call_id,
@@ -689,7 +682,7 @@ async fn apply_patch_function_call_output_is_structured(
     harness
         .test()
         .submit_turn_with_permission_profile(
-            "apply the patch via function-call apply_patch",
+            "apply the patch via freeform apply_patch",
             PermissionProfile::Disabled,
         )
         .await?;

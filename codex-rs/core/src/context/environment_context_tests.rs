@@ -71,11 +71,7 @@ fn serialize_environment_context_with_network() {
   <shell>bash</shell>
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
-  <network enabled="true">
-    <allowed>api.example.com</allowed>
-    <allowed>*.openai.com</allowed>
-    <denied>blocked.example.com</denied>
-  </network>
+  <network enabled="true"><allowed>api.example.com,*.openai.com</allowed><denied>blocked.example.com</denied></network>
 </environment_context>"#,
         test_path_buf("/repo").display()
     );
@@ -252,6 +248,49 @@ fn serialize_environment_context_with_multiple_selected_environments() {
   </environments>
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
+</environment_context>"#,
+        local_cwd.display(),
+        remote_cwd.display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
+fn serialize_environment_context_prefers_environment_shell_when_present() {
+    let local_cwd = test_path_buf("/repo/local");
+    let remote_cwd = test_path_buf("/repo/remote");
+    let context = EnvironmentContext::new(
+        vec![
+            EnvironmentContextEnvironment {
+                id: "local".to_string(),
+                cwd: local_cwd.abs(),
+                shell: "powershell".to_string(),
+            },
+            EnvironmentContextEnvironment {
+                id: "remote".to_string(),
+                cwd: remote_cwd.abs(),
+                shell: "cmd".to_string(),
+            },
+        ],
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+
+    let expected = format!(
+        r#"<environment_context>
+  <environments>
+    <environment id="local">
+      <cwd>{}</cwd>
+      <shell>powershell</shell>
+    </environment>
+    <environment id="remote">
+      <cwd>{}</cwd>
+      <shell>cmd</shell>
+    </environment>
+  </environments>
 </environment_context>"#,
         local_cwd.display(),
         remote_cwd.display()
