@@ -18,9 +18,11 @@ use crate::metrics::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::SSE_EVENT_DURATION_METRIC;
+use crate::metrics::STARTUP_PHASE_DURATION_METRIC;
 use crate::metrics::SessionMetricTagValues;
 use crate::metrics::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::TOOL_CALL_DURATION_METRIC;
+use crate::metrics::TURN_TTFT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
@@ -181,6 +183,45 @@ impl SessionTelemetry {
         if let Err(e) = res {
             tracing::warn!("metrics duration [{name}] failed: {e}");
         }
+    }
+
+    /// Records a coarse startup phase for production latency breakdowns.
+    pub fn record_startup_phase(
+        &self,
+        phase: &'static str,
+        duration: Duration,
+        status: Option<&'static str>,
+    ) {
+        let tags = match status {
+            Some(status) => vec![("phase", phase), ("status", status)],
+            None => vec![("phase", phase)],
+        };
+        self.record_duration(STARTUP_PHASE_DURATION_METRIC, duration, &tags);
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.startup_phase",
+                startup.phase = phase,
+                startup.status = status,
+                duration_ms = %duration.as_millis(),
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    /// Records time to first token as both a metric and a production telemetry event.
+    pub fn record_turn_ttft(&self, duration: Duration) {
+        self.record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.turn_ttft",
+                duration_ms = %duration.as_millis(),
+            },
+            log: {},
+            trace: {},
+        );
     }
 
     pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {

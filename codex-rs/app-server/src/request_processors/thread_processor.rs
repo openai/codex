@@ -960,21 +960,11 @@ impl ThreadRequestProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
-        let started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let config_started_at = std::time::Instant::now();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = config_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start loaded config"
-            );
-        }
 
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
@@ -1041,16 +1031,7 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let instruction_sources_started_at = std::time::Instant::now();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = instruction_sources_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start loaded instruction sources"
-            );
-        }
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -1108,14 +1089,11 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error creating thread: {err}")),
             })?;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = create_thread_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start created thread"
-            );
-        }
+        thread.session_telemetry().record_startup_phase(
+            "thread_start_create_thread",
+            create_thread_started_at.elapsed(),
+            Some("ready"),
+        );
 
         Self::set_app_server_client_info(
             thread.as_ref(),
@@ -1124,7 +1102,6 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
-        let config_snapshot_started_at = std::time::Instant::now();
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1132,14 +1109,6 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = config_snapshot_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start loaded config snapshot"
-            );
-        }
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
@@ -1148,7 +1117,6 @@ impl ThreadRequestProcessor {
         );
 
         // Auto-attach a thread listener when starting a thread.
-        let attach_listener_started_at = std::time::Instant::now();
         log_listener_attach_result(
             super::thread_lifecycle::ensure_conversation_listener(
                 listener_task_context.clone(),
@@ -1166,16 +1134,7 @@ impl ThreadRequestProcessor {
             request_id.connection_id,
             "thread",
         );
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = attach_listener_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start attached listener"
-            );
-        }
 
-        let upsert_thread_started_at = std::time::Instant::now();
         listener_task_context
             .thread_watch_manager
             .upsert_thread_silently(thread.clone())
@@ -1184,16 +1143,7 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.upsert_thread",
             ))
             .await;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = upsert_thread_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start upserted thread"
-            );
-        }
 
-        let resolve_status_started_at = std::time::Instant::now();
         thread.status = resolve_thread_status(
             listener_task_context
                 .thread_watch_manager
@@ -1205,14 +1155,6 @@ impl ThreadRequestProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = resolve_status_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start resolved status"
-            );
-        }
 
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
@@ -1236,7 +1178,6 @@ impl ThreadRequestProcessor {
             reasoning_effort: config_snapshot.reasoning_effort,
         };
         let notif = thread_started_notification(thread);
-        let send_response_started_at = std::time::Instant::now();
         listener_task_context
             .outgoing
             .send_response(request_id, response)
@@ -1245,16 +1186,7 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.send_response",
             ))
             .await;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = send_response_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start sent response"
-            );
-        }
 
-        let notify_started_started_at = std::time::Instant::now();
         listener_task_context
             .outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -1263,14 +1195,6 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
-        if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = notify_started_started_at.elapsed().as_millis(),
-                total_elapsed_ms = started_at.elapsed().as_millis(),
-                "thread/start sent started notification"
-            );
-        }
         Ok(())
     }
 

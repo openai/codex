@@ -791,33 +791,10 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    let started_at = std::time::Instant::now();
-    if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-        let unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis());
-        #[allow(clippy::print_stderr)]
-        {
-            eprintln!("startup_trace: cli main entered unix_ms={unix_ms} total_elapsed_ms=0");
-        }
-    }
-    let result = arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths).await?;
         Ok(())
-    });
-    if std::env::var_os("CODEX_STARTUP_TRACE").is_some() {
-        let unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis());
-        #[allow(clippy::print_stderr)]
-        {
-            eprintln!(
-                "startup_trace: cli main exiting unix_ms={unix_ms} total_elapsed_ms={}",
-                started_at.elapsed().as_millis()
-            );
-        }
-    }
-    result
+    })
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {

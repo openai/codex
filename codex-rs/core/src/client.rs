@@ -1350,7 +1350,6 @@ impl ModelClientSession {
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
     ) -> Result<WebsocketStreamOutcome> {
-        let websocket_request_started_at = Instant::now();
         let auth_manager = self.client.state.provider.auth_manager();
 
         let mut auth_recovery = auth_manager
@@ -1359,14 +1358,6 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
-            if crate::startup_trace::enabled() {
-                warn!(
-                    target: "startup_trace",
-                    total_elapsed_ms = websocket_request_started_at.elapsed().as_millis(),
-                    warmup,
-                    "websocket request built client setup"
-                );
-            }
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1431,14 +1422,6 @@ impl ModelClientSession {
                 }
                 Err(err) => return Err(map_api_error(err)),
             }
-            if crate::startup_trace::enabled() {
-                warn!(
-                    target: "startup_trace",
-                    total_elapsed_ms = websocket_request_started_at.elapsed().as_millis(),
-                    warmup,
-                    "websocket request acquired connection"
-                );
-            }
 
             let mut ws_request = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
@@ -1471,14 +1454,6 @@ impl ModelClientSession {
                     );
                     err
                 })?;
-            if crate::startup_trace::enabled() {
-                warn!(
-                    target: "startup_trace",
-                    total_elapsed_ms = websocket_request_started_at.elapsed().as_millis(),
-                    warmup,
-                    "websocket request sent request"
-                );
-            }
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
                 session_telemetry.clone(),
@@ -1542,7 +1517,6 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let warmup_started_at = Instant::now();
         let disabled_trace = InferenceTraceContext::disabled();
         match self
             .stream_responses_websocket(
@@ -1561,22 +1535,9 @@ impl ModelClientSession {
         {
             Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
                 // Wait for the v2 warmup request to complete before sending the first turn request.
-                let wait_for_completion_started_at = Instant::now();
                 while let Some(event) = stream.next().await {
                     match event {
-                        Ok(ResponseEvent::Completed { .. }) => {
-                            if crate::startup_trace::enabled() {
-                                warn!(
-                                    target: "startup_trace",
-                                    elapsed_ms = wait_for_completion_started_at
-                                        .elapsed()
-                                        .as_millis(),
-                                    total_elapsed_ms = warmup_started_at.elapsed().as_millis(),
-                                    "websocket warmup completed"
-                                );
-                            }
-                            break;
-                        }
+                        Ok(ResponseEvent::Completed { .. }) => break,
                         Err(err) => return Err(err),
                         _ => {}
                     }

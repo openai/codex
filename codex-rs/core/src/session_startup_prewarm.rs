@@ -79,6 +79,11 @@ impl SessionStartupPrewarmHandle {
                 }
                 None => {
                     task.abort();
+                    session_telemetry.record_startup_phase(
+                        "startup_prewarm_resolve",
+                        resolve_started_at.elapsed(),
+                        Some("cancelled"),
+                    );
                     session_telemetry.record_duration(
                         STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC,
                         age_at_first_turn,
@@ -93,19 +98,16 @@ impl SessionStartupPrewarmHandle {
                 }
             }
         };
-        if crate::startup_trace::enabled() {
-            let status = match &resolution {
-                SessionStartupPrewarmResolution::Cancelled => "cancelled",
-                SessionStartupPrewarmResolution::Ready(_) => "ready",
-                SessionStartupPrewarmResolution::Unavailable { status, .. } => status,
-            };
-            warn!(
-                target: "startup_trace",
-                elapsed_ms = resolve_started_at.elapsed().as_millis(),
-                status,
-                "regular turn resolved startup prewarm"
-            );
-        }
+        let status = match &resolution {
+            SessionStartupPrewarmResolution::Cancelled => "cancelled",
+            SessionStartupPrewarmResolution::Ready(_) => "ready",
+            SessionStartupPrewarmResolution::Unavailable { status, .. } => status,
+        };
+        session_telemetry.record_startup_phase(
+            "startup_prewarm_resolve",
+            resolve_started_at.elapsed(),
+            Some(status),
+        );
 
         match resolution {
             SessionStartupPrewarmResolution::Cancelled => {
@@ -179,6 +181,11 @@ impl Session {
             let result =
                 schedule_startup_prewarm_inner(startup_prewarm_session, base_instructions).await;
             let status = if result.is_ok() { "ready" } else { "failed" };
+            session_telemetry.record_startup_phase(
+                "startup_prewarm_total",
+                started_at.elapsed(),
+                Some(status),
+            );
             session_telemetry.record_duration(
                 STARTUP_PREWARM_DURATION_METRIC,
                 started_at.elapsed(),
@@ -218,13 +225,11 @@ async fn schedule_startup_prewarm_inner(
     let startup_turn_context = session
         .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
-    if crate::startup_trace::enabled() {
-        warn!(
-            target: "startup_trace",
-            elapsed_ms = prewarm_started_at.elapsed().as_millis(),
-            "startup prewarm created turn context"
-        );
-    }
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_create_turn_context",
+        prewarm_started_at.elapsed(),
+        /*status*/ None,
+    );
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
     let startup_router = built_tools(
@@ -236,14 +241,11 @@ async fn schedule_startup_prewarm_inner(
         &startup_cancellation_token,
     )
     .await?;
-    if crate::startup_trace::enabled() {
-        warn!(
-            target: "startup_trace",
-            elapsed_ms = built_tools_started_at.elapsed().as_millis(),
-            total_elapsed_ms = prewarm_started_at.elapsed().as_millis(),
-            "startup prewarm built tools"
-        );
-    }
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_tools",
+        built_tools_started_at.elapsed(),
+        /*status*/ None,
+    );
     let build_prompt_started_at = Instant::now();
     let startup_prompt = build_prompt(
         Vec::new(),
@@ -253,14 +255,11 @@ async fn schedule_startup_prewarm_inner(
             text: base_instructions,
         },
     );
-    if crate::startup_trace::enabled() {
-        warn!(
-            target: "startup_trace",
-            elapsed_ms = build_prompt_started_at.elapsed().as_millis(),
-            total_elapsed_ms = prewarm_started_at.elapsed().as_millis(),
-            "startup prewarm built prompt"
-        );
-    }
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_prompt",
+        build_prompt_started_at.elapsed(),
+        /*status*/ None,
+    );
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
         .current_header_value();
@@ -277,14 +276,11 @@ async fn schedule_startup_prewarm_inner(
             startup_turn_metadata_header.as_deref(),
         )
         .await?;
-    if crate::startup_trace::enabled() {
-        warn!(
-            target: "startup_trace",
-            elapsed_ms = websocket_warmup_started_at.elapsed().as_millis(),
-            total_elapsed_ms = prewarm_started_at.elapsed().as_millis(),
-            "startup prewarm completed websocket warmup"
-        );
-    }
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_websocket_warmup",
+        websocket_warmup_started_at.elapsed(),
+        /*status*/ None,
+    );
 
     Ok(client_session)
 }
