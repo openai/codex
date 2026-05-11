@@ -42,6 +42,7 @@ pub fn compute_allow_paths(
         let add_writable_root =
             |root: PathBuf,
              policy_cwd: &Path,
+             protect_git_metadata: bool,
              add_allow: &mut dyn FnMut(PathBuf),
              add_deny: &mut dyn FnMut(PathBuf)| {
                 let candidate = if root.is_absolute() {
@@ -52,7 +53,12 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
+                let protected_subdirs: &[&str] = if protect_git_metadata {
+                    &[".git", ".codex", ".agents"]
+                } else {
+                    &[".codex", ".agents"]
+                };
+                for protected_subdir in protected_subdirs {
                     let protected_entry = canonical.join(protected_subdir);
                     if protected_entry.exists() {
                         add_deny(protected_entry);
@@ -63,6 +69,7 @@ pub fn compute_allow_paths(
         add_writable_root(
             command_cwd.to_path_buf(),
             policy_cwd,
+            true,
             &mut add_allow_path,
             &mut add_deny_path,
         );
@@ -72,6 +79,7 @@ pub fn compute_allow_paths(
                 add_writable_root(
                     root.clone().into(),
                     policy_cwd,
+                    false,
                     &mut add_allow_path,
                     &mut add_deny_path,
                 );
@@ -117,12 +125,16 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&extra_root).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&extra_root).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -145,12 +157,16 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(!paths
-            .allow
-            .contains(&dunce::canonicalize(&temp_dir).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            !paths
+                .allow
+                .contains(&dunce::canonicalize(&temp_dir).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -239,6 +255,37 @@ mod tests {
     }
 
     #[test]
+    fn does_not_deny_git_dir_inside_additional_writable_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let extra_root = tmp.path().join("extra");
+        let extra_git_dir = extra_root.join(".git");
+        let _ = fs::create_dir_all(&command_cwd);
+        let _ = fs::create_dir_all(&extra_git_dir);
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> = [
+            dunce::canonicalize(&command_cwd).unwrap(),
+            dunce::canonicalize(&extra_root).unwrap(),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert!(
+            paths.deny.is_empty(),
+            "additional writable roots should not deny .git"
+        );
+    }
+
+    #[test]
     fn skips_protected_subdirs_when_missing() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
@@ -253,6 +300,9 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         assert_eq!(paths.allow.len(), 1);
-        assert!(paths.deny.is_empty(), "no deny when protected dirs are absent");
+        assert!(
+            paths.deny.is_empty(),
+            "no deny when protected dirs are absent"
+        );
     }
 }
