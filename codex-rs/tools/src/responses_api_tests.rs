@@ -4,9 +4,7 @@ use super::ResponsesApiNamespaceTool;
 use super::ResponsesApiTool;
 use super::dynamic_tool_to_responses_api_tool;
 use super::mcp_tool_to_deferred_responses_api_tool;
-use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
-use crate::ToolDefinition;
 use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
@@ -14,22 +12,23 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
-fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
+fn dynamic_tool_to_responses_api_tool_omits_false_defer_loading() {
     assert_eq!(
-        tool_definition_to_responses_api_tool(ToolDefinition {
+        dynamic_tool_to_responses_api_tool(&DynamicToolSpec {
+            namespace: None,
             name: "lookup_order".to_string(),
             description: "Look up an order".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::from([(
-                    "order_id".to_string(),
-                    JsonSchema::string(/*description*/ None),
-                )]),
-                Some(vec!["order_id".to_string()]),
-                Some(false.into())
-            ),
-            output_schema: Some(json!({"type": "object"})),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"}
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            }),
             defer_loading: false,
-        }),
+        })
+        .expect("convert dynamic tool"),
         ResponsesApiTool {
             name: "lookup_order".to_string(),
             description: "Look up an order".to_string(),
@@ -43,7 +42,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(json!({"type": "object"})),
+            output_schema: None,
         }
     );
 }
