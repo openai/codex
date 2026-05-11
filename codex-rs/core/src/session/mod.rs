@@ -603,6 +603,10 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
+        let cwd = environment_selections
+            .primary()
+            .map(|turn_environment| turn_environment.cwd.clone())
+            .unwrap_or_else(|| config.cwd.clone());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -618,7 +622,7 @@ impl Codex {
             permission_profile: config.permissions.permission_profile.clone(),
             active_permission_profile: config.permissions.active_permission_profile(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
+            cwd,
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),

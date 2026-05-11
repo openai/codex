@@ -399,6 +399,10 @@ default_cwd = "{dev_cwd}"
         .start_thread(config)
         .await
         .expect("thread should start");
+    let next_turn = thread.thread.codex.session.new_default_turn().await;
+
+    assert_eq!(next_turn.cwd.display().to_string(), dev_cwd);
+    assert_eq!(next_turn.config.cwd.display().to_string(), dev_cwd);
 
     let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
         thread.thread.codex.session.as_ref(),
