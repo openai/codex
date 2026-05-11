@@ -1901,6 +1901,7 @@ dependencies = [
  "codex-file-watcher",
  "codex-git-attribution",
  "codex-git-utils",
+ "codex-guardian",
  "codex-hooks",
  "codex-login",
  "codex-mcp",
@@ -2926,6 +2927,14 @@ dependencies = [
  "tokio",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-guardian"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-extension-api",
 ]
 
 [[package]]
