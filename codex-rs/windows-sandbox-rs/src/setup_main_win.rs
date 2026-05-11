@@ -23,6 +23,7 @@ use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
+use codex_windows_sandbox::materialize_setup_dependencies;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
@@ -886,6 +887,24 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         if legacy_users.exists() {
             let _ = std::fs::remove_file(&legacy_users);
         }
+        let materialized = materialize_setup_dependencies(&payload.codex_home, Some(sbx_dir))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperDependencyMaterializationFailed,
+                    format!(
+                        "materialize sandbox helper executables into {} failed: {err:#}",
+                        sandbox_bin_dir(&payload.codex_home).display()
+                    ),
+                ))
+            })?;
+        log_line(
+            log,
+            &format!(
+                "materialized {} helper executable(s) into {}",
+                materialized.len(),
+                sandbox_bin_dir(&payload.codex_home).display()
+            ),
+        )?;
     }
 
     unsafe {
