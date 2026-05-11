@@ -535,21 +535,19 @@ pub(crate) fn app_tool_policy(
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
     let apps_config = read_apps_config(config);
-    let mut policy = app_tool_policy_from_apps_config(
+    let managed_approval = managed_app_tool_approval(
+        config.config_layer_stack.requirements_toml().apps.as_ref(),
+        connector_id,
+        tool_name,
+    );
+    app_tool_policy_from_apps_config(
         apps_config.as_ref(),
         connector_id,
         tool_name,
         tool_title,
         annotations,
-    );
-    if let Some(approval) = managed_app_tool_approval(
-        config.config_layer_stack.requirements_toml().apps.as_ref(),
-        connector_id,
-        tool_name,
-    ) {
-        policy.approval = approval;
-    }
-    policy
+        managed_approval,
+    )
 }
 
 pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -> bool {
@@ -643,9 +641,13 @@ fn app_tool_policy_from_apps_config(
     tool_name: &str,
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
+    managed_approval: Option<AppToolApproval>,
 ) -> AppToolPolicy {
     let Some(apps_config) = apps_config else {
-        return AppToolPolicy::default();
+        return AppToolPolicy {
+            approval: managed_approval.unwrap_or(AppToolApproval::Auto),
+            ..Default::default()
+        };
     };
 
     let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
@@ -656,8 +658,8 @@ fn app_tool_policy_from_apps_config(
             .get(tool_name)
             .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
     });
-    let approval = tool_config
-        .and_then(|tool| tool.approval_mode)
+    let approval = managed_approval
+        .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .unwrap_or(AppToolApproval::Auto);
 

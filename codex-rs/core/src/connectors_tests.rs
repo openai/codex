@@ -361,6 +361,7 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), /*open_world_hint*/ None)),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -389,6 +390,7 @@ fn app_tool_policy_defaults_missing_destructive_hint_to_true() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(/*destructive_hint*/ None, Some(false))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -417,6 +419,7 @@ fn app_tool_policy_defaults_missing_open_world_hint_to_true() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(false), /*open_world_hint*/ None)),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -782,6 +785,7 @@ fn app_tool_policy_honors_default_app_enabled_false() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -789,6 +793,26 @@ fn app_tool_policy_honors_default_app_enabled_false() {
         AppToolPolicy {
             enabled: false,
             approval: AppToolApproval::Auto,
+        }
+    );
+}
+
+#[test]
+fn app_tool_policy_uses_managed_approval_without_apps_config() {
+    let policy = app_tool_policy_from_apps_config(
+        /*apps_config*/ None,
+        Some("calendar"),
+        "events/list",
+        /*tool_title*/ None,
+        /*annotations*/ None,
+        Some(AppToolApproval::Approve),
+    );
+
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
+            approval: AppToolApproval::Approve,
         }
     );
 }
@@ -1006,6 +1030,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1048,6 +1073,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1082,6 +1108,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
         "events/create",
         /*tool_title*/ None,
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1118,6 +1145,7 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1156,6 +1184,7 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
         Some(&annotations(
             /*destructive_hint*/ None, /*open_world_hint*/ None,
         )),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
@@ -1198,6 +1227,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
         "calendar_events/create",
         Some("events/create"),
         Some(&annotations(Some(true), Some(true))),
+        /*managed_approval*/ None,
     );
 
     assert_eq!(
