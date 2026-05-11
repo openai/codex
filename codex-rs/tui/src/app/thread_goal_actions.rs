@@ -127,6 +127,21 @@ impl App {
                 }
             }
         }
+
+        let replacing_goal = matches!(mode, ThreadGoalSetMode::ReplaceExisting);
+        if replacing_goal {
+            let result = app_server.thread_goal_clear(thread_id).await;
+
+            if let Err(err) = result {
+                if self.current_displayed_thread_id() != Some(thread_id) {
+                    return;
+                }
+                self.chat_widget
+                    .add_error_message(format!("Failed to replace thread goal: {err}"));
+                return;
+            }
+        }
+
         let (status, token_budget) = match mode {
             ThreadGoalSetMode::ConfirmIfExists | ThreadGoalSetMode::ReplaceExisting => {
                 (ThreadGoalStatus::Active, None)
@@ -149,9 +164,11 @@ impl App {
                 format!("Goal {}", goal_status_label(response.goal.status)),
                 Some(goal_usage_summary(&response.goal)),
             ),
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("Failed to set thread goal: {err}")),
+            Err(err) => {
+                let action = if replacing_goal { "replace" } else { "set" };
+                self.chat_widget
+                    .add_error_message(format!("Failed to {action} thread goal: {err}"));
+            }
         }
     }
 
