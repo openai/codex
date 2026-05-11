@@ -542,7 +542,7 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .context("sandboxed view_image error text present")?;
-    let expected_prefix = format!("unable to locate image at `{}`:", denied_path.display());
+    let expected_prefix = format!("unable to read image at `{}`:", denied_path.display());
     assert!(
         output_text.starts_with(&expected_prefix),
         "expected error to start with `{expected_prefix}` but got `{output_text}`"
