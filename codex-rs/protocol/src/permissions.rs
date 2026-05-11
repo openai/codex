@@ -538,27 +538,16 @@ impl FileSystemSandboxPolicy {
     /// into split filesystem policy.
     pub fn from_legacy_sandbox_policy_for_cwd(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
-        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox_policy {
-            if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
-                for protected_path in default_read_only_subpaths_for_writable_root(
-                    &cwd_root, /*protect_missing_dot_codex*/ true,
-                ) {
-                    append_default_read_only_path_if_no_explicit_rule(
-                        &mut file_system_policy.entries,
-                        protected_path,
-                    );
-                }
-            }
-            for writable_root in writable_roots {
-                for protected_path in default_read_only_subpaths_for_writable_root(
-                    writable_root,
-                    /*protect_missing_dot_codex*/ false,
-                ) {
-                    append_default_read_only_path_if_no_explicit_rule(
-                        &mut file_system_policy.entries,
-                        protected_path,
-                    );
-                }
+        if let SandboxPolicy::WorkspaceWrite { .. } = sandbox_policy
+            && let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd)
+        {
+            for protected_path in default_read_only_subpaths_for_writable_root(
+                &cwd_root, /*protect_missing_dot_codex*/ true,
+            ) {
+                append_default_read_only_path_if_no_explicit_rule(
+                    &mut file_system_policy.entries,
+                    protected_path,
+                );
             }
         }
 
@@ -676,6 +665,38 @@ impl FileSystemSandboxPolicy {
                 entry.path = FileSystemPath::Path { path };
             }
         }
+        self
+    }
+
+    /// Replaces symbolic `:project_roots` entries with concrete entries for
+    /// each workspace root.
+    pub fn materialize_project_roots_with_workspace_roots(
+        mut self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries {
+            let FileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { subpath },
+            } = &entry.path
+            else {
+                entries.push(entry);
+                continue;
+            };
+
+            entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: match subpath.as_ref() {
+                        Some(subpath) => {
+                            AbsolutePathBuf::resolve_path_against_base(subpath, root.as_path())
+                        }
+                        None => root.clone(),
+                    },
+                },
+                access: entry.access,
+            }));
+        }
+        self.entries = entries;
         self
     }
 
@@ -994,10 +1015,10 @@ impl FileSystemSandboxPolicy {
                 let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
                 let has_full_disk_write_access = self.has_full_disk_write_access();
                 let mut workspace_root_writable = false;
-                let mut writable_roots = Vec::new();
                 let mut tmpdir_writable = false;
                 let mut slash_tmp_writable = false;
                 let mut unbridgeable_root_write = false;
+                let mut unbridgeable_external_write = false;
 
                 for entry in &self.entries {
                     match &entry.path {
@@ -1007,7 +1028,7 @@ impl FileSystemSandboxPolicy {
                                 if cwd_absolute.as_ref().is_some_and(|cwd| cwd == path) {
                                     workspace_root_writable = true;
                                 } else {
-                                    writable_roots.push(path.clone());
+                                    unbridgeable_external_write = true;
                                 }
                             }
                         }
@@ -1023,11 +1044,8 @@ impl FileSystemSandboxPolicy {
                             FileSystemSpecialPath::ProjectRoots { subpath } => {
                                 if subpath.is_none() && entry.access.can_write() {
                                     workspace_root_writable = true;
-                                } else if let Some(path) =
-                                    resolve_file_system_special_path(value, cwd_absolute.as_ref())
-                                    && entry.access.can_write()
-                                {
-                                    writable_roots.push(path);
+                                } else if entry.access.can_write() {
+                                    unbridgeable_external_write = true;
                                 }
                             }
                             FileSystemSpecialPath::Tmpdir => {
@@ -1055,21 +1073,20 @@ impl FileSystemSandboxPolicy {
                     });
                 }
 
+                if unbridgeable_root_write || unbridgeable_external_write {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",
+                    ));
+                }
+
                 if workspace_root_writable {
                     SandboxPolicy::WorkspaceWrite {
-                        writable_roots: dedup_absolute_paths(
-                            writable_roots,
-                            /*normalize_effective_paths*/ false,
-                        ),
                         network_access: network_policy.is_enabled(),
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
-                } else if unbridgeable_root_write
-                    || !writable_roots.is_empty()
-                    || tmpdir_writable
-                    || slash_tmp_writable
-                {
+                } else if tmpdir_writable || slash_tmp_writable {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",
@@ -1135,12 +1152,11 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                 }])
             }
             SandboxPolicy::WorkspaceWrite {
-                writable_roots,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 ..
             } => FileSystemSandboxPolicy::workspace_write(
-                writable_roots,
+                &[],
                 *exclude_tmpdir_env_var,
                 *exclude_slash_tmp,
             ),
@@ -1447,7 +1463,6 @@ fn legacy_runtime_file_system_policy_for_cwd(
     cwd: &Path,
 ) -> FileSystemSandboxPolicy {
     let SandboxPolicy::WorkspaceWrite {
-        writable_roots,
         exclude_tmpdir_env_var,
         exclude_slash_tmp,
         ..
@@ -1487,27 +1502,9 @@ fn legacy_runtime_file_system_policy_for_cwd(
             access: FileSystemAccessMode::Write,
         });
     }
-    entries.extend(
-        writable_roots
-            .iter()
-            .cloned()
-            .map(|path| FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path },
-                access: FileSystemAccessMode::Write,
-            }),
-    );
-
     if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
         for protected_path in default_read_only_subpaths_for_writable_root(
             &cwd_root, /*protect_missing_dot_codex*/ true,
-        ) {
-            append_default_read_only_path_if_no_explicit_rule(&mut entries, protected_path);
-        }
-    }
-    for writable_root in writable_roots {
-        for protected_path in default_read_only_subpaths_for_writable_root(
-            writable_root,
-            /*protect_missing_dot_codex*/ false,
         ) {
             append_default_read_only_path_if_no_explicit_rule(&mut entries, protected_path);
         }
@@ -1770,6 +1767,29 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn legacy_bridge_rejects_extra_writable_root_when_cwd_is_writable() {
+        let cwd = TempDir::new().expect("tempdir");
+        let cwd_path = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
+        let extra_root = AbsolutePathBuf::resolve_path_against_base("extra-root", cwd.path());
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: cwd_path },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: extra_root },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let err = policy
+            .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd.path())
+            .expect_err("extra writable roots cannot be represented by WorkspaceWrite");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
     #[cfg(unix)]
     #[test]
     fn writable_roots_proactively_protect_missing_dot_codex() {
@@ -1800,7 +1820,6 @@ mod tests {
     #[test]
     fn legacy_workspace_write_projection_preserves_symbolic_project_root() {
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1956,7 +1975,6 @@ mod tests {
         )
         .expect("absolute root");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2472,7 +2490,6 @@ mod tests {
     fn legacy_projection_runtime_enforcement_ignores_entry_order() {
         let cwd = TempDir::new().expect("tempdir");
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2499,7 +2516,6 @@ mod tests {
     fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
         let cwd = TempDir::new().expect("tempdir");
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

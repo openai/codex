@@ -114,47 +114,13 @@
       ],
       "type": "string"
     },
-    "PermissionProfileModificationParams": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootPermissionProfileModificationParams",
-          "type": "object"
-        }
-      ]
-    },
     "PermissionProfileSelectionParams": {
       "oneOf": [
         {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "description": "Select a named built-in or user-defined profile. This updates profile identity metadata only; it does not replace the thread's effective permissions profile.",
           "properties": {
             "id": {
               "type": "string"
-            },
-            "modifications": {
-              "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
             },
             "type": {
               "enum": [
@@ -295,13 +261,6 @@
               ],
               "title": "WorkspaceWriteSandboxPolicyType",
               "type": "string"
-            },
-            "writableRoots": {
-              "default": [],
-              "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
-              },
-              "type": "array"
             }
           },
           "required": [
@@ -576,7 +535,7 @@
           "type": "null"
         }
       ],
-      "description": "Override the sandbox policy for this turn and subsequent turns."
+      "description": "Deprecated for turns. The server rejects this field because the thread permission profile value is not mutable through `turn/start`."
     },
     "serviceTier": {
       "description": "Override the service tier for this turn and subsequent turns.",
