@@ -155,6 +155,10 @@ mod tests {
     #[cfg(windows)]
     use super::parse_powershell_command_into_plain_commands;
 
+    #[cfg(windows)]
+    const WINDOWS_POWERSHELL_EXE: &str =
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+
     #[test]
     fn extracts_basic_powershell_command() {
         let cmd = vec![
@@ -206,7 +210,7 @@ mod tests {
     #[test]
     fn parses_plain_powershell_commands() {
         let commands = parse_powershell_command_into_plain_commands(&[
-            "powershell.exe".to_string(),
+            WINDOWS_POWERSHELL_EXE.to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             "echo hi".to_string(),
@@ -220,7 +224,7 @@ mod tests {
     #[test]
     fn parses_multiple_plain_powershell_commands() {
         let commands = parse_powershell_command_into_plain_commands(&[
-            "powershell.exe".to_string(),
+            WINDOWS_POWERSHELL_EXE.to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             "Write-Output foo | Measure-Object".to_string(),

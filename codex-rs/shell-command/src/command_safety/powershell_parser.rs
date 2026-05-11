@@ -7,6 +7,8 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::ErrorKind;
 use std::io::Write;
+#[cfg(windows)]
+use std::path::Path;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
@@ -17,6 +19,10 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
+#[cfg(windows)]
+const WINDOWS_POWERSHELL_EXE: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+#[cfg(windows)]
+const WINDOWS_PWSH_EXE: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
 
 /// Cache one long-lived parser process per executable path so repeated safety checks reuse
 /// PowerShell startup work while still consulting the real parser every time.
@@ -38,9 +44,63 @@ pub(crate) fn try_parse_powershell_ast_commands(
     executable: &str,
     script: &str,
 ) -> Option<Vec<Vec<String>>> {
-    match parse_with_powershell_ast(executable, script) {
+    let parser_executable = trusted_powershell_parser_executable(executable)?;
+    match parse_with_powershell_ast(parser_executable.as_str(), script) {
         PowershellParseOutcome::Commands(commands) => Some(commands),
         PowershellParseOutcome::Unsupported | PowershellParseOutcome::Failed => None,
+    }
+}
+
+/// Resolve the PowerShell binary that is safe to launch as the host-side parser.
+///
+/// The command being classified may name `pwsh`/`powershell.exe`, but that argv[0]
+/// is not itself trusted input. In particular, paths such as `./pwsh` or
+/// `C:\Temp\pwsh.exe` can point at workspace-controlled executables, while bare
+/// names such as `pwsh.exe` are resolved through search paths that can include
+/// the current directory. The parser subprocess runs before sandboxed execution,
+/// so only known system install locations are eligible here. Unknown locations
+/// fail closed.
+pub(super) fn trusted_powershell_parser_executable(executable: &str) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        let _ = executable;
+        None
+    }
+
+    #[cfg(windows)]
+    {
+        let executable_path = Path::new(executable);
+        let executable_name = executable_path
+            .file_name()
+            .and_then(|osstr| osstr.to_str())
+            .unwrap_or(executable)
+            .to_ascii_lowercase();
+        let parser_path = match executable_name.as_str() {
+            "powershell" | "powershell.exe" => WINDOWS_POWERSHELL_EXE,
+            "pwsh" | "pwsh.exe" => WINDOWS_PWSH_EXE,
+            _ => return None,
+        };
+
+        let has_path_component = executable_path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty());
+        if !has_path_component {
+            return None;
+        }
+
+        {
+            let normalized_executable = executable.trim_start_matches("\\\\?\\").replace('/', "\\");
+            let normalized_parser = parser_path.trim_start_matches("\\\\?\\").replace('/', "\\");
+            if !normalized_executable.eq_ignore_ascii_case(&normalized_parser) {
+                return None;
+            }
+        }
+
+        if Path::new(parser_path).is_file() {
+            Some(parser_path.to_string())
+        } else {
+            None
+        }
     }
 }
 
@@ -262,6 +322,46 @@ impl PowershellParserResponse {
 fn kill_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn rejects_untrusted_powershell_names() {
+        for executable in [
+            "pwsh",
+            "powershell.exe",
+            "./pwsh",
+            ".\\pwsh.exe",
+            r"C:\Temp\pwsh.exe",
+            "/tmp/pwsh",
+        ] {
+            assert_eq!(
+                trusted_powershell_parser_executable(executable),
+                None,
+                "{executable:?} must not be launched as a parser process",
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn does_not_resolve_powershell_parsers_on_non_windows() {
+        assert_eq!(trusted_powershell_parser_executable("pwsh"), None);
+        assert_eq!(trusted_powershell_parser_executable("powershell.exe"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_system_windows_powershell_parser() {
+        assert_eq!(
+            trusted_powershell_parser_executable(WINDOWS_POWERSHELL_EXE),
+            Some(WINDOWS_POWERSHELL_EXE.to_string()),
+        );
+    }
 }
 
 #[cfg(all(test, windows))]

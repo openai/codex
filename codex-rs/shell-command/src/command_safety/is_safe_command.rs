@@ -4,6 +4,7 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
+#[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_powershell_words as is_safe_powershell_words_windows;
@@ -20,8 +21,11 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         })
         .collect();
 
-    if is_safe_command_windows(&command) {
-        return true;
+    #[cfg(windows)]
+    {
+        if is_safe_command_windows(&command) {
+            return true;
+        }
     }
 
     if is_safe_to_call_with_exec(&command) {
@@ -336,6 +340,38 @@ mod tests {
 
     fn vec_str(args: &[&str]) -> Vec<String> {
         args.iter().map(ToString::to_string).collect()
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn powershell_like_paths_are_not_probed_on_non_windows() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "codex-powershell-safe-command-{}",
+            std::process::id()
+        ));
+        let fake_pwsh = test_dir.join("pwsh");
+        let marker = test_dir.join("marker");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(
+            &fake_pwsh,
+            format!("#!/bin/sh\nprintf spawned > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_pwsh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_pwsh, permissions).unwrap();
+
+        let command = vec![
+            fake_pwsh.to_string_lossy().to_string(),
+            "-Command".to_string(),
+            "Get-Location".to_string(),
+        ];
+        assert!(!is_known_safe_command(&command));
+        assert!(!marker.exists());
+
+        let _ = std::fs::remove_dir_all(test_dir);
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use crate::command_safety::is_safe_command::is_safe_git_command;
-use crate::command_safety::powershell_parser::PowershellParseOutcome;
-use crate::command_safety::powershell_parser::parse_with_powershell_ast;
+use crate::command_safety::powershell_parser::try_parse_powershell_ast_commands;
 use std::path::Path;
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
@@ -94,13 +93,7 @@ fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<
 /// Tokenizes an inline PowerShell script and delegates to the command splitter.
 /// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
 fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
-    if let PowershellParseOutcome::Commands(commands) =
-        parse_with_powershell_ast(executable, script)
-    {
-        Some(commands)
-    } else {
-        None
-    }
+    try_parse_powershell_ast_commands(executable, script)
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
@@ -228,6 +221,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::string::ToString;
 
+    const POWERSHELL_EXE: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+
     /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {
         args.iter().map(ToString::to_string).collect()
@@ -236,21 +231,21 @@ mod tests {
     #[test]
     fn recognizes_safe_powershell_wrappers() {
         assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoLogo",
             "-Command",
             "Get-ChildItem -Path .",
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoProfile",
             "-Command",
             "git status",
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "Get-Content",
             "Cargo.toml",
         ])));
@@ -283,7 +278,7 @@ mod tests {
         }
 
         assert!(is_safe_command_windows(&vec_str(&[
-            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content Cargo.toml",
         ])));
@@ -381,7 +376,7 @@ mod tests {
             (
                 script,
                 is_safe_command_windows(&[
-                    "powershell.exe".to_string(),
+                    POWERSHELL_EXE.to_string(),
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
                     script.to_string(),
@@ -405,97 +400,97 @@ mod tests {
     #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoLogo",
             "-Command",
             "Remove-Item foo.txt",
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoProfile",
             "-Command",
             "rg --pre cat",
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Set-Content foo.txt 'hello'",
         ])));
 
         // Redirections are blocked
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "echo hi > out.txt",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content x | Out-File y",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Write-Output foo 2> err.txt",
         ])));
 
         // Call operator is blocked
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "& Remove-Item foo",
         ])));
 
         // Chained safe + unsafe must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-ChildItem; Remove-Item foo",
         ])));
         // Nested unsafe cmdlet inside safe command must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Write-Output (Set-Content foo6.txt 'abc')",
         ])));
         // Additional nested unsafe cmdlet examples must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Write-Host (Remove-Item foo.txt)",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content (New-Item bar.txt)",
         ])));
 
         // Unsafe @ expansion.
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "ls @(calc.exe)"
         ])));
 
         // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "ls && pwd"
         ])));
 
         // Sub-expressions are rejected even if they contain otherwise safe commands.
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Write-Output $(Get-Content foo)"
         ])));
 
         // Empty words from the parser (e.g. '') are rejected.
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "''"
         ])));
@@ -504,13 +499,13 @@ mod tests {
     #[test]
     fn accepts_constant_expression_arguments() {
         assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content 'foo bar'"
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content \"foo bar\""
         ])));
@@ -519,13 +514,13 @@ mod tests {
     #[test]
     fn rejects_dynamic_arguments() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Get-Content $foo"
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-Command",
             "Write-Output \"foo $bar\""
         ])));
@@ -539,12 +534,9 @@ mod tests {
 
         let chain = "pwd && ls";
         assert!(
-            !is_safe_command_windows(&vec_str(&[
-                "powershell.exe",
-                "-NoProfile",
-                "-Command",
-                chain,
-            ])),
+            !is_safe_command_windows(&vec_str(
+                &[POWERSHELL_EXE, "-NoProfile", "-Command", chain,]
+            )),
             "`{chain}` is not recognized by powershell.exe"
         );
 
