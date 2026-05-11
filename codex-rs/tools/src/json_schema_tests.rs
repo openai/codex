@@ -10,15 +10,26 @@ use std::collections::BTreeMap;
 // formed JSON for consumption by the Responses API.
 
 #[test]
-fn parse_tool_input_schema_coerces_boolean_schemas() {
+fn parse_tool_input_schema_preserves_true_schema_as_any() {
     // Example schema shape:
     // true
     //
     // Expected normalization behavior:
-    // - JSON Schema boolean forms are coerced to `{ "type": "string" }`
-    //   because the baseline enum model cannot represent boolean-schema
-    //   semantics directly.
+    // - JSON Schema `true` is an accept-all schema and serializes as `{}`.
     let schema = parse_tool_input_schema(&serde_json::json!(true)).expect("parse schema");
+
+    assert_eq!(schema, JsonSchema::default());
+}
+
+#[test]
+fn parse_tool_input_schema_coerces_false_schema_to_string() {
+    // Example schema shape:
+    // false
+    //
+    // Expected normalization behavior:
+    // - JSON Schema `false` is unsatisfiable, which the current schema model
+    //   cannot represent directly, so it keeps the existing permissive fallback.
+    let schema = parse_tool_input_schema(&serde_json::json!(false)).expect("parse schema");
 
     assert_eq!(schema, JsonSchema::string(/*description*/ None));
 }
@@ -250,16 +261,63 @@ fn parse_tool_input_schema_infers_string_from_enum_const_and_format_keywords() {
 }
 
 #[test]
-fn parse_tool_input_schema_defaults_empty_schema_to_string() {
+fn parse_tool_input_schema_preserves_empty_schema_as_any() {
     // Example schema shape:
     // {}
     //
     // Expected normalization behavior:
-    // - With no structural hints at all, the normalizer falls back to a
-    //   permissive string schema.
+    // - With no structural hints at all, `{}` remains an accept-all schema.
     let schema = parse_tool_input_schema(&serde_json::json!({})).expect("parse schema");
 
-    assert_eq!(schema, JsonSchema::string(/*description*/ None));
+    assert_eq!(schema, JsonSchema::default());
+}
+
+#[test]
+fn parse_tool_input_schema_preserves_empty_property_schema_as_any() {
+    // Example schema shape:
+    // {
+    //   "type": "object",
+    //   "properties": {
+    //     "body": {
+    //       "type": "object",
+    //       "properties": {
+    //         "parent": {}
+    //       }
+    //     }
+    //   }
+    // }
+    //
+    // Expected normalization behavior:
+    // - Nested `{}` keeps its JSON Schema accept-all meaning instead of being
+    //   rewritten into a string.
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "body": {
+                "type": "object",
+                "properties": {
+                    "parent": {}
+                }
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "body".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([("parent".to_string(), JsonSchema::default())]),
+                    /*required*/ None,
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        )
+    );
 }
 
 #[test]
@@ -449,6 +507,46 @@ fn parse_tool_input_schema_fills_default_items_for_nullable_array_union() {
             items: Some(Box::new(JsonSchema::string(/*description*/ None))),
             ..Default::default()
         }
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_preserves_sibling_constraints_for_true_ref_targets() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "config": {
+                "$ref": "#/$defs/anything",
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" }
+                },
+                "required": ["dateTime"]
+            }
+        },
+        "$defs": {
+            "anything": true
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "config".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([(
+                        "dateTime".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
+                    Some(vec!["dateTime".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
     );
 }
 

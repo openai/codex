@@ -1,5 +1,5 @@
+use crate::JsonSchema;
 use crate::ToolDefinition;
-use crate::parse_tool_input_schema;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
@@ -18,7 +18,7 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_
         );
     }
 
-    let input_schema = parse_tool_input_schema(&serialized_input_schema)?;
+    let input_schema = JsonSchema::from_raw_tool_input_schema(serialized_input_schema);
     let structured_content_schema = tool
         .output_schema
         .as_ref()

@@ -3,7 +3,6 @@ use super::parse_mcp_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
@@ -34,14 +33,51 @@ fn parse_mcp_tool_inserts_empty_properties() {
         ToolDefinition {
             name: "no_props".to_string(),
             description: "No properties".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            input_schema: JsonSchema::from_raw_tool_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: false,
         }
+    );
+}
+
+#[test]
+fn parse_mcp_tool_preserves_raw_input_schema_keywords() {
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "parent": {},
+            "start": {
+                "$ref": "#/$defs/date_time_zone",
+                "description": "Event start"
+            },
+            "end": {
+                "allOf": [
+                    { "$ref": "#/$defs/date_time_zone" }
+                ]
+            }
+        },
+        "$defs": {
+            "date_time_zone": {
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" },
+                    "timeZone": { "type": "string" }
+                },
+                "required": ["dateTime", "timeZone"]
+            }
+        },
+        "additionalProperties": true
+    });
+    let tool = mcp_tool("create_page", "Create page", input_schema.clone());
+
+    let parsed = parse_mcp_tool(&tool).expect("parse MCP tool");
+
+    assert_eq!(
+        serde_json::to_value(&parsed.input_schema).expect("serialize input schema"),
+        input_schema
     );
 }
 
@@ -72,11 +108,10 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
         ToolDefinition {
             name: "with_output".to_string(),
             description: "Has output schema".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            input_schema: JsonSchema::from_raw_tool_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "properties": {
                     "result": {
@@ -112,11 +147,10 @@ fn parse_mcp_tool_preserves_output_schema_without_inferred_type() {
         ToolDefinition {
             name: "with_enum_output".to_string(),
             description: "Has enum output schema".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            input_schema: JsonSchema::from_raw_tool_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })),
             output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "enum": ["ok", "error"]
             }))),

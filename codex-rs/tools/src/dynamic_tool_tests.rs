@@ -3,10 +3,9 @@ use crate::JsonSchema;
 use crate::ToolDefinition;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 
 #[test]
-fn parse_dynamic_tool_sanitizes_input_schema() {
+fn parse_dynamic_tool_preserves_raw_input_schema() {
     let tool = DynamicToolSpec {
         namespace: None,
         name: "lookup_ticket".to_string(),
@@ -26,14 +25,14 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
         ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::from([(
-                    "id".to_string(),
-                    JsonSchema::string(Some("Ticket identifier".to_string()),),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            input_schema: JsonSchema::from_raw_tool_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "description": "Ticket identifier"
+                    }
+                }
+            })),
             output_schema: None,
             defer_loading: false,
         }
@@ -58,11 +57,10 @@ fn parse_dynamic_tool_preserves_defer_loading() {
         ToolDefinition {
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
+            input_schema: JsonSchema::from_raw_tool_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })),
             output_schema: None,
             defer_loading: true,
         }

@@ -72,14 +72,14 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::object(
-                BTreeMap::from([(
-                    "order_id".to_string(),
-                    JsonSchema::string(/*description*/ None),
-                )]),
-                Some(vec!["order_id".to_string()]),
-                Some(false.into())
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(json!({
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"}
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            })),
             output_schema: None,
         }
     );
@@ -117,16 +117,97 @@ fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::object(
-                BTreeMap::from([(
-                    "order_id".to_string(),
-                    JsonSchema::string(/*description*/ None),
-                )]),
-                Some(vec!["order_id".to_string()]),
-                Some(false.into())
-            ),
+            parameters: JsonSchema::from_raw_tool_input_schema(json!({
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"}
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            })),
             output_schema: None,
         }
+    );
+}
+
+#[test]
+fn dynamic_tool_to_responses_api_tool_serializes_raw_non_strict_schema() {
+    let tool = DynamicToolSpec {
+        namespace: None,
+        name: "create_page".to_string(),
+        description: "Create a page".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "properties": {
+                        "parent": {}
+                    }
+                },
+                "start": {
+                    "$ref": "#/$defs/date_time_zone",
+                    "description": "Event start"
+                },
+                "end": {
+                    "allOf": [
+                        { "$ref": "#/$defs/date_time_zone" }
+                    ]
+                }
+            },
+            "$defs": {
+                "date_time_zone": {
+                    "type": "object",
+                    "properties": {
+                        "dateTime": { "type": "string" },
+                        "timeZone": { "type": "string" }
+                    },
+                    "required": ["dateTime", "timeZone"]
+                }
+            },
+            "additionalProperties": true
+        }),
+        defer_loading: false,
+    };
+
+    let value = serde_json::to_value(
+        dynamic_tool_to_responses_api_tool(&tool).expect("convert dynamic tool"),
+    )
+    .expect("serialize responses tool");
+
+    assert_eq!(
+        value["parameters"],
+        json!({
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "properties": {
+                        "parent": {}
+                    }
+                },
+                "start": {
+                    "$ref": "#/$defs/date_time_zone",
+                    "description": "Event start"
+                },
+                "end": {
+                    "allOf": [
+                        { "$ref": "#/$defs/date_time_zone" }
+                    ]
+                }
+            },
+            "$defs": {
+                "date_time_zone": {
+                    "type": "object",
+                    "properties": {
+                        "dateTime": { "type": "string" },
+                        "timeZone": { "type": "string" }
+                    },
+                    "required": ["dateTime", "timeZone"]
+                }
+            },
+            "additionalProperties": true
+        })
     );
 }
 

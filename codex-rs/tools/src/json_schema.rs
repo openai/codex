@@ -1,5 +1,7 @@
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -8,7 +10,8 @@ use std::collections::BTreeMap;
 ///
 /// This mirrors the OpenAI Structured Outputs subset for JSON Schema `type`:
 /// string, number, boolean, integer, object, array, and null.
-/// Keywords such as `enum`, `const`, and `anyOf` are modeled separately.
+/// Keywords such as `enum`, `const`, `anyOf`, `allOf`, and `oneOf` are modeled
+/// separately.
 /// See <https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas>.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -31,30 +34,112 @@ pub enum JsonSchemaType {
 }
 
 /// Generic JSON-Schema subset needed for our tool definitions.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct JsonSchema {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    raw_schema: Option<JsonValue>,
     pub schema_type: Option<JsonSchemaType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
     pub enum_values: Option<Vec<JsonValue>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Box<JsonSchema>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<BTreeMap<String, JsonSchema>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
+    pub additional_properties: Option<AdditionalProperties>,
+    pub any_of: Option<Vec<JsonSchema>>,
+    pub all_of: Option<Vec<JsonSchema>>,
+    pub one_of: Option<Vec<JsonSchema>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+struct JsonSchemaFields {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    schema_type: Option<JsonSchemaType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
+    enum_values: Option<Vec<JsonValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    items: Option<Box<JsonSchema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<BTreeMap<String, JsonSchema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<Vec<String>>,
     #[serde(
         rename = "additionalProperties",
         skip_serializing_if = "Option::is_none"
     )]
-    pub additional_properties: Option<AdditionalProperties>,
+    additional_properties: Option<AdditionalProperties>,
     #[serde(rename = "anyOf", skip_serializing_if = "Option::is_none")]
-    pub any_of: Option<Vec<JsonSchema>>,
+    any_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "allOf", skip_serializing_if = "Option::is_none")]
+    all_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "oneOf", skip_serializing_if = "Option::is_none")]
+    one_of: Option<Vec<JsonSchema>>,
+}
+
+impl From<JsonSchemaFields> for JsonSchema {
+    fn from(fields: JsonSchemaFields) -> Self {
+        Self {
+            raw_schema: None,
+            schema_type: fields.schema_type,
+            description: fields.description,
+            enum_values: fields.enum_values,
+            items: fields.items,
+            properties: fields.properties,
+            required: fields.required,
+            additional_properties: fields.additional_properties,
+            any_of: fields.any_of,
+            all_of: fields.all_of,
+            one_of: fields.one_of,
+        }
+    }
+}
+
+impl From<&JsonSchema> for JsonSchemaFields {
+    fn from(schema: &JsonSchema) -> Self {
+        Self {
+            schema_type: schema.schema_type.clone(),
+            description: schema.description.clone(),
+            enum_values: schema.enum_values.clone(),
+            items: schema.items.clone(),
+            properties: schema.properties.clone(),
+            required: schema.required.clone(),
+            additional_properties: schema.additional_properties.clone(),
+            any_of: schema.any_of.clone(),
+            all_of: schema.all_of.clone(),
+            one_of: schema.one_of.clone(),
+        }
+    }
+}
+
+impl Serialize for JsonSchema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.raw_schema {
+            Some(raw_schema) => raw_schema.serialize(serializer),
+            None => JsonSchemaFields::from(self).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonSchema {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        JsonSchemaFields::deserialize(deserializer).map(Into::into)
+    }
 }
 
 impl JsonSchema {
+    pub fn from_raw_tool_input_schema(input_schema: JsonValue) -> Self {
+        Self {
+            raw_schema: Some(normalize_raw_tool_input_schema(input_schema)),
+            ..Default::default()
+        }
+    }
+
     /// Construct a scalar/object/array schema with a single JSON Schema type.
     fn typed(schema_type: JsonSchemaPrimitiveType, description: Option<String>) -> Self {
         Self {
@@ -68,6 +153,14 @@ impl JsonSchema {
         Self {
             description,
             any_of: Some(variants),
+            ..Default::default()
+        }
+    }
+
+    pub fn all_of(variants: Vec<JsonSchema>, description: Option<String>) -> Self {
+        Self {
+            description,
+            all_of: Some(variants),
             ..Default::default()
         }
     }
@@ -159,17 +252,64 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     Ok(schema)
 }
 
+fn normalize_raw_tool_input_schema(input_schema: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = input_schema else {
+        return empty_root_tool_schema();
+    };
+
+    if !root_schema_allows_object(&map) {
+        return empty_root_tool_schema();
+    }
+
+    if map.get("type").is_none_or(JsonValue::is_null) {
+        map.insert("type".to_string(), JsonValue::String("object".to_string()));
+    }
+
+    if map.get("properties").is_none_or(JsonValue::is_null) {
+        map.insert(
+            "properties".to_string(),
+            JsonValue::Object(serde_json::Map::new()),
+        );
+    }
+
+    JsonValue::Object(map)
+}
+
+fn empty_root_tool_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {}
+    })
+}
+
+fn root_schema_allows_object(map: &serde_json::Map<String, JsonValue>) -> bool {
+    match map.get("type") {
+        None | Some(JsonValue::Null) => true,
+        Some(JsonValue::String(schema_type)) => schema_type == "object",
+        Some(JsonValue::Array(schema_types)) => schema_types
+            .iter()
+            .any(|schema_type| schema_type.as_str() == Some("object")),
+        Some(_) => false,
+    }
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// schema representation. This function:
 /// - Ensures every typed schema object has a `"type"` when required.
-/// - Preserves explicit `anyOf`.
+/// - Preserves explicit `anyOf`, `allOf`, and `oneOf`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
 fn sanitize_json_schema(value: &mut JsonValue) {
     match value {
-        JsonValue::Bool(_) => {
-            // JSON Schema boolean form: true/false. Coerce to an accept-all string.
+        JsonValue::Bool(true) => {
+            // JSON Schema `true` is an accept-all schema.
+            *value = json!({});
+        }
+        JsonValue::Bool(false) => {
+            // `false` is unsatisfiable, which our tool schema subset cannot
+            // express. Keep the existing permissive fallback for that rare
+            // shape rather than rejecting the whole tool definition.
             *value = json!({ "type": "string" });
         }
         JsonValue::Array(values) => {
@@ -196,8 +336,10 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(value) = map.get_mut("prefixItems") {
                 sanitize_json_schema(value);
             }
-            if let Some(value) = map.get_mut("anyOf") {
-                sanitize_json_schema(value);
+            for keyword in ["anyOf", "allOf", "oneOf"] {
+                if let Some(value) = map.get_mut(keyword) {
+                    sanitize_json_schema(value);
+                }
             }
 
             if let Some(const_value) = map.remove("const") {
@@ -206,7 +348,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             let mut schema_types = normalized_schema_types(map);
 
-            if schema_types.is_empty() && map.contains_key("anyOf") {
+            if schema_types.is_empty() && (map.is_empty() || contains_schema_combiner(map)) {
                 return;
             }
 
@@ -237,6 +379,12 @@ fn sanitize_json_schema(value: &mut JsonValue) {
         }
         _ => {}
     }
+}
+
+fn contains_schema_combiner(map: &serde_json::Map<String, JsonValue>) -> bool {
+    ["anyOf", "allOf", "oneOf"]
+        .iter()
+        .any(|keyword| map.contains_key(*keyword))
 }
 
 fn ensure_default_children_for_schema_types(
