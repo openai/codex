@@ -21,6 +21,7 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
@@ -180,11 +181,6 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
     let managed_dir =
         AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
     fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
-    let unix_log_path = managed_dir.join("unix_pre_tool_use_log.jsonl");
-    let windows_log_path = managed_dir.join("windows_pre_tool_use_log.jsonl");
-
-    let unix_command = |log_path: &Path| format!(r#"printf ok > "{}""#, log_path.display());
-    let windows_command = |log_path: &Path| format!(r#"echo ok > "{}""#, log_path.display());
 
     let managed_hooks = managed_hooks_for_current_platform(
         managed_dir,
@@ -193,8 +189,8 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
-                        unix: unix_command(unix_log_path.as_path()),
-                        windows: windows_command(windows_log_path.as_path()),
+                        unix: "exit 17".to_string(),
+                        windows: "exit /B 19".to_string(),
                     }),
                     timeout_sec: Some(10),
                     r#async: false,
@@ -247,15 +243,15 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
         .await;
 
     assert!(!outcome.should_block);
+    let expected_exit_code = if cfg!(windows) { 19 } else { 17 };
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Failed);
     assert_eq!(
-        unix_log_path.exists(),
-        cfg!(not(windows)),
-        "only the Unix command should run off Windows"
-    );
-    assert_eq!(
-        windows_log_path.exists(),
-        cfg!(windows),
-        "only the Windows command should run on Windows"
+        outcome.hook_events[0].run.entries,
+        vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Error,
+            text: format!("hook exited with code {expected_exit_code}"),
+        }]
     );
 }
 
