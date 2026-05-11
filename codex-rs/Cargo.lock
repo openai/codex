@@ -1895,12 +1895,14 @@ dependencies = [
  "codex-core",
  "codex-core-plugins",
  "codex-exec-server",
+ "codex-extension-api",
  "codex-external-agent-migration",
  "codex-external-agent-sessions",
  "codex-features",
  "codex-feedback",
  "codex-file-search",
  "codex-file-watcher",
+ "codex-git-attribution",
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
@@ -2497,6 +2499,7 @@ dependencies = [
  "codex-core-skills",
  "codex-exec-server",
  "codex-execpolicy",
+ "codex-extension-api",
  "codex-features",
  "codex-feedback",
  "codex-git-utils",
@@ -2522,6 +2525,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-test-binary-support",
  "codex-thread-store",
+ "codex-tool-api",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2600,6 +2604,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec-server",
+ "codex-extension-api",
  "codex-features",
  "codex-login",
  "codex-model-provider-info",
@@ -2817,6 +2822,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-extension-api"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-tool-api",
+]
+
+[[package]]
 name = "codex-external-agent-migration"
 version = "0.0.0"
 dependencies = [
@@ -2903,6 +2916,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "codex-git-attribution"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "pretty_assertions",
 ]
 
 [[package]]
@@ -3090,6 +3113,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec-server",
+ "codex-extension-api",
  "codex-login",
  "codex-protocol",
  "codex-shell-command",
@@ -3679,6 +3703,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-tool-api"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4297,6 +4330,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec-server",
+ "codex-extension-api",
  "codex-features",
  "codex-hooks",
  "codex-login",

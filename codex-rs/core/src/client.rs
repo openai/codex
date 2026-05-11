@@ -142,6 +142,8 @@ pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-start-ms";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
@@ -1421,7 +1423,7 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let ws_request = self.prepare_websocket_request(ws_payload, &request);
+            let mut ws_request = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
@@ -1430,6 +1432,7 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
+            stamp_ws_stream_request_start_ms(&mut ws_request);
             inference_trace_attempt.record_started(&ws_request);
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
@@ -1636,6 +1639,23 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+/// Stamp a ResponsesWsRequest with the current time.
+///
+/// Meant to be called just before sending the request over the socket, to capture realistic
+/// transport timing.
+fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
+    let ResponsesWsRequest::ResponseCreate(payload) = request else {
+        return;
+    };
+    payload
+        .client_metadata
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
+            crate::turn_timing::now_unix_timestamp_ms().to_string(),
+        );
 }
 
 /// Builds the extra headers attached to Responses API requests.

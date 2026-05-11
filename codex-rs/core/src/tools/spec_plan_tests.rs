@@ -43,6 +43,10 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tool_api::FunctionToolSpec;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
+use codex_tool_api::ToolExecutor;
+use codex_tool_api::ToolFuture;
 use codex_tools::AdditionalProperties;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverablePluginInfo;
@@ -72,6 +76,74 @@ const DEFAULT_AGENT_TYPE_DESCRIPTION: &str = "Test agent type description.";
 const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 const MAX_WAIT_TIMEOUT_MS: i64 = 3_600_000;
+
+struct UnusedExtensionExecutor;
+
+impl ToolExecutor for UnusedExtensionExecutor {
+    fn execute<'a>(&'a self, _call: codex_tool_api::ToolCall) -> ToolFuture<'a> {
+        Box::pin(async { panic!("spec planning should not execute extension tools") })
+    }
+}
+
+fn extension_tool_bundle(name: &str, description: &str) -> ExtensionToolBundle {
+    ExtensionToolBundle::new(
+        FunctionToolSpec {
+            name: name.to_string(),
+            description: description.to_string(),
+            strict: true,
+            parameters: serde_json::to_value(JsonSchema::object(
+                BTreeMap::from([(
+                    "message".to_string(),
+                    JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["message".to_string()]),
+                Some(false.into()),
+            ))
+            .expect("extension schema should serialize"),
+        },
+        std::sync::Arc::new(UnusedExtensionExecutor),
+    )
+}
+
+#[test]
+fn extension_tools_do_not_replace_builtin_tools() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let extension_tool_bundles = vec![extension_tool_bundle(
+        "update_plan",
+        "Extension attempt to replace a built-in tool.",
+    )];
+    let (tools, _) = build_specs_with_discoverable_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_bundles,
+        &[],
+    );
+
+    assert_eq!(
+        find_tool(&tools, "update_plan").spec,
+        create_update_plan_tool()
+    );
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool.name() == "update_plan")
+            .count(),
+        1
+    );
+}
 
 #[test]
 fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
@@ -1807,6 +1879,7 @@ fn request_plugin_install_is_not_registered_without_feature_flag() {
             "Google Calendar",
             "Plan events and schedules.",
         )]),
+        /*extension_tool_bundles*/ &[],
         &[],
     );
 
@@ -1847,6 +1920,7 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
             "Google Calendar",
             "Plan events and schedules.",
         )]),
+        /*extension_tool_bundles*/ &[],
         &[],
     );
 
@@ -1913,6 +1987,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
         Some(discoverable_tools),
+        /*extension_tool_bundles*/ &[],
         &[],
     );
     assert!(registry.has_handler(&ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)));
@@ -2189,6 +2264,45 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 }
 
 #[test]
+fn code_mode_only_exec_description_includes_extension_tool_details() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let extension_tool_bundles = vec![extension_tool_bundle(
+        "extension_echo",
+        "Echoes arguments through an extension tool.",
+    )];
+    let (tools, _) = build_specs_with_discoverable_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_bundles,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
+    else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(description.contains("### `extension_echo`"));
+    assert!(description.contains("Echoes arguments through an extension tool."));
+}
+
+#[test]
 fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -2276,6 +2390,7 @@ fn build_specs<'a>(
         mcp_tools,
         deferred_mcp_tools,
         /*discoverable_tools*/ None,
+        /*extension_tool_bundles*/ &[],
         dynamic_tools,
     )
 }
@@ -2285,6 +2400,7 @@ fn build_specs_with_discoverable_tools<'a>(
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolRegistryBuildDeferredTool<'a>>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
     build_specs_with_optional_tool_namespaces(
@@ -2293,6 +2409,7 @@ fn build_specs_with_discoverable_tools<'a>(
         deferred_mcp_tools,
         /*tool_namespaces*/ None,
         discoverable_tools,
+        extension_tool_bundles,
         dynamic_tools,
     )
 }
@@ -2303,6 +2420,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     deferred_mcp_tools: Option<Vec<ToolRegistryBuildDeferredTool<'a>>>,
     tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
@@ -2321,6 +2439,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),
+            extension_tool_bundles,
             dynamic_tools,
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),

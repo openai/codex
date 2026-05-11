@@ -12,10 +12,9 @@
 //!   content is known to be plain prose.
 //! - **Adaptive** (`adaptive_wrap_line`, `adaptive_wrap_lines`):
 //!   inspects the line for URL-like tokens; if any are found, the
-//!   wrapping switches to `AsciiSpace` word separation and a custom
-//!   `WordSplitter` that refuses to split URL tokens. Non-URL tokens
-//!   on the same line still break at every character boundary (the
-//!   custom splitter returns all char indices for non-URL words).
+//!   wrapping keeps URL tokens intact. Mixed URL/prose lines still wrap
+//!   ordinary prose at word boundaries, only splitting a non-URL token
+//!   when that token is itself wider than the available row width.
 //!
 //! Callers that *might* encounter URLs should use the `adaptive_*`
 //! functions. Callers that definitely will not (code blocks, pure
@@ -31,6 +30,9 @@ use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
+use textwrap::WordSeparator;
+use textwrap::core::Word;
+use textwrap::core::display_width;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -458,42 +460,34 @@ fn is_domain_label(label: &str) -> bool {
 /// Reconfigures wrapping options so that URL-like tokens are never split.
 ///
 /// Sets `AsciiSpace` word separation (so `/` and `-` inside URLs are
-/// not treated as break points), disables `break_words`, and installs a
-/// custom `WordSplitter` that returns no split points for URL tokens
-/// while still allowing character-level splitting for non-URL words.
+/// not treated as break points), disables `break_words`, and prevents
+/// per-word hyphenation. Mixed URL/prose lines use a dedicated wrapper
+/// so normal prose can still wrap cleanly around the preserved URL token.
 pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<'a> {
     opts.word_separator(textwrap::WordSeparator::AsciiSpace)
-        .word_splitter(textwrap::WordSplitter::Custom(split_non_url_word))
+        .word_splitter(textwrap::WordSplitter::NoHyphenation)
         .break_words(/*break_words*/ false)
-}
-
-/// Custom `textwrap::WordSplitter` callback. Returns empty (no split
-/// points) for URL-like tokens so they are kept intact; returns every
-/// char-boundary index for everything else so non-URL words can still
-/// break at any position.
-fn split_non_url_word(word: &str) -> Vec<usize> {
-    if is_url_like_token(word) {
-        return Vec::new();
-    }
-
-    word.char_indices().skip(1).map(|(idx, _)| idx).collect()
 }
 
 /// Wraps a single ratatui `Line`, automatically switching to
 /// URL-preserving options when the line contains a URL-like token.
 ///
 /// When no URL is detected, wrapping behavior is identical to
-/// [`word_wrap_line`]. When a URL is detected, the line is wrapped with
-/// [`url_preserving_wrap_options`] — URLs stay intact while non-URL
-/// words on the same line still break normally.
+/// [`word_wrap_line`]. URL-only lines use [`url_preserving_wrap_options`]
+/// so terminal link detection keeps seeing one intact token. Mixed URL/prose
+/// lines use a token-aware wrapper so ordinary prose still moves as whole words
+/// while a genuinely overlong non-URL token can still split if needed.
 #[must_use]
 pub(crate) fn adaptive_wrap_line<'a>(line: &'a Line<'a>, base: RtOptions<'a>) -> Vec<Line<'a>> {
-    let selected = if line_contains_url_like(line) {
-        url_preserving_wrap_options(base)
+    if !line_contains_url_like(line) {
+        return word_wrap_line(line, base);
+    }
+
+    if line_has_mixed_url_and_non_url_tokens(line) {
+        mixed_url_wrap_line(line, base)
     } else {
-        base
-    };
-    word_wrap_line(line, selected)
+        word_wrap_line(line, url_preserving_wrap_options(base))
+    }
 }
 
 /// Wraps multiple input lines with URL-aware heuristics, applying
@@ -639,17 +633,7 @@ pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> 
 where
     O: Into<RtOptions<'a>>,
 {
-    // Flatten the line and record span byte ranges.
-    let mut flat = String::new();
-    let mut span_bounds = Vec::new();
-    let mut acc = 0usize;
-    for s in &line.spans {
-        let text = s.content.as_ref();
-        let start = acc;
-        flat.push_str(text);
-        acc += text.len();
-        span_bounds.push((start..acc, s.style));
-    }
+    let (flat, span_bounds) = flatten_line(line);
 
     let rt_opts: RtOptions<'a> = width_or_options.into();
     let opts = Options::new(rt_opts.width)
@@ -716,6 +700,186 @@ where
     }
 
     out
+}
+
+#[derive(Clone, Debug)]
+struct MixedUrlWord {
+    range: Range<usize>,
+    is_url: bool,
+}
+
+impl MixedUrlWord {
+    fn width(&self, text: &str) -> usize {
+        display_width(&text[self.range.clone()])
+    }
+}
+
+fn mixed_url_wrap_line<'a>(line: &'a Line<'a>, rt_opts: RtOptions<'a>) -> Vec<Line<'a>> {
+    let (flat, span_bounds) = flatten_line(line);
+    let initial_width_available = rt_opts
+        .width
+        .saturating_sub(rt_opts.initial_indent.width())
+        .max(1);
+    let subsequent_width_available = rt_opts
+        .width
+        .saturating_sub(rt_opts.subsequent_indent.width())
+        .max(1);
+    let ranges = mixed_url_wrap_ranges(&flat, initial_width_available, subsequent_width_available);
+
+    let mut out = Vec::new();
+    for (idx, range) in ranges.iter().enumerate() {
+        let mut wrapped_line = if idx == 0 {
+            rt_opts.initial_indent.clone()
+        } else {
+            rt_opts.subsequent_indent.clone()
+        }
+        .style(line.style);
+        let sliced = slice_line_spans(line, &span_bounds, range);
+        let mut spans = wrapped_line.spans;
+        spans.extend(
+            sliced
+                .spans
+                .into_iter()
+                .map(|span| span.patch_style(line.style)),
+        );
+        wrapped_line.spans = spans;
+        out.push(wrapped_line);
+    }
+
+    if out.is_empty() {
+        vec![rt_opts.initial_indent.clone()]
+    } else {
+        out
+    }
+}
+
+fn mixed_url_wrap_ranges(
+    text: &str,
+    initial_width: usize,
+    subsequent_width: usize,
+) -> Vec<Range<usize>> {
+    let leading_space_width = text.chars().take_while(|ch| *ch == ' ').count();
+    let mut words = Vec::new();
+    let mut cursor = 0usize;
+    for word in WordSeparator::AsciiSpace.find_words(text) {
+        let word_start = cursor;
+        let word_end = word_start + word.word.len();
+        let trailing_space_end = word_end + word.whitespace.len();
+        if !word.word.is_empty() {
+            words.push(MixedUrlWord {
+                range: word_start..word_end,
+                is_url: is_url_like_token(word.word),
+            });
+        }
+        cursor = trailing_space_end;
+    }
+
+    let mut lines = Vec::new();
+    let mut line_start = None;
+    let mut line_end = 0usize;
+    let mut line_width = 0usize;
+    let mut line_limit = initial_width.max(1);
+
+    for word in words {
+        let mut pending = split_mixed_url_word(text, word, line_limit);
+        let mut pending_idx = 0usize;
+
+        while let Some(piece) = pending.get(pending_idx).cloned() {
+            let empty_line_prefix_width = if line_start.is_none() && lines.is_empty() {
+                leading_space_width
+            } else {
+                0
+            };
+            let empty_line_piece_limit = line_limit.saturating_sub(empty_line_prefix_width).max(1);
+            if line_start.is_none() && !piece.is_url && piece.width(text) > empty_line_piece_limit {
+                pending.splice(
+                    pending_idx..=pending_idx,
+                    split_mixed_url_word(text, piece, empty_line_piece_limit),
+                );
+                continue;
+            }
+
+            let piece_width = piece.width(text);
+            let inter_word_space = line_start
+                .map(|_| text[line_end..piece.range.start].len())
+                .unwrap_or(0);
+            let fits = if line_start.is_none() {
+                piece.is_url
+                    || empty_line_prefix_width + piece_width <= line_limit
+                    || empty_line_prefix_width >= line_limit
+            } else {
+                line_width + inter_word_space + piece_width <= line_limit
+            };
+
+            if fits {
+                if line_start.is_none() {
+                    let is_first_output_line = lines.is_empty();
+                    let start = if is_first_output_line {
+                        0
+                    } else {
+                        piece.range.start
+                    };
+                    line_start = Some(start);
+                    line_width = if is_first_output_line {
+                        leading_space_width + piece_width
+                    } else {
+                        piece_width
+                    };
+                } else {
+                    line_width += inter_word_space + piece_width;
+                }
+                line_end = piece.range.end;
+                pending_idx += 1;
+                continue;
+            }
+
+            if let Some(start) = line_start.take() {
+                lines.push(start..line_end);
+            }
+            line_end = 0;
+            line_width = 0;
+            line_limit = subsequent_width.max(1);
+        }
+    }
+
+    if let Some(start) = line_start {
+        lines.push(start..line_end);
+    }
+
+    lines
+}
+
+fn split_mixed_url_word(text: &str, word: MixedUrlWord, line_limit: usize) -> Vec<MixedUrlWord> {
+    if word.is_url || word.width(text) <= line_limit {
+        return vec![word];
+    }
+
+    let source = Word::from(&text[word.range.clone()]);
+    let mut offset = word.range.start;
+    let mut pieces = Vec::new();
+    for piece in source.break_apart(line_limit.max(1)) {
+        let end = offset + piece.word.len();
+        pieces.push(MixedUrlWord {
+            range: offset..end,
+            is_url: false,
+        });
+        offset = end;
+    }
+    pieces
+}
+
+fn flatten_line(line: &Line<'_>) -> (String, Vec<(Range<usize>, ratatui::style::Style)>) {
+    let mut flat = String::new();
+    let mut span_bounds = Vec::new();
+    let mut acc = 0usize;
+    for span in &line.spans {
+        let text = span.content.as_ref();
+        let start = acc;
+        flat.push_str(text);
+        acc += text.len();
+        span_bounds.push((start..acc, span.style));
+    }
+    (flat, span_bounds)
 }
 
 /// Utilities to allow wrapping either borrowed or owned lines.
@@ -1248,6 +1412,20 @@ them."#
     }
 
     #[test]
+    fn adaptive_wrap_line_mixed_line_keeps_regular_words_intact() {
+        let line = Line::from(
+            "see https://example.com/path and keep strikethrough intact while wrapping prose",
+        );
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 36));
+        let joined = out.iter().map(concat_line).join("\n");
+
+        assert_eq!(
+            joined,
+            "see https://example.com/path and\nkeep strikethrough intact while\nwrapping prose"
+        );
+    }
+
+    #[test]
     fn adaptive_wrap_line_mixed_line_wraps_long_non_url_token() {
         let long_non_url = "a_very_long_token_without_spaces_to_force_wrapping";
         let line = Line::from(format!("see https://ex.com {long_non_url}"));
@@ -1262,6 +1440,40 @@ them."#
             !out.iter()
                 .any(|line| concat_line(line).contains(long_non_url)),
             "expected long non-url token to wrap on mixed lines, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_mixed_line_counts_leading_spaces_before_first_word() {
+        let line = Line::from("      abcdefgh https://x.co");
+        let out = adaptive_wrap_line(
+            &line,
+            RtOptions::new(/*width*/ 10).subsequent_indent("      ".into()),
+        );
+        let rendered = out.iter().map(concat_line).collect_vec();
+
+        assert_eq!(
+            rendered[..2],
+            ["      abcd".to_string(), "      efgh".to_string()]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_mixed_line_resplits_long_token_for_continuation_width() {
+        let line = Line::from("abcdefghijklmnopqrst https://x.co");
+        let out = adaptive_wrap_line(
+            &line,
+            RtOptions::new(/*width*/ 10).subsequent_indent("    ".into()),
+        );
+        let rendered = out.iter().map(concat_line).collect_vec();
+
+        assert_eq!(
+            rendered[..3],
+            [
+                "abcdefghij".to_string(),
+                "    klmnop".to_string(),
+                "    qrst".to_string(),
+            ]
         );
     }
 

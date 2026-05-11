@@ -16,7 +16,6 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
-use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -53,6 +52,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -392,6 +392,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
+    pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -455,6 +456,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager,
+            extensions,
             conversation_history,
             session_source,
             thread_source,
@@ -650,6 +652,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
+            extensions,
             agent_control,
             environment_manager,
             analytics_events_client,
@@ -2570,6 +2573,7 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
+        let mut separate_developer_sections = Vec::<String>::new();
         let (
             reference_context_item,
             previous_turn_settings,
@@ -2707,12 +2711,23 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
-            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
-                turn_context.config.commit_attribution.as_deref(),
-            )
-        {
-            developer_sections.push(commit_message_instruction);
+        for contributor in self.services.extensions.context_contributors() {
+            for fragment in contributor.contribute(
+                &self.services.session_extension_data,
+                &self.services.thread_extension_data,
+            ) {
+                match fragment.slot() {
+                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
+                        developer_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::ContextualUser => {
+                        contextual_user_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::SeparateDeveloper => {
+                        separate_developer_sections.push(fragment.text().to_string());
+                    }
+                }
+            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(
@@ -2745,6 +2760,13 @@ impl Session {
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
             items.push(developer_message);
+        }
+        for section in separate_developer_sections {
+            if let Some(developer_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![section])
+            {
+                items.push(developer_message);
+            }
         }
         if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
             && let Some(usage_hint_message) =

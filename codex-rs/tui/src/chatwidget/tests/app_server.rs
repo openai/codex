@@ -691,7 +691,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.status_state.retry_status_header.is_none());
 }
 
 #[tokio::test]

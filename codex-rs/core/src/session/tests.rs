@@ -545,6 +545,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     ));
@@ -3725,6 +3726,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -3871,6 +3873,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -4061,6 +4066,7 @@ async fn make_session_with_config_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -4163,6 +4169,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5586,6 +5593,9 @@ where
         skills_manager,
         plugins_manager,
         mcp_manager,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -6131,6 +6141,73 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     )
     .await;
     (session, turn_context)
+}
+
+struct GitAttributionTestContributor;
+struct GitAttributionTestState;
+
+impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+    fn contribute(
+        &self,
+        _session_store: &codex_extension_api::ExtensionData,
+        thread_store: &codex_extension_api::ExtensionData,
+    ) -> Vec<codex_extension_api::PromptFragment> {
+        thread_store
+            .get::<GitAttributionTestState>()
+            .is_some()
+            .then(|| {
+                codex_extension_api::PromptFragment::developer_policy(
+                    "git attribution extension enabled",
+                )
+            })
+            .into_iter()
+            .collect()
+    }
+}
+
+fn git_attribution_test_registry()
+-> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    Arc::new(builder.build())
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_git_attribution_from_extensions() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+    session
+        .services
+        .thread_extension_data
+        .insert(GitAttributionTestState);
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "expected git attribution developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        !developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "did not expect git attribution developer text, got {developer_messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -7630,7 +7707,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
-    let _responses = mount_sse_sequence(
+    let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -7692,6 +7769,25 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
         }
     })
     .await??;
+
+    let continuation_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("<goal_context>"))
+        .expect("expected a goal continuation request");
+    let body = continuation_request.body_json();
+    let goal_context_message = body["input"]
+        .as_array()
+        .expect("input should be an array")
+        .iter()
+        .find(|item| item.to_string().contains("<goal_context>"))
+        .expect("goal context message should be present");
+    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
+    assert!(
+        goal_context_message
+            .to_string()
+            .contains("Continue working toward the active thread goal.")
+    );
 
     Ok(())
 }
@@ -7893,10 +7989,12 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
-    assert_eq!("developer", role);
+    assert_eq!("user", role);
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected one text span in budget-limit steering message, got {content:#?}");
     };
+    assert!(text.starts_with("<goal_context>"));
+    assert!(text.trim_end().ends_with("</goal_context>"));
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
     assert!(sess.active_turn.lock().await.is_some());
@@ -8542,6 +8640,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     );

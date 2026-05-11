@@ -52,11 +52,11 @@ impl TurnEnvironment {
 
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
-pub(crate) struct TurnContext {
+pub struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
-    pub(crate) config: Arc<Config>,
+    pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
@@ -84,7 +84,7 @@ pub(crate) struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
-    pub(crate) features: ManagedFeatures,
+    pub features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
