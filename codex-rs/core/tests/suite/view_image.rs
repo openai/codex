@@ -478,18 +478,19 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_rejects_local_reads_outside_sandbox_read_roots() -> anyhow::Result<()> {
+async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
     let test = builder.build(&server).await?;
-    let outside_dir = TempDir::new()?;
-    let outside_path = outside_dir.path().join("outside.png");
-    fs::write(
-        &outside_path,
+    let rel_path = "denied.png";
+    let denied_path = write_workspace_file(
+        &test,
+        rel_path,
         png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?,
-    )?;
+    )
+    .await?;
     let call_id = "call-view-image-outside-cwd";
     let response_mock = mount_sse_sequence(
         &server,
@@ -499,7 +500,7 @@ async fn view_image_tool_rejects_local_reads_outside_sandbox_read_roots() -> any
                 ev_function_call(
                     call_id,
                     "view_image",
-                    &json!({ "path": outside_path.as_path() }).to_string(),
+                    &json!({ "path": rel_path }).to_string(),
                 ),
                 ev_completed("resp-1"),
             ]),
@@ -512,34 +513,35 @@ async fn view_image_tool_rejects_local_reads_outside_sandbox_read_roots() -> any
     )
     .await;
 
-    let permission_profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
+    file_system_sandbox_policy
+        .entries
+        .push(FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: test.config.cwd.clone(),
+                path: denied_path.clone(),
             },
-            access: FileSystemAccessMode::Read,
-        }]),
+            access: FileSystemAccessMode::None,
+        });
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
         NetworkSandboxPolicy::Restricted,
     );
 
-    test.submit_turn_with_permission_profile(
-        "attach the image outside the workspace",
-        permission_profile,
-    )
-    .await?;
+    test.submit_turn_with_permission_profile("attach the denied image", permission_profile)
+        .await?;
 
     let request = response_mock
         .last_request()
         .context("missing request containing sandboxed view_image output")?;
     assert!(
         request.inputs_of_type("input_image").is_empty(),
-        "sandboxed local view_image should not attach images outside configured read roots"
+        "sandboxed local view_image should not attach denied images"
     );
     let output_text = request
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .context("sandboxed view_image error text present")?;
-    let expected_prefix = format!("unable to locate image at `{}`:", outside_path.display());
+    let expected_prefix = format!("unable to locate image at `{}`:", denied_path.display());
     assert!(
         output_text.starts_with(&expected_prefix),
         "expected error to start with `{expected_prefix}` but got `{output_text}`"
