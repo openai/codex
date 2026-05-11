@@ -215,7 +215,7 @@ fn truncate_user_message_preserves_text_segment_order_around_images() {
     assert_eq!(
         vec![
             UserInput::Text {
-                text: before_image.clone(),
+                text: before_image,
                 text_elements: Vec::new(),
             },
             UserInput::Image {
