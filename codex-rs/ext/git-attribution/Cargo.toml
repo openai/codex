@@ -7,6 +7,7 @@ version.workspace = true
 [lib]
 name = "codex_git_attribution"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -15,3 +16,6 @@ workspace = true
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
