@@ -1,18 +1,12 @@
-use axum::Router;
-use axum::extract::ConnectInfo;
-use axum::extract::State;
-use axum::extract::ws::WebSocketUpgrade;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::any;
-use axum::routing::get;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
+use tokio_tungstenite::accept_async;
 use tracing::info;
+use tracing::warn;
 
 use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
@@ -120,42 +114,27 @@ async fn run_websocket_listener(
     println!("ws://{local_addr}");
     std::io::stdout().flush()?;
 
-    let router = Router::new()
-        .route("/", any(websocket_upgrade_handler))
-        .route("/readyz", get(readiness_handler))
-        .with_state(ExecServerWebSocketState { processor });
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
-    Ok(())
-}
-
-#[derive(Clone)]
-struct ExecServerWebSocketState {
-    processor: ConnectionProcessor,
-}
-
-async fn readiness_handler() -> StatusCode {
-    StatusCode::OK
-}
-
-async fn websocket_upgrade_handler(
-    websocket: WebSocketUpgrade,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    State(state): State<ExecServerWebSocketState>,
-) -> impl IntoResponse {
-    info!(%peer_addr, "exec-server websocket client connected");
-    websocket.on_upgrade(move |stream| async move {
-        state
-            .processor
-            .run_connection(JsonRpcConnection::from_axum_websocket(
-                stream,
-                format!("exec-server websocket {peer_addr}"),
-            ))
-            .await;
-    })
+    loop {
+        let (stream, peer_addr) = listener.accept().await?;
+        let processor = processor.clone();
+        tokio::spawn(async move {
+            match accept_async(stream).await {
+                Ok(websocket) => {
+                    processor
+                        .run_connection(JsonRpcConnection::from_websocket(
+                            websocket,
+                            format!("exec-server websocket {peer_addr}"),
+                        ))
+                        .await;
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to accept exec-server websocket connection from {peer_addr}: {err}"
+                    );
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
