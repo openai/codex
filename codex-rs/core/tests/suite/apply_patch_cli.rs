@@ -796,7 +796,7 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
 #[test_case(ApplyPatchModelOutput::Shell ; "shell")]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
-async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
+async fn apply_patch_cli_replaces_existing_hard_link_outside_workspace(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -872,24 +872,24 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
 
     assert!(
         out.contains("Success. Updated the following files:"),
-        "apply_patch should intentionally allow updates through existing hard links; tool output: {out}"
+        "apply_patch should update the workspace path without mutating the outside hard-link target; tool output: {out}"
     );
     assert_eq!(
         std::fs::read_to_string(&outside_file)?,
-        "updated through existing hard link\n",
-        "apply_patch intentionally preserves existing hard-link semantics; the outside path observes the shared inode update"
+        "original outside content\n",
+        "apply_patch must not mutate the outside hard-link target"
     );
     assert_eq!(
         std::fs::read_to_string(&link_path)?,
         "updated through existing hard link\n",
-        "apply_patch intentionally preserves existing hard-link semantics; the workspace path observes the same update"
+        "apply_patch should still update the workspace path"
     );
 
     std::fs::write(&outside_file, "post-apply outside write\n")?;
     assert_eq!(
         std::fs::read_to_string(&link_path)?,
-        "post-apply outside write\n",
-        "apply_patch must not unlink or replace an existing hard link; later writes through either path should still be visible"
+        "updated through existing hard link\n",
+        "apply_patch should replace the workspace hard-link entry instead of preserving the shared inode"
     );
 
     Ok(())

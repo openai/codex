@@ -397,7 +397,7 @@ async fn apply_hunks_to_files(
                     read_optional_file_text_for_delta(&path_abs, fs, sandbox, &mut delta.exact)
                         .await;
                 try_write!(
-                    write_file_with_missing_parent_retry(
+                    replace_file_with_missing_parent_retry(
                         fs,
                         &path_abs,
                         contents.clone().into_bytes(),
@@ -466,7 +466,7 @@ async fn apply_hunks_to_files(
                         read_optional_file_text_for_delta(&dest_abs, fs, sandbox, &mut delta.exact)
                             .await;
                     try_write!(
-                        write_file_with_missing_parent_retry(
+                        replace_file_with_missing_parent_retry(
                             fs,
                             &dest_abs,
                             new_contents.clone().into_bytes(),
@@ -522,12 +522,13 @@ async fn apply_hunks_to_files(
                     modified.push(affected_path);
                 } else {
                     try_write!(
-                        fs.write_file(&path_abs, new_contents.clone().into_bytes(), sandbox)
-                            .await
-                            .with_context(|| format!(
-                                "Failed to write file {}",
-                                path_abs.display()
-                            ))
+                        replace_file_with_missing_parent_retry(
+                            fs,
+                            &path_abs,
+                            new_contents.clone().into_bytes(),
+                            sandbox,
+                        )
+                        .await
                     );
                     delta.changes.push(AppliedPatchChange {
                         path: path_abs.into_path_buf(),
@@ -643,6 +644,45 @@ async fn write_file_with_missing_parent_retry(
             Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
         }
     }
+}
+
+async fn replace_file_with_missing_parent_retry(
+    fs: &dyn ExecutorFileSystem,
+    path_abs: &AbsolutePathBuf,
+    contents: Vec<u8>,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> anyhow::Result<()> {
+    match fs.get_metadata(path_abs, sandbox).await {
+        Ok(metadata) => {
+            if metadata.is_directory {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "path is a directory",
+                ))
+                .with_context(|| format!("Failed to write file {}", path_abs.display()));
+            }
+            if metadata.is_symlink {
+                return write_file_with_missing_parent_retry(fs, path_abs, contents, sandbox).await;
+            }
+            fs.remove(
+                path_abs,
+                RemoveOptions {
+                    recursive: false,
+                    force: false,
+                },
+                sandbox,
+            )
+            .await
+            .with_context(|| format!("Failed to replace file {}", path_abs.display()))?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect file {}", path_abs.display()));
+        }
+    }
+
+    write_file_with_missing_parent_retry(fs, path_abs, contents, sandbox).await
 }
 
 struct AppliedPatch {
