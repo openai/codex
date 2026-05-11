@@ -284,17 +284,24 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     .await;
 
     let refreshed_tools = if force_refetch {
-        match mcp_connection_manager
-            .hard_refresh_codex_apps_tools_cache()
-            .await
-        {
-            Ok(tools) => Some(tools),
-            Err(err) => {
-                warn!(
-                    "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
-                );
-                None
-            }
+        let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+            let timeout = cfg
+                .configured_config()
+                .and_then(|config| config.startup_timeout_sec)
+                .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
+            mcp_connection_manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+                .await
+        } else {
+            false
+        };
+        if codex_apps_ready {
+            Some(mcp_connection_manager.list_all_tools().await)
+        } else {
+            warn!(
+                "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools"
+            );
+            None
         }
     } else {
         None
