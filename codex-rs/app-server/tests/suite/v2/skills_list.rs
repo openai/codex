@@ -618,6 +618,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             approvals_reviewer: None,
             sandbox: None,
             permissions: None,
+            workspace_roots: None,
             config: None,
             service_name: None,
             base_instructions: None,

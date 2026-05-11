@@ -21,7 +21,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             summary
         }
         SandboxPolicy::WorkspaceWrite {
-            writable_roots,
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
@@ -36,11 +35,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             if !*exclude_tmpdir_env_var {
                 writable_entries.push("$TMPDIR".to_string());
             }
-            writable_entries.extend(
-                writable_roots
-                    .iter()
-                    .map(|p| p.to_string_lossy().to_string()),
-            );
 
             summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
             if *network_access {
@@ -67,7 +61,6 @@ pub fn summarize_permission_profile(permission_profile: &PermissionProfile, cwd:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -96,20 +89,14 @@ mod tests {
 
     #[test]
     fn workspace_write_summary_still_includes_network_access() {
-        let root = if cfg!(windows) { "C:\\repo" } else { "/repo" };
-        let writable_root = AbsolutePathBuf::try_from(root).unwrap();
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![writable_root.clone()],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });
         assert_eq!(
             summary,
-            format!(
-                "workspace-write [workdir, {}] (network access enabled)",
-                writable_root.to_string_lossy()
-            )
+            "workspace-write [workdir] (network access enabled)"
         );
     }
 }

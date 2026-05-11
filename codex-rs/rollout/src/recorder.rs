@@ -697,6 +697,7 @@ impl RolloutRecorder {
                         forked_from_id,
                         timestamp,
                         cwd: config.cwd().to_path_buf(),
+                        workspace_roots: config.workspace_roots().to_vec(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
