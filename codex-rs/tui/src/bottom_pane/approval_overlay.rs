@@ -47,6 +47,7 @@ use codex_app_server_protocol::FileSystemSandboxEntry;
 use codex_app_server_protocol::FileSystemSpecialPath;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::NetworkApprovalContext;
+use codex_app_server_protocol::NetworkApprovalProtocol;
 use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::RequestId;
 use codex_features::Features;
@@ -354,8 +355,17 @@ impl ApprovalOverlay {
             return;
         };
         if request.thread_label().is_none() {
+            let subject = match request {
+                ApprovalRequest::Exec {
+                    network_approval_context: Some(network_approval_context),
+                    ..
+                } => history_cell::ApprovalDecisionSubject::NetworkAccess {
+                    target: network_approval_target(network_approval_context, command),
+                },
+                _ => history_cell::ApprovalDecisionSubject::Command(command.to_vec()),
+            };
             let cell = history_cell::new_approval_decision_cell(
-                command.to_vec(),
+                subject,
                 command_decision_to_review_decision(&decision),
                 history_cell::ApprovalDecisionActor::User,
             );
@@ -621,6 +631,35 @@ fn approval_footer_hint(
         spans.extend([open_thread.into(), " to open thread".into()]);
     }
     Line::from(spans)
+}
+
+fn network_approval_target(
+    network_approval_context: &NetworkApprovalContext,
+    command: &[String],
+) -> String {
+    if let Some(target) = network_approval_command_target(command) {
+        return target.to_string();
+    }
+
+    let scheme = match network_approval_context.protocol {
+        NetworkApprovalProtocol::Http => "http",
+        NetworkApprovalProtocol::Https => "https",
+        NetworkApprovalProtocol::Socks5Tcp => "socks5-tcp",
+        NetworkApprovalProtocol::Socks5Udp => "socks5-udp",
+    };
+    format!("{scheme}://{}", network_approval_context.host)
+}
+
+fn network_approval_command_target(command: &[String]) -> Option<&str> {
+    match command {
+        [program, target] if program == "network-access" && !target.is_empty() => {
+            Some(target.as_str())
+        }
+        [command] => command
+            .strip_prefix("network-access ")
+            .filter(|target| !target.is_empty()),
+        _ => None,
+    }
 }
 
 fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
@@ -2086,7 +2125,7 @@ mod tests {
             "git add tui/src/render/mod.rs tui/src/render/renderable.rs".into(),
         ];
         let cell = history_cell::new_approval_decision_cell(
-            command,
+            history_cell::ApprovalDecisionSubject::Command(command),
             ReviewDecision::Approved,
             history_cell::ApprovalDecisionActor::User,
         );
