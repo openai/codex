@@ -18,6 +18,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::mcp_types::AppToolApproval;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
@@ -598,8 +599,42 @@ impl FeatureRequirementsToml {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppToolRequirementToml {
+    pub approval_mode: Option<AppToolApproval>,
+}
+
+impl AppToolRequirementToml {
+    pub fn is_empty(&self) -> bool {
+        self.approval_mode.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppToolsRequirementsToml {
+    #[serde(default, flatten)]
+    pub tools: BTreeMap<String, AppToolRequirementToml>,
+}
+
+impl AppToolsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.tools.values().all(AppToolRequirementToml::is_empty)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppRequirementToml {
     pub enabled: Option<bool>,
+    pub tools: Option<AppToolsRequirementsToml>,
+}
+
+impl AppRequirementToml {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
+            && self
+                .tools
+                .as_ref()
+                .is_none_or(AppToolsRequirementsToml::is_empty)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -610,14 +645,14 @@ pub struct AppsRequirementsToml {
 
 impl AppsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.apps.values().all(|app| app.enabled.is_none())
+        self.apps.values().all(AppRequirementToml::is_empty)
     }
 }
 
-/// Merge `enabled` configs from a lower-precedence source into an existing higher-precedence set.
-/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers.
-/// Implemented with AppsRequirementsToml for now, could be abstracted if we have more enablement-style configs in the future.
-pub(crate) fn merge_enablement_settings_descending(
+/// Merge app requirements from a lower-precedence source into an existing higher-precedence set.
+/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers,
+/// while exact tool approval settings keep the higher-precedence value when present.
+pub(crate) fn merge_app_requirements_descending(
     base: &mut AppsRequirementsToml,
     incoming: AppsRequirementsToml,
 ) {
@@ -631,6 +666,17 @@ pub(crate) fn merge_enablement_settings_descending(
             } else {
                 higher_precedence.or(lower_precedence)
             };
+
+        let Some(incoming_tools) = incoming_requirement.tools else {
+            continue;
+        };
+        let base_tools = base_requirement.tools.get_or_insert_with(Default::default);
+        for (tool_name, incoming_tool) in incoming_tools.tools {
+            let base_tool = base_tools.tools.entry(tool_name).or_default();
+            if base_tool.approval_mode.is_none() {
+                base_tool.approval_mode = incoming_tool.approval_mode;
+            }
+        }
     }
 }
 
@@ -769,7 +815,7 @@ impl ConfigRequirementsWithSources {
 
         if let Some(incoming_apps) = other.apps.take() {
             if let Some(existing_apps) = self.apps.as_mut() {
-                merge_enablement_settings_descending(&mut existing_apps.value, incoming_apps);
+                merge_app_requirements_descending(&mut existing_apps.value, incoming_apps);
             } else {
                 self.apps = Some(Sourced::new(incoming_apps, source));
             }
@@ -1583,6 +1629,37 @@ allowed_approvals_reviewers = ["user"]
                     "connector_123123".to_string(),
                     AppRequirementToml {
                         enabled: Some(false),
+                        tools: None,
+                    },
+                )]),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_apps_tool_requirements() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123.tools."calendar/list_events"]
+            approval_mode = "approve"
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: None,
+                        tools: Some(AppToolsRequirementsToml {
+                            tools: BTreeMap::from([(
+                                "calendar/list_events".to_string(),
+                                AppToolRequirementToml {
+                                    approval_mode: Some(AppToolApproval::Approve),
+                                },
+                            )]),
+                        }),
                     },
                 )]),
             })
@@ -1597,19 +1674,45 @@ allowed_approvals_reviewers = ["user"]
                 .map(|(app_id, enabled)| {
                     (
                         (*app_id).to_string(),
-                        AppRequirementToml { enabled: *enabled },
+                        AppRequirementToml {
+                            enabled: *enabled,
+                            tools: None,
+                        },
                     )
                 })
                 .collect(),
         }
     }
 
+    fn app_tool_requirements(
+        app_id: &str,
+        tool_name: &str,
+        approval_mode: AppToolApproval,
+    ) -> AppsRequirementsToml {
+        AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                app_id.to_string(),
+                AppRequirementToml {
+                    enabled: None,
+                    tools: Some(AppToolsRequirementsToml {
+                        tools: BTreeMap::from([(
+                            tool_name.to_string(),
+                            AppToolRequirementToml {
+                                approval_mode: Some(approval_mode),
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        }
+    }
+
     #[test]
-    fn merge_enablement_settings_descending_unions_distinct_apps() {
+    fn merge_app_requirements_descending_unions_distinct_apps() {
         let mut merged = apps_requirements(&[("connector_high", Some(false))]);
         let lower = apps_requirements(&[("connector_low", Some(true))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1621,11 +1724,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
+    fn merge_app_requirements_descending_prefers_false_from_lower_precedence() {
         let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
         let lower = apps_requirements(&[("connector_123123", Some(false))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1634,11 +1737,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
+    fn merge_app_requirements_descending_keeps_higher_true_when_lower_is_unset() {
         let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
         let lower = apps_requirements(&[("connector_123123", None)]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1647,11 +1750,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
+    fn merge_app_requirements_descending_uses_lower_value_when_higher_missing() {
         let mut merged = apps_requirements(&[]);
         let lower = apps_requirements(&[("connector_123123", Some(true))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1660,15 +1763,61 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
+    fn merge_app_requirements_descending_preserves_higher_false_when_lower_missing_app() {
         let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
         let lower = apps_requirements(&[]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
             apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_app_requirements_descending_preserves_higher_tool_approval_mode() {
+        let mut merged = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        );
+        let lower = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Prompt,
+        );
+
+        merge_app_requirements_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            app_tool_requirements(
+                "connector_123123",
+                "calendar/list_events",
+                AppToolApproval::Approve,
+            )
+        );
+    }
+
+    #[test]
+    fn merge_app_requirements_descending_uses_lower_tool_approval_when_higher_missing() {
+        let mut merged = apps_requirements(&[("connector_123123", None)]);
+        let lower = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        );
+
+        merge_app_requirements_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            app_tool_requirements(
+                "connector_123123",
+                "calendar/list_events",
+                AppToolApproval::Approve,
+            )
         );
     }
 

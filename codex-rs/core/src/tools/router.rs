@@ -15,6 +15,7 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -46,6 +47,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
+    pub(crate) extension_tool_bundles: Vec<ExtensionToolBundle>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
@@ -56,6 +58,7 @@ impl ToolRouter {
             deferred_mcp_tools,
             unavailable_called_tools,
             discoverable_tools,
+            extension_tool_bundles,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
@@ -64,6 +67,7 @@ impl ToolRouter {
             deferred_mcp_tools,
             unavailable_called_tools,
             discoverable_tools,
+            &extension_tool_bundles,
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
@@ -271,6 +275,21 @@ impl ToolRouter {
 
         self.registry.dispatch_any(invocation).await
     }
+}
+
+pub(crate) fn extension_tool_bundles(session: &Session) -> Vec<ExtensionToolBundle> {
+    session
+        .services
+        .extensions
+        .tool_contributors()
+        .iter()
+        .flat_map(|contributor| {
+            contributor.tools(
+                &session.services.session_extension_data,
+                &session.services.thread_extension_data,
+            )
+        })
+        .collect()
 }
 
 fn filter_deferred_dynamic_tool_spec(

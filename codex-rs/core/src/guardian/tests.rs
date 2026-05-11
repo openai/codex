@@ -86,7 +86,7 @@ fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 3,
-            total_denials: 3,
+            recent_denials: 3,
         }
     );
     assert_eq!(
@@ -115,13 +115,13 @@ fn guardian_rejection_circuit_breaker_resets_consecutive_denials_on_non_denial()
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 3,
-            total_denials: 4,
+            recent_denials: 4,
         }
     );
 }
 
 #[test]
-fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
+fn auto_review_rejection_circuit_breaker_interrupts_after_ten_recent_denials() {
     let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
     for _ in 0..9 {
         assert_eq!(
@@ -134,8 +134,27 @@ fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 1,
-            total_denials: 10,
+            recent_denials: 10,
         }
+    );
+}
+
+#[test]
+fn auto_review_rejection_circuit_breaker_forgets_denials_outside_recent_review_window() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    for _ in 0..9 {
+        assert_eq!(
+            circuit_breaker.record_denial("turn-1"),
+            GuardianRejectionCircuitBreakerAction::Continue
+        );
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    for _ in 0..(AUTO_REVIEW_DENIAL_WINDOW_SIZE - 18) {
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
     );
 }
 

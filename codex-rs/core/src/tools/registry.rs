@@ -16,11 +16,14 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
+use crate::tools::handlers::extension_tools::BundledToolHandler;
+use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -545,6 +548,28 @@ impl ToolRegistryBuilder {
 
         let handler: Arc<dyn AnyToolHandler> = handler;
         self.handlers.insert(name, handler);
+    }
+
+    pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
+        let tool_name = ToolName::plain(bundle.tool_name());
+        if self.handlers.contains_key(&tool_name) {
+            warn!("Skipping extension tool `{tool_name}`: handler already registered");
+            return;
+        }
+
+        let spec = match extension_tool_spec(bundle.spec()) {
+            Ok(spec) => spec,
+            Err(error) => {
+                error_or_panic(format!(
+                    "failed to convert extension tool `{tool_name}` to a host spec: {error}"
+                ));
+                return;
+            }
+        };
+        self.push_spec(spec.clone(), /*supports_parallel_tool_calls*/ false);
+
+        let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
+        self.handlers.insert(tool_name, handler);
     }
 
     pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {

@@ -29,6 +29,7 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::extension_tool_bundles;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
@@ -283,6 +284,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
             mcp_tools: Some(listed_mcp_tools),
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
+            extension_tool_bundles: extension_tool_bundles(exec.session.as_ref()),
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },
     )

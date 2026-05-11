@@ -438,6 +438,10 @@ pub fn build_tool_registry_builder(
         }
     }
 
+    for bundle in params.extension_tool_bundles.iter().cloned() {
+        builder.register_tool_bundle(bundle);
+    }
+
     builder
 }
 

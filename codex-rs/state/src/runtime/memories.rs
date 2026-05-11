@@ -147,6 +147,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
     threads.tokens_used,

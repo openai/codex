@@ -147,6 +147,17 @@ mod tests {
             "Failed to start side conversation: transport disconnected"
         );
     }
+
+    #[test]
+    fn side_developer_instructions_appends_existing_policy() {
+        let developer_instructions =
+            App::side_developer_instructions(Some("Existing developer policy."));
+
+        assert!(developer_instructions.contains("Existing developer policy."));
+        assert!(
+            developer_instructions.contains("You are in a side conversation, not the main thread.")
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,7 +457,14 @@ impl App {
     }
 
     pub(super) fn side_fork_config(&self) -> Config {
-        let mut fork_config = self.config.clone();
+        let mut fork_config = self.chat_widget.config_ref().clone();
+        let parent_model = self.chat_widget.current_model();
+        if !parent_model.trim().is_empty() {
+            fork_config.model = Some(parent_model.to_string());
+        }
+        fork_config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
+        fork_config.service_tier = self.chat_widget.configured_service_tier();
+        fork_config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         fork_config.ephemeral = true;
         fork_config.developer_instructions = Some(Self::side_developer_instructions(
             fork_config.developer_instructions.as_deref(),

@@ -1,6 +1,7 @@
 //! Shortcut picker construction for `/keymap`.
 
 use codex_config::types::TuiKeymap;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -15,6 +16,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::style::accent_style;
 
 use super::actions::KEYMAP_ACTIONS;
 use super::actions::KeymapActionFilter;
@@ -415,7 +417,7 @@ fn keymap_selection_item(row: &KeymapActionRow) -> SelectionItem {
 
 fn keymap_row_prefix(row: &KeymapActionRow) -> Vec<Span<'static>> {
     let indicator = if row.custom_binding {
-        "*".cyan()
+        "*".set_style(accent_style())
     } else if row.is_unbound() {
         "-".dim()
     } else {
@@ -450,25 +452,27 @@ fn action_count_line(count: usize) -> String {
 }
 
 fn keymap_picker_hint_line() -> Line<'static> {
+    let style = accent_style();
     Line::from(vec![
-        "left/right".cyan(),
+        "left/right".set_style(style),
         " group · ".dim(),
-        "enter".cyan(),
+        "enter".set_style(style),
         " edit shortcut · ".dim(),
-        "*".cyan(),
+        "*".set_style(style),
         " custom · ".dim(),
-        "-".cyan(),
+        "-".set_style(style),
         " unbound · ".dim(),
-        "esc".cyan(),
+        "esc".set_style(style),
         " close".dim(),
     ])
 }
 
 fn keymap_debug_hint_line() -> Line<'static> {
+    let style = accent_style();
     Line::from(vec![
-        "enter".cyan(),
+        "enter".set_style(style),
         " start inspector · ".dim(),
-        "esc".cyan(),
+        "esc".set_style(style),
         " close".dim(),
     ])
 }

@@ -296,6 +296,7 @@ fn build_specs_with_unavailable_tools(
         deferred_mcp_tools,
         unavailable_called_tools,
         /*discoverable_tools*/ None,
+        /*extension_tool_bundles*/ &[],
         dynamic_tools,
     )
 }
@@ -356,6 +357,7 @@ async fn assert_model_tools(
             deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: &[],
         },
     );
@@ -825,6 +827,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             /*deferred_mcp_tools*/ None,
             Vec::new(),
             discoverable_tools.clone(),
+            /*extension_tool_bundles*/ &[],
             &[],
         )
         .build();

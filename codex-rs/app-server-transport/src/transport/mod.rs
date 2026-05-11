@@ -1,5 +1,3 @@
-pub mod auth;
-
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
@@ -8,7 +6,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_core::config::find_codex_home;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
@@ -35,7 +32,6 @@ pub use remote_control::RemoteControlStartConfig;
 pub use remote_control::start_remote_control;
 pub use stdio::start_stdio_connection;
 pub use unix_socket::start_control_socket_acceptor;
-pub use websocket::start_websocket_acceptor;
 
 const OVERLOADED_ERROR_CODE: i64 = -32001;
 
@@ -54,7 +50,6 @@ pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<Abso
 pub enum AppServerTransport {
     Stdio,
     UnixSocket { socket_path: AbsolutePathBuf },
-    WebSocket { bind_address: SocketAddr },
     Off,
 }
 
@@ -62,7 +57,6 @@ pub enum AppServerTransport {
 pub enum AppServerTransportParseError {
     UnsupportedListenUrl(String),
     InvalidUnixSocketPath { listen_url: String, message: String },
-    InvalidWebSocketListenUrl(String),
 }
 
 impl std::fmt::Display for AppServerTransportParseError {
@@ -70,7 +64,7 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `unix://PATH`, or `off`"
             ),
             AppServerTransportParseError::InvalidUnixSocketPath {
                 listen_url,
@@ -78,10 +72,6 @@ impl std::fmt::Display for AppServerTransportParseError {
             } => write!(
                 f,
                 "invalid unix socket --listen URL `{listen_url}`; failed to resolve socket path: {message}"
-            ),
-            AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
-                f,
-                "invalid websocket --listen URL `{listen_url}`; expected `ws://IP:PORT`"
             ),
         }
     }
@@ -126,13 +116,6 @@ impl AppServerTransport {
             return Ok(Self::Off);
         }
 
-        if let Some(socket_addr) = listen_url.strip_prefix("ws://") {
-            let bind_address = socket_addr.parse::<SocketAddr>().map_err(|_| {
-                AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url.to_string())
-            })?;
-            return Ok(Self::WebSocket { bind_address });
-        }
-
         Err(AppServerTransportParseError::UnsupportedListenUrl(
             listen_url.to_string(),
         ))
@@ -168,7 +151,7 @@ pub enum TransportEvent {
 pub enum ConnectionOrigin {
     Stdio,
     InProcess,
-    WebSocket,
+    UnixSocket,
     RemoteControl,
 }
 
