@@ -1053,6 +1053,9 @@ impl MessageProcessor {
             ClientRequest::ThreadTurnsItemsList { params, .. } => {
                 self.thread_processor.thread_turns_items_list(params).await
             }
+            ClientRequest::ThreadItemContentRead { params, .. } => {
+                self.thread_processor.thread_item_content_read(params).await
+            }
             ClientRequest::ThreadShellCommand { params, .. } => {
                 self.thread_processor
                     .thread_shell_command(&request_id, params)

@@ -1289,6 +1289,13 @@
       ],
       "type": "object"
     },
+    "LargeContentMode": {
+      "enum": [
+        "inline",
+        "deferred"
+      ],
+      "type": "string"
+    },
     "ListMcpServerStatusParams": {
       "properties": {
         "cursor": {

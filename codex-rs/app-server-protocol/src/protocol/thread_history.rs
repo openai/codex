@@ -586,6 +586,13 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: String::new(),
             revised_prompt: None,
+            content: Some(crate::protocol::v2::ImageGenerationContent::Inline {
+                mime_type: "image/png".to_string(),
+                data_base64: String::new(),
+                byte_length: 0,
+                width: None,
+                height: None,
+            }),
             result: String::new(),
             saved_path: None,
         };
@@ -597,6 +604,13 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
+            content: Some(crate::protocol::v2::ImageGenerationContent::Inline {
+                mime_type: "image/png".to_string(),
+                data_base64: payload.result.clone(),
+                byte_length: crate::protocol::v2::image_generation_byte_length(&payload.result),
+                width: None,
+                height: None,
+            }),
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
         };
@@ -1469,6 +1483,13 @@ mod tests {
                         id: "ig_123".into(),
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
+                        content: Some(crate::protocol::v2::ImageGenerationContent::Inline {
+                            mime_type: "image/png".into(),
+                            data_base64: "Zm9v".into(),
+                            byte_length: 3,
+                            width: None,
+                            height: None,
+                        }),
                         result: "Zm9v".into(),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
                     },

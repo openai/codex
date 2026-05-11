@@ -345,6 +345,8 @@ pub enum ThreadItem {
         id: String,
         status: String,
         revised_prompt: Option<String>,
+        #[serde(default)]
+        content: Option<ImageGenerationContent>,
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -359,6 +361,40 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ContextCompaction { id: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ImageGenerationContent {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Inline {
+        mime_type: String,
+        data_base64: String,
+        byte_length: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Deferred {
+        content_id: String,
+        mime_type: String,
+        byte_length: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+}
+
+pub(crate) fn image_generation_byte_length(data_base64: &str) -> u64 {
+    let padding_len = data_base64
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    ((data_base64.len() / 4) * 3).saturating_sub(padding_len) as u64
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -822,6 +858,13 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
+                content: Some(ImageGenerationContent::Inline {
+                    mime_type: "image/png".to_string(),
+                    data_base64: image.result.clone(),
+                    byte_length: image_generation_byte_length(&image.result),
+                    width: None,
+                    height: None,
+                }),
                 result: image.result,
                 saved_path: image.saved_path,
             },

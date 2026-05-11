@@ -706,6 +706,13 @@ pub(super) fn handle_image_generation_end(
                 id: call_id.into(),
                 status: "completed".to_string(),
                 revised_prompt,
+                content: Some(codex_app_server_protocol::ImageGenerationContent::Inline {
+                    mime_type: "image/png".to_string(),
+                    data_base64: String::new(),
+                    byte_length: 0,
+                    width: None,
+                    height: None,
+                }),
                 result: String::new(),
                 saved_path,
             },

@@ -597,11 +597,20 @@ impl ThreadRequestProcessor {
 
     pub(crate) async fn thread_turns_items_list(
         &self,
-        _params: ThreadTurnsItemsListParams,
+        params: ThreadTurnsItemsListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Err(method_not_found(
-            "thread/turns/items/list is not supported yet",
-        ))
+        self.thread_turns_items_list_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_item_content_read(
+        &self,
+        params: ThreadItemContentReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_item_content_read_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn thread_shell_command(
@@ -2087,6 +2096,7 @@ impl ThreadRequestProcessor {
             limit,
             sort_direction,
             items_view,
+            large_content,
         } = params;
         let items_view = items_view.unwrap_or(TurnItemsView::Summary);
 
@@ -2102,21 +2112,7 @@ impl ThreadRequestProcessor {
         // every request. Rollback and compaction events can change earlier turns, so
         // the server has to rebuild the full turn list until turn metadata is indexed
         // separately.
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let has_live_running_thread = match loaded_thread.as_ref() {
-            Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
-            None => false,
-        };
-        let active_turn = if loaded_thread.is_some() {
-            // Persisted history may not yet include the currently running turn. The
-            // app-server listener has already projected live turn events into ThreadState,
-            // so merge that in-memory snapshot before paginating.
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let state = thread_state.lock().await;
-            state.active_turn_snapshot()
-        } else {
-            None
-        };
+        let (has_live_running_thread, active_turn) = self.live_turn_read_context(thread_uuid).await;
         let mut turns = reconstruct_thread_turns_for_turns_list(
             &items,
             self.thread_watch_manager
@@ -2160,6 +2156,7 @@ impl ThreadRequestProcessor {
                 }
             }
         }
+        apply_large_content_mode_to_turns(&mut turns, large_content.unwrap_or_default());
         let page = paginate_thread_turns(
             turns,
             cursor.as_deref(),
@@ -2171,6 +2168,129 @@ impl ThreadRequestProcessor {
             next_cursor: page.next_cursor,
             backwards_cursor: page.backwards_cursor,
         })
+    }
+
+    async fn thread_turns_items_list_response_inner(
+        &self,
+        params: ThreadTurnsItemsListParams,
+    ) -> Result<ThreadTurnsItemsListResponse, JSONRPCErrorError> {
+        let ThreadTurnsItemsListParams {
+            thread_id,
+            turn_id,
+            cursor,
+            limit,
+            sort_direction,
+            large_content,
+        } = params;
+
+        let thread_uuid = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let items = self
+            .load_thread_turns_list_history(thread_uuid)
+            .await
+            .map_err(thread_read_view_error)?;
+        let (has_live_running_thread, active_turn) = self.live_turn_read_context(thread_uuid).await;
+        let turns = reconstruct_thread_turns_for_turns_list(
+            &items,
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread_uuid.to_string())
+                .await,
+            has_live_running_thread,
+            active_turn,
+        );
+        let mut turn_items = turns
+            .into_iter()
+            .find(|turn| turn.id == turn_id)
+            .ok_or_else(|| invalid_request(format!("turn not found: {turn_id}")))?
+            .items;
+        apply_large_content_mode_to_items(&mut turn_items, large_content.unwrap_or_default());
+        let page = paginate_thread_items(
+            turn_items,
+            cursor.as_deref(),
+            limit,
+            sort_direction.unwrap_or(SortDirection::Asc),
+        )?;
+        Ok(ThreadTurnsItemsListResponse {
+            data: page.items,
+            next_cursor: page.next_cursor,
+            backwards_cursor: page.backwards_cursor,
+        })
+    }
+
+    async fn thread_item_content_read_response_inner(
+        &self,
+        params: ThreadItemContentReadParams,
+    ) -> Result<ThreadItemContentReadResponse, JSONRPCErrorError> {
+        let ThreadItemContentReadParams {
+            thread_id,
+            turn_id,
+            item_id,
+            content_id,
+        } = params;
+
+        let thread_uuid = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let items = self
+            .load_thread_turns_list_history(thread_uuid)
+            .await
+            .map_err(thread_read_view_error)?;
+        let (has_live_running_thread, active_turn) = self.live_turn_read_context(thread_uuid).await;
+        let turns = reconstruct_thread_turns_for_turns_list(
+            &items,
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread_uuid.to_string())
+                .await,
+            has_live_running_thread,
+            active_turn,
+        );
+        let turn = turns
+            .into_iter()
+            .find(|turn| turn.id == turn_id)
+            .ok_or_else(|| invalid_request(format!("turn not found: {turn_id}")))?;
+        let item = turn
+            .items
+            .into_iter()
+            .find(|item| item.id() == item_id)
+            .ok_or_else(|| invalid_request(format!("item not found: {item_id}")))?;
+        let ThreadItem::ImageGeneration {
+            content, result, ..
+        } = item
+        else {
+            return Err(invalid_request(format!(
+                "item {item_id} does not contain deferred content"
+            )));
+        };
+        if content_id != IMAGE_GENERATION_RESULT_CONTENT_ID {
+            return Err(invalid_request(format!("content not found: {content_id}")));
+        }
+        let Some(ImageGenerationContent::Inline {
+            mime_type,
+            byte_length,
+            ..
+        }) = content
+        else {
+            return Err(internal_error(format!(
+                "image generation item {item_id} does not have readable inline content"
+            )));
+        };
+        Ok(ThreadItemContentReadResponse {
+            mime_type,
+            data_base64: result,
+            byte_length,
+        })
+    }
+
+    async fn live_turn_read_context(&self, thread_id: ThreadId) -> (bool, Option<Turn>) {
+        let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+            return (false, None);
+        };
+        let has_live_running_thread = matches!(thread.agent_status().await, AgentStatus::Running);
+        // Persisted history may not yet include the currently running turn. The
+        // app-server listener has already projected live turn events into ThreadState,
+        // so merge that in-memory snapshot when serving history reads.
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        let state = thread_state.lock().await;
+        (has_live_running_thread, state.active_turn_snapshot())
     }
 
     async fn load_thread_turns_list_history(
@@ -2375,6 +2495,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
+            large_content,
             persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
@@ -2504,6 +2625,7 @@ impl ThreadRequestProcessor {
                     .await
                     .thread_source
                     .map(Into::into);
+                apply_large_content_mode_to_thread(&mut thread, large_content.unwrap_or_default());
 
                 self.thread_watch_manager
                     .upsert_thread(thread.clone())
@@ -2738,6 +2860,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    large_content: params.large_content.unwrap_or_default(),
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3389,6 +3512,9 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
 
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
+const THREAD_ITEMS_DEFAULT_LIMIT: usize = 100;
+const THREAD_ITEMS_MAX_LIMIT: usize = 500;
+const IMAGE_GENERATION_RESULT_CONTENT_ID: &str = "result";
 
 fn thread_backwards_cursor_for_sort_key(
     thread: &StoredThread,
@@ -3414,10 +3540,23 @@ struct ThreadTurnsPage {
     pub(super) backwards_cursor: Option<String>,
 }
 
+struct ThreadItemsPage {
+    pub(super) items: Vec<ThreadItem>,
+    pub(super) next_cursor: Option<String>,
+    pub(super) backwards_cursor: Option<String>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadTurnsCursor {
     turn_id: String,
+    include_anchor: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadItemsCursor {
+    item_id: String,
     include_anchor: bool,
 }
 
@@ -3513,6 +3652,141 @@ fn serialize_thread_turns_cursor(
 
 fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
     serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
+}
+
+fn paginate_thread_items(
+    items: Vec<ThreadItem>,
+    cursor: Option<&str>,
+    limit: Option<u32>,
+    sort_direction: SortDirection,
+) -> Result<ThreadItemsPage, JSONRPCErrorError> {
+    if items.is_empty() {
+        return Ok(ThreadItemsPage {
+            items: Vec::new(),
+            next_cursor: None,
+            backwards_cursor: None,
+        });
+    }
+
+    let anchor = cursor.map(parse_thread_items_cursor).transpose()?;
+    let page_size = limit
+        .map(|value| value as usize)
+        .unwrap_or(THREAD_ITEMS_DEFAULT_LIMIT)
+        .clamp(1, THREAD_ITEMS_MAX_LIMIT);
+
+    let anchor_index = anchor
+        .as_ref()
+        .and_then(|anchor| items.iter().position(|item| item.id() == anchor.item_id));
+    if anchor.is_some() && anchor_index.is_none() {
+        return Err(invalid_request(
+            "invalid cursor: anchor item is no longer present",
+        ));
+    }
+
+    let mut keyed_items: Vec<_> = items.into_iter().enumerate().collect();
+    match sort_direction {
+        SortDirection::Asc => {
+            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
+                keyed_items.retain(|(index, _)| {
+                    if anchor.include_anchor {
+                        *index >= anchor_index
+                    } else {
+                        *index > anchor_index
+                    }
+                });
+            }
+        }
+        SortDirection::Desc => {
+            keyed_items.reverse();
+            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
+                keyed_items.retain(|(index, _)| {
+                    if anchor.include_anchor {
+                        *index <= anchor_index
+                    } else {
+                        *index < anchor_index
+                    }
+                });
+            }
+        }
+    }
+
+    let more_items_available = keyed_items.len() > page_size;
+    keyed_items.truncate(page_size);
+    let backwards_cursor = keyed_items
+        .first()
+        .map(|(_, item)| serialize_thread_items_cursor(item.id(), /*include_anchor*/ true))
+        .transpose()?;
+    let next_cursor = if more_items_available {
+        keyed_items
+            .last()
+            .map(|(_, item)| {
+                serialize_thread_items_cursor(item.id(), /*include_anchor*/ false)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let items = keyed_items.into_iter().map(|(_, item)| item).collect();
+
+    Ok(ThreadItemsPage {
+        items,
+        next_cursor,
+        backwards_cursor,
+    })
+}
+
+fn serialize_thread_items_cursor(
+    item_id: &str,
+    include_anchor: bool,
+) -> Result<String, JSONRPCErrorError> {
+    serde_json::to_string(&ThreadItemsCursor {
+        item_id: item_id.to_string(),
+        include_anchor,
+    })
+    .map_err(|err| internal_error(format!("failed to serialize cursor: {err}")))
+}
+
+fn parse_thread_items_cursor(cursor: &str) -> Result<ThreadItemsCursor, JSONRPCErrorError> {
+    serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
+}
+
+pub(super) fn apply_large_content_mode_to_thread(thread: &mut Thread, mode: LargeContentMode) {
+    apply_large_content_mode_to_turns(&mut thread.turns, mode);
+}
+
+fn apply_large_content_mode_to_turns(turns: &mut [Turn], mode: LargeContentMode) {
+    for turn in turns {
+        apply_large_content_mode_to_items(&mut turn.items, mode);
+    }
+}
+
+fn apply_large_content_mode_to_items(items: &mut [ThreadItem], mode: LargeContentMode) {
+    if matches!(mode, LargeContentMode::Inline) {
+        return;
+    }
+
+    for item in items {
+        if let ThreadItem::ImageGeneration {
+            content, result, ..
+        } = item
+            && let Some(ImageGenerationContent::Inline {
+                mime_type,
+                byte_length,
+                width,
+                height,
+                ..
+            }) = content
+        {
+            *content = Some(ImageGenerationContent::Deferred {
+                content_id: IMAGE_GENERATION_RESULT_CONTENT_ID.to_string(),
+                mime_type: mime_type.clone(),
+                byte_length: *byte_length,
+                width: *width,
+                height: *height,
+            });
+            result.clear();
+        }
+    }
 }
 
 fn reconstruct_thread_turns_for_turns_list(
