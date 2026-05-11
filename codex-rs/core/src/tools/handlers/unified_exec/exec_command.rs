@@ -274,6 +274,7 @@ impl ToolHandler for ExecCommandHandler {
             &cwd,
             fs.as_ref(),
             &turn_environment.environment_id,
+            Arc::clone(&environment),
             context.session.clone(),
             context.turn.clone(),
             Some(&tracker),

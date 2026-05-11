@@ -296,10 +296,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
             /*grant_root*/ None, // No grant_root expected
-            Some(format!(
-                "Environment `local`, cwd `{}`.",
-                cwd.path().display()
-            )),
+            /*reason*/ None,
             codex_request_id.to_string(),
             params.codex_event_id.clone(),
             params.thread_id,

@@ -37,6 +37,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::Hunk;
 use codex_apply_patch::StreamingPatchParser;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -413,6 +414,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             environment_id: turn_environment.environment_id.clone(),
+                            environment: Arc::clone(&turn_environment.environment),
                             action: apply.action,
                             file_paths,
                             changes,
@@ -482,6 +484,7 @@ pub(crate) async fn intercept_apply_patch(
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
+    environment: Arc<Environment>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
@@ -524,6 +527,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         environment_id: environment_id.to_string(),
+                        environment,
                         action: apply.action,
                         file_paths: approval_keys,
                         changes,

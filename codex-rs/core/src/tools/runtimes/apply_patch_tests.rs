@@ -15,6 +15,11 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+fn test_environment() -> Arc<codex_exec_server::Environment> {
+    Arc::new(codex_exec_server::Environment::default_for_tests())
+}
 
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
@@ -50,6 +55,7 @@ fn guardian_review_request_includes_patch_context() {
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment: test_environment(),
         action,
         file_paths: vec![path.clone()],
         changes: HashMap::from([(
@@ -89,6 +95,7 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
     let expected_patch = action.patch.clone();
     let req = ApplyPatchRequest {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment: test_environment(),
         action,
         file_paths: vec![path],
         changes: HashMap::new(),
@@ -123,6 +130,7 @@ fn approval_keys_include_environment_id() {
         .abs();
     let req = ApplyPatchRequest {
         environment_id: "remote".to_string(),
+        environment: test_environment(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -155,6 +163,7 @@ fn sandbox_cwd_uses_patch_action_cwd() {
         .abs();
     let req = ApplyPatchRequest {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment: test_environment(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -167,33 +176,6 @@ fn sandbox_cwd_uses_patch_action_cwd() {
     };
 
     assert_eq!(runtime.sandbox_cwd(&req), Some(&req.action.cwd));
-}
-
-#[test]
-fn approval_reason_includes_environment_and_cwd() {
-    let path = std::env::temp_dir()
-        .join("apply-patch-approval-reason.txt")
-        .abs();
-    let req = ApplyPatchRequest {
-        environment_id: "remote".to_string(),
-        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
-        file_paths: vec![path],
-        changes: HashMap::new(),
-        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
-            reason: None,
-            proposed_execpolicy_amendment: None,
-        },
-        additional_permissions: None,
-        permissions_preapproved: false,
-    };
-
-    assert_eq!(
-        ApplyPatchRuntime::approval_reason(&req, Some("retry".to_string())),
-        Some(format!(
-            "retry\nEnvironment `remote`, cwd `{}`.",
-            req.action.cwd.display()
-        ))
-    );
 }
 
 #[test]
@@ -210,6 +192,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
     };
     let req = ApplyPatchRequest {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment: test_environment(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -268,6 +251,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         .abs();
     let req = ApplyPatchRequest {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment: test_environment(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),

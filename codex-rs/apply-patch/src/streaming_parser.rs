@@ -48,7 +48,7 @@ impl StreamingPatchParser {
     // The live streaming parser only needs to keep the patch preview flowing.
     // Environment selection and validation happen on the final tool invocation,
     // so here we just tolerate and skip the optional preamble line.
-    fn maybe_skip_environment_id_preamble_line(&self, line: &str) -> bool {
+    fn is_environment_id_preamble_line(&self, line: &str) -> bool {
         line.starts_with(ENVIRONMENT_ID_MARKER)
     }
 
@@ -170,10 +170,9 @@ impl StreamingPatchParser {
                 ))
             }
             StreamingParserMode::StartedPatch => {
-                if self.maybe_skip_environment_id_preamble_line(line) {
+                if self.is_environment_id_preamble_line(line) {
                     return Ok(());
                 }
-                let trimmed = line.trim();
                 if self.handle_hunk_headers_and_end_patch(trimmed)? {
                     return Ok(());
                 }

@@ -260,12 +260,14 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox() {
     ];
     let (session, mut turn) = make_session_and_context().await;
     turn.permission_profile = PermissionProfile::read_only();
+    let environment = session.services.environment_manager.local_environment();
 
     let result = intercept_apply_patch(
         &command,
         &cwd,
         LOCAL_FS.as_ref(),
         codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        environment,
         Arc::new(session),
         Arc::new(turn),
         /*tracker*/ None,

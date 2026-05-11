@@ -19,6 +19,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
+use codex_exec_server::Environment;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -45,6 +46,7 @@ pub(crate) struct ApplyPatchApprovalKey {
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub environment_id: String,
+    pub environment: std::sync::Arc<Environment>,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
@@ -83,18 +85,6 @@ impl ApplyPatchRuntime {
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
-    }
-
-    fn approval_reason(req: &ApplyPatchRequest, reason: Option<String>) -> Option<String> {
-        let context = format!(
-            "Environment `{}`, cwd `{}`.",
-            req.environment_id,
-            req.action.cwd.display()
-        );
-        Some(match reason {
-            Some(reason) => format!("{reason}\n{context}"),
-            None => context,
-        })
     }
 
     fn file_system_sandbox_context_for_attempt(
@@ -162,13 +152,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
-                let reason = ApplyPatchRuntime::approval_reason(req, Some(reason));
                 let rx_approve = session
                     .request_patch_approval(
                         turn,
                         call_id,
                         changes.clone(),
-                        reason,
+                        Some(reason),
                         /*grant_root*/ None,
                     )
                     .await;
@@ -180,10 +169,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 "apply_patch",
                 approval_keys,
                 || async move {
-                    let reason = ApplyPatchRuntime::approval_reason(req, /*reason*/ None);
                     let rx_approve = session
                         .request_patch_approval(
-                            turn, call_id, changes, reason, /*grant_root*/ None,
+                            turn, call_id, changes, None, /*grant_root*/ None,
                         )
                         .await;
                     rx_approve.await.unwrap_or_default()
@@ -234,19 +222,10 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx,
+        _ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
-        let turn_environment = ctx
-            .turn
-            .environments
-            .turn_environments
-            .iter()
-            .find(|environment| environment.environment_id == req.environment_id)
-            .ok_or_else(|| {
-                ToolError::Rejected("apply_patch is unavailable in this session".to_string())
-            })?;
         let started_at = Instant::now();
-        let fs = turn_environment.environment.get_filesystem();
+        let fs = req.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

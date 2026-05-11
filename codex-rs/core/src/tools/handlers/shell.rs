@@ -199,6 +199,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         &exec_params.cwd,
         fs.as_ref(),
         &turn_environment.environment_id,
+        Arc::clone(&turn_environment.environment),
         session.clone(),
         turn.clone(),
         Some(&tracker),
