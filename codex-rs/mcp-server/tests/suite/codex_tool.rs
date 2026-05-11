@@ -261,6 +261,10 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
+            config: Some(HashMap::from([(
+                "sandbox_mode".to_string(),
+                json!("danger-full-access"),
+            )])),
             ..Default::default()
         })
         .await?;
