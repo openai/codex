@@ -380,7 +380,7 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
-    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
+    // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
 }
 

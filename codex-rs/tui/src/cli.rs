@@ -63,9 +63,7 @@ pub struct Cli {
 
     /// Disable alternate screen mode
     ///
-    /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
-    /// in terminal multiplexers like Zellij that follow the xterm spec strictly and disable
-    /// scrollback in alternate screen buffers.
+    /// Runs the TUI in inline mode, preserving terminal scrollback history.
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
