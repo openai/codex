@@ -8,7 +8,6 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::FunctionToolSpec;
 use codex_extension_api::ToolBundle;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFuture;
@@ -16,6 +15,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tool_api::JsonSchema;
 use codex_tool_api::ToolCall as ExtensionToolCall;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -38,22 +38,40 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
     ) -> Vec<ToolBundle> {
-        vec![ToolBundle::new(
-            FunctionToolSpec {
-                name: "extension_echo".to_string(),
-                description: "Echoes arguments through an extension tool.".to_string(),
-                strict: true,
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "message": { "type": "string" },
-                    },
-                    "required": ["message"],
-                    "additionalProperties": false,
-                }),
-            },
-            Arc::new(ExtensionEchoExecutor),
-        )]
+        vec![
+            ToolBundle::new(
+                ToolName::plain("extension_echo"),
+                "Echoes arguments through an extension tool.".to_string(),
+                JsonSchema::object(
+                    std::collections::BTreeMap::from([(
+                        "message".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
+                    Some(vec!["message".to_string()]),
+                    Some(false.into()),
+                ),
+                Arc::new(ExtensionEchoExecutor),
+            )
+            .strict(),
+            ToolBundle::new(
+                ToolName::plain("echo"),
+                "Echoes arguments through a namespaced extension tool.".to_string(),
+                JsonSchema::object(
+                    std::collections::BTreeMap::from([(
+                        "message".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
+                    Some(vec!["message".to_string()]),
+                    Some(false.into()),
+                ),
+                Arc::new(ExtensionEchoExecutor),
+            )
+            .in_namespace(
+                codex_extension_api::ToolNamespace::new("extension_tools")
+                    .with_description("Extension-owned tools."),
+            )
+            .strict(),
+        ]
     }
 }
 
@@ -335,6 +353,84 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
                 json!({
                     "arguments": { "message": "hello" },
                     "callId": "call-extension",
+                    "ok": true,
+                })
+            );
+        }
+        other => panic!("expected function call output, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn namespaced_extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::Result<()>
+{
+    let (mut session, turn) = make_session_and_context().await;
+    session.services.extensions = extension_tool_test_registry();
+
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            extension_tool_bundles: extension_tool_bundles(&session),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+        },
+    );
+
+    assert!(
+        router
+            .find_spec(&ToolName::namespaced("extension_tools", "echo"))
+            .is_some(),
+        "expected namespaced extension-provided tool spec to be registered"
+    );
+    assert_eq!(
+        namespace_function_names(&router.model_visible_specs(), "extension_tools"),
+        vec!["echo".to_string()]
+    );
+
+    let call = ToolRouter::build_tool_call(
+        &session,
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "echo".to_string(),
+            namespace: Some("extension_tools".to_string()),
+            arguments: json!({ "message": "hello" }).to_string(),
+            call_id: "call-extension-namespace".to_string(),
+        },
+    )
+    .await?
+    .expect("function_call should produce a tool call");
+
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await?;
+
+    let response = result.into_response();
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "call-extension-namespace");
+            let FunctionCallOutputBody::Text(text) = output.body else {
+                panic!("expected text function call output")
+            };
+            let value: serde_json::Value =
+                serde_json::from_str(&text).expect("extension tool output should be json");
+            assert_eq!(
+                value,
+                json!({
+                    "arguments": { "message": "hello" },
+                    "callId": "call-extension-namespace",
                     "ok": true,
                 })
             );

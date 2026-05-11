@@ -17,7 +17,6 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
 use crate::tools::handlers::extension_tools::BundledToolHandler;
-use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
@@ -25,8 +24,12 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ConfiguredToolSpec;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::default_namespace_description;
 use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -512,12 +515,16 @@ impl ToolRegistryBuilder {
         }
     }
 
-    pub(crate) fn push_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
-        let spec = if self.code_mode_enabled {
+    fn prepare_spec(&self, spec: ToolSpec) -> ToolSpec {
+        if self.code_mode_enabled {
             codex_tools::augment_tool_spec_for_code_mode(spec)
         } else {
             spec
-        };
+        }
+    }
+
+    pub(crate) fn push_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
+        let spec = self.prepare_spec(spec);
         self.specs
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
@@ -542,22 +549,64 @@ impl ToolRegistryBuilder {
     }
 
     pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
-        let tool_name = ToolName::plain(bundle.tool_name());
+        let tool_name = bundle.tool_name().clone();
         if self.handlers.contains_key(&tool_name) {
             warn!("Skipping extension tool `{tool_name}`: handler already registered");
             return;
         }
 
-        let spec = match extension_tool_spec(bundle.spec()) {
-            Ok(spec) => spec,
-            Err(error) => {
-                error_or_panic(format!(
-                    "failed to convert extension tool `{tool_name}` to a host spec: {error}"
-                ));
-                return;
-            }
+        let function_tool = ResponsesApiTool {
+            name: bundle.tool_name().name.clone(),
+            description: bundle.description().to_string(),
+            strict: bundle.is_strict(),
+            defer_loading: bundle.defer_loading().then_some(true),
+            parameters: bundle.input_schema().clone(),
+            output_schema: bundle.output_schema().cloned(),
         };
-        self.push_spec(spec.clone(), /*supports_parallel_tool_calls*/ false);
+        let spec = match bundle.namespace() {
+            Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+                name: namespace.name().to_string(),
+                description: namespace
+                    .description()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| default_namespace_description(namespace.name())),
+                tools: vec![ResponsesApiNamespaceTool::Function(function_tool)],
+            }),
+            None => ToolSpec::Function(function_tool),
+        };
+        match self.prepare_spec(spec.clone()) {
+            ToolSpec::Namespace(mut namespace) => {
+                if let Some(existing_namespace) =
+                    self.specs.iter_mut().find_map(|configured_tool| {
+                        match &mut configured_tool.spec {
+                            ToolSpec::Namespace(existing_namespace)
+                                if existing_namespace.name == namespace.name =>
+                            {
+                                Some(existing_namespace)
+                            }
+                            ToolSpec::Function(_)
+                            | ToolSpec::ToolSearch { .. }
+                            | ToolSpec::LocalShell {}
+                            | ToolSpec::ImageGeneration { .. }
+                            | ToolSpec::WebSearch { .. }
+                            | ToolSpec::Freeform(_)
+                            | ToolSpec::Namespace(_) => None,
+                        }
+                    })
+                {
+                    existing_namespace.tools.append(&mut namespace.tools);
+                } else {
+                    self.specs.push(ConfiguredToolSpec::new(
+                        ToolSpec::Namespace(namespace),
+                        /*supports_parallel_tool_calls*/ false,
+                    ));
+                }
+            }
+            prepared_spec => self.specs.push(ConfiguredToolSpec::new(
+                prepared_spec,
+                /*supports_parallel_tool_calls*/ false,
+            )),
+        }
 
         let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);

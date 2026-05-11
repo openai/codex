@@ -2,12 +2,13 @@ mod contributors;
 mod registry;
 mod state;
 
-pub use codex_tool_api::FunctionToolSpec;
 pub use codex_tool_api::ToolBundle;
 pub use codex_tool_api::ToolCall;
 pub use codex_tool_api::ToolError;
 pub use codex_tool_api::ToolExecutor;
 pub use codex_tool_api::ToolFuture;
+pub use codex_tool_api::ToolName;
+pub use codex_tool_api::ToolNamespace;
 pub use contributors::ApprovalInterceptorContributor;
 pub use contributors::ContextContributor;
 pub use contributors::PromptFragment;

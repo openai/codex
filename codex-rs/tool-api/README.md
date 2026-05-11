@@ -8,8 +8,9 @@ Crates that define contributed tools should depend on this crate. It owns:
 
 - the executable bundle contract: `ToolBundle`, `ToolExecutor`, `ToolCall`,
   and `ToolError`
-- the one model-visible spec an extension may contribute directly:
-  `FunctionToolSpec`
+- the shared model-visible function-tool fields stored directly on
+  `ToolBundle`
+- contributed namespace metadata through `ToolNamespace`
 
 The contract is intentionally narrow: contributed tools receive a call id plus
 raw JSON arguments and return a JSON value. If a feature needs richer host
@@ -23,7 +24,7 @@ tool-owning extension crate --> codex-tool-api <-- codex-core
 ```
 
 `codex-tools` has a different job. It remains the host-side owner of Responses
-API tool models, schema parsing, namespaces, discovery, MCP/dynamic conversion,
-code-mode shaping, and other aggregate host concerns. A crate that only wants
-to contribute one ordinary function tool through an extension should not need
-to depend on `codex-tools`.
+API tool models, namespace rendering and aggregation, discovery, MCP/dynamic
+conversion, code-mode shaping, and other aggregate host concerns. A crate that
+only wants to contribute one ordinary function tool through an extension should
+not need to depend on `codex-tools`.

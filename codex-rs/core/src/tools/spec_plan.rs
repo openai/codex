@@ -74,7 +74,7 @@ pub fn build_tool_registry_builder(
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
-        let namespace_descriptions = params
+        let mut namespace_descriptions = params
             .tool_namespaces
             .into_iter()
             .flatten()
@@ -88,6 +88,17 @@ pub fn build_tool_registry_builder(
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        for bundle in params.extension_tool_bundles {
+            let Some(namespace) = bundle.namespace() else {
+                continue;
+            };
+            namespace_descriptions
+                .entry(namespace.name().to_string())
+                .or_insert_with(|| codex_code_mode::ToolNamespaceDescription {
+                    name: namespace.name().to_string(),
+                    description: namespace.description().unwrap_or_default().to_string(),
+                });
+        }
         let nested_config = config.for_code_mode_nested_tools();
         let nested_builder = build_tool_registry_builder(
             &nested_config,

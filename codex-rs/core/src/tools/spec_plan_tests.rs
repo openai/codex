@@ -43,7 +43,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tool_api::FunctionToolSpec;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tool_api::ToolExecutor;
 use codex_tool_api::ToolFuture;
@@ -87,21 +86,29 @@ impl ToolExecutor for UnusedExtensionExecutor {
 
 fn extension_tool_bundle(name: &str, description: &str) -> ExtensionToolBundle {
     ExtensionToolBundle::new(
-        FunctionToolSpec {
-            name: name.to_string(),
-            description: description.to_string(),
-            strict: true,
-            parameters: serde_json::to_value(JsonSchema::object(
-                BTreeMap::from([(
-                    "message".to_string(),
-                    JsonSchema::string(/*description*/ None),
-                )]),
-                Some(vec!["message".to_string()]),
-                Some(false.into()),
-            ))
-            .expect("extension schema should serialize"),
-        },
+        ToolName::plain(name),
+        description.to_string(),
+        JsonSchema::object(
+            BTreeMap::from([(
+                "message".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )]),
+            Some(vec!["message".to_string()]),
+            Some(false.into()),
+        ),
         std::sync::Arc::new(UnusedExtensionExecutor),
+    )
+    .strict()
+}
+
+fn namespaced_extension_tool_bundle(
+    name: &str,
+    description: &str,
+    namespace: &str,
+    namespace_description: &str,
+) -> ExtensionToolBundle {
+    extension_tool_bundle(name, description).in_namespace(
+        codex_tool_api::ToolNamespace::new(namespace).with_description(namespace_description),
     )
 }
 
@@ -143,6 +150,53 @@ fn extension_tools_do_not_replace_builtin_tools() {
             .count(),
         1
     );
+}
+
+#[test]
+fn namespaced_extension_tools_coalesce_into_namespace_specs() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let extension_tool_bundles = vec![
+        namespaced_extension_tool_bundle(
+            "echo",
+            "Echoes extension arguments.",
+            "extension_tools",
+            "Extension-owned tools.",
+        ),
+        namespaced_extension_tool_bundle(
+            "status",
+            "Returns extension status.",
+            "extension_tools",
+            "Extension-owned tools.",
+        ),
+    ];
+    let (tools, _) = build_specs_with_discoverable_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_bundles,
+        &[],
+    );
+
+    assert_eq!(
+        namespace_function_names(&tools, "extension_tools"),
+        vec!["echo".to_string(), "status".to_string()]
+    );
+    let ToolSpec::Namespace(namespace) = &find_tool(&tools, "extension_tools").spec else {
+        panic!("expected extension namespace tool");
+    };
+    assert_eq!(namespace.description, "Extension-owned tools.");
 }
 
 #[test]
@@ -2300,6 +2354,46 @@ fn code_mode_only_exec_description_includes_extension_tool_details() {
 
     assert!(description.contains("### `extension_echo`"));
     assert!(description.contains("Echoes arguments through an extension tool."));
+}
+
+#[test]
+fn code_mode_only_exec_description_includes_extension_namespace_guidance() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let extension_tool_bundles = vec![namespaced_extension_tool_bundle(
+        "echo",
+        "Echoes arguments through a namespaced extension tool.",
+        "extension_tools",
+        "Extension-owned tools.",
+    )];
+    let (tools, _) = build_specs_with_discoverable_tools(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        /*discoverable_tools*/ None,
+        &extension_tool_bundles,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
+    else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(description.contains("## extension_tools\nExtension-owned tools."));
 }
 
 #[test]
