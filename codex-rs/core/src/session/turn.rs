@@ -12,6 +12,7 @@ use crate::client_common::ResponseEvent;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
+use crate::compact::PreservedCurrentUserTurn;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -305,8 +306,8 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
+    let (additional_contexts, preserved_current_user_turn) = if input.is_empty() {
+        (Vec::new(), PreservedCurrentUserTurn::None)
     } else {
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -327,7 +328,10 @@ pub(crate) async fn run_turn(
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
-        user_prompt_submit_outcome.additional_contexts
+        (
+            user_prompt_submit_outcome.additional_contexts,
+            PreservedCurrentUserTurn::Exact(initial_input_for_turn.into()),
+        )
     };
     sess.services
         .analytics_events_client
@@ -457,6 +461,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            preserved_current_user_turn.clone(),
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
@@ -496,6 +501,7 @@ pub(crate) async fn run_turn(
                         &turn_context,
                         &mut client_session,
                         InitialContextInjection::BeforeLastUserMessage,
+                        PreservedCurrentUserTurn::None,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -744,6 +750,7 @@ async fn run_pre_sampling_compact(
             turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            PreservedCurrentUserTurn::None,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
@@ -795,6 +802,7 @@ async fn maybe_run_previous_model_inline_compact(
             &previous_model_turn_context,
             client_session,
             InitialContextInjection::DoNotInject,
+            PreservedCurrentUserTurn::None,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
         )
@@ -809,6 +817,7 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
@@ -819,6 +828,7 @@ async fn run_auto_compact(
                 Arc::clone(turn_context),
                 client_session,
                 initial_context_injection,
+                preserved_current_user_turn,
                 reason,
                 phase,
             )
@@ -829,6 +839,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -838,6 +849,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            preserved_current_user_turn,
             reason,
             phase,
         )
@@ -1008,6 +1020,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
@@ -1083,6 +1096,7 @@ async fn run_sampling_request(
                     &turn_context,
                     client_session,
                     InitialContextInjection::BeforeLastUserMessage,
+                    preserved_current_user_turn.clone(),
                     CompactionReason::ContextLimit,
                     CompactionPhase::MidTurn,
                 )

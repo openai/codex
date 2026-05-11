@@ -62,6 +62,12 @@ pub(crate) enum InitialContextInjection {
     DoNotInject,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum PreservedCurrentUserTurn {
+    Exact(ResponseItem),
+    None,
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
 }
@@ -70,6 +76,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -85,6 +92,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         turn_context,
         input,
         initial_context_injection,
+        preserved_current_user_turn,
         CompactionTrigger::Auto,
         reason,
         phase,
@@ -110,6 +118,7 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
+        PreservedCurrentUserTurn::None,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
         CompactionPhase::StandaloneTurn,
@@ -118,11 +127,13 @@ pub(crate) async fn run_compact_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -152,6 +163,7 @@ async fn run_compact_task_inner(
         Arc::clone(&turn_context),
         input,
         initial_context_injection,
+        preserved_current_user_turn,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -172,6 +184,7 @@ async fn run_compact_task_inner_impl(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -179,6 +192,7 @@ async fn run_compact_task_inner_impl(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
+    remove_preserved_current_user_turn_from_history(&mut history, &preserved_current_user_turn);
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -256,13 +270,18 @@ async fn run_compact_task_inner_impl(
         }
     }
 
-    let history_snapshot = sess.clone_history().await;
+    let mut history_snapshot = sess.clone_history().await;
+    remove_preserved_current_user_turn_from_history(
+        &mut history_snapshot,
+        &preserved_current_user_turn,
+    );
     let history_items = history_snapshot.raw_items();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    new_history = restore_preserved_current_user_turn(new_history, &preserved_current_user_turn);
 
     if matches!(
         initial_context_injection,
@@ -404,6 +423,52 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
+}
+
+pub(crate) fn remove_preserved_current_user_turn_from_history(
+    history: &mut crate::context_manager::ContextManager,
+    preserved_current_user_turn: &PreservedCurrentUserTurn,
+) {
+    if let PreservedCurrentUserTurn::Exact(response_item) = preserved_current_user_turn {
+        history.remove_last_matching_item(response_item);
+    }
+}
+
+pub(crate) fn restore_preserved_current_user_turn(
+    mut compacted_history: Vec<ResponseItem>,
+    preserved_current_user_turn: &PreservedCurrentUserTurn,
+) -> Vec<ResponseItem> {
+    let PreservedCurrentUserTurn::Exact(response_item) = preserved_current_user_turn else {
+        return compacted_history;
+    };
+
+    let insertion_index = compacted_history
+        .iter()
+        .rposition(is_summary_or_compaction_item)
+        .unwrap_or(compacted_history.len());
+    compacted_history.insert(insertion_index, response_item.clone());
+    compacted_history
+}
+
+fn is_summary_or_compaction_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { .. } => matches!(
+            crate::event_mapping::parse_turn_item(item),
+            Some(TurnItem::UserMessage(user)) if is_summary_message(&user.message())
+        ),
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Other => false,
+    }
 }
 
 /// Inserts canonical initial context into compacted replacement history at the

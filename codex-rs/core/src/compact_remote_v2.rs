@@ -7,7 +7,9 @@ use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
+use crate::compact::PreservedCurrentUserTurn;
 use crate::compact::compaction_status_from_result;
+use crate::compact::remove_preserved_current_user_turn_from_history;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
@@ -40,6 +42,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -48,6 +51,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         &turn_context,
         Some(client_session),
         initial_context_injection,
+        preserved_current_user_turn,
         CompactionTrigger::Auto,
         reason,
         phase,
@@ -72,6 +76,7 @@ pub(crate) async fn run_remote_compact_task(
         &turn_context,
         /*client_session*/ None,
         InitialContextInjection::DoNotInject,
+        PreservedCurrentUserTurn::None,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
         CompactionPhase::StandaloneTurn,
@@ -79,11 +84,13 @@ pub(crate) async fn run_remote_compact_task(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -102,6 +109,7 @@ async fn run_remote_compact_task_inner(
         turn_context,
         client_session,
         initial_context_injection,
+        preserved_current_user_turn,
     )
     .await;
     attempt
@@ -126,6 +134,7 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
@@ -139,6 +148,7 @@ async fn run_remote_compact_task_inner_impl(
         .await;
 
     let mut history = sess.clone_history().await;
+    remove_preserved_current_user_turn_from_history(&mut history, &preserved_current_user_turn);
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -215,6 +225,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         compacted_history,
         initial_context_injection,
+        &preserved_current_user_turn,
     )
     .await;
 

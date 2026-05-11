@@ -5,8 +5,11 @@ use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
+use crate::compact::PreservedCurrentUserTurn;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact::remove_preserved_current_user_turn_from_history;
+use crate::compact::restore_preserved_current_user_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -42,6 +45,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -49,6 +53,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         &sess,
         &turn_context,
         initial_context_injection,
+        preserved_current_user_turn,
         CompactionTrigger::Auto,
         reason,
         phase,
@@ -73,6 +78,7 @@ pub(crate) async fn run_remote_compact_task(
         &sess,
         &turn_context,
         InitialContextInjection::DoNotInject,
+        PreservedCurrentUserTurn::None,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
         CompactionPhase::StandaloneTurn,
@@ -85,6 +91,7 @@ async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -113,8 +120,13 @@ async fn run_remote_compact_task_inner(
             return Err(CodexErr::TurnAborted);
         }
     }
-    let result =
-        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await;
+    let result = run_remote_compact_task_inner_impl(
+        sess,
+        turn_context,
+        initial_context_injection,
+        preserved_current_user_turn,
+    )
+    .await;
     let status = compaction_status_from_result(&result);
     let error = result.as_ref().err().map(ToString::to_string);
     if result.is_ok() {
@@ -139,6 +151,7 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: PreservedCurrentUserTurn,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
@@ -153,6 +166,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
+    remove_preserved_current_user_turn_from_history(&mut history, &preserved_current_user_turn);
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -225,6 +239,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         initial_context_injection,
+        &preserved_current_user_turn,
     )
     .await;
 
@@ -257,6 +272,7 @@ pub(crate) async fn process_compacted_history(
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: InitialContextInjection,
+    preserved_current_user_turn: &PreservedCurrentUserTurn,
 ) -> Vec<ResponseItem> {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
@@ -271,6 +287,8 @@ pub(crate) async fn process_compacted_history(
     };
 
     compacted_history.retain(should_keep_compacted_history_item);
+    compacted_history =
+        restore_preserved_current_user_turn(compacted_history, preserved_current_user_turn);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
 

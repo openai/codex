@@ -2449,6 +2449,7 @@ async fn normal_loop_context_window_error_auto_compacts_and_resumes_turn() {
 
     let server = start_mock_server().await;
     let user_message = "turn rescued after sampling overflow";
+    let image_url = "data:image/png;base64,local-overflow-preserve-image";
 
     let request_log = mount_sse_sequence(
         &server,
@@ -2485,10 +2486,15 @@ async fn normal_loop_context_window_error_auto_compacts_and_resumes_turn() {
     codex
         .submit(Op::UserInput {
             environments: None,
-            items: vec![UserInput::Text {
-                text: user_message.to_string(),
-                text_elements: Vec::new(),
-            }],
+            items: vec![
+                UserInput::Image {
+                    image_url: image_url.to_string(),
+                },
+                UserInput::Text {
+                    text: user_message.to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
         })
@@ -2508,13 +2514,20 @@ async fn normal_loop_context_window_error_auto_compacts_and_resumes_turn() {
     );
 
     let recovered_user_messages = requests[2].message_input_texts("user");
+    let recovered_user_images = requests[2].message_input_image_urls("user");
     assert_eq!(
-        recovered_user_messages
-            .iter()
-            .filter(|message| message.as_str() == user_message)
-            .count(),
-        1,
-        "recovered sampling request should preserve incoming user text exactly once"
+        (
+            recovered_user_messages
+                .iter()
+                .filter(|message| message.as_str() == user_message)
+                .count(),
+            recovered_user_images
+                .iter()
+                .filter(|url| url.as_str() == image_url)
+                .count(),
+        ),
+        (1, 1),
+        "recovered sampling request should preserve incoming user text and image exactly once"
     );
 }
 
