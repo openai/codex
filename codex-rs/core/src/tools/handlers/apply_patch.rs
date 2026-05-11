@@ -589,10 +589,6 @@ fn require_environment_id(
             "apply_patch environment selection is unavailable for this turn".to_string(),
         )),
         Some(environment_id) => Ok(Some(environment_id.to_string())),
-        None if allow_environment_id => Err(FunctionCallError::RespondToModel(
-            "apply_patch environment_id is required when multiple environments are available"
-                .to_string(),
-        )),
         None => Ok(None),
     }
 }

@@ -207,10 +207,7 @@ fn reconcile_environment_id_requires_selection_when_enabled() {
         require_environment_id(
             /*parsed_environment_id*/ None, /*allow_environment_id*/ true
         ),
-        Err(FunctionCallError::RespondToModel(
-            "apply_patch environment_id is required when multiple environments are available"
-                .to_string(),
-        ))
+        Ok(None)
     );
 }
 
