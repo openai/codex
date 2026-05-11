@@ -364,12 +364,12 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
-        skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -845,13 +845,13 @@ impl Session {
                 skills_manager,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
-                skills_watcher,
                 agent_control,
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
+                attestation_provider: attestation_provider.clone(),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     session_id,
@@ -863,6 +863,7 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
+                    attestation_provider,
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
@@ -932,8 +933,6 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            // Start the watcher after SessionConfigured so it cannot emit earlier events.
-            sess.start_skills_watcher_listener();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())

@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::os::unix::fs::MetadataExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
@@ -728,6 +729,53 @@ async fn file_system_sandboxed_write_rejects_symlink_escape(use_remote: bool) ->
     };
     assert_sandbox_denied(&error);
     assert!(!outside_dir.join("blocked.txt").exists());
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_sandboxed_write_preserves_existing_hard_link(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let outside_dir = tmp.path().join("outside");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::create_dir_all(&outside_dir)?;
+
+    let outside_file = outside_dir.join("outside.txt");
+    let hard_link = allowed_dir.join("hard-link.txt");
+    std::fs::write(&outside_file, "outside\n")?;
+    std::fs::hard_link(&outside_file, &hard_link)?;
+
+    let sandbox = workspace_write_sandbox(allowed_dir);
+    file_system
+        .write_file(
+            &absolute_path(hard_link.clone()),
+            b"updated through existing hard link\n".to_vec(),
+            Some(&sandbox),
+        )
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+
+    assert_eq!(
+        std::fs::read_to_string(&outside_file)?,
+        "updated through existing hard link\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&hard_link)?,
+        "updated through existing hard link\n"
+    );
+
+    let outside_metadata = std::fs::metadata(&outside_file)?;
+    let link_metadata = std::fs::metadata(&hard_link)?;
+    assert_eq!(
+        (link_metadata.dev(), link_metadata.ino()),
+        (outside_metadata.dev(), outside_metadata.ino())
+    );
 
     Ok(())
 }

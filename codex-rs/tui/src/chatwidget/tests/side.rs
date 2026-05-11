@@ -149,7 +149,7 @@ async fn slash_side_is_rejected_for_side_threads() {
 #[tokio::test]
 async fn slash_side_is_rejected_during_review_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.is_review_mode = true;
+    chat.review.is_review_mode = true;
 
     chat.dispatch_command(SlashCommand::Side);
 
@@ -216,7 +216,7 @@ async fn slash_side_without_args_starts_empty_side_conversation() {
         op_rx.try_recv().is_err(),
         "bare /side should not submit an op on the parent thread"
     );
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]

@@ -8,7 +8,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
-use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
@@ -31,6 +30,7 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
@@ -74,6 +74,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod analytics_utils;
 mod app_server_tracing;
+mod attestation;
 mod bespoke_event_handling;
 mod command_exec;
 mod config;
@@ -93,6 +94,7 @@ mod outgoing_message;
 mod request_processors;
 mod request_serialization;
 mod server_request_error;
+mod skills_watcher;
 mod thread_state;
 mod thread_status;
 mod transport;
@@ -159,22 +161,33 @@ enum ShutdownAction {
     Finish,
 }
 
-async fn shutdown_signal() -> IoResult<()> {
+#[derive(Clone, Copy)]
+enum ShutdownSignal {
+    Forceable,
+    #[cfg(unix)]
+    GracefulOnly,
+}
+
+async fn shutdown_signal() -> IoResult<ShutdownSignal> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::SignalKind;
         use tokio::signal::unix::signal;
 
         let mut term = signal(SignalKind::terminate())?;
+        let mut hangup = signal(SignalKind::hangup())?;
         tokio::select! {
-            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result,
-            _ = term.recv() => Ok(()),
+            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result.map(|_| ShutdownSignal::Forceable),
+            _ = term.recv() => Ok(ShutdownSignal::Forceable),
+            _ = hangup.recv() => Ok(ShutdownSignal::GracefulOnly),
         }
     }
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await
+        tokio::signal::ctrl_c()
+            .await
+            .map(|_| ShutdownSignal::Forceable)
     }
 }
 
@@ -187,9 +200,16 @@ impl ShutdownState {
         self.forced
     }
 
-    fn on_signal(&mut self, connection_count: usize, running_turn_count: usize) {
+    fn on_signal(
+        &mut self,
+        signal: ShutdownSignal,
+        connection_count: usize,
+        running_turn_count: usize,
+    ) {
         if self.requested {
-            self.forced = true;
+            if matches!(signal, ShutdownSignal::Forceable) {
+                self.forced = true;
+            }
             return;
         }
 
@@ -419,15 +439,6 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(
-        EnvironmentManager::new(EnvironmentManagerArgs::new(
-            ExecServerRuntimePaths::from_optional_paths(
-                arg0_paths.codex_self_exe.clone(),
-                arg0_paths.codex_linux_sandbox_exe.clone(),
-            )?,
-        ))
-        .await,
-    );
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -443,6 +454,17 @@ pub async fn run_main_with_transport_options(
         )
     })?;
     let codex_home = find_codex_home()?;
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager = if loader_overrides.ignore_user_config {
+        EnvironmentManager::from_env(local_runtime_paths).await
+    } else {
+        EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+    }
+    .map(Arc::new)
+    .map_err(std::io::Error::other)?;
     let config_manager = ConfigManager::new(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
@@ -686,7 +708,10 @@ pub async fn run_main_with_transport_options(
     }
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
-        config.chatgpt_base_url.clone(),
+        RemoteControlStartConfig {
+            remote_control_url: config.chatgpt_base_url.clone(),
+            installation_id: installation_id.clone(),
+        },
         state_db.clone(),
         auth_manager.clone(),
         transport_event_tx.clone(),
@@ -808,11 +833,15 @@ pub async fn run_main_with_transport_options(
 
                 tokio::select! {
                     shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
-                        if let Err(err) = shutdown_signal_result {
-                            warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
-                        }
+                        let signal = match shutdown_signal_result {
+                            Ok(signal) => signal,
+                            Err(err) => {
+                                warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
+                                continue;
+                            }
+                        };
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_signal(connections.len(), running_turn_count);
+                        shutdown_state.on_signal(signal, connections.len(), running_turn_count);
                     }
                     changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
@@ -933,7 +962,14 @@ pub async fn run_main_with_transport_options(
                                                     ),
                                                 )
                                                 .await;
-                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .connection_initialized(
+                                                    connection_id,
+                                                    connection_state
+                                                        .session
+                                                        .request_attestation(),
+                                                )
+                                                .await;
                                             connection_state
                                                 .outbound_initialized
                                                 .store(true, std::sync::atomic::Ordering::Release);
@@ -977,6 +1013,7 @@ pub async fn run_main_with_transport_options(
                             .send_server_notification(ServerNotification::RemoteControlStatusChanged(
                                 RemoteControlStatusChangedNotification {
                                     status: status.status,
+                                    installation_id: status.installation_id,
                                     environment_id: status.environment_id,
                                 },
                             ))

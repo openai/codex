@@ -872,8 +872,8 @@ async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
         cells.is_empty(),
         "expected no history cell for replayed StreamError event"
     );
-    assert_eq!(chat.current_status.header, "Idle");
-    assert!(chat.retry_status_header.is_none());
+    assert_eq!(chat.status_state.current_status.header, "Idle");
+    assert!(chat.status_state.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());
 }
 
@@ -900,7 +900,7 @@ async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_heade
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.status_state.retry_status_header.is_none());
 }
 
 #[tokio::test]
@@ -922,5 +922,5 @@ async fn stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.status_state.retry_status_header.is_none());
 }

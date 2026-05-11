@@ -18,12 +18,15 @@ use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginSkillReadResponse;
@@ -237,6 +240,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
   "id": "plugins~Plugin_11111111111111111111111111111111",
   "name": "shared-linear",
   "scope": "WORKSPACE",
+  "discoverability": "PRIVATE",
   "creator_account_user_id": "user-gavin__account-123",
   "creator_name": "Gavin",
   "share_url": "https://chatgpt.example/plugins/share/share-key-1",
@@ -320,6 +324,10 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         "plugins~Plugin_11111111111111111111111111111111"
     );
     assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Private)
+    );
+    assert_eq!(
         share_context.creator_account_user_id.as_deref(),
         Some("user-gavin__account-123")
     );
@@ -329,12 +337,21 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         Some("https://chatgpt.example/plugins/share/share-key-1")
     );
     assert_eq!(
-        share_context.share_targets,
-        Some(vec![PluginSharePrincipal {
-            principal_type: PluginSharePrincipalType::User,
-            principal_id: "user-ada__account-123".to_string(),
-            name: "Ada".to_string(),
-        }])
+        share_context.share_principals,
+        Some(vec![
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-gavin__account-123".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Gavin".to_string(),
+            },
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-ada__account-123".to_string(),
+                role: PluginSharePrincipalRole::Reader,
+                name: "Ada".to_string(),
+            },
+        ])
     );
     Ok(())
 }
@@ -751,6 +768,19 @@ enabled = true
 async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
     write_plugin_marketplace(
         repo_root.path(),
         "codex-curated",
@@ -764,7 +794,120 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
             .join("demo-plugin/.codex-plugin/plugin.json"),
         r#"{"name":"demo-plugin"}"#,
     )?;
+    let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
+    write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/plugins_123"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "plugins_123",
+            "name": "demo-plugin",
+            "scope": "WORKSPACE",
+            "discoverability": "UNLISTED",
+            "creator_account_user_id": "user-owner__account-123",
+            "creator_name": "Owner",
+            "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+            "share_principals": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-owner__account-123",
+                    "role": "owner",
+                    "name": "Owner",
+                },
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-editor__account-123",
+                    "role": "editor",
+                    "name": "Editor",
+                },
+            ],
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "display_name": "Demo Plugin",
+                "description": "Shared local plugin",
+                "app_ids": [],
+                "keywords": [],
+                "interface": {},
+                "skills": []
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?),
+            remote_marketplace_name: None,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    let share_context = response
+        .plugin
+        .summary
+        .share_context
+        .as_ref()
+        .expect("expected share context");
+    assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Unlisted)
+    );
+    assert_eq!(
+        share_context.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/share-key-1")
+    );
+    assert_eq!(
+        share_context.creator_account_user_id.as_deref(),
+        Some("user-owner__account-123")
+    );
+    assert_eq!(share_context.creator_name.as_deref(), Some("Owner"));
+    assert_eq!(
+        share_context.share_principals,
+        Some(vec![
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-owner__account-123".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Owner".to_string(),
+            },
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-editor__account-123".to_string(),
+                role: PluginSharePrincipalRole::Editor,
+                name: "Editor".to_string(),
+            },
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
     write_plugins_enabled_config(&codex_home)?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "codex-curated",
+        "demo-plugin",
+        "./demo-plugin",
+    )?;
+    write_plugin_source(repo_root.path(), "demo-plugin", &[])?;
     let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
     write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
 
@@ -795,10 +938,60 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         .as_ref()
         .expect("expected share context");
     assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.discoverability, None);
     assert_eq!(share_context.share_url, None);
     assert_eq!(share_context.creator_account_user_id, None);
     assert_eq!(share_context.creator_name, None);
-    assert_eq!(share_context.share_targets, None);
+    assert_eq!(share_context.share_principals, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_fails_on_malformed_share_mapping() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    write_plugins_enabled_config(&codex_home)?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "codex-curated",
+        "demo-plugin",
+        "./demo-plugin",
+    )?;
+    write_plugin_source(repo_root.path(), "demo-plugin", &[])?;
+    std::fs::create_dir_all(codex_home.path().join(".tmp"))?;
+    std::fs::write(
+        codex_home
+            .path()
+            .join(".tmp/plugin-share-local-paths-v1.json"),
+        "not valid json\n",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?),
+            remote_marketplace_name: None,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32603);
+    assert!(
+        error
+            .error
+            .message
+            .contains("failed to load plugin share local path mapping")
+    );
     Ok(())
 }
 

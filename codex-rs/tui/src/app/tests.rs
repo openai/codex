@@ -301,17 +301,6 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     assert!(app.transcript_cells.is_empty());
 }
 
-#[test]
-fn hooks_needing_review_startup_warning_snapshot() {
-    let message = startup_prompts::hooks_needing_review_warning(/*count*/ 2)
-        .expect("review-needed hooks should produce a startup warning");
-    let rendered = lines_to_single_string(
-        &history_cell::new_warning_event(message).display_lines(/*width*/ 80),
-    );
-
-    assert_app_snapshot!("hooks_needing_review_startup_warning", rendered);
-}
-
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -435,6 +424,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
@@ -1257,6 +1247,75 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         app.chat_widget.status_line_text(),
         Some("950K window".into())
     );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_caches_thread_without_app_server_read() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "wait-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::Wait,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: None,
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+        }),
+    ));
+
+    assert_eq!(
+        app.agent_navigation.get(&receiver_thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            is_closed: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_does_not_cache_not_found_thread() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "send-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::SendInput,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::Failed,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: Some("hello".to_string()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::from([(
+                    receiver_thread_id.to_string(),
+                    codex_app_server_protocol::CollabAgentState {
+                        status: codex_app_server_protocol::CollabAgentStatus::NotFound,
+                        message: None,
+                    },
+                )]),
+            },
+        }),
+    ));
+
+    assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
 }
 
 #[tokio::test]
@@ -3829,8 +3888,11 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     set_fast_mode_test_catalog(&mut app.chat_widget);
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
     set_chatgpt_auth(&mut app.chat_widget);
     set_fast_mode_test_catalog(&mut app.chat_widget);
 
@@ -4481,8 +4543,11 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
 #[tokio::test]
 async fn fresh_session_config_uses_current_service_tier() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
 
     let config = app.fresh_session_config();
 
@@ -4828,6 +4893,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 
     let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
         config: app.config.clone(),
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
