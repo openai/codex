@@ -14,6 +14,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -34,6 +35,9 @@ pub struct ThreadPersistenceMetadata {
     ///
     /// `None` means the thread has no filesystem/environment context.
     pub cwd: Option<PathBuf>,
+    /// Thread-scoped workspace roots used to materialize permission profiles.
+    #[serde(default)]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     /// Model provider associated with the thread.
     pub model_provider: String,
     /// Memory mode associated with the live thread.
