@@ -75,6 +75,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -249,6 +250,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_profile,
         sandbox_mode: sandbox_mode_cli_arg,
         dangerously_bypass_approvals_and_sandbox,
+        auto_review_cli_mode,
         cwd,
         add_dir,
     } = shared;
@@ -278,8 +280,19 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
+    } else if auto_review_cli_mode {
+        Some(SandboxMode::WorkspaceWrite)
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
+    };
+    let (approval_policy, approvals_reviewer) = if auto_review_cli_mode {
+        (
+            Some(AskForApproval::OnRequest),
+            Some(ApprovalsReviewer::AutoReview),
+        )
+    } else {
+        // Default to never ask for approvals in headless mode. Feature flags can override.
+        (Some(AskForApproval::Never), None)
     };
 
     // Parse `-c` overrides from the CLI.
@@ -394,9 +407,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         model,
         review_model: None,
         config_profile,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
-        approval_policy: Some(AskForApproval::Never),
-        approvals_reviewer: None,
+        approval_policy,
+        approvals_reviewer,
         sandbox_mode,
         permission_profile: None,
         cwd: resolved_cwd,

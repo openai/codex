@@ -47,6 +47,14 @@ pub struct SharedCliOptions {
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
+    /// Let Codex auto-review approval requests while running with workspace write access.
+    #[arg(
+        long = "not-so-yolo",
+        default_value_t = false,
+        conflicts_with = "dangerously_bypass_approvals_and_sandbox"
+    )]
+    pub auto_review_cli_mode: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
@@ -58,8 +66,9 @@ pub struct SharedCliOptions {
 
 impl SharedCliOptions {
     pub fn inherit_exec_root_options(&mut self, root: &Self) {
-        let self_selected_sandbox_mode =
-            self.sandbox_mode.is_some() || self.dangerously_bypass_approvals_and_sandbox;
+        let self_selected_permission_mode = self.sandbox_mode.is_some()
+            || self.dangerously_bypass_approvals_and_sandbox
+            || self.auto_review_cli_mode;
         let Self {
             images,
             model,
@@ -68,6 +77,7 @@ impl SharedCliOptions {
             config_profile,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
+            auto_review_cli_mode,
             cwd,
             add_dir,
         } = self;
@@ -79,6 +89,7 @@ impl SharedCliOptions {
             config_profile: root_config_profile,
             sandbox_mode: root_sandbox_mode,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
+            auto_review_cli_mode: root_auto_review_cli_mode,
             cwd: root_cwd,
             add_dir: root_add_dir,
         } = root;
@@ -98,9 +109,10 @@ impl SharedCliOptions {
         if sandbox_mode.is_none() {
             *sandbox_mode = *root_sandbox_mode;
         }
-        if !self_selected_sandbox_mode {
+        if !self_selected_permission_mode {
             *dangerously_bypass_approvals_and_sandbox =
                 *root_dangerously_bypass_approvals_and_sandbox;
+            *auto_review_cli_mode = *root_auto_review_cli_mode;
         }
         if cwd.is_none() {
             cwd.clone_from(root_cwd);
@@ -118,8 +130,9 @@ impl SharedCliOptions {
     }
 
     pub fn apply_subcommand_overrides(&mut self, subcommand: Self) {
-        let subcommand_selected_sandbox_mode = subcommand.sandbox_mode.is_some()
-            || subcommand.dangerously_bypass_approvals_and_sandbox;
+        let subcommand_selected_permission_mode = subcommand.sandbox_mode.is_some()
+            || subcommand.dangerously_bypass_approvals_and_sandbox
+            || subcommand.auto_review_cli_mode;
         let Self {
             images,
             model,
@@ -128,6 +141,7 @@ impl SharedCliOptions {
             config_profile,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
+            auto_review_cli_mode,
             cwd,
             add_dir,
         } = subcommand;
@@ -144,10 +158,11 @@ impl SharedCliOptions {
         if let Some(config_profile) = config_profile {
             self.config_profile = Some(config_profile);
         }
-        if subcommand_selected_sandbox_mode {
+        if subcommand_selected_permission_mode {
             self.sandbox_mode = sandbox_mode;
             self.dangerously_bypass_approvals_and_sandbox =
                 dangerously_bypass_approvals_and_sandbox;
+            self.auto_review_cli_mode = auto_review_cli_mode;
         }
         if let Some(cwd) = cwd {
             self.cwd = Some(cwd);

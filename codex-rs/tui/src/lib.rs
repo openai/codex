@@ -44,6 +44,7 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -697,17 +698,26 @@ pub async fn run_main(
         .cwd
         .clone()
         .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
-    let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
-        (
-            Some(SandboxMode::DangerFullAccess),
-            Some(AskForApproval::Never),
-        )
-    } else {
-        (
-            cli.sandbox_mode.map(Into::<SandboxMode>::into),
-            cli.approval_policy.map(Into::into),
-        )
-    };
+    let (sandbox_mode, approval_policy, approvals_reviewer) =
+        if cli.dangerously_bypass_approvals_and_sandbox {
+            (
+                Some(SandboxMode::DangerFullAccess),
+                Some(AskForApproval::Never),
+                None,
+            )
+        } else if cli.auto_review_cli_mode {
+            (
+                Some(SandboxMode::WorkspaceWrite),
+                Some(AskForApproval::OnRequest),
+                Some(ApprovalsReviewer::AutoReview),
+            )
+        } else {
+            (
+                cli.sandbox_mode.map(Into::<SandboxMode>::into),
+                cli.approval_policy.map(Into::into),
+                None,
+            )
+        };
 
     // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
@@ -842,6 +852,7 @@ pub async fn run_main(
     let overrides = ConfigOverrides {
         model,
         approval_policy,
+        approvals_reviewer,
         sandbox_mode,
         cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
             None

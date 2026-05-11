@@ -63,6 +63,8 @@ use codex_login::AuthManager;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
@@ -1351,20 +1353,31 @@ async fn run_debug_prompt_input_command(
         ));
     }
 
-    let approval_policy = if shared.dangerously_bypass_approvals_and_sandbox {
-        Some(AskForApproval::Never)
-    } else {
-        interactive.approval_policy.map(Into::into)
-    };
-    let sandbox_mode = if shared.dangerously_bypass_approvals_and_sandbox {
-        Some(codex_protocol::config_types::SandboxMode::DangerFullAccess)
-    } else {
-        shared.sandbox_mode.map(Into::into)
-    };
+    let (approval_policy, approvals_reviewer, sandbox_mode) =
+        if shared.dangerously_bypass_approvals_and_sandbox {
+            (
+                Some(AskForApproval::Never),
+                None,
+                Some(SandboxMode::DangerFullAccess),
+            )
+        } else if shared.auto_review_cli_mode {
+            (
+                Some(AskForApproval::OnRequest),
+                Some(ApprovalsReviewer::AutoReview),
+                Some(SandboxMode::WorkspaceWrite),
+            )
+        } else {
+            (
+                interactive.approval_policy.map(Into::into),
+                None,
+                shared.sandbox_mode.map(Into::into),
+            )
+        };
     let overrides = ConfigOverrides {
         model: shared.model,
         config_profile: shared.config_profile,
         approval_policy,
+        approvals_reviewer,
         sandbox_mode,
         cwd: shared.cwd,
         codex_self_exe: arg0_paths.codex_self_exe,

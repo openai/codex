@@ -93,6 +93,8 @@ codex --sandbox danger-full-access
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 In `workspace-write`, Codex also includes `~/.codex/memories` in its writable roots so memory maintenance does not require an extra approval.
 
+For a less-permissive alternative to `--yolo`, pass `--not-so-yolo` to run with workspace write access and route approvals through auto-review.
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
