@@ -52,7 +52,8 @@ struct EnvironmentToml {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TomlEnvironmentProvider {
     default: EnvironmentDefault,
-    environments: Vec<(String, ExecServerTransportParams, Option<AbsolutePathBuf>)>,
+    default_cwds: HashMap<String, AbsolutePathBuf>,
+    environments: Vec<(String, ExecServerTransportParams)>,
 }
 
 impl TomlEnvironmentProvider {
@@ -66,6 +67,7 @@ impl TomlEnvironmentProvider {
         config_dir: Option<&Path>,
     ) -> Result<Self, ExecServerError> {
         let mut ids = HashSet::from([LOCAL_ENVIRONMENT_ID.to_string()]);
+        let mut default_cwds = HashMap::new();
         let mut environments = Vec::with_capacity(config.environments.len());
         for item in config.environments {
             let (id, transport, default_cwd) = parse_environment_toml(item, config_dir)?;
@@ -74,11 +76,15 @@ impl TomlEnvironmentProvider {
                     "environment id `{id}` is duplicated"
                 )));
             }
-            environments.push((id, transport, default_cwd));
+            if let Some(default_cwd) = default_cwd {
+                default_cwds.insert(id.clone(), default_cwd);
+            }
+            environments.push((id, transport));
         }
         let default = normalize_default_environment_id(config.default.as_deref(), &ids)?;
         Ok(Self {
             default,
+            default_cwds,
             environments,
         })
     }
@@ -88,19 +94,19 @@ impl TomlEnvironmentProvider {
 impl EnvironmentProvider for TomlEnvironmentProvider {
     async fn snapshot(&self) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
         let mut environments = Vec::with_capacity(self.environments.len());
-        for (id, transport_params, default_cwd) in &self.environments {
+        for (id, transport_params) in &self.environments {
             environments.push((
                 id.clone(),
-                Environment::remote_with_transport_and_default_cwd(
+                Environment::remote_with_transport(
                     transport_params.clone(),
                     /*local_runtime_paths*/ None,
-                    default_cwd.clone(),
                 ),
             ));
         }
 
         Ok(EnvironmentProviderSnapshot {
             environments,
+            default_cwds: self.default_cwds.clone(),
             default: self.default.clone(),
             include_local: true,
         })
@@ -360,6 +366,7 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
@@ -371,6 +378,7 @@ mod tests {
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(include_local);
+        assert!(default_cwds.is_empty());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert_eq!(
             environments["devbox"].exec_server_url(),
@@ -570,7 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn toml_provider_adds_configured_default_cwd_to_environment() {
+    async fn toml_provider_exposes_configured_default_cwd() {
         let default_cwd = AbsolutePathBuf::from_absolute_path("/workspace").expect("cwd");
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml {
             default: None,
@@ -584,9 +592,7 @@ mod tests {
         .expect("provider");
 
         let snapshot = provider.snapshot().await.expect("environments");
-        let environment = &snapshot.environments[0].1;
-
-        assert_eq!(environment.default_cwd(), Some(&default_cwd));
+        assert_eq!(snapshot.default_cwds.get("ssh-dev"), Some(&default_cwd));
     }
 
     #[test]

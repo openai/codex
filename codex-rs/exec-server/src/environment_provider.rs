@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::Environment;
 use crate::ExecServerError;
@@ -8,9 +11,9 @@ use crate::environment::REMOTE_ENVIRONMENT_ID;
 
 /// Lists the concrete environments available to Codex.
 ///
-/// Implementations own a startup snapshot containing both the available
-/// environment list in configured order and the default environment
-/// selection. Providers should only return provider-owned remote environments;
+/// Implementations own a startup snapshot containing the available environment
+/// list in configured order plus provider-owned default selection metadata.
+/// Providers should only return provider-owned remote environments;
 /// `include_local` controls whether `EnvironmentManager` should add the local
 /// environment to the snapshot.
 #[async_trait]
@@ -22,6 +25,7 @@ pub trait EnvironmentProvider: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct EnvironmentProviderSnapshot {
     pub environments: Vec<(String, Environment)>,
+    pub default_cwds: HashMap<String, AbsolutePathBuf>,
     pub default: EnvironmentDefault,
     pub include_local: bool,
 }
@@ -74,6 +78,7 @@ impl DefaultEnvironmentProvider {
 
         EnvironmentProviderSnapshot {
             environments,
+            default_cwds: HashMap::new(),
             default,
             include_local,
         }
@@ -109,12 +114,14 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(include_local);
+        assert!(default_cwds.is_empty());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(
@@ -129,12 +136,14 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(include_local);
+        assert!(default_cwds.is_empty());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(
@@ -149,12 +158,14 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!include_local);
+        assert!(default_cwds.is_empty());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
         assert_eq!(default, EnvironmentDefault::Disabled);
@@ -166,12 +177,14 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
         assert!(!include_local);
+        assert!(default_cwds.is_empty());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
         assert!(remote_environment.is_remote());

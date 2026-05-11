@@ -121,7 +121,10 @@ default_cwd = "{default_cwd_display}"
     let environment = environment_manager
         .default_environment()
         .context("default environment should resolve")?;
-    assert_eq!(environment.default_cwd(), Some(&default_cwd));
+    assert_eq!(
+        environment_manager.default_cwd(REMOTE_ENVIRONMENT_ID),
+        Some(default_cwd.clone())
+    );
 
     let started = environment
         .get_exec_backend()

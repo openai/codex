@@ -43,6 +43,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
+    default_cwds: HashMap<String, AbsolutePathBuf>,
     environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Arc<Environment>,
 }
@@ -68,6 +69,7 @@ impl EnvironmentManager {
     pub fn default_for_tests() -> Self {
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
+            default_cwds: HashMap::new(),
             environments: RwLock::new(HashMap::from([(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::new(Environment::default_for_tests()),
@@ -80,6 +82,7 @@ impl EnvironmentManager {
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             default_environment: None,
+            default_cwds: HashMap::new(),
             environments: RwLock::new(HashMap::new()),
             local_environment: Arc::new(Environment::local(local_runtime_paths)),
         }
@@ -154,6 +157,7 @@ impl EnvironmentManager {
     ) -> Result<Self, ExecServerError> {
         let EnvironmentProviderSnapshot {
             environments,
+            default_cwds,
             default,
             include_local,
         } = snapshot;
@@ -197,8 +201,17 @@ impl EnvironmentManager {
                 Some(environment_id)
             }
         };
+        if let Some(environment_id) = default_cwds
+            .keys()
+            .find(|environment_id| !environment_map.contains_key(*environment_id))
+        {
+            return Err(ExecServerError::Protocol(format!(
+                "default cwd environment `{environment_id}` is not configured"
+            )));
+        }
         Ok(Self {
             default_environment,
+            default_cwds,
             environments: RwLock::new(environment_map),
             local_environment,
         })
@@ -214,6 +227,13 @@ impl EnvironmentManager {
     /// Returns the id of the default environment.
     pub fn default_environment_id(&self) -> Option<&str> {
         self.default_environment.as_deref()
+    }
+
+    /// Returns the configured startup cwd for a named environment.
+    pub fn default_cwd(&self, environment_id: &str) -> Option<AbsolutePathBuf> {
+        self.default_cwds
+            .get(environment_id)
+            .cloned()
     }
 
     /// Returns the ordered environment ids used for new thread startup.
@@ -291,7 +311,6 @@ impl EnvironmentManager {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
-    default_cwd: Option<AbsolutePathBuf>,
     exec_server_url: Option<String>,
     remote_transport: Option<ExecServerTransportParams>,
     exec_backend: Arc<dyn ExecBackend>,
@@ -304,7 +323,6 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
-            default_cwd: None,
             exec_server_url: None,
             remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
@@ -361,7 +379,6 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            default_cwd: None,
             exec_server_url: None,
             remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
@@ -387,18 +404,6 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        Self::remote_with_transport_and_default_cwd(
-            remote_transport,
-            local_runtime_paths,
-            /*default_cwd*/ None,
-        )
-    }
-
-    pub(crate) fn remote_with_transport_and_default_cwd(
-        remote_transport: ExecServerTransportParams,
-        local_runtime_paths: Option<ExecServerRuntimePaths>,
-        default_cwd: Option<AbsolutePathBuf>,
-    ) -> Self {
         let exec_server_url = match &remote_transport {
             ExecServerTransportParams::WebSocketUrl {
                 websocket_url: exec_server_url,
@@ -412,7 +417,6 @@ impl Environment {
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
-            default_cwd,
             exec_server_url,
             remote_transport: Some(remote_transport),
             exec_backend,
@@ -424,10 +428,6 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_transport.is_some()
-    }
-
-    pub fn default_cwd(&self) -> Option<&AbsolutePathBuf> {
-        self.default_cwd.as_ref()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
@@ -573,6 +573,7 @@ mod tests {
                     Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
+                default_cwds: HashMap::new(),
                 default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
                 include_local: false,
             },
@@ -600,6 +601,7 @@ mod tests {
         let provider = TestEnvironmentProvider {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![("".to_string(), Environment::default_for_tests())],
+                default_cwds: HashMap::new(),
                 default: EnvironmentDefault::Disabled,
                 include_local: false,
             },
@@ -622,6 +624,7 @@ mod tests {
                     LOCAL_ENVIRONMENT_ID.to_string(),
                     Environment::default_for_tests(),
                 )],
+                default_cwds: HashMap::new(),
                 default: EnvironmentDefault::Disabled,
                 include_local: false,
             },
@@ -638,6 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
+        let default_cwd = AbsolutePathBuf::from_absolute_path("/workspace").expect("cwd");
         let provider = TestEnvironmentProvider {
             snapshot: EnvironmentProviderSnapshot {
                 environments: vec![(
@@ -645,6 +649,7 @@ mod tests {
                     Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
+                default_cwds: HashMap::from([("devbox".to_string(), default_cwd.clone())]),
                 default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
                 include_local: true,
             },
@@ -654,6 +659,7 @@ mod tests {
             .expect("manager");
 
         assert_eq!(manager.default_environment_id(), Some("devbox"));
+        assert_eq!(manager.default_cwd("devbox"), Some(default_cwd));
         assert_eq!(
             manager.default_environment_ids(),
             vec!["devbox".to_string(), LOCAL_ENVIRONMENT_ID.to_string()]
@@ -670,6 +676,7 @@ mod tests {
                     Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
+                default_cwds: HashMap::new(),
                 default: EnvironmentDefault::Disabled,
                 include_local: true,
             },
@@ -697,6 +704,7 @@ mod tests {
                     Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                         .expect("remote environment"),
                 )],
+                default_cwds: HashMap::new(),
                 default: EnvironmentDefault::EnvironmentId("missing".to_string()),
                 include_local: true,
             },

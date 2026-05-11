@@ -17,16 +17,11 @@ pub(crate) fn default_thread_environment_selections(
     environment_manager
         .default_environment_ids()
         .into_iter()
-        .filter_map(|environment_id| {
-            let environment = environment_manager.get_environment(&environment_id)?;
-            TurnEnvironmentSelection {
-                environment_id,
-                cwd: environment
-                    .default_cwd()
-                    .cloned()
-                    .unwrap_or_else(|| cwd.clone()),
-            }
-            .into()
+        .map(|environment_id| TurnEnvironmentSelection {
+            cwd: environment_manager
+                .default_cwd(&environment_id)
+                .unwrap_or_else(|| cwd.clone()),
+            environment_id,
         })
         .collect()
 }

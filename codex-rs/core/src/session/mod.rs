@@ -49,7 +49,6 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::PromptSlot;
@@ -603,10 +602,9 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
-        let cwd = primary_environment
-            .as_deref()
-            .and_then(Environment::default_cwd)
-            .cloned()
+        let cwd = environment_selections
+            .primary()
+            .map(|environment| environment.cwd.clone())
             .unwrap_or_else(|| config.cwd.clone());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
