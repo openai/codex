@@ -14681,6 +14681,19 @@
           "path": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
+          "plugin": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SkillPluginMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance": {
+            "$ref": "#/definitions/v2/SkillProvenance"
+          },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
           },
@@ -14697,9 +14710,76 @@
           "enabled",
           "name",
           "path",
+          "provenance",
           "scope"
         ],
         "type": "object"
+      },
+      "SkillPluginMetadata": {
+        "properties": {
+          "brandColor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composerIcon": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "marketplaceName",
+          "name"
+        ],
+        "type": "object"
+      },
+      "SkillProvenance": {
+        "enum": [
+          "personal",
+          "project",
+          "system",
+          "admin",
+          "openai_marketplace",
+          "workspace_marketplace",
+          "custom_marketplace",
+          "local_plugin",
+          "debug_plugin",
+          "ad_hoc_plugin"
+        ],
+        "type": "string"
       },
       "SkillScope": {
         "enum": [

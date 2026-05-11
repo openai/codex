@@ -4,10 +4,12 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { SkillDependencies } from "./SkillDependencies";
 import type { SkillInterface } from "./SkillInterface";
+import type { SkillPluginMetadata } from "./SkillPluginMetadata";
+import type { SkillProvenance } from "./SkillProvenance";
 import type { SkillScope } from "./SkillScope";
 
 export type SkillMetadata = { name: string, description: string,
 /**
  * Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
  */
-shortDescription?: string, interface?: SkillInterface, dependencies?: SkillDependencies, path: AbsolutePathBuf, scope: SkillScope, enabled: boolean, };
+shortDescription?: string, interface?: SkillInterface, dependencies?: SkillDependencies, path: AbsolutePathBuf, scope: SkillScope, provenance: SkillProvenance, plugin: SkillPluginMetadata | null, enabled: boolean, };

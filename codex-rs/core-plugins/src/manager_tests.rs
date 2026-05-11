@@ -205,6 +205,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             manifest_description: Some(
                 "Plugin that includes the sample MCP server and Skills".to_string(),
             ),
+            manifest_interface: None,
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
             skill_roots: vec![plugin_root.join("skills").abs()],
@@ -855,6 +856,7 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             config_name: "sample@test".to_string(),
             manifest_name: None,
             manifest_description: None,
+            manifest_interface: None,
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
             skill_roots: Vec::new(),
@@ -974,6 +976,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         config_name: config_name.to_string(),
         manifest_name: Some(manifest_name.to_string()),
         manifest_description: None,
+        manifest_interface: None,
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
         skill_roots: Vec::new(),

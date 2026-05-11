@@ -16,6 +16,7 @@ pub struct LoadedPlugin<M> {
     pub config_name: String,
     pub manifest_name: Option<String>,
     pub manifest_description: Option<String>,
+    pub manifest_interface: Option<PluginInterfaceSummary>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
     pub skill_roots: Vec<AbsolutePathBuf>,
@@ -26,6 +27,13 @@ pub struct LoadedPlugin<M> {
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInterfaceSummary {
+    pub brand_color: Option<String>,
+    pub composer_icon: Option<AbsolutePathBuf>,
+    pub logo: Option<AbsolutePathBuf>,
 }
 
 impl<M> LoadedPlugin<M> {
@@ -219,6 +227,7 @@ mod tests {
             config_name: config_name.to_string(),
             manifest_name: None,
             manifest_description: None,
+            manifest_interface: None,
             root: test_path(config_name),
             enabled: true,
             skill_roots,

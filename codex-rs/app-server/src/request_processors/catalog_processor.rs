@@ -12,14 +12,36 @@ pub(crate) struct CatalogRequestProcessor {
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
+#[derive(Clone)]
+struct SkillPluginInfo {
+    id: String,
+    name: String,
+    marketplace_name: String,
+    display_name: Option<String>,
+    provenance: codex_app_server_protocol::SkillProvenance,
+    brand_color: Option<String>,
+    composer_icon: Option<AbsolutePathBuf>,
+    logo: Option<AbsolutePathBuf>,
+}
+
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_paths: &HashSet<AbsolutePathBuf>,
+    plugins_by_id: &HashMap<String, SkillPluginInfo>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
             let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+            let plugin = skill
+                .plugin_id
+                .as_ref()
+                .and_then(|plugin_id| plugins_by_id.get(plugin_id))
+                .cloned();
+            let provenance = plugin
+                .as_ref()
+                .map(|plugin| plugin.provenance)
+                .unwrap_or_else(|| skill.scope.into());
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -52,10 +74,71 @@ fn skills_to_info(
                 }),
                 path: skill.path_to_skills_md.clone(),
                 scope: skill.scope.into(),
+                provenance,
+                plugin: plugin.map(|plugin| codex_app_server_protocol::SkillPluginMetadata {
+                    id: plugin.id,
+                    name: plugin.name,
+                    marketplace_name: plugin.marketplace_name,
+                    display_name: plugin.display_name,
+                    brand_color: plugin.brand_color,
+                    composer_icon: plugin.composer_icon,
+                    logo: plugin.logo,
+                }),
                 enabled,
             }
         })
         .collect()
+}
+
+fn plugin_infos_by_id<M>(
+    plugins: &[codex_plugin::LoadedPlugin<M>],
+) -> HashMap<String, SkillPluginInfo> {
+    plugins
+        .iter()
+        .filter(|plugin| plugin.enabled && plugin.error.is_none())
+        .filter_map(|plugin| {
+            let plugin_id = codex_plugin::PluginId::parse(&plugin.config_name).ok()?;
+            let provenance = plugin_provenance(&plugin_id.marketplace_name);
+            Some((
+                plugin.config_name.clone(),
+                SkillPluginInfo {
+                    id: plugin.config_name.clone(),
+                    name: plugin_id.plugin_name,
+                    marketplace_name: plugin_id.marketplace_name,
+                    display_name: plugin.manifest_name.clone(),
+                    provenance,
+                    brand_color: plugin
+                        .manifest_interface
+                        .as_ref()
+                        .and_then(|interface| interface.brand_color.clone()),
+                    composer_icon: plugin
+                        .manifest_interface
+                        .as_ref()
+                        .and_then(|interface| interface.composer_icon.clone()),
+                    logo: plugin
+                        .manifest_interface
+                        .as_ref()
+                        .and_then(|interface| interface.logo.clone()),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn plugin_provenance(marketplace_name: &str) -> codex_app_server_protocol::SkillProvenance {
+    match marketplace_name {
+        codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME
+        | codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME => {
+            codex_app_server_protocol::SkillProvenance::OpenaiMarketplace
+        }
+        codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME
+        | codex_core_plugins::remote::REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME => {
+            codex_app_server_protocol::SkillProvenance::WorkspaceMarketplace
+        }
+        "debug" => codex_app_server_protocol::SkillProvenance::DebugPlugin,
+        "local" | "personal" => codex_app_server_protocol::SkillProvenance::LocalPlugin,
+        _ => codex_app_server_protocol::SkillProvenance::CustomMarketplace,
+    }
 }
 
 fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
@@ -425,16 +508,22 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
+                    let (effective_skill_roots, plugins_by_id) = if workspace_codex_plugins_enabled
+                    {
                         let plugins_input = config.plugins_config_input();
-                        plugins_manager
-                            .effective_skill_roots_for_layer_stack(
+                        let plugin_outcome = plugins_manager
+                            .plugins_for_layer_stack(
                                 &config_layer_stack,
                                 &plugins_input,
+                                plugins_input.plugin_hooks_enabled,
                             )
-                            .await
+                            .await;
+                        (
+                            plugin_outcome.effective_plugin_skill_roots(),
+                            plugin_infos_by_id(plugin_outcome.plugins()),
+                        )
                     } else {
-                        Vec::new()
+                        (Vec::new(), HashMap::new())
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
                         cwd_abs.clone(),
@@ -446,7 +535,8 @@ impl CatalogRequestProcessor {
                         .skills_for_cwd(&skills_input, force_reload, fs)
                         .await;
                     let errors = errors_to_info(&outcome.errors);
-                    let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
+                    let skills =
+                        skills_to_info(&outcome.skills, &outcome.disabled_paths, &plugins_by_id);
                     (
                         index,
                         codex_app_server_protocol::SkillsListEntry {

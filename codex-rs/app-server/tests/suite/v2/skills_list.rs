@@ -12,12 +12,14 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SkillProvenance;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -40,9 +42,10 @@ fn write_skill(root: &TempDir, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_plugins_enabled_config_with_base_url(
+fn write_plugins_enabled_config_with_enabled_plugin(
     codex_home: &std::path::Path,
     base_url: &str,
+    plugin_id: &str,
 ) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
@@ -51,6 +54,9 @@ fn write_plugins_enabled_config_with_base_url(
 
 [features]
 plugins = true
+
+[plugins."{plugin_id}"]
+enabled = true
 "#,
         ),
     )
@@ -100,9 +106,20 @@ fn write_plugin_with_skill(
 
     let plugin_root = repo_root.join(plugin_name);
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("assets"))?;
+    std::fs::write(plugin_root.join("assets/icon.png"), &[] as &[u8])?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        format!(r#"{{"name":"{plugin_name}"}}"#),
+        format!(
+            r##"{{
+  "name": "{plugin_name}",
+  "interface": {{
+    "displayName": "{plugin_name} display",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png"
+  }}
+}}"##
+        ),
     )?;
 
     let skill_dir = plugin_root.join("skills").join(skill_name);
@@ -119,9 +136,17 @@ fn write_cached_remote_plugin_with_skill(
 ) -> Result<std::path::PathBuf> {
     let plugin_root = codex_home.join("plugins/cache/chatgpt-global/linear/local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("assets"))?;
+    std::fs::write(plugin_root.join("assets/linear.png"), &[] as &[u8])?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"linear"}"#,
+        r##"{
+  "name": "linear",
+  "interface": {
+    "displayName": "Linear",
+    "composerIcon": "./assets/linear.png"
+  }
+}"##,
     )?;
 
     let skill_dir = plugin_root.join("skills/triage-issues");
@@ -132,6 +157,36 @@ fn write_cached_remote_plugin_with_skill(
         "---\nname: triage-issues\ndescription: Triage Linear issues\n---\n\n# Body\n",
     )?;
     Ok(skill_path)
+}
+
+fn write_cached_local_plugin_with_skill(
+    codex_home: &std::path::Path,
+) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let plugin_root = codex_home.join("plugins/cache/local-marketplace/demo-plugin/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("assets"))?;
+    let icon_path = plugin_root.join("assets/icon.png");
+    std::fs::write(&icon_path, &[] as &[u8])?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r##"{
+  "name": "demo-plugin",
+  "interface": {
+    "displayName": "Demo Plugin",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png"
+  }
+}"##,
+    )?;
+
+    let skill_dir = plugin_root.join("skills/plugin-skill");
+    std::fs::create_dir_all(&skill_dir)?;
+    let skill_path = skill_dir.join("SKILL.md");
+    std::fs::write(
+        &skill_path,
+        "---\nname: plugin-skill\ndescription: plugin skill description\n---\n\n# Body\n",
+    )?;
+    Ok((skill_path, icon_path))
 }
 
 #[tokio::test]
@@ -311,6 +366,19 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         std::fs::canonicalize(skill.path.as_path())?,
         expected_skill_path
     );
+    assert_eq!(skill.provenance, SkillProvenance::OpenaiMarketplace);
+    let plugin = skill.plugin.as_ref().expect("expected plugin metadata");
+    assert_eq!(plugin.id, "linear@chatgpt-global");
+    assert_eq!(plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(plugin.display_name.as_deref(), Some("Linear"));
+    assert_eq!(
+        plugin.composer_icon,
+        Some(AbsolutePathBuf::try_from(std::fs::canonicalize(
+            codex_home
+                .path()
+                .join("plugins/cache/chatgpt-global/linear/local/assets/linear.png")
+        )?)?)
+    );
     assert_eq!(skill.enabled, true);
     Ok(())
 }
@@ -322,9 +390,10 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
     let server = MockServer::start().await;
     write_skill(&codex_home, "home-skill")?;
     write_plugin_with_skill(repo_root.path(), "demo-plugin", "plugin-skill")?;
-    write_plugins_enabled_config_with_base_url(
+    write_plugins_enabled_config_with_enabled_plugin(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
+        "demo-plugin@local-marketplace",
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -376,6 +445,62 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
             .iter()
             .all(|skill| skill.name != "demo-plugin:plugin-skill"),
         "plugin skills should be hidden when workspace Codex plugins are disabled"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_includes_plugin_metadata_for_plugin_skills() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let server = MockServer::start().await;
+    let (expected_skill_path, expected_icon_path) =
+        write_cached_local_plugin_with_skill(codex_home.path())?;
+    write_plugins_enabled_config_with_enabled_plugin(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+        "demo-plugin@local-marketplace",
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    let skill = data[0]
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo-plugin:plugin-skill")
+        .expect("expected plugin skill");
+    assert_eq!(
+        std::fs::canonicalize(skill.path.as_path())?,
+        std::fs::canonicalize(expected_skill_path)?
+    );
+    assert_eq!(skill.scope, codex_app_server_protocol::SkillScope::User);
+    assert_eq!(skill.provenance, SkillProvenance::CustomMarketplace);
+    let plugin = skill.plugin.as_ref().expect("expected plugin metadata");
+    assert_eq!(plugin.id, "demo-plugin@local-marketplace");
+    assert_eq!(plugin.name, "demo-plugin");
+    assert_eq!(plugin.marketplace_name, "local-marketplace");
+    assert_eq!(plugin.display_name.as_deref(), Some("Demo Plugin"));
+    assert_eq!(plugin.brand_color.as_deref(), Some("#3B82F6"));
+    assert_eq!(
+        plugin.composer_icon,
+        Some(AbsolutePathBuf::try_from(std::fs::canonicalize(
+            expected_icon_path
+        )?)?)
     );
     Ok(())
 }

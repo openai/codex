@@ -1470,6 +1470,7 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
+Each skill includes a user-facing `provenance`; skills loaded from installed/local plugins also include compact `plugin` metadata for display name, marketplace, brand color, and local icon assets.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
@@ -1485,6 +1486,9 @@ The server also emits `skills/changed` notifications when watched local skill fi
               "name": "skill-creator",
               "description": "Create or update a Codex skill",
               "enabled": true,
+              "scope": "user",
+              "provenance": "personal",
+              "plugin": null,
               "interface": {
                 "displayName": "Skill Creator",
                 "shortDescription": "Create or update a Codex skill",

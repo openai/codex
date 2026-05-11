@@ -26,6 +26,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::PluginInterfaceSummary;
 use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::Product;
@@ -516,6 +517,7 @@ async fn load_plugin(
         config_name,
         manifest_name: None,
         manifest_description: None,
+        manifest_interface: None,
         root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
@@ -566,6 +568,15 @@ async fn load_plugin(
         .map(str::to_string)
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
+    loaded_plugin.manifest_interface =
+        manifest
+            .interface
+            .as_ref()
+            .map(|interface| PluginInterfaceSummary {
+                brand_color: interface.brand_color.clone(),
+                composer_icon: interface.composer_icon.clone(),
+                logo: interface.logo.clone(),
+            });
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
     let resolved_skills = load_plugin_skills(
         &plugin_root,
