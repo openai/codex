@@ -218,7 +218,7 @@ index 421ebcd..52283ea 100644
      ],
  )
  
-@@ -4465,6 +4474,15 @@ filegroup(
+@@ -4465,6 +4474,35 @@ filegroup(
      ],
  )
  
@@ -226,6 +226,26 @@ index 421ebcd..52283ea 100644
 +    name = "rusty_v8_internal_headers",
 +    hdrs = [
 +        "src/libplatform/default-platform.h",
++    ],
++    strip_include_prefix = "",
++    visibility = ["//visibility:public"],
++)
++
++cc_library(
++    name = "rusty_v8_crdtp_headers",
++    hdrs = [
++        "third_party/inspector_protocol/crdtp/cbor.h",
++        "third_party/inspector_protocol/crdtp/dispatch.h",
++        "third_party/inspector_protocol/crdtp/error_support.h",
++        "third_party/inspector_protocol/crdtp/export.h",
++        "third_party/inspector_protocol/crdtp/find_by_first.h",
++        "third_party/inspector_protocol/crdtp/frontend_channel.h",
++        "third_party/inspector_protocol/crdtp/json.h",
++        "third_party/inspector_protocol/crdtp/parser_handler.h",
++        "third_party/inspector_protocol/crdtp/protocol_core.h",
++        "third_party/inspector_protocol/crdtp/serializable.h",
++        "third_party/inspector_protocol/crdtp/span.h",
++        "third_party/inspector_protocol/crdtp/status.h",
 +    ],
 +    strip_include_prefix = "",
 +    visibility = ["//visibility:public"],
