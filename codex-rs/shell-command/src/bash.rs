@@ -152,10 +152,10 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 if word_node.kind() != "word" {
                     return None;
                 }
-                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(parse_unquoted_literal(word_node, src)?);
             }
             "word" | "number" => {
-                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(parse_unquoted_literal(child, src)?);
             }
             "string" => {
                 let parsed = parse_double_quoted_string(child, src)?;
@@ -172,8 +172,7 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 for part in child.named_children(&mut concat_cursor) {
                     match part.kind() {
                         "word" | "number" => {
-                            concatenated
-                                .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
+                            concatenated.push_str(&parse_unquoted_literal(part, src)?);
                         }
                         "string" => {
                             let parsed = parse_double_quoted_string(part, src)?;
@@ -195,6 +194,18 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
         }
     }
     Some(words)
+}
+
+fn parse_unquoted_literal(node: Node, src: &str) -> Option<String> {
+    let text = node.utf8_text(src.as_bytes()).ok()?;
+    if text.starts_with('~') || text.chars().any(is_unquoted_shell_expansion_char) {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+fn is_unquoted_shell_expansion_char(c: char) -> bool {
+    matches!(c, '*' | '?' | '[' | ']' | '{' | '}')
 }
 
 fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
@@ -498,6 +509,26 @@ mod tests {
         // Command substitution in concatenated strings should be rejected
         assert!(parse_seq("rg -g\"$(pwd)\" pattern").is_none());
         assert!(parse_seq("rg -g\"$(echo '*.py')\" pattern").is_none());
+    }
+
+    #[test]
+    fn rejects_unquoted_shell_expansion_words() {
+        assert!(parse_seq("base64 -i input.txt -* cc06_out").is_none());
+        assert!(parse_seq("ls *.rs").is_none());
+        assert!(parse_seq("echo -{o,}").is_none());
+    }
+
+    #[test]
+    fn accepts_quoted_shell_expansion_literals() {
+        assert_eq!(
+            parse_seq(r#"echo "-*" '*.rs' "-{o,}""#).unwrap(),
+            vec![vec![
+                "echo".to_string(),
+                "-*".to_string(),
+                "*.rs".to_string(),
+                "-{o,}".to_string(),
+            ]]
+        );
     }
 
     #[test]

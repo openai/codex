@@ -739,6 +739,18 @@ mod tests {
     }
 
     #[test]
+    fn bash_lc_glob_expansion_option_injection_is_not_safe() {
+        assert!(
+            !is_known_safe_command(&vec_str(&[
+                "bash",
+                "-lc",
+                "base64 -i input.txt -* cc06_out",
+            ])),
+            "Unquoted shell expansion can rewrite argv into base64 -o at runtime"
+        );
+    }
+
+    #[test]
     fn direct_powershell_words_use_windows_safelist() {
         let command = vec_str(&["Get-Content", "Cargo.toml"]);
 
