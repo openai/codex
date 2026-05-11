@@ -740,7 +740,8 @@ async fn build_thread_item(
     cwd_filters: Option<&[PathBuf]>,
     updated_at: Option<String>,
 ) -> Option<ThreadItem> {
-    // Read head and detect preview-bearing events; stop once meta + preview are found.
+    // Read head and detect preview-bearing events; goal previews can appear before
+    // the first normal user message.
     let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
         .await
         .unwrap_or_default();
@@ -1082,7 +1083,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
     while lines_scanned < head_limit
         || (summary.saw_session_meta
-            && summary.preview.is_none()
+            && (summary.preview.is_none() || summary.first_user_message.is_none())
             && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
     {
         let line_opt = lines.next_line().await?;
@@ -1148,7 +1149,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             }
         }
 
-        if summary.saw_session_meta && summary.preview.is_some() {
+        if summary.saw_session_meta
+            && summary.preview.is_some()
+            && summary.first_user_message.is_some()
+        {
             break;
         }
     }

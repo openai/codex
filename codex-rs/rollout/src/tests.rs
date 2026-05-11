@@ -475,6 +475,7 @@ fn write_goal_started_session_file(
     ts_str: &str,
     uuid: Uuid,
     objective: &str,
+    later_user_message: Option<&str>,
 ) -> std::io::Result<()> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
@@ -529,6 +530,19 @@ fn write_goal_started_session_file(
         "payload": goal_event,
     });
     writeln!(file, "{event}")?;
+
+    if let Some(message) = later_user_message {
+        let user_event = serde_json::json!({
+            "timestamp": ts_str,
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": message,
+                "kind": "plain"
+            }
+        });
+        writeln!(file, "{user_event}")?;
+    }
 
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
@@ -1044,7 +1058,14 @@ async fn test_list_threads_uses_goal_objective_as_preview() {
 
     let uuid = Uuid::from_u128(100);
     let ts = "2025-05-02T10-30-00";
-    write_goal_started_session_file(home, ts, uuid, "optimize the benchmark").unwrap();
+    write_goal_started_session_file(
+        home,
+        ts,
+        uuid,
+        "optimize the benchmark",
+        /*later_user_message*/ None,
+    )
+    .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
     let page = get_threads(
@@ -1065,6 +1086,46 @@ async fn test_list_threads_uses_goal_objective_as_preview() {
     assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
     assert_eq!(item.preview.as_deref(), Some("optimize the benchmark"));
     assert_eq!(item.first_user_message, None);
+}
+
+#[tokio::test]
+async fn test_goal_first_thread_reads_later_user_message() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(101);
+    let ts = "2025-05-02T10-30-00";
+    write_goal_started_session_file(
+        home,
+        ts,
+        uuid,
+        "optimize the benchmark",
+        Some("run the benchmark"),
+    )
+    .unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
+    assert_eq!(item.preview.as_deref(), Some("optimize the benchmark"));
+    assert_eq!(
+        item.first_user_message.as_deref(),
+        Some("run the benchmark")
+    );
 }
 
 #[tokio::test]
