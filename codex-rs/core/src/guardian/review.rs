@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::turn_timing::now_unix_timestamp_ms;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
@@ -251,6 +252,7 @@ async fn run_guardian_review(
         guardian_reviewed_action(&request),
         GUARDIAN_REVIEW_TIMEOUT.as_millis() as u64,
     );
+    let started_at_ms = review_tracking.started_at_ms.try_into().unwrap_or_default();
     session
         .send_event(
             turn.as_ref(),
@@ -258,6 +260,8 @@ async fn run_guardian_review(
                 id: review_id.clone(),
                 target_item_id: target_item_id.clone(),
                 turn_id: assessment_turn_id.clone(),
+                started_at_ms,
+                completed_at_ms: None,
                 status: GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
@@ -289,6 +293,8 @@ async fn run_guardian_review(
                     id: review_id,
                     target_item_id,
                     turn_id: assessment_turn_id.clone(),
+                    started_at_ms,
+                    completed_at_ms: Some(now_unix_timestamp_ms()),
                     status: GuardianAssessmentStatus::Aborted,
                     risk_level: None,
                     user_authorization: None,
@@ -372,6 +378,8 @@ async fn run_guardian_review(
                             id: review_id,
                             target_item_id,
                             turn_id: assessment_turn_id.clone(),
+                            started_at_ms,
+                            completed_at_ms: Some(now_unix_timestamp_ms()),
                             status: GuardianAssessmentStatus::TimedOut,
                             risk_level: None,
                             user_authorization: None,
@@ -402,6 +410,8 @@ async fn run_guardian_review(
                             id: review_id,
                             target_item_id,
                             turn_id: assessment_turn_id.clone(),
+                            started_at_ms,
+                            completed_at_ms: Some(now_unix_timestamp_ms()),
                             status: GuardianAssessmentStatus::Aborted,
                             risk_level: None,
                             user_authorization: None,
@@ -495,6 +505,8 @@ async fn run_guardian_review(
                 id: review_id,
                 target_item_id,
                 turn_id: assessment_turn_id.clone(),
+                started_at_ms,
+                completed_at_ms: Some(now_unix_timestamp_ms()),
                 status,
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),

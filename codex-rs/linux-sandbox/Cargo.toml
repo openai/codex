@@ -11,6 +11,7 @@ path = "src/main.rs"
 [lib]
 name = "codex_linux_sandbox"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true

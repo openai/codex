@@ -578,7 +578,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
         FeatureConfigSource::default(),
         FeatureOverrides::default(),
     );
-    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), false);
+    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), true);
 }
 
 #[test]

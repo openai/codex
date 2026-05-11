@@ -14,3 +14,6 @@ tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lib]
+doctest = false

@@ -621,7 +621,6 @@ impl App {
                         .skills_list(codex_app_server_protocol::SkillsListParams {
                             cwds: cwds.clone(),
                             force_reload: *force_reload,
-                            per_cwd_extra_user_roots: None,
                         })
                         .await,
                     "failed to refresh skills",
@@ -843,20 +842,14 @@ impl App {
         Ok(())
     }
 
-    /// Eagerly fetches nickname and role for receiver threads referenced by a collab notification.
+    /// Locally remembers receiver threads referenced by a collab notification.
     ///
-    /// This runs on every buffered thread notification before it reaches rendering. For each
-    /// receiver thread id that the navigation cache does not yet have metadata for, it issues a
-    /// `thread/read` RPC and registers the result in both `AgentNavigationState` and the
-    /// `ChatWidget` metadata map. Threads that already have a nickname or role cached are skipped,
-    /// so the cost is at most one RPC per thread over the lifetime of a session.
-    ///
-    /// Failures are logged and silently ignored -- the worst outcome is that a rendered item shows
-    /// a thread id instead of a human-readable name, which is the same behavior the TUI had before
-    /// this change.
-    pub(super) async fn hydrate_collab_agent_metadata_for_notification(
+    /// This intentionally avoids app-server reads on the active-thread rendering path. During large
+    /// fan-outs the app-server can be saturated with spawn work, and blocking here would freeze the
+    /// TUI event loop. Metadata from `ThreadStarted` or explicit picker refreshes still fills in
+    /// names and roles later; until then, rendering falls back to the thread id.
+    pub(super) fn cache_collab_receiver_threads_for_notification(
         &mut self,
-        app_server: &mut AppServerSession,
         notification: &ServerNotification,
     ) {
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
@@ -864,42 +857,26 @@ impl App {
         };
 
         for receiver_thread_id in receiver_thread_ids {
+            if collab_receiver_is_not_found(notification, receiver_thread_id) {
+                continue;
+            }
+
             let Ok(thread_id) = ThreadId::from_string(receiver_thread_id) else {
                 tracing::warn!(
                     thread_id = receiver_thread_id,
-                    "ignoring collab receiver with invalid thread id during metadata hydration"
+                    "ignoring collab receiver with invalid thread id during local caching"
                 );
                 continue;
             };
 
-            if self
-                .agent_navigation
-                .get(&thread_id)
-                .is_some_and(|entry| entry.agent_nickname.is_some() || entry.agent_role.is_some())
-            {
+            if self.agent_navigation.get(&thread_id).is_some() {
                 continue;
             }
 
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
-                .await
-            {
-                Ok(thread) => {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        thread.agent_nickname,
-                        thread.agent_role,
-                        /*is_closed*/ false,
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        thread_id = %thread_id,
-                        error = %err,
-                        "failed to hydrate collab receiver thread metadata"
-                    );
-                }
-            }
+            self.upsert_agent_picker_thread(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ false,
+            );
         }
     }
 
@@ -1366,6 +1343,7 @@ impl App {
         );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
+                self.cache_collab_receiver_threads_for_notification(&notification);
                 self.chat_widget
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
@@ -1468,11 +1446,6 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        if let ThreadBufferedEvent::Notification(notification) = &event {
-            self.hydrate_collab_agent_metadata_for_notification(app_server, notification)
-                .await;
-        }
-
         self.handle_thread_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();

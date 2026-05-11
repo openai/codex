@@ -22,6 +22,7 @@ mod exec_command;
 mod write_stdin;
 
 pub use exec_command::ExecCommandHandler;
+pub(crate) use exec_command::ExecCommandHandlerOptions;
 pub use write_stdin::WriteStdinHandler;
 
 #[derive(Debug, Deserialize)]

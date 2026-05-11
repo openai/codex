@@ -8,7 +8,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
-use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_loader_overrides;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -40,7 +40,6 @@ use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
@@ -127,6 +126,7 @@ mod frames;
 mod get_git_diff;
 mod goal_display;
 mod history_cell;
+mod hooks_rpc;
 mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
@@ -163,6 +163,7 @@ mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_hooks_review;
 mod status;
 mod status_indicator_widget;
 mod streaming;
@@ -250,6 +251,7 @@ mod voice {
 
 mod wrapping;
 
+mod table_detect;
 #[cfg(test)]
 pub(crate) mod test_backend;
 #[cfg(test)]
@@ -257,6 +259,8 @@ pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::startup_hooks_review::StartupHooksReviewOutcome;
+use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
@@ -661,10 +665,10 @@ fn config_cwd_for_app_server_target(
     app_server_target: &AppServerTarget,
     environment_manager: &EnvironmentManager,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if environment_manager
-        .default_environment()
-        .is_some_and(|environment| environment.is_remote())
-        || matches!(app_server_target, AppServerTarget::Remote { .. })
+    if matches!(app_server_target, AppServerTarget::Remote { .. })
+        || environment_manager
+            .default_environment()
+            .is_some_and(|environment| environment.is_remote())
     {
         return Ok(None);
     }
@@ -676,6 +680,14 @@ fn config_cwd_for_app_server_target(
         None => AbsolutePathBuf::current_dir(),
     }?;
     Ok(Some(cwd))
+}
+
+fn should_load_configured_environments(
+    loader_overrides: &LoaderOverrides,
+    app_server_target: &AppServerTarget,
+) -> bool {
+    !loader_overrides.ignore_user_config
+        && !matches!(app_server_target, AppServerTarget::Remote { .. })
 }
 
 fn latest_session_cwd_filter<'a>(
@@ -761,24 +773,28 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(
-        EnvironmentManager::new(EnvironmentManagerArgs::new(
-            ExecServerRuntimePaths::from_optional_paths(
-                arg0_paths.codex_self_exe.clone(),
-                arg0_paths.codex_linux_sandbox_exe.clone(),
-            )?,
-        ))
-        .await,
-    );
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        if should_load_configured_environments(&loader_overrides, &app_server_target) {
+            EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        } else {
+            EnvironmentManager::from_env(local_runtime_paths).await
+        }
+        .map(Arc::new)
+        .map_err(std::io::Error::other)?;
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
+        loader_overrides.clone(),
     )
     .await
     {
@@ -881,40 +897,38 @@ pub async fn run_main(
         AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
     };
 
-    if let Some(state_db) = state_db.clone() {
-        let effective_toml = config.config_layer_stack.effective_config();
-        match effective_toml.try_into() {
-            Ok(config_toml) => {
-                match crate::legacy_core::personality_migration::maybe_migrate_personality(
-                    &config.codex_home,
-                    &config_toml,
-                    state_db,
-                )
-                .await
-                {
-                    Ok(
-                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
-                    ) => {
-                        config = load_config_or_exit(
-                            cli_kv_overrides.clone(),
-                            overrides.clone(),
-                            cloud_requirements.clone(),
-                        )
-                        .await;
-                    }
-                    Ok(
-                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
-                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
-                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
-                    ) => {}
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to run personality migration");
-                    }
+    let effective_toml = config.config_layer_stack.effective_config();
+    match effective_toml.try_into() {
+        Ok(config_toml) => {
+            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                &config.codex_home,
+                &config_toml,
+                state_db.clone(),
+            )
+            .await
+            {
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                ) => {
+                    config = load_config_or_exit(
+                        cli_kv_overrides.clone(),
+                        overrides.clone(),
+                        cloud_requirements.clone(),
+                    )
+                    .await;
+                }
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                ) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to run personality migration");
                 }
             }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to deserialize config for personality migration");
-            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to deserialize config for personality migration");
         }
     }
 
@@ -1485,7 +1499,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match app_server {
+    let mut app_server = match app_server {
         Some(app_server) => app_server,
         None => match start_app_server(
             &app_server_target,
@@ -1511,6 +1525,12 @@ async fn run_ratatui_app(
         },
     };
 
+    let startup_hooks_browser =
+        match maybe_run_startup_hooks_review(&mut app_server, &mut tui, &config).await? {
+            StartupHooksReviewOutcome::Continue => None,
+            StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
+        };
+
     let app_result = App::run(
         &mut tui,
         app_server,
@@ -1529,6 +1549,7 @@ async fn run_ratatui_app(
         remote_auth_token,
         state_db,
         environment_manager,
+        startup_hooks_browser,
     )
     .await;
 

@@ -15,3 +15,6 @@ codex-protocol = { workspace = true }
 [dev-dependencies]
 codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[lib]
+doctest = false

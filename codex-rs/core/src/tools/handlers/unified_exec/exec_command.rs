@@ -27,21 +27,65 @@ use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
 
+use super::super::shell_spec::CommandToolOptions;
+use super::super::shell_spec::create_exec_command_tool_with_environment_id;
 use super::ExecCommandArgs;
 use super::ExecCommandEnvironmentArgs;
 use super::effective_max_output_tokens;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
 
-pub struct ExecCommandHandler;
+#[derive(Clone, Copy)]
+pub(crate) struct ExecCommandHandlerOptions {
+    pub(crate) allow_login_shell: bool,
+    pub(crate) exec_permission_approvals_enabled: bool,
+    pub(crate) include_environment_id: bool,
+}
+
+pub struct ExecCommandHandler {
+    options: ExecCommandHandlerOptions,
+}
+
+impl Default for ExecCommandHandler {
+    fn default() -> Self {
+        Self {
+            options: ExecCommandHandlerOptions {
+                allow_login_shell: false,
+                exec_permission_approvals_enabled: false,
+                include_environment_id: false,
+            },
+        }
+    }
+}
+
+impl ExecCommandHandler {
+    pub(crate) fn new(options: ExecCommandHandlerOptions) -> Self {
+        Self { options }
+    }
+}
 
 impl ToolHandler for ExecCommandHandler {
     type Output = ExecCommandToolOutput;
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("exec_command")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_exec_command_tool_with_environment_id(
+            CommandToolOptions {
+                allow_login_shell: self.options.allow_login_shell,
+                exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
+            },
+            self.options.include_environment_id,
+        ))
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn kind(&self) -> ToolKind {

@@ -117,12 +117,16 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&extra_root).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&extra_root).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -145,12 +149,16 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(!paths
-            .allow
-            .contains(&dunce::canonicalize(&temp_dir).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            !paths
+                .allow
+                .contains(&dunce::canonicalize(&temp_dir).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -253,6 +261,9 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         assert_eq!(paths.allow.len(), 1);
-        assert!(paths.deny.is_empty(), "no deny when protected dirs are absent");
+        assert!(
+            paths.deny.is_empty(),
+            "no deny when protected dirs are absent"
+        );
     }
 }

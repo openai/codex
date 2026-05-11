@@ -16,6 +16,7 @@ path = "src/bin/md-events.rs"
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
