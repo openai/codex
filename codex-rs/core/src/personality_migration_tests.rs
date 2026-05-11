@@ -47,6 +47,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             forked_from_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),
             cwd: std::path::PathBuf::from("."),
+            workspace_roots: Vec::new(),
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
             source: SessionSource::Cli,

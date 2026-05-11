@@ -294,6 +294,7 @@ pub async fn process_exec_tool_call(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
@@ -302,6 +303,7 @@ pub async fn process_exec_tool_call(
         params,
         permission_profile,
         sandbox_cwd,
+        workspace_roots,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
     )?;
@@ -316,6 +318,7 @@ pub fn build_exec_request(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
@@ -377,6 +380,7 @@ pub fn build_exec_request(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
+            workspace_roots,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
             windows_sandbox_level,

@@ -610,6 +610,7 @@ sqlite = true
         codex_home: codex_home.path().to_path_buf(),
         sqlite_home: codex_home.path().to_path_buf(),
         cwd: codex_home.path().to_path_buf(),
+        workspace_roots: Vec::new(),
         model_provider_id: "mock_provider".to_string(),
         generate_memories: false,
     };

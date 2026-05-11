@@ -109,6 +109,7 @@ impl FileSystemSandboxRunner {
                 enforce_managed_network: false,
                 network: None,
                 sandbox_policy_cwd: cwd.as_path(),
+                workspace_roots: &sandbox_context.workspace_roots,
                 codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,
                 windows_sandbox_level: sandbox_context.windows_sandbox_level,
