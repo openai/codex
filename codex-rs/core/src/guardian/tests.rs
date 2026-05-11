@@ -121,7 +121,7 @@ fn guardian_rejection_circuit_breaker_resets_consecutive_denials_on_non_denial()
 }
 
 #[test]
-fn guardian_rejection_circuit_breaker_interrupts_after_ten_recent_denials() {
+fn auto_review_rejection_circuit_breaker_interrupts_after_ten_recent_denials() {
     let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
     for _ in 0..9 {
         assert_eq!(
@@ -140,7 +140,7 @@ fn guardian_rejection_circuit_breaker_interrupts_after_ten_recent_denials() {
 }
 
 #[test]
-fn guardian_rejection_circuit_breaker_forgets_denials_outside_recent_review_window() {
+fn auto_review_rejection_circuit_breaker_forgets_denials_outside_recent_review_window() {
     let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
     for _ in 0..9 {
         assert_eq!(
