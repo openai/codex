@@ -38,6 +38,21 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
+/// Return the git repository root for `base_dir` using the provided executor
+/// filesystem. This is the remote-environment equivalent of [`get_git_repo_root`].
+pub async fn get_git_repo_root_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    base_dir: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let base = match fs.get_metadata(base_dir, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => base_dir.clone(),
+        _ => base_dir.parent()?,
+    };
+    find_ancestor_git_entry_with_fs(fs, &base)
+        .await
+        .map(|(repo_root, _)| repo_root)
+}
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
