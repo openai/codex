@@ -14,7 +14,7 @@ from _bootstrap import (
 
 ensure_local_sdk_src()
 
-from codex_app_server import Codex, ImageInput, TextInput
+from openai_codex import Codex, ImageInput, TextInput
 
 REMOTE_IMAGE_URL = "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
 
