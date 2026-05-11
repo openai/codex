@@ -412,7 +412,10 @@ pub enum ConfiguredHookHandler {
     #[serde(rename = "command")]
     #[ts(rename = "command")]
     Command {
-        command: ConfiguredHookCommand,
+        command: String,
+        #[serde(rename = "commandWindows")]
+        #[ts(rename = "commandWindows")]
+        command_windows: Option<String>,
         #[serde(rename = "timeoutSec")]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,
@@ -427,22 +430,6 @@ pub enum ConfiguredHookHandler {
     #[serde(rename = "agent")]
     #[ts(rename = "agent")]
     Agent {},
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(untagged)]
-#[ts(export_to = "v2/")]
-pub enum ConfiguredHookCommand {
-    Single(String),
-    ByPlatform(ConfiguredHookCommandByPlatform),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct ConfiguredHookCommandByPlatform {
-    pub unix: String,
-    pub windows: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -388,11 +388,16 @@ fn append_matcher_groups(
             match handler {
                 HookHandlerConfig::Command {
                     command,
+                    command_windows,
                     timeout_sec,
                     r#async,
                     status_message,
                 } => {
-                    let command = command.for_current_platform().to_string();
+                    let command = if cfg!(windows) {
+                        command_windows.unwrap_or(command)
+                    } else {
+                        command
+                    };
                     if r#async {
                         warnings.push(format!(
                             "skipping async hook in {}: async hooks are not supported yet",
@@ -409,7 +414,8 @@ fn append_matcher_groups(
                     }
                     let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                     let normalized_handler = HookHandlerConfig::Command {
-                        command: codex_config::HookCommandConfig::Single(command.clone()),
+                        command: command.clone(),
+                        command_windows: None,
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
@@ -566,8 +572,6 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
 mod tests {
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
-    use codex_config::HookCommandByPlatformConfig;
-    use codex_config::HookCommandConfig;
     use codex_config::HookEventsToml;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
@@ -610,7 +614,8 @@ mod tests {
         MatcherGroup {
             matcher: matcher.map(str::to_string),
             hooks: vec![HookHandlerConfig::Command {
-                command: HookCommandConfig::Single("echo hello".to_string()),
+                command: "echo hello".to_string(),
+                command_windows: None,
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
@@ -755,7 +760,8 @@ mod tests {
                 session_start: vec![MatcherGroup {
                     matcher: None,
                     hooks: vec![HookHandlerConfig::Command {
-                        command: HookCommandConfig::Single("echo hello".to_string()),
+                        command: "echo hello".to_string(),
+                        command_windows: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -767,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_resolves_platform_specific_command_during_discovery() {
+    fn pre_tool_use_resolves_windows_command_override_during_discovery() {
         let mut handlers = Vec::new();
         let mut warnings = Vec::new();
         let mut display_order = 0;
@@ -784,10 +790,8 @@ mod tests {
             vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
-                        unix: "echo unix".to_string(),
-                        windows: "echo windows".to_string(),
-                    }),
+                    command: "echo unix".to_string(),
+                    command_windows: Some("echo windows".to_string()),
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,

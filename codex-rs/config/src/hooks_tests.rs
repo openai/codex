@@ -2,8 +2,6 @@ use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
 
-use super::HookCommandByPlatformConfig;
-use super::HookCommandConfig;
 use super::HookEventsToml;
 use super::HookHandlerConfig;
 use super::HooksFile;
@@ -41,7 +39,8 @@ fn hooks_file_deserializes_existing_json_shape() {
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![HookHandlerConfig::Command {
-                        command: HookCommandConfig::Single("python3 /tmp/pre.py".to_string()),
+                        command: "python3 /tmp/pre.py".to_string(),
+                        command_windows: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
@@ -75,7 +74,8 @@ statusMessage = "checking"
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single("python3 /tmp/pre.py".to_string()),
+                    command: "python3 /tmp/pre.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -111,7 +111,8 @@ command = "python3 /tmp/pre.py"
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![HookHandlerConfig::Command {
-                        command: HookCommandConfig::Single("python3 /tmp/pre.py".to_string()),
+                        command: "python3 /tmp/pre.py".to_string(),
+                        command_windows: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -155,9 +156,8 @@ command = "python3 /enterprise/place/pre.py"
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![HookHandlerConfig::Command {
-                        command: HookCommandConfig::Single(
-                            "python3 /enterprise/place/pre.py".to_string(),
-                        ),
+                        command: "python3 /enterprise/place/pre.py".to_string(),
+                        command_windows: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -170,7 +170,7 @@ command = "python3 /enterprise/place/pre.py"
 }
 
 #[test]
-fn hook_events_deserialize_platform_command_from_toml() {
+fn hook_events_deserialize_windows_override_from_toml() {
     let parsed: HookEventsToml = toml::from_str(
         r#"
 [[PreToolUse]]
@@ -178,10 +178,11 @@ matcher = "^Bash$"
 
 [[PreToolUse.hooks]]
 type = "command"
-command = { unix = "bash /enterprise/hooks/pre.sh", windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1" }
+command = "bash /enterprise/hooks/pre.sh"
+command_windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
 "#,
     )
-    .expect("platform hook command TOML should deserialize");
+    .expect("hook command Windows override TOML should deserialize");
 
     assert_eq!(
         parsed,
@@ -189,10 +190,10 @@ command = { unix = "bash /enterprise/hooks/pre.sh", windows = "powershell -File 
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
-                        unix: "bash /enterprise/hooks/pre.sh".to_string(),
-                        windows: r"powershell -File C:\enterprise\hooks\pre.ps1".to_string(),
-                    }),
+                    command: "bash /enterprise/hooks/pre.sh".to_string(),
+                    command_windows: Some(
+                        r"powershell -File C:\enterprise\hooks\pre.ps1".to_string(),
+                    ),
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,

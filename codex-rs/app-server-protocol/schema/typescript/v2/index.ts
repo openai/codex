@@ -76,8 +76,6 @@ export type { ConfigRequirementsReadResponse } from "./ConfigRequirementsReadRes
 export type { ConfigValueWriteParams } from "./ConfigValueWriteParams";
 export type { ConfigWarningNotification } from "./ConfigWarningNotification";
 export type { ConfigWriteResponse } from "./ConfigWriteResponse";
-export type { ConfiguredHookCommand } from "./ConfiguredHookCommand";
-export type { ConfiguredHookCommandByPlatform } from "./ConfiguredHookCommandByPlatform";
 export type { ConfiguredHookHandler } from "./ConfiguredHookHandler";
 export type { ConfiguredHookMatcherGroup } from "./ConfiguredHookMatcherGroup";
 export type { ContextCompactedNotification } from "./ContextCompactedNotification";

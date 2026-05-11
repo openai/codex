@@ -929,9 +929,8 @@ approval_policy = "never"
                         pre_tool_use: vec![MatcherGroup {
                             matcher: Some("^Bash$".to_string()),
                             hooks: vec![HookHandlerConfig::Command {
-                                command: codex_config::HookCommandConfig::Single(
-                                    "python3 /enterprise/hooks/pre.py".to_string(),
-                                ),
+                                command: "python3 /enterprise/hooks/pre.py".to_string(),
+                                command_windows: None,
                                 timeout_sec: Some(10),
                                 r#async: false,
                                 status_message: Some("checking".to_string()),

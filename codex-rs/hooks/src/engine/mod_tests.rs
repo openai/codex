@@ -10,8 +10,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::Constrained;
 use codex_config::ConstrainedWithSource;
-use codex_config::HookCommandByPlatformConfig;
-use codex_config::HookCommandConfig;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig;
 use codex_config::ManagedHooksRequirementsToml;
@@ -87,10 +85,8 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single(format!(
-                        "python3 {}",
-                        script_path.display()
-                    )),
+                    command: format!("python3 {}", script_path.display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -176,7 +172,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 }
 
 #[tokio::test]
-async fn requirements_managed_hooks_execute_platform_specific_command() {
+async fn requirements_managed_hooks_execute_windows_command_override() {
     let temp = tempdir().expect("create temp dir");
     let managed_dir =
         AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
@@ -188,10 +184,8 @@ async fn requirements_managed_hooks_execute_platform_specific_command() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::ByPlatform(HookCommandByPlatformConfig {
-                        unix: "exit 17".to_string(),
-                        windows: "exit /B 19".to_string(),
-                    }),
+                    command: "exit 17".to_string(),
+                    command_windows: Some("exit /B 19".to_string()),
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -267,7 +261,8 @@ fn unknown_requirement_source_hooks_stay_managed() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single("python3 /tmp/managed.py".to_string()),
+                    command: "python3 /tmp/managed.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -329,7 +324,8 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single("python3 /tmp/managed.py".to_string()),
+                    command: "python3 /tmp/managed.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -548,10 +544,8 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single(format!(
-                        "python3 {}",
-                        missing_dir.join("pre.py").display()
-                    )),
+                    command: format!("python3 {}", missing_dir.join("pre.py").display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -762,10 +756,8 @@ print(json.dumps({
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single(format!(
-                        "python3 {}",
-                        script_path.display()
-                    )),
+                    command: format!("python3 {}", script_path.display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
@@ -872,10 +864,10 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: HookCommandConfig::Single(
+                    command:
                         "run ${PLUGIN_ROOT} ${CLAUDE_PLUGIN_ROOT} ${PLUGIN_DATA} ${CLAUDE_PLUGIN_DATA}"
                             .to_string(),
-                    ),
+                    command_windows: None,
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,

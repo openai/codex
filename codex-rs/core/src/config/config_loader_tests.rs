@@ -1156,10 +1156,8 @@ async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result
                 pre_tool_use: vec![codex_config::MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![codex_config::HookHandlerConfig::Command {
-                        command: codex_config::HookCommandConfig::Single(format!(
-                            "python3 {}/pre.py",
-                            managed_dir.display()
-                        )),
+                        command: format!("python3 {}/pre.py", managed_dir.display()),
+                        command_windows: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),

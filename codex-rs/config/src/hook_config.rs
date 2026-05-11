@@ -125,7 +125,9 @@ pub struct MatcherGroup {
 pub enum HookHandlerConfig {
     #[serde(rename = "command")]
     Command {
-        command: HookCommandConfig,
+        command: String,
+        #[serde(default)]
+        command_windows: Option<String>,
         #[serde(default, rename = "timeout")]
         timeout_sec: Option<u64>,
         #[serde(default)]
@@ -137,42 +139,6 @@ pub enum HookHandlerConfig {
     Prompt {},
     #[serde(rename = "agent")]
     Agent {},
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum HookCommandConfig {
-    Single(String),
-    ByPlatform(HookCommandByPlatformConfig),
-}
-
-impl HookCommandConfig {
-    pub fn for_current_platform(&self) -> &str {
-        match self {
-            Self::Single(command) => command,
-            Self::ByPlatform(command) => command.for_current_platform(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct HookCommandByPlatformConfig {
-    pub unix: String,
-    pub windows: String,
-}
-
-impl HookCommandByPlatformConfig {
-    fn for_current_platform(&self) -> &str {
-        #[cfg(windows)]
-        {
-            &self.windows
-        }
-
-        #[cfg(not(windows))]
-        {
-            &self.unix
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

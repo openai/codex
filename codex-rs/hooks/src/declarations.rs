@@ -38,7 +38,6 @@ pub(crate) fn plugin_hook_key_source(plugin_id: &str, source_relative_path: &str
 
 #[cfg(test)]
 mod tests {
-    use codex_config::HookCommandConfig;
     use codex_config::HookEventsToml;
     use codex_config::HookHandlerConfig;
     use codex_config::MatcherGroup;
@@ -65,7 +64,8 @@ mod tests {
                     hooks: vec![
                         HookHandlerConfig::Prompt {},
                         HookHandlerConfig::Command {
-                            command: HookCommandConfig::Single("echo hi".to_string()),
+                            command: "echo hi".to_string(),
+                            command_windows: None,
                             timeout_sec: None,
                             r#async: false,
                             status_message: None,
