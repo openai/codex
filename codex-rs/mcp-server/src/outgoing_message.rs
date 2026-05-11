@@ -394,6 +394,7 @@ mod tests {
                 "approvals_reviewer": "user",
                 "permission_profile": session_configured_event.permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
+                "workspace_roots": [],
                 "reasoning_effort": session_configured_event.reasoning_effort,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
@@ -463,6 +464,7 @@ mod tests {
                 "approvals_reviewer": "user",
                 "permission_profile": session_configured_event.permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
+                "workspace_roots": [],
                 "reasoning_effort": session_configured_event.reasoning_effort,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
