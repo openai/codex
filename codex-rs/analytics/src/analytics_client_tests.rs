@@ -30,7 +30,6 @@ use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_metadata;
 use crate::events::codex_plugin_used_metadata;
 use crate::events::subagent_thread_started_event_request;
-use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
@@ -847,10 +846,7 @@ fn accepted_line_fingerprints_event_serializes_expected_shape() {
                 repo_hash: Some("repo-hash-1".to_string()),
                 accepted_added_lines: 42,
                 accepted_deleted_lines: 40,
-                line_fingerprints: vec![AcceptedLineFingerprint {
-                    path_hash: "path-hash-1".to_string(),
-                    line_hash: "line-hash-1".to_string(),
-                }],
+                line_fingerprints: Vec::new(),
             },
         },
     ));
@@ -871,19 +867,14 @@ fn accepted_line_fingerprints_event_serializes_expected_shape() {
                 "repo_hash": "repo-hash-1",
                 "accepted_added_lines": 42,
                 "accepted_deleted_lines": 40,
-                "line_fingerprints": [
-                    {
-                        "path_hash": "path-hash-1",
-                        "line_hash": "line-hash-1"
-                    }
-                ]
+                "line_fingerprints": []
             }
         })
     );
 }
 
 #[tokio::test]
-async fn reducer_chunks_large_accepted_line_fingerprint_events_without_repeating_counts() {
+async fn reducer_emits_large_accepted_line_aggregates_without_fingerprints() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
 
@@ -943,22 +934,14 @@ index 1111111..2222222
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(accepted_line_events.len() > 1);
-    let mut total_fingerprints = 0;
-    for (index, event) in accepted_line_events.iter().enumerate() {
-        assert_eq!(event.event_params.turn_id, "turn-2");
-        assert_eq!(event.event_params.thread_id, "thread-2");
-        total_fingerprints += event.event_params.line_fingerprints.len();
-        if index == 0 {
-            assert_eq!(event.event_params.accepted_added_lines, 20_000);
-            assert_eq!(event.event_params.accepted_deleted_lines, 0);
-        } else {
-            assert_eq!(event.event_params.accepted_added_lines, 0);
-            assert_eq!(event.event_params.accepted_deleted_lines, 0);
-        }
-        assert!(serde_json::to_vec(event).expect("serialize chunk").len() < 2_100_000);
-    }
-    assert_eq!(total_fingerprints, 20_000);
+    assert_eq!(accepted_line_events.len(), 1);
+    let event = accepted_line_events[0];
+    assert_eq!(event.event_params.turn_id, "turn-2");
+    assert_eq!(event.event_params.thread_id, "thread-2");
+    assert_eq!(event.event_params.accepted_added_lines, 20_000);
+    assert_eq!(event.event_params.accepted_deleted_lines, 0);
+    assert!(event.event_params.line_fingerprints.is_empty());
+    assert!(serde_json::to_vec(event).expect("serialize event").len() < 2_100_000);
 }
 
 #[tokio::test]
@@ -1025,11 +1008,7 @@ index 1111111..2222222
     assert_eq!(accepted_line_events.len(), 1);
     let event = accepted_line_events[0];
     assert_eq!(event.event_params.accepted_added_lines, 1);
-    assert_eq!(event.event_params.line_fingerprints.len(), 1);
-    assert_eq!(
-        event.event_params.line_fingerprints[0].line_hash,
-        crate::fingerprint_hash("line", "let latest_value = 2;")
-    );
+    assert!(event.event_params.line_fingerprints.is_empty());
 }
 
 #[test]
