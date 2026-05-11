@@ -523,7 +523,7 @@ async fn spawn_agent_service_tier_override_uses_supported_child_model_tier() {
 }
 
 #[tokio::test]
-async fn spawn_agent_role_service_tier_overrides_spawn_argument() {
+async fn spawn_agent_role_service_tier_persists_in_child_config() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
         agent_id: String,
@@ -546,12 +546,11 @@ async fn spawn_agent_role_service_tier_overrides_spawn_argument() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
-                "agent_type": role_name,
-                "service_tier": "turbo"
+                "agent_type": role_name
             })),
         ))
         .await
-        .expect("role-owned service tier should win over the spawn argument");
+        .expect("role-configured service tier should persist in the child config");
     let (content, _) = expect_text_output(output);
     let result: SpawnAgentResult =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
@@ -589,32 +588,6 @@ async fn spawn_agent_service_tier_override_rejects_unknown_tier() {
         err,
         FunctionCallError::RespondToModel(
             "Service tier `turbo` is not supported for model `gpt-5.4`. Supported service tiers: priority"
-                .to_string()
-        )
-    );
-}
-
-#[tokio::test]
-async fn spawn_agent_role_service_tier_rejects_unsupported_child_model_tier() {
-    let (session, mut turn) = make_session_and_context().await;
-    let role_name = install_role_with_service_tier(&mut turn, "gpt-5.3-codex").await;
-    let err = SpawnAgentHandler::default()
-        .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "agent_type": role_name
-            })),
-        ))
-        .await
-        .expect_err("role-owned service tier should validate against the final role model");
-
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "Service tier `priority` is not supported for model `gpt-5.3-codex`. Supported service tiers: none"
                 .to_string()
         )
     );

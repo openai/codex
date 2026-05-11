@@ -29,15 +29,7 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct AppliedRoleConfig {
-    pub(crate) service_tier: Option<String>,
-}
-
 /// Applies a named role layer to `config` while preserving caller-owned model selection.
-///
-/// The returned settings capture role-owned values that spawn orchestration must keep locked after
-/// the config reload completes.
 ///
 /// The role layer is inserted at session-flag precedence so it can override persisted config, but
 /// the caller's current `profile` and `model_provider` remain sticky runtime choices unless the
@@ -48,7 +40,7 @@ pub(crate) struct AppliedRoleConfig {
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
-) -> Result<AppliedRoleConfig, String> {
+) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
     let role = resolve_role_config(config, role_name)
@@ -67,19 +59,18 @@ async fn apply_role_to_config_inner(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
-) -> anyhow::Result<AppliedRoleConfig> {
+) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
-        return Ok(AppliedRoleConfig::default());
+        return Ok(());
     };
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
     if role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
     {
-        return Ok(AppliedRoleConfig::default());
+        return Ok(());
     }
-    let role_sets_service_tier = role_layer_toml.get("service_tier").is_some();
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
 
@@ -90,11 +81,7 @@ async fn apply_role_to_config_inner(
         preserve_current_provider,
     )
     .await?;
-    Ok(AppliedRoleConfig {
-        service_tier: role_sets_service_tier
-            .then(|| config.service_tier.clone())
-            .flatten(),
-    })
+    Ok(())
 }
 
 async fn load_role_layer_toml(
@@ -330,39 +317,28 @@ pub(crate) mod spawn_tool_spec {
                 })
                 .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
                 .map(|role_toml| {
-                    let model = role_toml.get("model").and_then(TomlValue::as_str);
+                    let model = role_toml
+                        .get("model")
+                        .and_then(TomlValue::as_str);
                     let reasoning_effort = role_toml
                         .get("model_reasoning_effort")
                         .and_then(TomlValue::as_str);
-                    let service_tier = role_toml
-                        .get("service_tier")
-                        .and_then(TomlValue::as_str);
-                    let mut locked_settings = Vec::new();
-                    if let Some(model) = model {
-                        locked_settings.push(format!("model is set to `{model}`"));
-                    }
-                    if let Some(reasoning_effort) = reasoning_effort {
-                        locked_settings.push(format!(
-                            "reasoning effort is set to `{reasoning_effort}`"
-                        ));
-                    }
-                    if let Some(service_tier) = service_tier {
-                        locked_settings
-                            .push(format!("service tier is set to `{service_tier}`"));
-                    }
 
-                    match locked_settings.as_slice() {
-                        [] => String::new(),
-                        [setting] => {
-                            format!("\n- This role's {setting} and cannot be changed.")
+                    match (model, reasoning_effort) {
+                        (Some(model), Some(reasoning_effort)) => format!(
+                            "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
+                        ),
+                        (Some(model), None) => {
+                            format!(
+                                "\n- This role's model is set to `{model}` and cannot be changed."
+                            )
                         }
-                        [left, right] => format!(
-                            "\n- This role's {left} and its {right}. These settings cannot be changed."
-                        ),
-                        [left, middle, right] => format!(
-                            "\n- This role's {left}, its {middle}, and its {right}. These settings cannot be changed."
-                        ),
-                        _ => unreachable!("role locked settings are limited to three fields"),
+                        (None, Some(reasoning_effort)) => {
+                            format!(
+                                "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
+                            )
+                        }
+                        (None, None) => String::new(),
                     }
                 })
                 .unwrap_or_default();

@@ -235,16 +235,13 @@ service_tier = "priority"
         },
     );
 
-    let applied_role = apply_role_to_config(&mut config, Some("custom"))
+    apply_role_to_config(&mut config, Some("custom"))
         .await
         .expect("custom role should apply");
 
     assert_eq!(
-        (applied_role.service_tier, config.service_tier,),
-        (
-            Some(ServiceTier::Fast.request_value().to_string()),
-            Some(ServiceTier::Fast.request_value().to_string()),
-        )
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
     );
 }
 
@@ -798,31 +795,6 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
     assert!(spec.contains(
             "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
         ));
-}
-
-#[test]
-fn spawn_tool_spec_marks_role_locked_service_tier() {
-    let tempdir = TempDir::new().expect("create temp dir");
-    let role_path = tempdir.path().join("reviewer.toml");
-    fs::write(
-        &role_path,
-        "developer_instructions = \"Review quickly\"\nservice_tier = \"priority\"\n",
-    )
-    .expect("write role config");
-    let user_defined_roles = BTreeMap::from([(
-        "reviewer".to_string(),
-        AgentRoleConfig {
-            description: Some("Review quickly.".to_string()),
-            config_file: Some(role_path),
-            nickname_candidates: None,
-        },
-    )]);
-
-    let spec = spawn_tool_spec::build(&user_defined_roles);
-
-    assert!(spec.contains(
-        "Review quickly.\n- This role's service tier is set to `priority` and cannot be changed."
-    ));
 }
 
 #[test]

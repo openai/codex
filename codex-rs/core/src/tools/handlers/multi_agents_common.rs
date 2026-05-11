@@ -339,13 +339,13 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
 pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
-    role_service_tier: Option<&str>,
     parent_service_tier: Option<&str>,
     requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    let Some(candidate_service_tier) = role_service_tier
-        .or(requested_service_tier)
-        .or(parent_service_tier)
+    let Some(candidate_service_tier) = requested_service_tier
+        .map(str::to_string)
+        .or_else(|| config.service_tier.clone())
+        .or_else(|| parent_service_tier.map(str::to_string))
     else {
         config.service_tier = None;
         return Ok(());
@@ -361,12 +361,12 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
-    if model_info.supports_service_tier(candidate_service_tier) {
-        config.service_tier = Some(candidate_service_tier.to_string());
+    if model_info.supports_service_tier(candidate_service_tier.as_str()) {
+        config.service_tier = Some(candidate_service_tier);
         return Ok(());
     }
 
-    if role_service_tier.is_none() && requested_service_tier.is_none() {
+    if requested_service_tier.is_none() {
         config.service_tier = None;
         return Ok(());
     }
