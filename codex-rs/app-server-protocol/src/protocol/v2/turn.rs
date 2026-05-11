@@ -1,6 +1,5 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
-use super::PermissionProfileSelectionParams;
 use super::SandboxPolicy;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -64,6 +63,11 @@ pub struct TurnStartParams {
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Replace the workspace roots for this turn and subsequent turns. Omitted
+    /// preserves the current roots.
+    #[experimental("turn/start.workspaceRoots")]
+    #[ts(optional = nullable)]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     /// Override the approval policy for this turn and subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -72,16 +76,15 @@ pub struct TurnStartParams {
     /// subsequent turns.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    /// Override the sandbox policy for this turn and subsequent turns.
+    /// Deprecated for turns. The server rejects this field because the
+    /// thread permission profile value is not mutable through `turn/start`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Select a named permissions profile for this turn and subsequent turns.
-    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
-    /// for supported turn adjustments instead of replacing the full
-    /// permissions profile.
+    /// Select a named permissions profile id for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
     #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
