@@ -894,6 +894,7 @@ impl AnalyticsReducer {
                             completed: None,
                             latest_diff: None,
                             steer_count: 0,
+                            tool_counts: TurnToolCounts::default(),
                         });
                 turn_state.thread_id = Some(notification.thread_id);
                 turn_state.latest_diff = Some(notification.diff);
