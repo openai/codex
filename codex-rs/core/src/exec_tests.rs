@@ -365,6 +365,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         },
         &permission_profile,
         &cwd,
+        &[],
         &None,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,
@@ -470,7 +471,6 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
 #[test]
 fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -528,7 +528,6 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -573,7 +572,6 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -619,7 +617,6 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
     let docs = cwd.join("docs");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -711,7 +708,6 @@ fn windows_elevated_supports_split_write_read_carveouts() {
     std::fs::create_dir_all(&docs).expect("create docs");
     let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -767,7 +763,6 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
     let blocked = temp_dir.path().join("blocked");
     std::fs::create_dir_all(&blocked).expect("create blocked");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -816,7 +811,6 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
 fn windows_elevated_rejects_unreadable_globs() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -867,7 +861,6 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
     let nested = docs.join("nested");
     std::fs::create_dir_all(&nested).expect("create nested");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -1040,6 +1033,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
             params,
             &PermissionProfile::Disabled,
             &cwd,
+            &[],
             &None,
             /*use_legacy_landlock*/ false,
             /*stdout_stream*/ None,

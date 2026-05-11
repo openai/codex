@@ -210,6 +210,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_vim_mode_default: false,
         cwd,
+        workspace_roots: Vec::new(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::File,
