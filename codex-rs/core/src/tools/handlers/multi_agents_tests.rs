@@ -731,6 +731,72 @@ async fn multi_agent_v2_spawn_role_service_tier_persists_in_child_config() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_role_service_tier_overrides_spawn_argument() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_service_tier(&mut turn, "gpt-5.4").await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "tiered_role_override",
+                "agent_type": role_name,
+                "service_tier": "turbo",
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .expect("role-configured service tier should win over the spawn argument");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.conversation_id,
+            &turn.session_source,
+            result.task_name.as_str(),
+        )
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_inherits_supported_parent_service_tier() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
