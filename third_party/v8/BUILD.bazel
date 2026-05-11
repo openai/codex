@@ -40,16 +40,16 @@ alias(
 )
 
 alias(
-    name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
+    name = "v8_147_4_0_aarch64_pc_windows_gnullvm",
     # `rusty_v8` only ships prebuilt Windows archives for MSVC. Build the
     # GNU-flavored archive in-tree so windows-gnullvm consumers can link
     # against a matching ABI instead of trying to reuse the MSVC release.
-    actual = ":v8_146_4_0_aarch64_pc_windows_gnullvm_bazel",
+    actual = ":v8_147_4_0_aarch64_pc_windows_gnullvm_bazel",
 )
 
 alias(
-    name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_x86_64_pc_windows_gnullvm_bazel",
+    name = "v8_147_4_0_x86_64_pc_windows_gnullvm",
+    actual = ":v8_147_4_0_x86_64_pc_windows_gnullvm_bazel",
 )
 
 filegroup(
@@ -73,29 +73,29 @@ filegroup(
 )
 
 alias(
-    name = "src_binding_release_x86_64_pc_windows_gnullvm",
+    name = "src_binding_release_x86_64_pc_windows_gnullvm_147_4_0_release",
     # `rusty_v8` does not publish a Windows GNU binding file. The generated
     # binding only describes this V8 release's C++ API surface, so reuse the
     # Linux release binding while the windows-gnullvm archive build is still
     # experimental.
-    actual = ":src_binding_release_x86_64_unknown_linux_gnu",
+    actual = ":src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
 )
 
 alias(
-    name = "src_binding_release_aarch64_pc_windows_gnullvm",
-    actual = ":src_binding_release_aarch64_unknown_linux_gnu",
+    name = "src_binding_release_aarch64_pc_windows_gnullvm_147_4_0_release",
+    actual = ":src_binding_release_aarch64_unknown_linux_gnu_147_4_0_release",
 )
 
 alias(
     name = "rusty_v8_archive_for_target",
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_147_4_0_aarch64_apple_darwin_bazel",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_146_4_0_aarch64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_147_4_0_aarch64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_147_4_0_aarch64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_147_4_0_aarch64_unknown_linux_gnu_bazel",
         ":platform_aarch64_unknown_linux_musl": ":v8_147_4_0_aarch64_unknown_linux_musl_release_base",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_147_4_0_x86_64_apple_darwin_bazel",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_146_4_0_x86_64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_147_4_0_x86_64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_147_4_0_x86_64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_147_4_0_x86_64_unknown_linux_gnu_bazel",
         ":platform_x86_64_unknown_linux_musl": ":v8_147_4_0_x86_64_unknown_linux_musl_release",
@@ -107,12 +107,12 @@ alias(
     name = "rusty_v8_binding_for_target",
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_147_4_0_release",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu_147_4_0_release",
         ":platform_aarch64_unknown_linux_musl": ":src_binding_release_aarch64_unknown_linux_musl_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin_147_4_0_release",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc_147_4_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
         ":platform_x86_64_unknown_linux_musl": ":src_binding_release_x86_64_unknown_linux_musl_147_4_0_release",
@@ -343,6 +343,12 @@ cc_static_library(
 )
 
 cc_static_library(
+    name = "v8_147_4_0_aarch64_pc_windows_gnullvm_bazel",
+    deps = [":v8_147_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_147_4_0_aarch64_unknown_linux_musl_release_base",
     deps = [
         ":rusty_v8_custom_libcxx_runtime",
@@ -390,6 +396,12 @@ cc_static_library(
         ":rusty_v8_custom_libcxx_runtime",
         ":v8_147_4_0_binding",
     ],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_147_4_0_x86_64_pc_windows_gnullvm_bazel",
+    deps = [":v8_147_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )
 
