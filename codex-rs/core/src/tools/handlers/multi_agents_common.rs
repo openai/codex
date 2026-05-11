@@ -339,10 +339,14 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
 pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
+    role_service_tier: Option<&str>,
     parent_service_tier: Option<&str>,
     requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
+    let Some(candidate_service_tier) = role_service_tier
+        .or(requested_service_tier)
+        .or(parent_service_tier)
+    else {
         config.service_tier = None;
         return Ok(());
     };
@@ -362,7 +366,7 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         return Ok(());
     }
 
-    if requested_service_tier.is_none() {
+    if role_service_tier.is_none() && requested_service_tier.is_none() {
         config.service_tier = None;
         return Ok(());
     }
