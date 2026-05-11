@@ -214,7 +214,11 @@ fn emit_startup_warning(message: &str) {
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
-        codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_unavailable");
+        codex_state::record_fallback(
+            "get_state_db",
+            "db_unavailable",
+            /*telemetry_override*/ None,
+        );
         return None;
     }
     let runtime = match codex_state::StateRuntime::init(
@@ -225,7 +229,11 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     {
         Ok(runtime) => runtime,
         Err(_) => {
-            codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_error");
+            codex_state::record_fallback(
+                "get_state_db",
+                "db_error",
+                /*telemetry_override*/ None,
+            );
             return None;
         }
     };
@@ -253,9 +261,9 @@ async fn require_backfill_complete(
                 state.status.as_str()
             );
             codex_state::record_fallback(
-                /*telemetry*/ None,
                 "get_state_db",
                 "backfill_incomplete",
+                /*telemetry_override*/ None,
             );
             None
         }
@@ -264,7 +272,11 @@ async fn require_backfill_complete(
                 "failed to read backfill state at {}: {err}",
                 codex_home.display()
             );
-            codex_state::record_fallback(/*telemetry*/ None, "get_state_db", "db_error");
+            codex_state::record_fallback(
+                "get_state_db",
+                "db_error",
+                /*telemetry_override*/ None,
+            );
             None
         }
     }

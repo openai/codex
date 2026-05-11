@@ -71,12 +71,12 @@ pub fn record_backfill_gate(
 }
 
 pub fn record_fallback(
-    telemetry: Option<&dyn DbTelemetry>,
     caller: &'static str,
     reason: &'static str,
+    telemetry_override: Option<&dyn DbTelemetry>,
 ) {
     record_counter(
-        telemetry,
+        telemetry_override,
         DB_FALLBACK_METRIC,
         &[("caller", caller), ("reason", reason)],
     );

@@ -450,7 +450,11 @@ impl RolloutRecorder {
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
-            codex_state::record_fallback(/*telemetry*/ None, "list_threads", "db_unavailable");
+            codex_state::record_fallback(
+                "list_threads",
+                "db_unavailable",
+                /*telemetry_override*/ None,
+            );
             return Ok(page_from_filesystem_scan(
                 fs_page,
                 sort_direction,
@@ -560,9 +564,9 @@ impl RolloutRecorder {
                     .await;
                 }
                 codex_state::record_fallback(
-                    /*telemetry*/ None,
                     "list_threads",
                     "metadata_filter",
+                    /*telemetry_override*/ None,
                 );
                 let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
                 return Ok(fill_missing_thread_item_metadata_from_state_db(
@@ -575,7 +579,11 @@ impl RolloutRecorder {
         }
         if listing_has_metadata_filters {
             let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
-            codex_state::record_fallback(/*telemetry*/ None, "list_threads", "db_error");
+            codex_state::record_fallback(
+                "list_threads",
+                "db_error",
+                /*telemetry_override*/ None,
+            );
             return Ok(fill_missing_thread_item_metadata_from_state_db(
                 state_db_ctx.as_deref(),
                 page,
@@ -585,7 +593,11 @@ impl RolloutRecorder {
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
         tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
-        codex_state::record_fallback(/*telemetry*/ None, "list_threads", "db_error");
+        codex_state::record_fallback(
+            "list_threads",
+            "db_error",
+            /*telemetry_override*/ None,
+        );
         Ok(page_from_filesystem_scan(
             fs_page,
             sort_direction,
@@ -645,9 +657,9 @@ impl RolloutRecorder {
         }
         if let Some(reason) = fallback_reason {
             codex_state::record_fallback(
-                /*telemetry*/ None,
                 "find_latest_thread_path",
                 reason,
+                /*telemetry_override*/ None,
             );
         }
 
