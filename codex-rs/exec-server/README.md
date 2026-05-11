@@ -22,6 +22,7 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
+- `ws+http://IP:PORT` for HTTP-upgrade websocket connections plus `/readyz`
 - `--remote URL --executor-id ID [--name NAME]`
 
 Remote mode registers the local exec-server with the executor registry,
