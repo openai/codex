@@ -6,6 +6,7 @@ use codex_extension_api::AgentSpawner;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartContributor;
+use codex_protocol::ThreadId;
 
 /// Guardian extension dependencies supplied by the host at construction time.
 #[derive(Clone, Debug)]
@@ -19,20 +20,30 @@ impl<S> GuardianExtension<S> {
         Self { agent_spawner }
     }
 
-    /// Returns the host-provided agent spawn helper.
-    pub fn agent_spawner(&self) -> &S {
-        &self.agent_spawner
-    }
-
-    /// Delegates one guardian-owned spawn request to the host-provided helper.
-    pub fn spawn_agent<'a, R>(
+    /// Delegates one guardian-owned subagent spawn request to the host helper.
+    pub fn spawn_subagent<'a, R>(
         &'a self,
+        forked_from_thread_id: ThreadId,
         request: R,
     ) -> AgentSpawnFuture<'a, <S as AgentSpawner<R>>::Spawned, <S as AgentSpawner<R>>::Error>
     where
         S: AgentSpawner<R>,
     {
-        self.agent_spawner.spawn_agent(request)
+        self.agent_spawner
+            .spawn_subagent(forked_from_thread_id, request)
+    }
+}
+
+/// Thread-local guardian state captured when the host starts a thread.
+#[derive(Clone, Copy, Debug)]
+pub struct GuardianThreadContext {
+    forked_from_thread_id: ThreadId,
+}
+
+impl GuardianThreadContext {
+    /// Returns the thread that future guardian subagents should fork from by default.
+    pub fn forked_from_thread_id(&self) -> ThreadId {
+        self.forked_from_thread_id
     }
 }
 
@@ -42,10 +53,14 @@ where
 {
     fn contribute(
         &self,
+        thread_id: ThreadId,
         _input: &Config,
         _session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
+        thread_store: &ExtensionData,
     ) {
+        thread_store.insert(GuardianThreadContext {
+            forked_from_thread_id: thread_id,
+        });
     }
 }
 

@@ -482,6 +482,75 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 }
 
 #[tokio::test]
+async fn spawn_subagent_forks_from_the_source_thread() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store.clone(),
+        state_db,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+    );
+    let parent = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start parent thread");
+
+    let spawned = manager
+        .spawn_subagent(
+            parent.thread_id,
+            StartThreadOptions {
+                config,
+                initial_history: InitialHistory::New,
+                session_source: None,
+                thread_source: None,
+                dynamic_tools: Vec::new(),
+                persist_extended_history: false,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments: Vec::new(),
+            },
+        )
+        .await
+        .expect("spawn subagent");
+    let stored_spawned = spawned
+        .thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await
+        .expect("read spawned subagent");
+
+    assert_ne!(spawned.thread_id, parent.thread_id);
+    assert_eq!(stored_spawned.forked_from_id, Some(parent.thread_id));
+
+    parent
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown parent thread");
+    spawned
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown spawned subagent");
+}
+
+#[tokio::test]
 async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;

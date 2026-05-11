@@ -9,6 +9,7 @@ use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 
 pub(crate) fn thread_extensions<S>(guardian_agent_spawner: S) -> Arc<ExtensionRegistry<Config>>
@@ -24,13 +25,17 @@ where
 pub(crate) fn guardian_agent_spawner(
     thread_manager: Weak<ThreadManager>,
 ) -> impl AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> {
-    move |options: StartThreadOptions| -> AgentSpawnFuture<'static, NewThread, CodexErr> {
+    move |forked_from_thread_id: ThreadId,
+          options: StartThreadOptions|
+          -> AgentSpawnFuture<'static, NewThread, CodexErr> {
         let thread_manager = thread_manager.clone();
         Box::pin(async move {
             let thread_manager = thread_manager.upgrade().ok_or_else(|| {
                 CodexErr::UnsupportedOperation("thread manager dropped".to_string())
             })?;
-            thread_manager.start_thread_with_options(options).await
+            thread_manager
+                .spawn_subagent(forked_from_thread_id, options)
+                .await
         })
     }
 }
