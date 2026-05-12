@@ -1081,6 +1081,10 @@ impl BottomPane {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
+    pub(crate) fn list_keymap(&self) -> crate::keymap::ListKeymap {
+        self.keymap.list.clone()
+    }
+
     /// Replace one or more active views whose IDs are in `view_ids` with a
     /// generic list selection view.
     pub(crate) fn replace_active_views_with_selection_view(

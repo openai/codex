@@ -62,6 +62,54 @@ impl ScrollState {
         });
     }
 
+    /// Move selection up by one visible page, clamping at the first row.
+    pub fn page_up_clamped(&mut self, len: usize, visible_rows: usize) {
+        if len == 0 {
+            self.selected_idx = None;
+            self.scroll_top = 0;
+            return;
+        }
+        let step = visible_rows.max(1);
+        let current = self.selected_idx.unwrap_or(0).min(len - 1);
+        self.selected_idx = Some(current.saturating_sub(step));
+        self.ensure_visible(len, visible_rows);
+    }
+
+    /// Move selection down by one visible page, clamping at the last row.
+    pub fn page_down_clamped(&mut self, len: usize, visible_rows: usize) {
+        if len == 0 {
+            self.selected_idx = None;
+            self.scroll_top = 0;
+            return;
+        }
+        let step = visible_rows.max(1);
+        let current = self.selected_idx.unwrap_or(0).min(len - 1);
+        self.selected_idx = Some(current.saturating_add(step).min(len - 1));
+        self.ensure_visible(len, visible_rows);
+    }
+
+    /// Jump selection to the first row.
+    pub fn jump_top(&mut self, len: usize, visible_rows: usize) {
+        if len == 0 {
+            self.selected_idx = None;
+            self.scroll_top = 0;
+            return;
+        }
+        self.selected_idx = Some(0);
+        self.ensure_visible(len, visible_rows);
+    }
+
+    /// Jump selection to the last row.
+    pub fn jump_bottom(&mut self, len: usize, visible_rows: usize) {
+        if len == 0 {
+            self.selected_idx = None;
+            self.scroll_top = 0;
+            return;
+        }
+        self.selected_idx = Some(len - 1);
+        self.ensure_visible(len, visible_rows);
+    }
+
     /// Adjust `scroll_top` so that the current `selected_idx` is visible within
     /// the window of `visible_rows`.
     pub fn ensure_visible(&mut self, len: usize, visible_rows: usize) {
@@ -111,5 +159,37 @@ mod tests {
         s.ensure_visible(len, vis);
         assert_eq!(s.selected_idx, Some(0));
         assert_eq!(s.scroll_top, 0);
+    }
+
+    #[test]
+    fn page_and_jump_navigation_clamps() {
+        let mut s = ScrollState::new();
+        let len = 10;
+        let vis = 4;
+
+        s.clamp_selection(len);
+        s.page_down_clamped(len, vis);
+        assert_eq!(s.selected_idx, Some(4));
+        assert_eq!(s.scroll_top, 1);
+
+        s.page_down_clamped(len, vis);
+        assert_eq!(s.selected_idx, Some(8));
+        assert_eq!(s.scroll_top, 5);
+
+        s.page_down_clamped(len, vis);
+        assert_eq!(s.selected_idx, Some(9));
+        assert_eq!(s.scroll_top, 6);
+
+        s.page_up_clamped(len, vis);
+        assert_eq!(s.selected_idx, Some(5));
+        assert_eq!(s.scroll_top, 5);
+
+        s.jump_top(len, vis);
+        assert_eq!(s.selected_idx, Some(0));
+        assert_eq!(s.scroll_top, 0);
+
+        s.jump_bottom(len, vis);
+        assert_eq!(s.selected_idx, Some(9));
+        assert_eq!(s.scroll_top, 6);
     }
 }

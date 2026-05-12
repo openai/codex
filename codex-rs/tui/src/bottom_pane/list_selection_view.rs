@@ -674,6 +674,50 @@ impl ListSelectionView {
         }
     }
 
+    fn page_up(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.page_up_clamped(len, visible);
+        self.skip_disabled_up();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn page_down(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.page_down_clamped(len, visible);
+        self.skip_disabled_down();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn jump_top(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.jump_top(len, visible);
+        self.skip_disabled_down();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
+    fn jump_bottom(&mut self) {
+        let before = self.selected_actual_idx();
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.jump_bottom(len, visible);
+        self.skip_disabled_up();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
+    }
+
     fn fire_selection_changed(&self) {
         if let Some(cb) = &self.on_selection_changed
             && let Some(actual) = self.selected_actual_idx()
@@ -840,6 +884,18 @@ impl BottomPaneView for ListSelectionView {
             }
             _ if allow_plain_char_navigation && self.keymap.move_down.is_pressed(key_event) => {
                 self.move_down()
+            }
+            _ if allow_plain_char_navigation && self.keymap.page_up.is_pressed(key_event) => {
+                self.page_up()
+            }
+            _ if allow_plain_char_navigation && self.keymap.page_down.is_pressed(key_event) => {
+                self.page_down()
+            }
+            _ if allow_plain_char_navigation && self.keymap.jump_top.is_pressed(key_event) => {
+                self.jump_top()
+            }
+            _ if allow_plain_char_navigation && self.keymap.jump_bottom.is_pressed(key_event) => {
+                self.jump_bottom()
             }
             KeyEvent {
                 code: KeyCode::Left,
@@ -2057,6 +2113,45 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
 
         assert_eq!(view.selected_actual_idx(), Some(1));
+    }
+
+    #[test]
+    fn page_and_jump_navigation_use_list_keymap() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.page_down = vec![crate::key_hint::ctrl(KeyCode::Char('d'))];
+        keymap.page_up = vec![crate::key_hint::ctrl(KeyCode::Char('u'))];
+        keymap.jump_bottom = vec![crate::key_hint::ctrl(KeyCode::Char('e'))];
+        keymap.jump_top = vec![crate::key_hint::ctrl(KeyCode::Char('a'))];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: (0..12)
+                    .map(|idx| SelectionItem {
+                        name: format!("Item {idx}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            tx,
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(view.selected_actual_idx(), Some(0));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_actual_idx(), Some(8));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_actual_idx(), Some(0));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_actual_idx(), Some(11));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_actual_idx(), Some(0));
     }
 
     #[test]

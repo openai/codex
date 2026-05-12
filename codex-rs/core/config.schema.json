@@ -2600,8 +2600,12 @@
             "list": {
               "accept": null,
               "cancel": null,
+              "jump_bottom": null,
+              "jump_top": null,
               "move_down": null,
-              "move_up": null
+              "move_up": null,
+              "page_down": null,
+              "page_up": null
             },
             "pager": {
               "close": null,
@@ -3232,8 +3236,12 @@
           "default": {
             "accept": null,
             "cancel": null,
+            "jump_bottom": null,
+            "jump_top": null,
             "move_down": null,
-            "move_up": null
+            "move_up": null,
+            "page_down": null,
+            "page_up": null
           }
         },
         "pager": {
@@ -3330,6 +3338,22 @@
           ],
           "description": "Cancel and close selection view."
         },
+        "jump_bottom": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the last list item."
+        },
+        "jump_top": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the first list item."
+        },
         "move_down": {
           "allOf": [
             {
@@ -3345,6 +3369,22 @@
             }
           ],
           "description": "Move list selection up."
+        },
+        "page_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection down by one page."
+        },
+        "page_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection up by one page."
         }
       },
       "type": "object"

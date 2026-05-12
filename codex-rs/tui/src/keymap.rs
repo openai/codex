@@ -205,6 +205,10 @@ pub(crate) struct PagerKeymap {
 pub(crate) struct ListKeymap {
     pub(crate) move_up: Vec<KeyBinding>,
     pub(crate) move_down: Vec<KeyBinding>,
+    pub(crate) page_up: Vec<KeyBinding>,
+    pub(crate) page_down: Vec<KeyBinding>,
+    pub(crate) jump_top: Vec<KeyBinding>,
+    pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) accept: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
@@ -508,6 +512,10 @@ impl RuntimeKeymap {
         let list = ListKeymap {
             move_up: resolve_local!(keymap, defaults, list, move_up),
             move_down: resolve_local!(keymap, defaults, list, move_down),
+            page_up: resolve_local!(keymap, defaults, list, page_up),
+            page_down: resolve_local!(keymap, defaults, list, page_down),
+            jump_top: resolve_local!(keymap, defaults, list, jump_top),
+            jump_bottom: resolve_local!(keymap, defaults, list, jump_bottom),
             accept: resolve_local!(keymap, defaults, list, accept),
             cancel: resolve_local!(keymap, defaults, list, cancel),
         };
@@ -711,13 +719,19 @@ impl RuntimeKeymap {
                 move_up: default_bindings![
                     plain(KeyCode::Up),
                     ctrl(KeyCode::Char('p')),
+                    ctrl(KeyCode::Char('k')),
                     plain(KeyCode::Char('k'))
                 ],
                 move_down: default_bindings![
                     plain(KeyCode::Down),
                     ctrl(KeyCode::Char('n')),
+                    ctrl(KeyCode::Char('j')),
                     plain(KeyCode::Char('j'))
                 ],
+                page_up: default_bindings![plain(KeyCode::PageUp), ctrl(KeyCode::Char('b'))],
+                page_down: default_bindings![plain(KeyCode::PageDown), ctrl(KeyCode::Char('f'))],
+                jump_top: default_bindings![plain(KeyCode::Home)],
+                jump_bottom: default_bindings![plain(KeyCode::End)],
                 accept: default_bindings![plain(KeyCode::Enter)],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
@@ -852,6 +866,10 @@ impl RuntimeKeymap {
             [
                 ("list.move_up", self.list.move_up.as_slice()),
                 ("list.move_down", self.list.move_down.as_slice()),
+                ("list.page_up", self.list.page_up.as_slice()),
+                ("list.page_down", self.list.page_down.as_slice()),
+                ("list.jump_top", self.list.jump_top.as_slice()),
+                ("list.jump_bottom", self.list.jump_bottom.as_slice()),
                 ("list.accept", self.list.accept.as_slice()),
                 ("list.cancel", self.list.cancel.as_slice()),
                 (
@@ -1123,6 +1141,10 @@ impl RuntimeKeymap {
             [
                 ("move_up", self.list.move_up.as_slice()),
                 ("move_down", self.list.move_down.as_slice()),
+                ("page_up", self.list.page_up.as_slice()),
+                ("page_down", self.list.page_down.as_slice()),
+                ("jump_top", self.list.jump_top.as_slice()),
+                ("jump_bottom", self.list.jump_bottom.as_slice()),
                 ("accept", self.list.accept.as_slice()),
                 ("cancel", self.list.cancel.as_slice()),
             ],
@@ -1152,6 +1174,10 @@ impl RuntimeKeymap {
         for (action, bindings) in [
             ("list.move_up", self.list.move_up.as_slice()),
             ("list.move_down", self.list.move_down.as_slice()),
+            ("list.page_up", self.list.page_up.as_slice()),
+            ("list.page_down", self.list.page_down.as_slice()),
+            ("list.jump_top", self.list.jump_top.as_slice()),
+            ("list.jump_bottom", self.list.jump_bottom.as_slice()),
             ("list.accept", self.list.accept.as_slice()),
             ("list.cancel", self.list.cancel.as_slice()),
             (
@@ -1660,6 +1686,49 @@ mod tests {
     }
 
     #[test]
+    fn defaults_include_list_page_and_jump_actions() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.list.move_up,
+            vec![
+                key_hint::plain(KeyCode::Up),
+                key_hint::ctrl(KeyCode::Char('p')),
+                key_hint::ctrl(KeyCode::Char('k')),
+                key_hint::plain(KeyCode::Char('k')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.move_down,
+            vec![
+                key_hint::plain(KeyCode::Down),
+                key_hint::ctrl(KeyCode::Char('n')),
+                key_hint::ctrl(KeyCode::Char('j')),
+                key_hint::plain(KeyCode::Char('j')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.page_up,
+            vec![
+                key_hint::plain(KeyCode::PageUp),
+                key_hint::ctrl(KeyCode::Char('b')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.page_down,
+            vec![
+                key_hint::plain(KeyCode::PageDown),
+                key_hint::ctrl(KeyCode::Char('f')),
+            ]
+        );
+        assert_eq!(runtime.list.jump_top, vec![key_hint::plain(KeyCode::Home)]);
+        assert_eq!(
+            runtime.list.jump_bottom,
+            vec![key_hint::plain(KeyCode::End)]
+        );
+    }
+
+    #[test]
     fn vim_normal_defaults_include_insert_and_arrow_aliases() {
         let runtime = RuntimeKeymap::defaults();
 
@@ -1734,6 +1803,15 @@ mod tests {
         keymap.list.move_down = Some(one("up"));
 
         expect_conflict(&keymap, "move_up", "move_down");
+    }
+
+    #[test]
+    fn rejects_conflicting_list_page_and_jump_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.page_up = Some(one("home"));
+        keymap.list.jump_top = Some(one("home"));
+
+        expect_conflict(&keymap, "page_up", "jump_top");
     }
 
     #[test]

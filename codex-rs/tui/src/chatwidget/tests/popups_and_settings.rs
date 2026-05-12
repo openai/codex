@@ -2181,7 +2181,11 @@ async fn experimental_features_popup_snapshot() {
             enabled: true,
         },
     ];
-    let view = ExperimentalFeaturesView::new(features, chat.app_event_tx.clone());
+    let view = ExperimentalFeaturesView::new(
+        features,
+        chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
     chat.bottom_pane.show_view(Box::new(view));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -2201,6 +2205,7 @@ async fn experimental_features_toggle_saves_on_exit() {
             enabled: false,
         }],
         chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
     );
     chat.bottom_pane.show_view(Box::new(view));
 
