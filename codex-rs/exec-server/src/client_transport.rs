@@ -7,6 +7,8 @@ use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::client_api::RemoteExecServerConnectArgs;
@@ -53,6 +55,7 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))

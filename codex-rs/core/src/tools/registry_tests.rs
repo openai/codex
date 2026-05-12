@@ -15,10 +15,6 @@ impl ToolHandler for TestHandler {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         Ok(crate::tools::context::FunctionToolOutput::from_text(
             "ok".to_string(),
@@ -75,7 +71,7 @@ fn register_handler_adds_handler_and_augments_specs_for_code_mode() {
 
     assert_eq!(specs.len(), 1);
     assert_eq!(
-        specs[0].spec,
+        specs[0],
         codex_tools::augment_tool_spec_for_code_mode(create_get_goal_tool())
     );
     assert!(registry.has_handler(&codex_tools::ToolName::plain(GET_GOAL_TOOL_NAME)));

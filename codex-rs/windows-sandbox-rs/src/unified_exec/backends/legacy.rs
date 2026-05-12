@@ -16,6 +16,7 @@ use crate::spawn_prep::apply_legacy_session_acl_rules;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
 use anyhow::Result;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
@@ -287,6 +288,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    additional_deny_read_paths: &[AbsolutePathBuf],
+    additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,
@@ -303,6 +306,19 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
+    // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
+    // backend cannot make capability-SID deny-read ACLs authoritative.
+    if !additional_deny_read_paths.is_empty() {
+        anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
+    }
+    let additional_deny_read_paths = additional_deny_read_paths
+        .iter()
+        .map(AbsolutePathBuf::to_path_buf)
+        .collect::<Vec<_>>();
+    let additional_deny_write_paths = additional_deny_write_paths
+        .iter()
+        .map(AbsolutePathBuf::to_path_buf)
+        .collect::<Vec<_>>();
     let security = prepare_legacy_session_security(&common.policy, codex_home, cwd)?;
     allow_null_device_for_workspace_write(common.is_workspace_write);
 
@@ -310,12 +326,16 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let guards = apply_legacy_session_acl_rules(
         &common.policy,
         sandbox_policy_cwd,
+        codex_home,
         &common.current_dir,
         &env_map,
         &security.psid_generic,
         security.psid_workspace.as_ref(),
+        &security.cap_sid_str,
+        &additional_deny_read_paths,
+        &additional_deny_write_paths,
         persist_aces,
-    );
+    )?;
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(256);

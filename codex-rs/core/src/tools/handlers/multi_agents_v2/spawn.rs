@@ -35,10 +35,6 @@ impl ToolHandler for Handler {
         Some(create_spawn_agent_tool_v2(self.options.clone()))
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

@@ -23,6 +23,17 @@ async fn process_compacted_history_with_test_session(
     (refreshed, initial_context)
 }
 
+fn user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 #[test]
 fn content_items_to_text_joins_non_empty_segments() {
     let items = vec![
@@ -113,6 +124,26 @@ do things
             }],
             phase: None,
         },
+    ];
+
+    let collected = collect_user_messages(&items);
+
+    assert_eq!(vec!["real user message".to_string()], collected);
+}
+
+#[test]
+fn collect_user_messages_filters_legacy_warnings() {
+    let items = vec![
+        user_message(
+            "Warning: The maximum number of unified exec processes you can keep open is 60 and you currently have 61 processes open. Reuse older processes or close them to prevent automatic pruning of old processes",
+        ),
+        user_message(
+            "Warning: apply_patch was requested via exec_command. Use the apply_patch tool instead of exec_command.",
+        ),
+        user_message(
+            "Warning: Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: https://chatgpt.com/cyber or learn more: https://developers.openai.com/codex/concepts/cyber-safety",
+        ),
+        user_message("real user message"),
     ];
 
     let collected = collect_user_messages(&items);
@@ -348,6 +379,31 @@ keep me updated
         }],
         phase: None,
     });
+    assert_eq!(refreshed, expected);
+}
+
+#[tokio::test]
+async fn process_compacted_history_drops_legacy_warnings() {
+    let latest_user = user_message("latest user");
+    let compacted_history = vec![
+        user_message(
+            "Warning: The maximum number of unified exec processes you can keep open is 60 and you currently have 61 processes open. Reuse older processes or close them to prevent automatic pruning of old processes",
+        ),
+        user_message(
+            "Warning: apply_patch was requested via exec_command. Use the apply_patch tool instead of exec_command.",
+        ),
+        user_message(
+            "Warning: Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: https://chatgpt.com/cyber or learn more: https://developers.openai.com/codex/concepts/cyber-safety",
+        ),
+        latest_user.clone(),
+    ];
+    let (refreshed, initial_context) = process_compacted_history_with_test_session(
+        compacted_history,
+        /*previous_turn_settings*/ None,
+    )
+    .await;
+    let mut expected = initial_context;
+    expected.push(latest_user);
     assert_eq!(refreshed, expected);
 }
 

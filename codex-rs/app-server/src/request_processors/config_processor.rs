@@ -515,11 +515,13 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
     match handler {
         CoreHookHandlerConfig::Command {
             command,
+            command_windows,
             timeout_sec,
             r#async,
             status_message,
         } => ConfiguredHookHandler::Command {
             command,
+            command_windows,
             timeout_sec,
             r#async,
             status_message,

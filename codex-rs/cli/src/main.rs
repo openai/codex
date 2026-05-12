@@ -129,7 +129,7 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// [experimental] Start a headless app-server with remote control enabled.
+    /// [experimental] Ensure the app-server daemon is running with remote control enabled.
     RemoteControl,
 
     /// Launch the Codex desktop app (opens the app installer if missing).
@@ -772,14 +772,6 @@ struct FeatureSetArgs {
     feature: String,
 }
 
-const REMOTE_CONTROL_FEATURE_OVERRIDE: &str = "features.remote_control=true";
-
-fn enable_remote_control_for_invocation(config_overrides: &mut CliConfigOverrides) {
-    config_overrides
-        .raw_overrides
-        .push(REMOTE_CONTROL_FEATURE_OVERRIDE.to_string());
-}
-
 fn stage_str(stage: Stage) -> &'static str {
     match stage {
         Stage::UnderDevelopment => "under development",
@@ -989,16 +981,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "remote-control",
             )?;
-            enable_remote_control_for_invocation(&mut root_config_overrides);
-            codex_app_server::run_main_with_transport(
-                arg0_paths.clone(),
-                root_config_overrides,
-                codex_config::LoaderOverrides::default(),
-                /*default_analytics_enabled*/ false,
-                codex_app_server::AppServerTransport::Off,
-                codex_protocol::protocol::SessionSource::Cli,
-            )
-            .await?;
+            let output = codex_app_server_daemon::ensure_remote_control_started().await?;
+            println!("{}", serde_json::to_string(&output)?);
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -2406,24 +2390,6 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
-    }
-
-    #[test]
-    fn remote_control_override_is_appended_after_root_toggles() {
-        let mut config_overrides = CliConfigOverrides::default();
-        config_overrides
-            .raw_overrides
-            .push("features.remote_control=false".to_string());
-
-        enable_remote_control_for_invocation(&mut config_overrides);
-
-        assert_eq!(
-            config_overrides.raw_overrides,
-            vec![
-                "features.remote_control=false".to_string(),
-                REMOTE_CONTROL_FEATURE_OVERRIDE.to_string(),
-            ]
-        );
     }
 
     #[test]

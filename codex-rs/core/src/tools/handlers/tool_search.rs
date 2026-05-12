@@ -4,7 +4,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::tool_search_entry::ToolSearchEntry;
 use bm25::Document;
 use bm25::Language;
@@ -66,10 +65,6 @@ impl ToolHandler for ToolSearchHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(
@@ -399,6 +394,8 @@ mod tests {
     fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: tool_name.to_string(),
             callable_namespace: format!("mcp__{server_name}__"),
             namespace_description: None,

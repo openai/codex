@@ -538,6 +538,8 @@ pub enum PluginAvailability {
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
     pub id: String,
+    /// Backend remote plugin identifier when available.
+    pub remote_plugin_id: Option<String>,
     pub name: String,
     /// Remote sharing context associated with this plugin when available.
     pub share_context: Option<PluginShareContext>,
