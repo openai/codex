@@ -59,6 +59,7 @@ pub struct UnifiedExecRequest {
     pub hook_command: String,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
+    pub sandbox_cwd: AbsolutePathBuf,
     pub environment: Arc<Environment>,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
@@ -217,7 +218,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b AbsolutePathBuf> {
-        Some(&req.cwd)
+        Some(&req.sandbox_cwd)
     }
 
     fn network_approval_spec(
@@ -361,7 +362,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 mod tests {
     use super::*;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+    use crate::tools::sandboxing::ToolRuntime;
+    use codex_exec_server::Environment;
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
@@ -383,5 +387,41 @@ mod tests {
             }
             other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn unified_exec_uses_the_trusted_sandbox_cwd() {
+        let cwd_dir = tempdir().expect("create process temp dir");
+        let sandbox_dir = tempdir().expect("create sandbox temp dir");
+        let cwd =
+            AbsolutePathBuf::try_from(cwd_dir.path().to_path_buf()).expect("absolute temp dir");
+        let sandbox_cwd = AbsolutePathBuf::try_from(sandbox_dir.path().to_path_buf())
+            .expect("absolute sandbox temp dir");
+        let manager = UnifiedExecProcessManager::default();
+        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let request = UnifiedExecRequest {
+            command: vec!["pwd".to_string()],
+            hook_command: "pwd".to_string(),
+            process_id: 1000,
+            cwd,
+            sandbox_cwd: sandbox_cwd.clone(),
+            environment: Arc::new(Environment::default_for_tests()),
+            env: HashMap::new(),
+            exec_server_env_config: None,
+            explicit_env_overrides: HashMap::new(),
+            network: None,
+            tty: false,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            #[cfg(unix)]
+            additional_permissions_preapproved: false,
+            justification: None,
+            exec_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        };
+
+        assert_eq!(runtime.sandbox_cwd(&request), Some(&sandbox_cwd));
     }
 }

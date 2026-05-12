@@ -13,6 +13,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
@@ -85,6 +86,7 @@ use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -4157,6 +4159,32 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
     assert_eq!(rendered.lines.len(), 39);
     assert_eq!(rendered_line_text(&rendered.lines[0]), "cell 0");
     assert_eq!(rendered_line_text(&rendered.lines[38]), "cell 19");
+}
+
+#[tokio::test]
+async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda".to_string(),
+        Path::new("/tmp"),
+    ))];
+
+    let without_pet = app.render_transcript_lines_for_reflow(/*width*/ 40);
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let width = app.chat_widget.history_wrap_width(/*width*/ 40);
+    assert!(width < 40);
+    let with_pet = app.render_transcript_lines_for_reflow(width);
+
+    assert!(
+        with_pet.lines.len() > without_pet.lines.len(),
+        "expected pet-enabled transcript reflow to wrap earlier"
+    );
 }
 
 #[tokio::test]
