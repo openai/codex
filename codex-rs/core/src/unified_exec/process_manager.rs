@@ -19,6 +19,7 @@ use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
@@ -52,6 +53,7 @@ use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -305,6 +307,34 @@ async fn emit_failed_initial_exec_end_if_unstored(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn emit_failed_initial_exec_lifecycle_before_process_start(
+    context: &UnifiedExecContext,
+    request: &ExecCommandRequest,
+    cwd: AbsolutePathBuf,
+    output: ExecToolCallOutput,
+) {
+    let event_ctx = ToolEventCtx::new(
+        context.session.as_ref(),
+        context.turn.as_ref(),
+        &context.call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let emitter = ToolEmitter::unified_exec(
+        &request.command,
+        cwd,
+        ExecCommandSource::UnifiedExecStartup,
+        Some(request.process_id.to_string()),
+    );
+    emitter.emit(event_ctx, ToolEventStage::Begin).await;
+    emitter
+        .emit(
+            event_ctx,
+            ToolEventStage::Failure(ToolEventFailure::Output(output)),
+        )
+        .await;
+}
+
 fn terminate_process_on_network_denial(
     process: Arc<UnifiedExecProcess>,
     session: std::sync::Weak<crate::session::session::Session>,
@@ -381,6 +411,15 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
+                if let UnifiedExecError::SandboxDenied { output, .. } = &err {
+                    emit_failed_initial_exec_lifecycle_before_process_start(
+                        context,
+                        &request,
+                        cwd.clone(),
+                        output.clone(),
+                    )
+                    .await;
+                }
                 self.release_process_id(request.process_id).await;
                 return Err(err);
             }
