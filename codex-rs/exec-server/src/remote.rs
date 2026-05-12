@@ -113,7 +113,7 @@ impl RemoteExecutorConfig {
         Self::with_bearer_token(base_url, executor_id, read_remote_bearer_token_from_env()?)
     }
 
-    fn with_bearer_token(
+    pub fn with_bearer_token(
         base_url: String,
         executor_id: String,
         bearer_token: String,
