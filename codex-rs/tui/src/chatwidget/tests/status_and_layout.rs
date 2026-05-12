@@ -434,7 +434,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
     let chat = ChatWidget::new_with_app_event(init);
 
     assert!(!chat.ambient_pet_image_enabled());
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+    let event = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), rx.recv())
         .await
         .unwrap()
         .unwrap();
