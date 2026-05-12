@@ -1066,7 +1066,7 @@ async fn load_project_layers(
                 let ignored_project_config_keys = sanitize_project_config(&mut config);
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let config = load_root_checkout_project_hooks(
+                let config = merge_root_checkout_project_hooks(
                     fs,
                     config,
                     hooks_config_folder_override.as_ref(),
@@ -1092,7 +1092,7 @@ async fn load_project_layers(
                     // If there is no config.toml file, record an empty entry
                     // for this project layer, as this may still have subfolders
                     // that are significant in the overall ConfigLayerStack.
-                    let config = load_root_checkout_project_hooks(
+                    let config = merge_root_checkout_project_hooks(
                         fs,
                         TomlValue::Table(toml::map::Map::new()),
                         hooks_config_folder_override.as_ref(),
@@ -1124,7 +1124,7 @@ async fn load_project_layers(
 
 /// For linked worktrees, preserve ordinary worktree-local project config while
 /// replacing only hook declarations with the matching root-checkout layer.
-async fn load_root_checkout_project_hooks(
+async fn merge_root_checkout_project_hooks(
     fs: &dyn ExecutorFileSystem,
     mut config: TomlValue,
     hooks_config_folder_override: Option<&AbsolutePathBuf>,

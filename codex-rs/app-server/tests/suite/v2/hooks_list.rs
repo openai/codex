@@ -106,6 +106,29 @@ enabled = true
     Ok(())
 }
 
+fn write_project_hook_config(dot_codex_folder: &std::path::Path, command: &str) -> Result<()> {
+    std::fs::create_dir_all(dot_codex_folder)?;
+    std::fs::write(
+        dot_codex_folder.join("config.toml"),
+        format!(
+            r#"[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{command}"
+timeout = 5
+"#
+        ),
+    )?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn hooks_list_shows_discovered_hook() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -375,45 +398,14 @@ async fn hooks_list_uses_root_repo_hooks_for_linked_worktrees() -> Result<()> {
     let worktree_root = workspace.path().join("worktree");
     let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
 
-    std::fs::create_dir_all(repo_root.join(".codex"))?;
-    std::fs::create_dir_all(worktree_root.join(".codex"))?;
     std::fs::create_dir_all(&worktree_git_dir)?;
+    std::fs::create_dir_all(&worktree_root)?;
     std::fs::write(
         worktree_root.join(".git"),
         format!("gitdir: {}\n", worktree_git_dir.display()),
     )?;
-    std::fs::write(
-        repo_root.join(".codex/config.toml"),
-        r#"[features]
-hooks = true
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo root hook"
-timeout = 5
-"#,
-    )?;
-    std::fs::write(
-        worktree_root.join(".codex/config.toml"),
-        r#"[features]
-hooks = true
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo worktree hook"
-timeout = 5
-"#,
-    )?;
+    write_project_hook_config(&repo_root.join(".codex"), "echo root hook")?;
+    write_project_hook_config(&worktree_root.join(".codex"), "echo worktree hook")?;
     set_project_trust_level(codex_home.path(), &repo_root, TrustLevel::Trusted)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

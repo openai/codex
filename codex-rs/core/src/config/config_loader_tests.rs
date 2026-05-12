@@ -67,6 +67,45 @@ async fn make_config_for_test(
     .await
 }
 
+async fn write_linked_worktree_pointer(
+    repo_root: &Path,
+    worktree_root: &Path,
+) -> std::io::Result<()> {
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+    tokio::fs::create_dir_all(&worktree_git_dir).await?;
+    tokio::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .await
+}
+
+async fn write_project_hook_config(
+    dot_codex_folder: &Path,
+    foo: Option<&str>,
+    command: &str,
+) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(dot_codex_folder).await?;
+    let foo = foo
+        .map(|value| format!("foo = \"{value}\"\n\n"))
+        .unwrap_or_default();
+    tokio::fs::write(
+        dot_codex_folder.join(CONFIG_TOML_FILE),
+        format!(
+            r#"{foo}[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{command}"
+"#
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<()> {
     let codex_home = tempdir().expect("tempdir");
@@ -1340,77 +1379,32 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
     let repo_child = repo_root.join("child");
     let worktree_root = tmp.path().join("worktree");
     let worktree_child = worktree_root.join("child");
-    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
 
-    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(repo_child.join(".codex")).await?;
     tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
     tokio::fs::create_dir_all(worktree_child.join(".codex")).await?;
-    tokio::fs::create_dir_all(&worktree_git_dir).await?;
-    tokio::fs::write(
-        worktree_root.join(".git"),
-        format!("gitdir: {}\n", worktree_git_dir.display()),
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        Some("repo-root"),
+        "echo repo root hook",
     )
     .await?;
-
-    tokio::fs::write(
-        repo_root.join(".codex/config.toml"),
-        r#"foo = "repo-root"
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo repo root hook"
-"#,
+    write_project_hook_config(
+        &repo_child.join(".codex"),
+        Some("repo-child"),
+        "echo repo child hook",
     )
     .await?;
-    tokio::fs::write(
-        repo_child.join(".codex/config.toml"),
-        r#"foo = "repo-child"
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo repo child hook"
-"#,
+    write_project_hook_config(
+        &worktree_root.join(".codex"),
+        Some("worktree-root"),
+        "echo worktree root hook",
     )
     .await?;
-    tokio::fs::write(
-        worktree_root.join(".codex/config.toml"),
-        r#"foo = "worktree-root"
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo worktree root hook"
-"#,
-    )
-    .await?;
-    tokio::fs::write(
-        worktree_child.join(".codex/config.toml"),
-        r#"foo = "worktree-child"
-
-[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo worktree child hook"
-"#,
+    write_project_hook_config(
+        &worktree_child.join(".codex"),
+        Some("worktree-child"),
+        "echo worktree child hook",
     )
     .await?;
 
@@ -1486,29 +1480,10 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
     let tmp = tempdir()?;
     let repo_root = tmp.path().join("repo");
     let worktree_root = tmp.path().join("worktree");
-    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
 
-    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
     tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(&worktree_git_dir).await?;
-    tokio::fs::write(
-        worktree_root.join(".git"),
-        format!("gitdir: {}\n", worktree_git_dir.display()),
-    )
-    .await?;
-    tokio::fs::write(
-        repo_root.join(".codex/config.toml"),
-        r#"[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo repo root hook"
-"#,
-    )
-    .await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    write_project_hook_config(&repo_root.join(".codex"), None, "echo repo root hook").await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1560,49 +1535,11 @@ async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std
     let nested = project_root.join("child");
 
     tokio::fs::create_dir_all(repo_root.join(".git")).await?;
-    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(&project_root).await?;
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
-    tokio::fs::write(
-        repo_root.join(".codex/config.toml"),
-        r#"[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo repo root hook"
-"#,
-    )
-    .await?;
-    tokio::fs::write(
-        project_root.join(".codex/config.toml"),
-        r#"[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo project root hook"
-"#,
-    )
-    .await?;
-    tokio::fs::write(
-        nested.join(".codex/config.toml"),
-        r#"[hooks]
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "echo nested hook"
-"#,
-    )
-    .await?;
+    write_project_hook_config(&repo_root.join(".codex"), None, "echo repo root hook").await?;
+    write_project_hook_config(&project_root.join(".codex"), None, "echo project root hook").await?;
+    write_project_hook_config(&nested.join(".codex"), None, "echo nested hook").await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
