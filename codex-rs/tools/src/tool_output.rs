@@ -1,6 +1,7 @@
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value as JsonValue;
@@ -32,6 +33,88 @@ pub trait ToolOutput: Send {
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
+    }
+}
+
+impl<T> ToolOutput for Box<T>
+where
+    T: ToolOutput + ?Sized,
+{
+    fn log_preview(&self) -> String {
+        (**self).log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        (**self).success_for_logging()
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        (**self).to_response_item(call_id, payload)
+    }
+
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
+        (**self).post_tool_use_response(call_id, payload)
+    }
+
+    fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
+        (**self).code_mode_result(payload)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonToolOutput {
+    value: JsonValue,
+    success: Option<bool>,
+}
+
+impl JsonToolOutput {
+    pub fn new(value: JsonValue) -> Self {
+        Self {
+            value,
+            success: Some(true),
+        }
+    }
+
+    pub fn with_success(value: JsonValue, success: Option<bool>) -> Self {
+        Self { value, success }
+    }
+}
+
+impl ToolOutput for JsonToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.value.to_string())
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.success.unwrap_or(true)
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        let output = FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(self.value.to_string()),
+            success: self.success,
+        };
+
+        if matches!(payload, ToolPayload::Custom { .. }) {
+            return ResponseInputItem::CustomToolCallOutput {
+                call_id: call_id.to_string(),
+                name: None,
+                output,
+            };
+        }
+
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output,
+        }
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(self.value.clone())
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        self.value.clone()
     }
 }
 

@@ -27,7 +27,6 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
-use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -49,6 +48,7 @@ use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
+use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
@@ -84,7 +84,7 @@ pub fn build_tool_registry_builder(
     for handler in build_code_mode_handlers(
         config,
         &handlers,
-        params.extension_tool_bundles,
+        params.extension_tool_executors,
         config.search_tool && !all_deferred_tools.is_empty(),
     ) {
         builder.register_any_handler(handler);
@@ -134,8 +134,8 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ToolSearchHandler::new(deferred_search_infos)));
     }
 
-    for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle);
+    for executor in params.extension_tool_executors.iter().cloned() {
+        builder.register_extension_tool_executor(executor);
     }
 
     builder
@@ -144,7 +144,7 @@ pub fn build_tool_registry_builder(
 fn build_code_mode_handlers(
     config: &ToolsConfig,
     handlers: &[Arc<dyn AnyToolHandler>],
-    extension_tool_bundles: &[codex_tool_api::ToolBundle],
+    extension_tool_executors: &[Arc<dyn ExtensionToolExecutor>],
     deferred_tools_available: bool,
 ) -> Vec<Arc<dyn AnyToolHandler>> {
     if !config.code_mode_enabled {
@@ -156,9 +156,9 @@ fn build_code_mode_handlers(
         .filter_map(|handler| handler.spec())
         .collect::<Vec<_>>();
     code_mode_nested_tool_specs.extend(
-        extension_tool_bundles
+        extension_tool_executors
             .iter()
-            .filter_map(|bundle| extension_tool_spec(bundle.spec()).ok()),
+            .filter_map(|executor| executor.spec()),
     );
     let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
     let mut enabled_tools =

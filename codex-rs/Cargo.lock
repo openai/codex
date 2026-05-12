@@ -2518,7 +2518,6 @@ dependencies = [
  "codex-terminal-detection",
  "codex-test-binary-support",
  "codex-thread-store",
- "codex-tool-api",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2820,7 +2819,7 @@ name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
- "codex-tool-api",
+ "codex-tools",
 ]
 
 [[package]]
@@ -3708,15 +3707,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "codex-tool-api"
-version = "0.0.0"
-dependencies = [
- "pretty_assertions",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]

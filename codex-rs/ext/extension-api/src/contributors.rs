@@ -1,16 +1,20 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
-use codex_tool_api::ToolBundle;
 
 use crate::ExtensionData;
 
 mod prompt;
+mod tools;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use tools::ExtensionToolExecutor;
+pub use tools::ExtensionToolFuture;
+pub use tools::ExtensionToolOutput;
 
 /// Contributor that receives the live thread id and host-owned thread-start
 /// input before later contributors read from extension stores.
@@ -36,8 +40,11 @@ pub trait ContextContributor: Send + Sync {
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
     /// Returns the native tools visible for the supplied extension stores.
-    fn tools(&self, session_store: &ExtensionData, thread_store: &ExtensionData)
-    -> Vec<ToolBundle>;
+    fn tools(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ExtensionToolExecutor>>;
 }
 
 /// Future returned by one claimed approval-review contribution.
