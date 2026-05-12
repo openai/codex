@@ -895,9 +895,11 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    guardian_config.permissions.permission_profile = Constrained::allow_only(
-        PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
-    );
+    guardian_config
+        .permissions
+        .replace_permission_profile_constraint(Constrained::allow_only(
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
+        ));
     guardian_config
         .permissions
         .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())
@@ -923,7 +925,7 @@ pub(crate) fn build_guardian_review_session_config(
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
-            guardian_config.permissions.permission_profile.get(),
+            guardian_config.permissions.permission_profile_ref(),
         )?);
     }
     for feature in [
