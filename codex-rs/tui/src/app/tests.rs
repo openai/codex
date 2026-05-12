@@ -73,6 +73,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
@@ -299,17 +300,6 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
 
     assert!(!ignored);
     assert!(app.transcript_cells.is_empty());
-}
-
-#[test]
-fn hooks_needing_review_startup_warning_snapshot() {
-    let message = startup_prompts::hooks_needing_review_warning(/*count*/ 2)
-        .expect("review-needed hooks should produce a startup warning");
-    let rendered = lines_to_single_string(
-        &history_cell::new_warning_event(message).display_lines(/*width*/ 80),
-    );
-
-    assert_app_snapshot!("hooks_needing_review_startup_warning", rendered);
 }
 
 #[tokio::test]
@@ -1258,6 +1248,75 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         app.chat_widget.status_line_text(),
         Some("950K window".into())
     );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_caches_thread_without_app_server_read() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "wait-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::Wait,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: None,
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+        }),
+    ));
+
+    assert_eq!(
+        app.agent_navigation.get(&receiver_thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            is_closed: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_does_not_cache_not_found_thread() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "send-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::SendInput,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::Failed,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: Some("hello".to_string()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::from([(
+                    receiver_thread_id.to_string(),
+                    codex_app_server_protocol::CollabAgentState {
+                        status: codex_app_server_protocol::CollabAgentStatus::NotFound,
+                        message: None,
+                    },
+                )]),
+            },
+        }),
+    ));
+
+    assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
 }
 
 #[tokio::test]
@@ -3166,8 +3225,7 @@ fn agent_picker_item_name_snapshot() {
 
 #[tokio::test]
 async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
-    let mut app = make_test_app().await;
-    app.config.developer_instructions = Some("Existing developer policy.".to_string());
+    let app = make_test_app().await;
     let original_approval_policy = app.config.permissions.approval_policy.value();
     let original_sandbox_policy = app.config.legacy_sandbox_policy();
 
@@ -3183,7 +3241,6 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
         .developer_instructions
         .as_deref()
         .expect("side developer instructions");
-    assert!(developer_instructions.contains("Existing developer policy."));
     assert!(
         developer_instructions.contains("You are in a side conversation, not the main thread.")
     );
@@ -3209,6 +3266,49 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     assert!(developer_instructions.contains("Do not modify files"));
     assert!(developer_instructions.contains("Do not request escalated permissions"));
     assert!(app.transcript_cells.is_empty());
+}
+
+#[tokio::test]
+async fn side_fork_config_inherits_parent_thread_runtime_settings() {
+    let mut app = make_test_app().await;
+    app.config.model = Some("persisted-default-model".to_string());
+    app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+
+    let parent_service_tier = ServiceTier::Fast.request_value();
+    let parent_permission_profile = PermissionProfile::workspace_write();
+    app.chat_widget.set_model("parent-thread-model");
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    app.chat_widget
+        .set_service_tier(Some(parent_service_tier.to_string()));
+    app.chat_widget
+        .set_approval_policy(AskForApproval::OnRequest);
+    app.chat_widget
+        .set_permission_profile(parent_permission_profile.clone())
+        .expect("test permission profile should be accepted");
+    app.chat_widget
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+
+    let fork_config = app.side_fork_config();
+
+    assert_eq!(
+        (
+            fork_config.model.as_deref(),
+            fork_config.model_reasoning_effort,
+            fork_config.service_tier.as_deref(),
+            fork_config.permissions.approval_policy.value(),
+            fork_config.permissions.permission_profile(),
+            fork_config.approvals_reviewer,
+        ),
+        (
+            Some("parent-thread-model"),
+            Some(ReasoningEffortConfig::High),
+            Some(parent_service_tier),
+            AskForApproval::OnRequest.to_core(),
+            parent_permission_profile,
+            ApprovalsReviewer::AutoReview,
+        )
+    );
 }
 
 #[tokio::test]

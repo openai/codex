@@ -49,7 +49,6 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -193,13 +192,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
-        }
-        EventMsg::SkillsUpdateAvailable => {
-            outgoing
-                .send_server_notification(ServerNotification::SkillsChanged(
-                    SkillsChangedNotification {},
-                ))
-                .await;
         }
         EventMsg::McpStartupUpdate(update) => {
             let (status, error) = match update.status {
@@ -780,6 +772,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 requested_permissions,
                 request_cwd,
                 pending_request_id,
+                outgoing,
                 receiver: rx,
                 request_permissions_guard: permission_guard,
             };
@@ -1753,11 +1746,12 @@ async fn on_request_permissions_response(
         requested_permissions,
         request_cwd,
         pending_request_id,
+        outgoing,
         receiver,
         request_permissions_guard,
     } = pending_response;
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id.clone()).await;
     drop(request_permissions_guard);
     let Some(response) = request_permissions_response_from_client_result(
         requested_permissions,
@@ -1766,6 +1760,7 @@ async fn on_request_permissions_response(
     ) else {
         return;
     };
+    outgoing.track_effective_permissions_approval_response(pending_request_id, response.clone());
 
     if let Err(err) = conversation
         .submit(Op::RequestPermissionsResponse {
@@ -1783,6 +1778,7 @@ struct PendingRequestPermissionsResponse {
     requested_permissions: CoreRequestPermissionProfile,
     request_cwd: AbsolutePathBuf,
     pending_request_id: RequestId,
+    outgoing: ThreadScopedOutgoingMessageSender,
     receiver: oneshot::Receiver<ClientRequestResult>,
     request_permissions_guard: ThreadWatchActiveGuard,
 }
@@ -2190,7 +2186,7 @@ mod tests {
 
         assert_eq!(response.thread.id, thread_id.to_string());
         assert_eq!(response.thread.path, None);
-        assert_eq!(response.thread.preview, "before rollback");
+        assert_eq!(response.thread.preview, "fallback preview");
         assert_eq!(response.thread.name.as_deref(), Some("Rollback thread"));
         assert_eq!(response.thread.status, ThreadStatus::NotLoaded);
         assert_eq!(response.thread.turns.len(), 1);

@@ -19,6 +19,7 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
@@ -85,6 +86,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", script_path.display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -169,6 +171,84 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
 }
 
+#[tokio::test]
+async fn requirements_managed_hooks_execute_windows_command_override() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_dir =
+        AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+
+    let managed_hooks = managed_hooks_for_current_platform(
+        managed_dir,
+        HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "exit 17".to_string(),
+                    command_windows: Some("exit /B 19".to_string()),
+                    timeout_sec: Some(10),
+                    r#async: false,
+                    status_message: Some("checking".to_string()),
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    let outcome = engine
+        .run_pre_tool_use(PreToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
+            tool_use_id: "tool-1".to_string(),
+            tool_input: serde_json::json!({ "command": "echo hello" }),
+        })
+        .await;
+
+    assert!(!outcome.should_block);
+    let expected_exit_code = if cfg!(windows) { 19 } else { 17 };
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Failed);
+    assert_eq!(
+        outcome.hook_events[0].run.entries,
+        vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Error,
+            text: format!("hook exited with code {expected_exit_code}"),
+        }]
+    );
+}
+
 #[test]
 fn unknown_requirement_source_hooks_stay_managed() {
     let temp = tempdir().expect("create temp dir");
@@ -182,6 +262,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: "python3 /tmp/managed.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -244,6 +325,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: "python3 /tmp/managed.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -463,6 +545,7 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", missing_dir.join("pre.py").display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -674,6 +757,7 @@ print(json.dumps({
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", script_path.display()),
+                    command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
@@ -780,8 +864,10 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: "run ${PLUGIN_ROOT} ${CLAUDE_PLUGIN_ROOT} ${PLUGIN_DATA} ${CLAUDE_PLUGIN_DATA}"
-                        .to_string(),
+                    command:
+                        "run ${PLUGIN_ROOT} ${CLAUDE_PLUGIN_ROOT} ${PLUGIN_DATA} ${CLAUDE_PLUGIN_DATA}"
+                            .to_string(),
+                    command_windows: None,
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,

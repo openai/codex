@@ -219,11 +219,10 @@ impl ToolsConfig {
             model_shell_type
         };
 
-        let apply_patch_tool_type = match model_info.apply_patch_tool_type {
-            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
-            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
-            None => include_apply_patch_tool.then_some(ApplyPatchToolType::Function),
-        };
+        let apply_patch_tool_type = model_info
+            .apply_patch_tool_type
+            .clone()
+            .or_else(|| include_apply_patch_tool.then_some(ApplyPatchToolType::Freeform));
 
         let agent_jobs_worker_tools = include_agent_jobs
             && matches!(

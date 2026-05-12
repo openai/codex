@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 
+use crate::tools::flat_tool_name;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolName;
 
@@ -9,9 +10,9 @@ pub(crate) fn collect_unavailable_called_tools(
     exposed_tool_names: &HashSet<ToolName>,
 ) -> Vec<ToolName> {
     let mut unavailable_tools = BTreeMap::new();
-    let exposed_display_names = exposed_tool_names
+    let exposed_flat_names = exposed_tool_names
         .iter()
-        .map(ToolName::display)
+        .map(flat_tool_name)
         .collect::<HashSet<_>>();
 
     for item in input {
@@ -29,13 +30,13 @@ pub(crate) fn collect_unavailable_called_tools(
             Some(namespace) => ToolName::namespaced(namespace.clone(), name.clone()),
             None => ToolName::plain(name.clone()),
         };
-        let display_name = tool_name.display();
-        if exposed_display_names.contains(&display_name) {
+        let tool_name_flat = flat_tool_name(&tool_name).into_owned();
+        if exposed_flat_names.contains(tool_name_flat.as_str()) {
             continue;
         }
 
         unavailable_tools
-            .entry(display_name)
+            .entry(tool_name_flat)
             .or_insert_with(|| tool_name);
     }
 

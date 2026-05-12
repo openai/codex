@@ -478,6 +478,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             None
         }
     };
+    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
+    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -1603,6 +1605,15 @@ async fn handle_server_request(
                 request_id,
                 &method,
                 "chatgpt auth token refresh is not supported in exec mode".to_string(),
+            )
+            .await
+        }
+        ServerRequest::AttestationGenerate { request_id, .. } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                "attestation generation is not supported in exec mode".to_string(),
             )
             .await
         }

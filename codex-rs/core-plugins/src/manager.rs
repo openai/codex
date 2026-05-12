@@ -1196,19 +1196,37 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let installed = installed_plugins.contains(&plugin_key);
+                        let enabled = enabled_plugins.contains(&plugin_key);
+                        let mut interface = plugin.interface;
+                        if installed
+                            && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
+                            && let Ok(plugin_id) =
+                                PluginId::new(plugin.name.clone(), marketplace_name.clone())
+                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
+                        {
+                            let marketplace_category = interface
+                                .as_ref()
+                                .and_then(|interface| interface.category.clone());
+                            interface = plugin_interface_with_marketplace_category(
+                                manifest.interface,
+                                marketplace_category,
+                            );
+                        }
 
                         Some(ConfiguredMarketplacePlugin {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
-                            id: plugin_key.clone(),
-                            installed: installed_plugins.contains(&plugin_key),
-                            enabled: enabled_plugins.contains(&plugin_key),
+                            id: plugin_key,
+                            installed,
+                            enabled,
                             name: plugin.name,
                             source: plugin.source,
                             policy: plugin.policy,
-                            interface: plugin.interface,
                             keywords: plugin.keywords,
+                            interface,
                         })
                     })
                     .collect::<Vec<_>>();

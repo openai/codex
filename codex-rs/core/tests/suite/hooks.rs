@@ -23,7 +23,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
@@ -1573,7 +1573,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &patch),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -1612,7 +1612,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    requests[1].function_call_output(call_id);
+    requests[1].custom_tool_call_output(call_id);
     assert!(
         target_path.exists(),
         "approved apply_patch should create the out-of-workspace file"
@@ -2825,7 +2825,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &patch),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -2858,7 +2858,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
+    let output_item = requests[1].custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -2973,7 +2973,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &patch),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -3004,7 +3004,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
+    let output_item = requests[1].custom_tool_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
@@ -3643,7 +3643,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &patch),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -3731,7 +3731,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &patch),
+                ev_apply_patch_custom_tool_call(call_id, &patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![

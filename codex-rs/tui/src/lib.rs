@@ -42,6 +42,7 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -126,6 +127,7 @@ mod frames;
 mod get_git_diff;
 mod goal_display;
 mod history_cell;
+mod hooks_rpc;
 mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
@@ -162,6 +164,7 @@ mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_hooks_review;
 mod status;
 mod status_indicator_widget;
 mod streaming;
@@ -249,6 +252,7 @@ mod voice {
 
 mod wrapping;
 
+mod table_detect;
 #[cfg(test)]
 pub(crate) mod test_backend;
 #[cfg(test)]
@@ -256,6 +260,8 @@ pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::startup_hooks_review::StartupHooksReviewOutcome;
+use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
@@ -887,6 +893,36 @@ pub async fn run_main(
     )
     .await;
 
+    let otel_originator = originator().value;
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::legacy_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
+        }
+    };
+    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
+    crate::legacy_core::otel_init::install_sqlite_telemetry(
+        otel.as_ref(),
+        otel_originator.as_str(),
+    );
     let state_db = match &app_server_target {
         AppServerTarget::Embedded => state_db::init(&config).await,
         AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
@@ -1028,31 +1064,6 @@ pub async fn run_main(
         };
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
-
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_analytics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            None
-        }
-    };
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -1494,7 +1505,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match app_server {
+    let mut app_server = match app_server {
         Some(app_server) => app_server,
         None => match start_app_server(
             &app_server_target,
@@ -1520,6 +1531,12 @@ async fn run_ratatui_app(
         },
     };
 
+    let startup_hooks_browser =
+        match maybe_run_startup_hooks_review(&mut app_server, &mut tui, &config).await? {
+            StartupHooksReviewOutcome::Continue => None,
+            StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
+        };
+
     let app_result = App::run(
         &mut tui,
         app_server,
@@ -1538,6 +1555,7 @@ async fn run_ratatui_app(
         remote_auth_token,
         state_db,
         environment_manager,
+        startup_hooks_browser,
     )
     .await;
 

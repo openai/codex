@@ -146,13 +146,6 @@ fn responses_websocket_response_processed_is_under_development() {
 }
 
 #[test]
-fn builtin_mcp_is_under_development() {
-    assert_eq!(Feature::BuiltInMcp.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::BuiltInMcp.default_enabled(), false);
-    assert_eq!(feature_for_key("builtin_mcp"), Some(Feature::BuiltInMcp));
-}
-
-#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),
@@ -169,6 +162,19 @@ fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
 fn tool_suggest_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSuggest.default_enabled(), true);
+}
+
+#[test]
+fn network_proxy_is_experimental_and_disabled_by_default() {
+    assert_eq!(
+        feature_for_key("network_proxy"),
+        Some(Feature::NetworkProxy)
+    );
+    assert!(matches!(
+        Feature::NetworkProxy.stage(),
+        Stage::Experimental { .. }
+    ));
+    assert_eq!(Feature::NetworkProxy.default_enabled(), false);
 }
 
 #[test]
@@ -538,12 +544,18 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
+    features.enable(Feature::NetworkProxy);
     features.disable(Feature::ToolSearch);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(false),
             min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        })),
+        network_proxy: Some(FeatureToml::Config(crate::NetworkProxyConfigToml {
+            enabled: Some(false),
+            proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
         entries: BTreeMap::from([("include_apply_patch_tool".to_string(), true)]),
@@ -567,6 +579,14 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
         Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(true),
             min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        }))
+    );
+    assert_eq!(
+        features_toml.network_proxy,
+        Some(FeatureToml::Config(crate::NetworkProxyConfigToml {
+            enabled: Some(true),
+            proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         }))
     );
