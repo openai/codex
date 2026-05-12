@@ -352,6 +352,8 @@ mod tests {
 
     #[tokio::test]
     async fn raw_append_items_does_not_update_sqlite_metadata() {
+        // This pins the ThreadStore contract: raw appends are history-only. Callers that need
+        // metadata updates must use LiveThread or call update_thread_metadata explicitly.
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(

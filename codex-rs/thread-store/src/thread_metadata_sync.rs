@@ -289,7 +289,7 @@ impl ThreadMetadataSync {
             return;
         };
         match self.pending_update.as_mut() {
-            Some(pending_update) => merge_metadata_update(pending_update, update),
+            Some(pending_update) => pending_update.merge(update),
             None => self.pending_update = Some(update),
         }
         self.pending_update_generation = self.pending_update_generation.wrapping_add(1);
@@ -366,75 +366,6 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.git_info.is_some()
         || update.memory_mode.is_some()
         || update.dynamic_tools.is_some()
-}
-
-fn merge_metadata_update(current: &mut ThreadMetadataPatch, next: ThreadMetadataPatch) {
-    if next.rollout_path.is_some() {
-        current.rollout_path = next.rollout_path;
-    }
-    if next.preview.is_some() {
-        current.preview = next.preview;
-    }
-    if next.title.is_some() {
-        current.title = next.title;
-    }
-    if next.model_provider.is_some() {
-        current.model_provider = next.model_provider;
-    }
-    if next.model.is_some() {
-        current.model = next.model;
-    }
-    if next.reasoning_effort.is_some() {
-        current.reasoning_effort = next.reasoning_effort;
-    }
-    if next.created_at.is_some() {
-        current.created_at = next.created_at;
-    }
-    if next.updated_at.is_some() {
-        current.updated_at = next.updated_at;
-    }
-    if next.source.is_some() {
-        current.source = next.source;
-    }
-    if next.thread_source.is_some() {
-        current.thread_source = next.thread_source;
-    }
-    if next.agent_nickname.is_some() {
-        current.agent_nickname = next.agent_nickname;
-    }
-    if next.agent_role.is_some() {
-        current.agent_role = next.agent_role;
-    }
-    if next.agent_path.is_some() {
-        current.agent_path = next.agent_path;
-    }
-    if next.cwd.is_some() {
-        current.cwd = next.cwd;
-    }
-    if next.cli_version.is_some() {
-        current.cli_version = next.cli_version;
-    }
-    if next.approval_mode.is_some() {
-        current.approval_mode = next.approval_mode;
-    }
-    if next.sandbox_policy.is_some() {
-        current.sandbox_policy = next.sandbox_policy;
-    }
-    if next.token_usage.is_some() {
-        current.token_usage = next.token_usage;
-    }
-    if next.first_user_message.is_some() {
-        current.first_user_message = next.first_user_message;
-    }
-    if next.git_info.is_some() {
-        current.git_info = next.git_info;
-    }
-    if next.memory_mode.is_some() {
-        current.memory_mode = next.memory_mode;
-    }
-    if next.dynamic_tools.is_some() {
-        current.dynamic_tools = next.dynamic_tools;
-    }
 }
 
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
