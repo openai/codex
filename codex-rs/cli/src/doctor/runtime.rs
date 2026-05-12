@@ -6,7 +6,6 @@
 //! standalone resources or from PATH.
 
 use std::env;
-use std::path::Path;
 use std::process::Command;
 
 use codex_install_context::InstallContext;
@@ -130,7 +129,7 @@ fn search_provider(context: &InstallContext) -> &'static str {
         InstallContext::Standalone {
             resources_dir: Some(resources_dir),
             ..
-        } if context.rg_command().starts_with(Path::new(resources_dir)) => "bundled",
+        } if context.rg_command().starts_with(resources_dir) => "bundled",
         _ => "system",
     }
 }

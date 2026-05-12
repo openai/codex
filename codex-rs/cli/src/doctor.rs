@@ -542,7 +542,7 @@ fn config_check(config: &Config) -> DoctorCheck {
     details.push(format!("cwd: {}", config.cwd.display()));
     details.push(format!(
         "model: {}",
-        option_or_default(config.model.as_deref())
+        config.model.as_deref().unwrap_or("<default>")
     ));
     details.push(format!("model provider: {}", config.model_provider_id));
     details.push(format!("log dir: {}", config.log_dir.display()));
@@ -1092,10 +1092,6 @@ fn push_env_path_detail(details: &mut Vec<String>, label: &str, name: &str) {
 
 fn env_var_present(name: &str) -> bool {
     env::var_os(name).is_some_and(|value| !value.is_empty())
-}
-
-fn option_or_default(value: Option<&str>) -> &str {
-    value.unwrap_or("<default>")
 }
 
 fn human_output_options(command: &DoctorCommand) -> HumanOutputOptions {

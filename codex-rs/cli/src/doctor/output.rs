@@ -137,16 +137,12 @@ fn row_description(check: &DoctorCheck, options: HumanOutputOptions) -> String {
     if matches!(check.status, CheckStatus::Warning | CheckStatus::Fail)
         && let Some(remediation) = &check.remediation
     {
-        let dash = dash(options);
+        let dash = if options.ascii { " - " } else { " — " };
         let summary = &check.summary;
         return format!("{summary}{dash}{remediation}");
     }
 
     check.summary.clone()
-}
-
-fn dash(options: HumanOutputOptions) -> &'static str {
-    if options.ascii { " - " } else { " — " }
 }
 
 fn status_marker(status: CheckStatus, options: HumanOutputOptions) -> String {
