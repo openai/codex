@@ -118,7 +118,7 @@ impl CodeModeService {
         self.start_session(
             request,
             SessionResponseSender::ExecuteToPending(response_tx),
-            None,
+            /*initial_yield_time_ms*/ None,
             PendingRuntimeMode::PauseUntilResumed,
         )
         .await?;
