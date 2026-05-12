@@ -601,7 +601,6 @@ impl App {
                             cwd.clone(),
                             *approval_policy,
                             approvals_reviewer,
-                            permission_profile.clone(),
                             active_permission_profile,
                             model.to_string(),
                             *effort,

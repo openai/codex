@@ -5583,45 +5583,12 @@
           "id": {
             "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
             "type": "string"
-          },
-          "modifications": {
-            "default": [],
-            "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
-            "items": {
-              "$ref": "#/definitions/v2/ActivePermissionProfileModification"
-            },
-            "type": "array"
           }
         },
         "required": [
           "id"
         ],
         "type": "object"
-      },
-      "ActivePermissionProfileModification": {
-        "oneOf": [
-          {
-            "description": "Additional concrete directory that should be writable.",
-            "properties": {
-              "path": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              },
-              "type": {
-                "enum": [
-                  "additionalWritableRoot"
-                ],
-                "title": "AdditionalWritableRootActivePermissionProfileModificationType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "path",
-              "type"
-            ],
-            "title": "AdditionalWritableRootActivePermissionProfileModification",
-            "type": "object"
-          }
-        ]
       },
       "AddCreditsNudgeCreditType": {
         "enum": [
@@ -11710,31 +11677,6 @@
           }
         ]
       },
-      "PermissionProfileModificationParams": {
-        "oneOf": [
-          {
-            "description": "Additional concrete directory that should be writable.",
-            "properties": {
-              "path": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              },
-              "type": {
-                "enum": [
-                  "additionalWritableRoot"
-                ],
-                "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "path",
-              "type"
-            ],
-            "title": "AdditionalWritableRootPermissionProfileModificationParams",
-            "type": "object"
-          }
-        ]
-      },
       "PermissionProfileNetworkPermissions": {
         "properties": {
           "enabled": {
@@ -11745,40 +11687,6 @@
           "enabled"
         ],
         "type": "object"
-      },
-      "PermissionProfileSelectionParams": {
-        "oneOf": [
-          {
-            "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "modifications": {
-                "items": {
-                  "$ref": "#/definitions/v2/PermissionProfileModificationParams"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "profile"
-                ],
-                "title": "ProfilePermissionProfileSelectionParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "type"
-            ],
-            "title": "ProfilePermissionProfileSelectionParams",
-            "type": "object"
-          }
-        ]
       },
       "Personality": {
         "enum": [
@@ -14396,13 +14304,6 @@
                 ],
                 "title": "WorkspaceWriteSandboxPolicyType",
                 "type": "string"
-              },
-              "writableRoots": {
-                "default": [],
-                "items": {
-                  "$ref": "#/definitions/v2/AbsolutePathBuf"
-                },
-                "type": "array"
               }
             },
             "required": [
@@ -15390,7 +15291,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Deprecated for fork. When present, the server treats this as a compatibility spelling for selecting a matching named permissions profile."
           },
           "serviceTier": {
             "type": [
@@ -15466,7 +15368,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` for the exact effective permissions."
           },
           "serviceTier": {
             "type": [
@@ -16893,7 +16795,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Deprecated for resume. When present, the server treats this as a compatibility spelling for selecting a matching named permissions profile."
           },
           "serviceTier": {
             "type": [
@@ -16958,7 +16861,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` for the exact effective permissions."
           },
           "serviceTier": {
             "type": [
@@ -17266,7 +17169,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` for the exact effective permissions."
           },
           "serviceTier": {
             "type": [
@@ -17935,7 +17838,7 @@
                 "type": "null"
               }
             ],
-            "description": "Override the sandbox policy for this turn and subsequent turns."
+            "description": "Deprecated for turns. When present, the server treats this as a compatibility spelling for selecting a matching named permissions profile."
           },
           "serviceTier": {
             "description": "Override the service tier for this turn and subsequent turns.",

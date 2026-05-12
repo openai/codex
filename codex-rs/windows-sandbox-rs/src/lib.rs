@@ -254,6 +254,7 @@ mod windows_impl {
     use super::acl::revoke_ace;
     use super::allow::AllowDenyPaths;
     use super::allow::compute_allow_paths;
+    use super::allow::protected_child_deny_paths_for_roots;
     use super::cap::load_or_create_cap_sids;
     use super::cap::workspace_cap_sid_for_cwd;
     use super::logging::log_failure;
@@ -339,6 +340,7 @@ mod windows_impl {
             cwd,
             env_map,
             timeout_ms,
+            /*write_roots_override*/ None,
             &[],
             use_private_desktop,
         )
@@ -353,6 +355,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        write_roots_override: Option<&[PathBuf]>,
         additional_deny_write_paths: &[PathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
@@ -421,8 +424,18 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
-        let AllowDenyPaths { allow, mut deny } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let AllowDenyPaths { allow, mut deny } = if let Some(write_roots) = write_roots_override {
+            AllowDenyPaths {
+                allow: write_roots
+                    .iter()
+                    .filter(|path| path.exists())
+                    .cloned()
+                    .collect(),
+                deny: protected_child_deny_paths_for_roots(write_roots, sandbox_policy_cwd),
+            }
+        } else {
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map)
+        };
         for path in additional_deny_write_paths {
             if path.exists() {
                 deny.insert(path.clone());
@@ -651,7 +664,6 @@ mod windows_impl {
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
                 network_access,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
