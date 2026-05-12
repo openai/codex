@@ -46,10 +46,6 @@ use updates::updates_check;
 
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
-    /// Run bounded reachability probes in addition to local checks.
-    #[arg(long, default_value_t = false)]
-    deep: bool,
-
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
@@ -81,17 +77,9 @@ enum CheckStatus {
 struct DoctorReport {
     schema_version: u32,
     generated_at: String,
-    mode: DoctorMode,
     overall_status: CheckStatus,
     codex_version: String,
     checks: Vec<DoctorCheck>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum DoctorMode {
-    Fast,
-    Deep,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,9 +168,9 @@ async fn build_report(
         Ok(config) => {
             checks.push(timed_check(|| config_check(config)));
             checks.push(timed_check(|| auth_check(config)));
-            checks.push(timed_check(|| updates_check(config, command.deep)));
-            checks.push(timed_check(|| network_check(command.deep)));
-            checks.push(timed_check(|| mcp_check(config, command.deep)));
+            checks.push(timed_check(|| updates_check(config)));
+            checks.push(timed_check(network_check));
+            checks.push(timed_check(|| mcp_check(config)));
             checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
             checks.push(timed_check(terminal_check));
             checks.push(timed_check(|| state_check(config)));
@@ -199,35 +187,18 @@ async fn build_report(
                 .detail(err.to_string())
                 .remediation("Fix the reported config error, then rerun codex doctor.")
             }));
-            checks.push(timed_check(|| network_check(command.deep)));
+            checks.push(timed_check(network_check));
             checks.push(timed_check(terminal_check));
             checks.push(timed_check(fallback_state_check));
         }
     }
 
-    if command.deep {
-        checks.push(timed_check(deep_openai_reachability_check));
-    } else {
-        checks.push(timed_check(|| {
-            DoctorCheck::new(
-                "deep.probes",
-                "deep",
-                CheckStatus::Skipped,
-                "deep reachability probes were skipped",
-            )
-            .detail("Run codex doctor --deep for network, app-server, and MCP reachability probes.")
-        }));
-    }
+    checks.push(timed_check(openai_reachability_check));
 
     let overall_status = overall_status(&checks);
     DoctorReport {
         schema_version: 1,
         generated_at: generated_at(),
-        mode: if command.deep {
-            DoctorMode::Deep
-        } else {
-            DoctorMode::Fast
-        },
         overall_status,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
         checks,
@@ -670,7 +641,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
     }
 }
 
-fn network_check(deep: bool) -> DoctorCheck {
+fn network_check() -> DoctorCheck {
     let mut details = Vec::new();
     let proxy_vars = [
         "HTTP_PROXY",
@@ -718,14 +689,10 @@ fn network_check(deep: bool) -> DoctorCheck {
         }
     }
 
-    if !deep {
-        details.push("deep reachability probes: skipped in fast mode".to_string());
-    }
-
     DoctorCheck::new("network.env", "network", status, summary).details(details)
 }
 
-fn mcp_check(config: &Config, deep: bool) -> DoctorCheck {
+fn mcp_check(config: &Config) -> DoctorCheck {
     let servers = config.mcp_servers.get();
     if servers.is_empty() {
         return DoctorCheck::new(
@@ -794,7 +761,7 @@ fn mcp_check(config: &Config, deep: bool) -> DoctorCheck {
                         }
                     }
                 }
-                if deep && let Err(err) = tcp_probe_url(url) {
+                if let Err(err) = tcp_probe_url(url) {
                     unreachable_http.push(format!("{name}: {url} ({err})"));
                 }
             }
@@ -810,11 +777,8 @@ fn mcp_check(config: &Config, deep: bool) -> DoctorCheck {
     details.extend(
         unreachable_http
             .iter()
-            .map(|detail| format!("deep reachability failed: {detail}")),
+            .map(|detail| format!("reachability failed: {detail}")),
     );
-    if !deep {
-        details.push("MCP startup and HTTP reachability probes skipped in fast mode".to_string());
-    }
 
     let required_missing = servers.iter().any(|(name, server)| {
         server.required
@@ -975,7 +939,7 @@ fn fallback_state_check() -> DoctorCheck {
     }
 }
 
-fn deep_openai_reachability_check() -> DoctorCheck {
+fn openai_reachability_check() -> DoctorCheck {
     let endpoints = [("api.openai.com", 443), ("chatgpt.com", 443)];
     let mut details = Vec::new();
     let mut failures = Vec::new();
@@ -999,8 +963,13 @@ fn deep_openai_reachability_check() -> DoctorCheck {
     } else {
         "one or more OpenAI endpoints are unreachable over TCP"
     };
-    let mut check =
-        DoctorCheck::new("network.deep_reachability", "network", status, summary).details(details);
+    let mut check = DoctorCheck::new(
+        "network.openai_reachability",
+        "reachability",
+        status,
+        summary,
+    )
+    .details(details);
     if status != CheckStatus::Ok {
         check = check.remediation("Check proxy, VPN, firewall, DNS, and custom CA configuration.");
     }

@@ -2234,6 +2234,13 @@ mod tests {
     }
 
     #[test]
+    fn doctor_rejects_removed_deep_flag() {
+        let err = MultitoolCli::try_parse_from(["codex", "doctor", "--deep"])
+            .expect_err("doctor --deep should no longer parse");
+        assert!(err.to_string().contains("--deep"));
+    }
+
+    #[test]
     fn sandbox_macos_parses_permissions_profile() {
         let cli = MultitoolCli::try_parse_from([
             "codex",

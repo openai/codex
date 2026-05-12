@@ -4,7 +4,6 @@ use owo_colors::OwoColorize;
 
 use super::CheckStatus;
 use super::DoctorCheck;
-use super::DoctorMode;
 use super::DoctorReport;
 
 const NAME_WIDTH: usize = 12;
@@ -25,7 +24,7 @@ const GROUPS: &[OutputGroup] = &[
     },
     OutputGroup {
         title: "Connectivity",
-        keys: &["network", "deep"],
+        keys: &["network", "reachability"],
     },
     OutputGroup {
         title: "Background Server",
@@ -47,14 +46,11 @@ pub(super) struct HumanOutputOptions {
 
 pub(super) fn render_human_report(report: &DoctorReport, options: HumanOutputOptions) -> String {
     let mut out = String::new();
-    let title_separator = if options.ascii { " - " } else { " · " };
     let _ = writeln!(
         out,
-        "{} {}{}{} mode",
+        "{} {}",
         bold("Codex Doctor", options),
-        dim(&format!("v{}", report.codex_version), options),
-        dim(title_separator, options),
-        dim(report.mode.name(), options)
+        dim(&format!("v{}", report.codex_version), options)
     );
     out.push('\n');
 
@@ -92,29 +88,9 @@ fn checks_for_group<'a>(report: &'a DoctorReport, group: &OutputGroup) -> Vec<&'
             report
                 .checks
                 .iter()
-                .filter(move |check| output_key(check) == *key)
+                .filter(move |check| check.category == *key)
         })
         .collect()
-}
-
-fn output_key(check: &DoctorCheck) -> &str {
-    if is_deep_probe_check(check) {
-        "deep"
-    } else {
-        &check.category
-    }
-}
-
-fn display_name(check: &DoctorCheck) -> &str {
-    if is_deep_probe_check(check) {
-        "deep probes"
-    } else {
-        &check.category
-    }
-}
-
-fn is_deep_probe_check(check: &DoctorCheck) -> bool {
-    check.id == "deep.probes" || check.id == "network.deep_reachability"
 }
 
 fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOptions) {
@@ -123,7 +99,7 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
         out,
         "  {} {:<NAME_WIDTH$} {}",
         status_marker(check.status, options),
-        display_name(check),
+        check.category,
         style_description(&description, check.status, options)
     );
 
@@ -142,10 +118,6 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
 }
 
 fn row_description(check: &DoctorCheck, options: HumanOutputOptions) -> String {
-    if check.id == "deep.probes" {
-        return format!("skipped{}run with --deep", dash(options));
-    }
-
     if matches!(check.status, CheckStatus::Warning | CheckStatus::Fail)
         && let Some(remediation) = &check.remediation
     {
@@ -253,15 +225,7 @@ fn styled_overall_status(label: &str, status: CheckStatus, options: HumanOutputO
     }
 }
 
-fn write_footer(out: &mut String, report: &DoctorReport, options: HumanOutputOptions) {
-    if matches!(report.mode, DoctorMode::Fast) {
-        let _ = writeln!(
-            out,
-            "{} {}",
-            cyan("--deep", options),
-            dim("reachability and latest-version probes", options)
-        );
-    }
+fn write_footer(out: &mut String, _report: &DoctorReport, options: HumanOutputOptions) {
     let _ = writeln!(
         out,
         "{} {}",
@@ -272,7 +236,7 @@ fn write_footer(out: &mut String, report: &DoctorReport, options: HumanOutputOpt
         out,
         "{}",
         dim(
-            "Still having issues? Run codex doctor --json for support details.",
+            "Still having issues? Run codex doctor --verbose for more details.",
             options
         )
     );
@@ -341,15 +305,6 @@ fn redact_for_display(detail: &str) -> String {
         format!("{name}: <redacted>")
     } else {
         detail.to_string()
-    }
-}
-
-impl DoctorMode {
-    fn name(&self) -> &'static str {
-        match self {
-            DoctorMode::Fast => "fast",
-            DoctorMode::Deep => "deep",
-        }
     }
 }
 
@@ -497,16 +452,15 @@ mod tests {
                 "background server is not running",
             ),
             DoctorCheck::new(
-                "deep.probes",
-                "deep",
-                CheckStatus::Skipped,
-                "deep reachability probes were skipped",
+                "network.openai_reachability",
+                "reachability",
+                CheckStatus::Ok,
+                "OpenAI endpoints are reachable over TCP",
             ),
         ];
         DoctorReport {
             schema_version: 1,
             generated_at: "0s since unix epoch".to_string(),
-            mode: DoctorMode::Fast,
             overall_status: CheckStatus::Fail,
             codex_version: "0.0.0".to_string(),
             checks,
@@ -517,7 +471,7 @@ mod tests {
     fn render_human_report_groups_checks_without_color() {
         let rendered = render_human_report(&sample_report(), no_color_unicode_options());
         let expected = "\
-Codex Doctor v0.0.0 · fast mode
+Codex Doctor v0.0.0
 
 Environment
   ✓ runtime      running local on darwin-arm64
@@ -534,17 +488,16 @@ Updates
 
 Connectivity
   ✓ network      network environment readable
-  ⊘ deep probes  skipped — run with --deep
+  ✓ reachability OpenAI endpoints are reachable over TCP
 
 Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────
-7 ok · 1 warn · 1 fail · 1 skipped failed
+8 ok · 1 warn · 1 fail · 0 skipped failed
 
---deep reachability and latest-version probes
 --json redacted support report
-Still having issues? Run codex doctor --json for support details.
+Still having issues? Run codex doctor --verbose for more details.
 ";
         assert_eq!(rendered, expected);
     }
@@ -561,7 +514,7 @@ Still having issues? Run codex doctor --json for support details.
         );
         let expected = format!(
             "\
-Codex Doctor v0.0.0 - fast mode
+Codex Doctor v0.0.0
 
 Environment
   [ok] runtime      running local on darwin-arm64
@@ -578,17 +531,16 @@ Updates
 
 Connectivity
   [ok] network      network environment readable
-  [--] deep probes  skipped - run with --deep
+  [ok] reachability OpenAI endpoints are reachable over TCP
 
 Background Server
   [ok] app-server   background server is not running
 
 {}
-7 ok | 1 warn | 1 fail | 1 skipped failed
+8 ok | 1 warn | 1 fail | 0 skipped failed
 
---deep reachability and latest-version probes
 --json redacted support report
-Still having issues? Run codex doctor --json for support details.
+Still having issues? Run codex doctor --verbose for more details.
 ",
             "-".repeat(SEPARATOR_WIDTH)
         );

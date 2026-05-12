@@ -16,7 +16,7 @@ const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 
-pub(super) fn updates_check(config: &Config, deep: bool) -> DoctorCheck {
+pub(super) fn updates_check(config: &Config) -> DoctorCheck {
     let current_exe = std::env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());
     let mut details = vec![
@@ -72,23 +72,19 @@ pub(super) fn updates_check(config: &Config, deep: bool) -> DoctorCheck {
         }
     }
 
-    if deep {
-        match fetch_latest_version(&install_context) {
-            Ok(latest_version) => {
-                details.push(format!("latest version: {latest_version}"));
-                if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
-                    details.push("latest version status: newer version is available".to_string());
-                } else {
-                    details.push("latest version status: current version is not older".to_string());
-                }
-            }
-            Err(err) => {
-                status = status.max(CheckStatus::Warning);
-                details.push(format!("latest version probe: {err}"));
+    match fetch_latest_version(&install_context) {
+        Ok(latest_version) => {
+            details.push(format!("latest version: {latest_version}"));
+            if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
+                details.push("latest version status: newer version is available".to_string());
+            } else {
+                details.push("latest version status: current version is not older".to_string());
             }
         }
-    } else {
-        details.push("latest version probe: skipped in fast mode".to_string());
+        Err(err) => {
+            status = status.max(CheckStatus::Warning);
+            details.push(format!("latest version probe: {err}"));
+        }
     }
 
     let mut check = DoctorCheck::new("updates.status", "updates", status, summary).details(details);
