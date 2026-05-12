@@ -182,7 +182,10 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Text;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -203,6 +206,8 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const PET_SELECTION_LOADING_VIEW_ID: &str = "pet-selection-loading";
+const AMBIENT_PET_WRAP_GAP_COLUMNS: u16 = 2;
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -334,6 +339,7 @@ use self::interrupts::InterruptManager;
 mod keymap_picker;
 mod mcp_startup;
 use self::mcp_startup::McpStartupStatus;
+mod pets;
 mod session_header;
 use self::session_header::SessionHeader;
 mod hooks;
@@ -743,6 +749,15 @@ pub(crate) struct ChatWidget {
     review: ReviewState,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
+    // Ambient companion rendered over the transcript area, never inside the footer rows.
+    ambient_pet: Option<crate::pets::AmbientPet>,
+    pet_picker_preview_state: crate::pets::PetPickerPreviewState,
+    pet_picker_preview_pet: Option<crate::pets::AmbientPet>,
+    pet_picker_preview_request_id: u64,
+    pet_picker_preview_image_visible: std::cell::Cell<bool>,
+    pet_selection_load_request_id: u64,
+    #[cfg(test)]
+    pet_image_support_override: Option<crate::pets::PetImageSupport>,
     thread_id: Option<ThreadId>,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
@@ -2270,6 +2285,10 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Running,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -2363,6 +2382,10 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        if !from_replay {
+            let body = Notification::agent_turn_preview(&notification_response);
+            self.set_ambient_pet_notification(crate::pets::PetNotificationKind::Review, body);
+        }
         self.request_redraw();
 
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
@@ -2847,6 +2870,10 @@ impl ChatWidget {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Failed,
+            /*body*/ None,
+        );
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -4051,6 +4078,9 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
+        if let Some(pet) = self.ambient_pet.as_ref() {
+            pet.schedule_next_frame();
+        }
         self.refresh_plan_mode_nudge();
         self.refresh_goal_status_indicator_for_time_tick();
         if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
@@ -4395,6 +4425,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4411,6 +4445,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.to_path_buf(),
@@ -4469,12 +4507,20 @@ impl ChatWidget {
                 }
             }
         }
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4484,6 +4530,10 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .push_mcp_server_elicitation_request(request);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4498,6 +4548,10 @@ impl ChatWidget {
         };
         self.notify(Notification::PlanModePrompt { title });
         self.bottom_pane.push_user_input_request(ev);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4512,6 +4566,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4772,6 +4830,12 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        pets::start_configured_pet_load_if_needed(
+            &config,
+            /*ambient_pet_missing*/ true,
+            frame_requester.clone(),
+            app_event_tx.clone(),
+        );
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -4846,6 +4910,14 @@ impl ChatWidget {
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,
+            ambient_pet: None,
+            pet_picker_preview_state: crate::pets::PetPickerPreviewState::default(),
+            pet_picker_preview_pet: None,
+            pet_picker_preview_request_id: 0,
+            pet_picker_preview_image_visible: std::cell::Cell::new(/*value*/ false),
+            pet_selection_load_request_id: 0,
+            #[cfg(test)]
+            pet_image_support_override: None,
             thread_id: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
@@ -9369,6 +9441,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn add_warning_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+    }
+
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -9775,6 +9852,8 @@ impl ChatWidget {
             if width == 0 {
                 None
             } else {
+                let width = u16::try_from(width).unwrap_or(u16::MAX);
+                let width = usize::from(self.history_wrap_width(width));
                 Some(crate::width::usable_content_width(width, reserved_cols).unwrap_or(1))
             }
         })
@@ -10405,17 +10484,22 @@ impl ChatWidget {
     }
 
     fn as_renderable(&self) -> RenderableItem<'_> {
+        let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-            )),
+            Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                child: cell.as_ref(),
+                top: 1,
+                right: active_cell_right_reserve,
+            })),
             None => RenderableItem::Owned(Box::new(())),
         };
         let active_hook_cell_renderable = match &self.active_hook_cell {
             Some(cell) if cell.should_render() => {
-                RenderableItem::Borrowed(cell).inset(Insets::tlbr(
-                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                ))
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                }))
             }
             _ => RenderableItem::Owned(Box::new(())),
         };
@@ -10424,11 +10508,84 @@ impl ChatWidget {
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
         flex.push(
             /*flex*/ 0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
+            RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
+                bottom_pane: &self.bottom_pane,
+                right_reserve: active_cell_right_reserve,
+            }))
+            .inset(Insets::tlbr(
                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
             )),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+struct BottomPaneComposerReserveRenderable<'a> {
+    bottom_pane: &'a BottomPane,
+    right_reserve: u16,
+}
+
+impl Renderable for BottomPaneComposerReserveRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.bottom_pane
+            .render_with_composer_right_reserve(area, buf, self.right_reserve);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.bottom_pane
+            .desired_height_with_composer_right_reserve(width, self.right_reserve)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.bottom_pane
+            .cursor_pos_with_composer_right_reserve(area, self.right_reserve)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.bottom_pane
+            .cursor_style_with_composer_right_reserve(area, self.right_reserve)
+    }
+}
+
+struct TranscriptAreaRenderable<'a> {
+    child: &'a dyn HistoryCell,
+    top: u16,
+    right: u16,
+}
+
+impl Renderable for TranscriptAreaRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let area = self.child_area(area);
+        let lines = self.child.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let y = if area.height == 0 {
+            0
+        } else {
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
+            u16::try_from(overflow).unwrap_or(u16::MAX)
+        };
+        Clear.render(area, buf);
+        paragraph.scroll((y, 0)).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let child_width = width.saturating_sub(self.right).max(1);
+        HistoryCell::desired_height(self.child, child_width) + self.top
+    }
+}
+
+impl TranscriptAreaRenderable<'_> {
+    fn child_area(&self, area: Rect) -> Rect {
+        let y = area.y.saturating_add(self.top);
+        let height = area.height.saturating_sub(self.top);
+        Rect::new(
+            area.x,
+            y,
+            area.width.saturating_sub(self.right).max(1),
+            height,
+        )
     }
 }
 

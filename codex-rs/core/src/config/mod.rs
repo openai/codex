@@ -51,6 +51,7 @@ use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::TuiPetAnchor;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginsConfigInput;
@@ -548,6 +549,12 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Pet id preselected by the terminal pet picker.
+    pub tui_pet: Option<String>,
+
+    /// Vertical anchor used by terminal pet rendering.
+    pub tui_pet_anchor: TuiPetAnchor,
 
     /// Preferred layout for resume/fork session picker results.
     pub tui_session_picker_view: SessionPickerViewMode,
@@ -2905,12 +2912,6 @@ impl Config {
                     }
                 })
                 .map_err(std::io::Error::from)?;
-
-            if cfg!(target_os = "windows") {
-                startup_warnings.push(format!(
-                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
-                ));
-            }
         }
         apply_requirement_constrained_value(
             "approvals_reviewer",
@@ -3211,6 +3212,12 @@ impl Config {
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),
+            tui_pet_anchor: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.pet_anchor)
+                .unwrap_or_default(),
             tui_session_picker_view: config_profile
                 .tui
                 .as_ref()

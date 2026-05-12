@@ -815,6 +815,7 @@ impl Session {
             let thread_extension_data = codex_extension_api::ExtensionData::new();
             for contributor in extensions.thread_start_contributors() {
                 contributor.contribute(
+                    thread_id,
                     config.as_ref(),
                     &session_extension_data,
                     &thread_extension_data,

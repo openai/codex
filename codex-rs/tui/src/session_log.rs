@@ -169,6 +169,33 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
+        AppEvent::PetPreviewLoaded { request_id, result } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "PetPreviewLoaded",
+                "request_id": request_id,
+                "ok": result.is_ok(),
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::PetSelectionLoaded {
+            request_id,
+            pet_id,
+            result,
+        } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "PetSelectionLoaded",
+                "request_id": request_id,
+                "pet_id": pet_id,
+                "ok": result.is_ok(),
+            });
+            LOGGER.write_json_line(value);
+        }
         // Noise or control flow – record variant only
         other => {
             let value = json!({
