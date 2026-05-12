@@ -67,7 +67,6 @@ use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -98,6 +97,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+
+fn materialized_file_system_sandbox_policy(config: &Config) -> FileSystemSandboxPolicy {
+    config
+        .permissions
+        .permission_profile()
+        .materialize_project_roots_with_workspace_roots(&config.workspace_roots)
+        .file_system_sandbox_policy()
+}
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
     McpServerConfig {
@@ -1361,7 +1368,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: memories_root.clone(),
+                    path: memories_root,
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1370,7 +1377,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1547,7 +1553,6 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1748,7 +1753,7 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
+    let policy = materialized_file_system_sandbox_policy(&config);
     assert_eq!(
         config
             .permissions
@@ -1769,7 +1774,7 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
 }
 
 #[tokio::test]
-async fn default_permissions_read_only_applies_additional_writable_roots_as_modifications()
+async fn default_permissions_read_only_records_additional_writable_roots_as_workspace_roots()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
@@ -1790,18 +1795,18 @@ async fn default_permissions_read_only_applies_additional_writable_roots_as_modi
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
-    assert!(
-        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
-        "expected additional writable root to modify :read-only, policy: {policy:?}"
+    let policy = materialized_file_system_sandbox_policy(&config);
+    assert_eq!(
+        policy,
+        PermissionProfile::read_only().file_system_sandbox_policy()
+    );
+    assert_eq!(
+        config.workspace_roots,
+        vec![cwd.path().abs(), extra_root.clone()]
     );
     assert_eq!(
         config.permissions.active_permission_profile(),
-        Some(
-            ActivePermissionProfile::new(":read-only").with_modifications(vec![
-                ActivePermissionProfileModification::AdditionalWritableRoot { path: extra_root },
-            ])
-        )
+        Some(ActivePermissionProfile::new(":read-only"))
     );
     Ok(())
 }
@@ -1832,7 +1837,7 @@ async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_setti
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
+    let policy = materialized_file_system_sandbox_policy(&config);
     assert_eq!(
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
@@ -1872,7 +1877,7 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
+    let policy = materialized_file_system_sandbox_policy(&config);
     assert_eq!(
         config
             .permissions
@@ -1940,7 +1945,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
+    let policy = materialized_file_system_sandbox_policy(&config);
     assert!(
         policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
         "expected implicit :workspace to preserve sandbox_workspace_write.writable_roots, policy: {policy:?}"
@@ -1957,12 +1962,11 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
     );
     match config.legacy_sandbox_policy() {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots,
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         } => {
-            assert!(writable_roots.contains(&extra_root));
+            assert!(config.workspace_roots.contains(&extra_root));
             assert!(network_access);
             assert!(exclude_tmpdir_env_var);
             assert!(!exclude_slash_tmp);
@@ -2006,7 +2010,7 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
     )
     .await?;
 
-    let policy = config.permissions.file_system_sandbox_policy();
+    let policy = materialized_file_system_sandbox_policy(&config);
     let extra_root = extra_root.path().abs();
     assert!(
         policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
@@ -2181,9 +2185,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
-    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("memories"),
-    )?)?;
     assert!(
         config
             .permissions
@@ -2193,7 +2194,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path, memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2803,7 +2803,6 @@ trust_level = "trusted"
         assert_eq!(
             resolution,
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable_root.clone()],
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -2843,7 +2842,6 @@ exclude_slash_tmp = true
         assert_eq!(
             resolution,
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable_root],
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -2907,13 +2905,21 @@ exclude_slash_tmp = true
             NetworkSandboxPolicy::from(&sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
-        assert_eq!(
-            file_system_policy
-                .to_legacy_sandbox_policy(network_policy, cwd.path())
-                .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
-            sandbox_policy,
-            "case `{name}` should preserve its legacy compatibility projection"
-        );
+        let direct_legacy_projection =
+            file_system_policy.to_legacy_sandbox_policy(network_policy, cwd.path());
+        if name == "workspace-write" && !cfg!(target_os = "windows") {
+            assert!(
+                direct_legacy_projection.is_err(),
+                "case `{name}` should require the compatibility projection for split workspace roots"
+            );
+        } else {
+            assert_eq!(
+                direct_legacy_projection
+                    .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
+                sandbox_policy,
+                "case `{name}` should preserve its legacy compatibility projection"
+            );
+        }
 
         match name.as_str() {
             "danger-full-access" | "read-only" => {
@@ -2955,14 +2961,19 @@ exclude_slash_tmp = true
                         })
                 );
                 assert!(
-                    file_system_policy
+                    config.workspace_roots.contains(&extra_root),
+                    "case `{name}` should store legacy writable roots as thread workspace roots"
+                );
+                assert!(
+                    materialized_file_system_sandbox_policy(&config)
                         .entries
                         .contains(&FileSystemSandboxEntry {
                             path: FileSystemPath::Path {
                                 path: extra_root.clone(),
                             },
                             access: FileSystemAccessMode::Write,
-                        })
+                        }),
+                    "case `{name}` should materialize workspace roots into runtime write access"
                 );
                 for subpath in [".git", ".agents", ".codex"] {
                     assert!(
@@ -3705,14 +3716,15 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
         }
     } else {
         match &config.legacy_sandbox_policy() {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            SandboxPolicy::WorkspaceWrite { .. } => {
                 assert_eq!(
-                    writable_roots
+                    config
+                        .workspace_roots
                         .iter()
                         .filter(|root| **root == expected_backend)
                         .count(),
                     1,
-                    "expected single writable root entry for {}",
+                    "expected single workspace root entry for {}",
                     expected_backend.display()
                 );
             }
@@ -3772,13 +3784,16 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
             "expected memories root directory to exist at {}",
             memories_root.display()
         );
-        let expected_memories_root = memories_root.abs();
+        let expected_memories_root =
+            AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(&memories_root)?)?;
         match &config.legacy_sandbox_policy() {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let writable_roots = materialized_file_system_sandbox_policy(&config)
+                    .get_writable_roots_with_cwd(config.cwd.as_path());
                 assert_eq!(
                     writable_roots
                         .iter()
-                        .filter(|root| **root == expected_memories_root)
+                        .filter(|root| root.root == expected_memories_root)
                         .count(),
                     1,
                     "expected single writable root entry for {}",
@@ -7226,6 +7241,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
+            workspace_roots: vec![fixture.cwd()],
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -7670,6 +7686,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
+        workspace_roots: vec![fixture.cwd()],
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -7828,6 +7845,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
+        workspace_roots: vec![fixture.cwd()],
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -7971,6 +7989,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
+        workspace_roots: vec![fixture.cwd()],
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -8976,7 +8995,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
-            &config.permissions.permission_profile(),
+            config.permissions.permission_profile_ref(),
         ),
         WebSearchMode::Cached,
     );
