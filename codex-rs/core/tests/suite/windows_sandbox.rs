@@ -3,6 +3,7 @@ use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -166,7 +167,12 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
         NetworkSandboxPolicy::Restricted,
     );
 
-    let output = process_exec_tool_call(
+    let ExecToolCallOutput {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = process_exec_tool_call(
         ExecParams {
             command: vec![
                 "cmd.exe".to_string(),
@@ -193,32 +199,32 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
     )
     .await?;
 
-    assert_eq!(output.exit_code, 0, "sandboxed command should complete");
+    assert_eq!(exit_code, 0, "sandboxed command should complete");
     assert!(
-        output.stdout.text.contains("GLOB-DENIED"),
+        stdout.text.contains("GLOB-DENIED"),
         "glob deny-read should block the secret: {:?}",
-        output.stdout
+        stdout
     );
     assert!(
-        !output.stdout.text.contains("GLOB-READ"),
+        !stdout.text.contains("GLOB-READ"),
         "glob deny-read should not allow the secret: {:?}",
-        output.stdout
+        stdout
     );
     assert!(
-        output.stdout.text.contains("EXACT-DENIED"),
+        stdout.text.contains("EXACT-DENIED"),
         "exact deny-read should block the secret: {:?}",
-        output.stdout
+        stdout
     );
     assert!(
-        !output.stdout.text.contains("EXACT-READ"),
+        !stdout.text.contains("EXACT-READ"),
         "exact deny-read should not allow the secret: {:?}",
-        output.stdout
+        stdout
     );
     assert!(
-        output.stdout.text.contains("public ok"),
+        stdout.text.contains("public ok"),
         "allowed reads should still work: {:?}",
-        output.stdout
+        stdout
     );
-    assert_eq!(output.stderr.text, "");
+    assert_eq!(stderr.text, "");
     Ok(())
 }
