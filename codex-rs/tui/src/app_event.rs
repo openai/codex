@@ -75,10 +75,15 @@ pub(crate) struct HistoryLookupResponse {
 
 #[derive(Debug)]
 pub(crate) struct WorktreeSessionReadyEvent {
+    /// Worktree the new or forked session should attach to.
     pub(crate) info: WorktreeInfo,
+    /// Runtime configuration rebuilt for the worktree cwd.
     pub(crate) config: Config,
+    /// Whether the session was forked from the current thread instead of started fresh.
     pub(crate) forked: bool,
+    /// User-facing warnings emitted while creating or entering the worktree.
     pub(crate) warnings: Vec<String>,
+    /// Result of starting or forking the app-server thread.
     pub(crate) result: Result<AppServerStartedThread, String>,
 }
 

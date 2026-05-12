@@ -1,3 +1,13 @@
+//! Selection-view construction and slash parsing for the TUI worktree flow.
+//!
+//! This module is intentionally presentation-focused. It parses slash-command arguments, builds
+//! picker rows, and dispatches AppEvent values, while app-level handlers perform helper execution
+//! and session switching. Keeping the split narrow makes snapshots meaningful: changes here should
+//! mostly affect visible text, selection actions, or parser behavior.
+//!
+//! Picker-selected existing worktrees carry WorktreeInfo through the event path so the TUI does not
+//! need to list worktrees a second time after the user chooses a row.
+
 use std::path::Path;
 use std::time::Instant;
 
@@ -110,6 +120,11 @@ pub(crate) enum WorktreeSlashAction {
 }
 
 impl WorktreeSlashAction {
+    /// Dispatches a parsed slash action into the TUI event loop.
+    ///
+    /// Parser output stays independent of AppEvent so tests can validate command handling without
+    /// constructing app state. Adding a new slash action should update this method and the event
+    /// dispatcher together; otherwise the command will parse successfully but do nothing.
     pub(crate) fn dispatch(self, tx: &AppEventSender) {
         match self {
             WorktreeSlashAction::OpenPicker => tx.send(AppEvent::OpenWorktreePicker),
@@ -142,6 +157,11 @@ impl WorktreeSlashAction {
     }
 }
 
+/// Parses the argument string following the /worktree slash command.
+///
+/// An empty argument string opens the picker. Creation keeps explicit base-ref and dirty-policy
+/// flags for power users even though the interactive picker uses the default base and a simpler
+/// two-choice dirty prompt.
 pub(crate) fn parse_worktree_slash_args(args: &str) -> Result<WorktreeSlashAction, String> {
     let mut parts = args.split_whitespace();
     let Some(command) = parts.next() else {
@@ -250,30 +270,22 @@ pub(crate) fn dispatch_worktree_slash_args(args: &str, tx: &AppEventSender) -> R
     Ok(())
 }
 
+/// Builds the animated loading view shown while worktrees are being listed.
+///
+/// Callers must start the list request asynchronously before returning to the render loop; otherwise
+/// the spinner cannot animate and the UI will jump straight to the final result or error.
 pub(crate) fn loading_params(
     frame_requester: FrameRequester,
     animations_enabled: bool,
 ) -> SelectionViewParams {
     let status = "Loading worktrees...".to_string();
-    let note =
-        "This can take a moment when Codex is checking app, CLI, and Git worktrees.".to_string();
-    SelectionViewParams {
-        view_id: Some(WORKTREE_SELECTION_VIEW_ID),
-        header: Box::new(WorktreeLoadingHeader::new(
-            frame_requester,
-            animations_enabled,
-            status.clone(),
-            note.clone(),
-        )),
-        footer_hint: Some(standard_popup_hint_line()),
-        items: vec![SelectionItem {
-            name: status,
-            description: Some(note),
-            is_disabled: true,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    worktree_progress_params(
+        frame_requester,
+        animations_enabled,
+        status.clone(),
+        "This can take a moment when Codex is checking app, CLI, and Git worktrees.",
+        status,
+    )
 }
 
 pub(crate) fn switching_params(
@@ -281,26 +293,13 @@ pub(crate) fn switching_params(
     frame_requester: FrameRequester,
     animations_enabled: bool,
 ) -> SelectionViewParams {
-    let status = format!("Switching to {target}...");
-    let note =
-        "Codex is rebuilding configuration and starting the chat in that workspace.".to_string();
-    SelectionViewParams {
-        view_id: Some(WORKTREE_SELECTION_VIEW_ID),
-        header: Box::new(WorktreeLoadingHeader::new(
-            frame_requester,
-            animations_enabled,
-            status,
-            note.clone(),
-        )),
-        footer_hint: Some(standard_popup_hint_line()),
-        items: vec![SelectionItem {
-            name: "Preparing worktree session...".to_string(),
-            description: Some(note),
-            is_disabled: true,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    worktree_progress_params(
+        frame_requester,
+        animations_enabled,
+        format!("Switching to {target}..."),
+        "Codex is rebuilding configuration and starting the chat in that workspace.",
+        "Preparing worktree session...".to_string(),
+    )
 }
 
 pub(crate) fn creating_params(
@@ -308,9 +307,23 @@ pub(crate) fn creating_params(
     frame_requester: FrameRequester,
     animations_enabled: bool,
 ) -> SelectionViewParams {
-    let status = format!("Creating {branch}...");
-    let note =
-        "Codex is creating the worktree before starting the chat in that workspace.".to_string();
+    worktree_progress_params(
+        frame_requester,
+        animations_enabled,
+        format!("Creating {branch}..."),
+        "Codex is creating the worktree before starting the chat in that workspace.",
+        "Preparing worktree...".to_string(),
+    )
+}
+
+fn worktree_progress_params(
+    frame_requester: FrameRequester,
+    animations_enabled: bool,
+    status: String,
+    note: &'static str,
+    item_name: String,
+) -> SelectionViewParams {
+    let note = note.to_string();
     SelectionViewParams {
         view_id: Some(WORKTREE_SELECTION_VIEW_ID),
         header: Box::new(WorktreeLoadingHeader::new(
@@ -321,7 +334,7 @@ pub(crate) fn creating_params(
         )),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![SelectionItem {
-            name: "Preparing worktree...".to_string(),
+            name: item_name,
             description: Some(note),
             is_disabled: true,
             ..Default::default()
@@ -331,12 +344,9 @@ pub(crate) fn creating_params(
 }
 
 pub(crate) fn empty_params() -> SelectionViewParams {
-    let mut header = ColumnRenderable::new();
-    header.push(Line::from("Worktrees".bold()));
-
     SelectionViewParams {
         view_id: Some(WORKTREE_SELECTION_VIEW_ID),
-        header: Box::new(header),
+        header: Box::new(worktrees_header()),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![new_worktree_item()],
         ..Default::default()
@@ -348,12 +358,9 @@ pub(crate) fn error_params(error: String) -> SelectionViewParams {
 }
 
 pub(crate) fn error_with_summary_params(summary: String, error: String) -> SelectionViewParams {
-    let mut header = ColumnRenderable::new();
-    header.push(Line::from("Worktrees".bold()));
-
     SelectionViewParams {
         view_id: Some(WORKTREE_SELECTION_VIEW_ID),
-        header: Box::new(header),
+        header: Box::new(worktrees_header()),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![SelectionItem {
             name: summary,
@@ -365,6 +372,11 @@ pub(crate) fn error_with_summary_params(summary: String, error: String) -> Selec
     }
 }
 
+/// Builds the picker for creating or entering managed worktrees.
+///
+/// The first row is always the creation action, so the preselected current worktree index is offset
+/// by one. Existing rows dispatch their full WorktreeInfo to avoid resolving the same row by a
+/// potentially ambiguous branch or slug after selection.
 pub(crate) fn picker_params(entries: Vec<WorktreeInfo>, current_cwd: &Path) -> SelectionViewParams {
     let mut items = vec![new_worktree_item()];
     let mut initial_selected_idx = None;
@@ -420,8 +432,7 @@ pub(crate) fn picker_params(entries: Vec<WorktreeInfo>, current_cwd: &Path) -> S
         }
     }));
 
-    let mut header = ColumnRenderable::new();
-    header.push(Line::from("Worktrees".bold()));
+    let mut header = worktrees_header();
     header.push(Line::from(
         "Create a worktree or fork this chat into an existing workspace.".dim(),
     ));
@@ -454,6 +465,17 @@ fn new_worktree_item() -> SelectionItem {
     }
 }
 
+fn worktrees_header() -> ColumnRenderable<'static> {
+    let mut header = ColumnRenderable::new();
+    header.push(Line::from("Worktrees".bold()));
+    header
+}
+
+/// Builds the pending-changes prompt for creating a worktree from a dirty checkout.
+///
+/// The interactive flow intentionally exposes only two choices: move all pending changes into the
+/// new worktree or leave them in the source checkout. More granular copy/tracked policies remain
+/// available through explicit slash and CLI flags.
 pub(crate) fn dirty_policy_prompt_params(
     branch: String,
     base_ref: Option<String>,

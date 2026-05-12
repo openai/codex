@@ -1,4 +1,13 @@
 //! App-layer handlers for the worktree TUI flow.
+//!
+//! This module connects user-facing worktree commands to the app-server-backed workspace command
+//! runner. It owns the TUI state machine: show a loading or confirmation view, run the hidden
+//! worktree helper in the active workspace, rebuild configuration for the selected cwd, then start
+//! or fork a session there.
+//!
+//! Git and metadata semantics stay in the codex-worktree crate and hidden CLI helper. The TUI layer
+//! should pass structured choices through that helper instead of duplicating path, dirty-state, or
+//! ownership checks locally.
 
 use anyhow::Context;
 use codex_app_server_protocol::SandboxPolicy;
@@ -654,6 +663,7 @@ impl App {
     fn defer_switch_to_worktree_info(&self, info: WorktreeInfo) {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
+            // Give the switching view one render tick before session startup begins doing work.
             tokio::time::sleep(WORKTREE_SWITCH_RENDER_DELAY).await;
             app_event_tx.send(AppEvent::SwitchToWorktreeAfterLoading { info });
         });
@@ -713,6 +723,8 @@ async fn run_worktree_helper_with<T>(
 where
     T: DeserializeOwned,
 {
+    // The helper must be JSON-clean: skip arg0 PATH update output and run the exact Codex binary
+    // known to app-server so local, remote, and packaged TUI sessions use the same helper path.
     let mut command = WorkspaceCommand::codex_self(["worktree", "__internal"])
         .cwd(cwd)
         .env(codex_arg0::CODEX_ARG0_SKIP_PATH_UPDATE_ENV_VAR, "1")

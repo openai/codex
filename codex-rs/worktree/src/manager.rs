@@ -1,3 +1,14 @@
+//! High-level manager for creating, listing, resolving, and removing managed worktrees.
+//!
+//! This module is the only place that combines repository discovery, Git worktree commands,
+//! dirty-change transfer, and Codex metadata writes. It treats metadata as the authority for
+//! destructive operations, while list and resolve paths also tolerate plain Git and legacy entries
+//! so users can see the worktrees that matter before choosing an action.
+//!
+//! The core invariant is that a managed worktree has both a Git worktree root and a Codex workspace
+//! cwd. The workspace cwd preserves the source checkout's original subdirectory and is the path
+//! higher layers should use when launching or switching a Codex session.
+
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,6 +31,13 @@ use crate::metadata;
 use crate::metadata::WorktreeMetadata;
 use crate::paths;
 
+/// Creates or reuses the managed worktree described by the request.
+///
+/// Existing Codex-managed worktrees are reused only when their metadata or current branch matches
+/// the requested branch. New worktrees are created as siblings of the primary repository, receive
+/// pending changes according to the dirty policy, and get Codex metadata before the result is
+/// returned. A caller that passes a source cwd outside the intended repository can create a valid
+/// worktree for the wrong repo, so UI layers should pass the active session workspace cwd.
 pub fn ensure_worktree(req: WorktreeRequest) -> Result<WorktreeResolution> {
     let repo = SourceRepo::resolve(&req.source_cwd)?;
     let branch = req.branch.clone();
@@ -66,6 +84,8 @@ pub fn ensure_worktree(req: WorktreeRequest) -> Result<WorktreeResolution> {
             .parent()
             .context("managed worktree path has no parent")?,
     )?;
+    // Git worktree add has three materially different shapes: reuse an existing branch, create an
+    // orphan branch for an unborn repository, or create a new branch from a resolved base ref.
     let worktree_arg = worktree_git_root.to_string_lossy();
     let mut args = vec!["worktree", "add"];
     if branch_exists {
@@ -160,6 +180,10 @@ fn rollback_failed_create(
     }
 }
 
+/// Resolves the current cwd to managed worktree information when Codex metadata is present.
+///
+/// A non-Git cwd or an unmanaged Git worktree returns Ok(None). Errors are reserved for malformed or
+/// unreadable metadata after the path has otherwise looked like a managed worktree.
 pub fn resolve_worktree(codex_home: &Path, cwd: &Path) -> Result<Option<WorktreeInfo>> {
     let Ok(root) = git::stdout(cwd, &["rev-parse", "--show-toplevel"]) else {
         return Ok(None);
@@ -175,6 +199,12 @@ pub fn resolve_worktree(codex_home: &Path, cwd: &Path) -> Result<Option<Worktree
     )?))
 }
 
+/// Lists worktrees visible to Codex, optionally scoped to the current repository.
+///
+/// Repository-scoped listings combine Git's worktree inventory for the current repo with
+/// Codex-home worktrees that carry matching metadata. Entries that cannot be parsed or inspected are
+/// skipped so one stale worktree does not break the picker, but the source repository itself must be
+/// resolvable when filtering is requested.
 pub fn list_worktrees(query: WorktreeListQuery) -> Result<Vec<WorktreeInfo>> {
     let repo_filter = if query.include_all_repos {
         None
@@ -291,6 +321,11 @@ fn paths_match(a: &Path, b: &Path) -> bool {
     a == b
 }
 
+/// Removes a Codex-managed worktree and optionally deletes its branch.
+///
+/// Removal first resolves the target by path or name and then requires Codex metadata at the target
+/// path, which prevents a stale picker row or ambiguous name from deleting an arbitrary Git
+/// worktree. Dirty worktrees require force so callers cannot accidentally discard uncommitted work.
 pub fn remove_worktree(req: WorktreeRemoveRequest) -> Result<WorktreeRemoveResult> {
     let target = target_worktree_path(&req)?;
     let metadata = metadata::read_worktree_metadata(&target)?

@@ -1,3 +1,13 @@
+//! Dirty-checkout transfer support for managed worktree creation.
+//!
+//! Worktree creation is split into validation, transfer preparation, and final cleanup so the
+//! caller can roll back a newly-created worktree if copying changes fails. Tracked changes are
+//! transferred with Git binary patches so staged and unstaged state is preserved; untracked files
+//! are copied by path after rejecting absolute paths, parent traversal, and .git entries.
+//!
+//! The move policies are intentionally two-phase. The new worktree receives the changes before the
+//! source checkout is cleaned, which avoids data loss if applying or copying into the target fails.
+
 use std::fs;
 use std::path::Component;
 use std::path::Path;
@@ -10,13 +20,25 @@ use serde::Serialize;
 
 use crate::git;
 
+/// Policy for pending source checkout changes during worktree creation.
+///
+/// Copy policies leave the source checkout dirty, while move policies clean the transferred paths
+/// from the source only after the target worktree has received them. Choosing a tracked-only policy
+/// with untracked files present is allowed, but callers should surface the warning returned by
+/// validation so users know those files stayed behind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirtyPolicy {
+    /// Reject creation when the source checkout has pending changes.
     Fail,
+    /// Create the worktree without transferring pending changes.
     Ignore,
+    /// Copy staged and unstaged tracked changes into the new worktree.
     CopyTracked,
+    /// Copy tracked changes and untracked files into the new worktree.
     CopyAll,
+    /// Move staged and unstaged tracked changes into the new worktree.
     MoveTracked,
+    /// Move tracked changes and untracked files into the new worktree.
     MoveAll,
 }
 
@@ -39,20 +61,33 @@ struct MovePlan {
     move_untracked: bool,
 }
 
+/// Dirty-state summary for a Git checkout.
+///
+/// The fields are coarse by design: they support UI decisions and policy validation without exposing
+/// filenames. Callers that need a transfer must let this module recalculate paths from Git rather
+/// than deriving behavior from this summary.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirtyState {
+    /// Whether the index contains staged changes.
     pub has_staged_changes: bool,
+    /// Whether tracked files have unstaged changes.
     pub has_unstaged_changes: bool,
+    /// Whether Git reports untracked, non-ignored files.
     pub has_untracked_files: bool,
 }
 
 impl DirtyState {
+    /// Returns true when any tracked or untracked pending changes are present.
     pub fn is_dirty(&self) -> bool {
         self.has_staged_changes || self.has_unstaged_changes || self.has_untracked_files
     }
 }
 
+/// Returns a coarse dirty-state summary for a Git checkout.
+///
+/// The root must be a Git worktree. Errors mean Git could not inspect the checkout, not that the
+/// checkout is clean; treating those errors as clean would allow callers to skip policy prompts.
 pub fn dirty_state(root: &Path) -> Result<DirtyState> {
     let staged = git::bytes(root, &["diff", "--cached", "--name-only", "-z"])?;
     let unstaged = git::bytes(root, &["diff", "--name-only", "-z"])?;
@@ -64,6 +99,11 @@ pub fn dirty_state(root: &Path) -> Result<DirtyState> {
     })
 }
 
+/// Validates whether a dirty policy can proceed before creating the target worktree.
+///
+/// This function does not mutate the checkout. It returns user-facing warnings for policies that
+/// intentionally leave changes behind, and it fails only when the policy says dirty changes should
+/// block creation.
 pub fn validate_dirty_policy_before_create(
     source_root: &Path,
     policy: DirtyPolicy,
@@ -110,6 +150,8 @@ pub(crate) fn prepare_dirty_policy_after_create(
     let plan = TransferPlan::capture(source_root)?;
     plan.apply_tracked_diff(worktree_root)?;
 
+    // Untracked files are copied before the source checkout is cleaned so move-all can fail without
+    // losing files that were never represented in Git.
     let move_untracked = matches!(policy, DirtyPolicy::MoveAll);
     if matches!(policy, DirtyPolicy::CopyAll | DirtyPolicy::MoveAll) {
         copy_untracked_files_at_paths(source_root, worktree_root, &plan.untracked_paths)?;
