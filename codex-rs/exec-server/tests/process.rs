@@ -78,6 +78,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_sigterm_shuts_down_gracefully() -> anyhow::Result<()> {
     let mut server = exec_server().await?;
