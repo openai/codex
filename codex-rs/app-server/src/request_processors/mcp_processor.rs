@@ -286,7 +286,7 @@ impl McpRequestProcessor {
             .mcp_servers
             .keys()
             .cloned()
-            // Include built-in/plugin MCP servers that are present in the
+            // Include runtime-added/plugin MCP servers that are present in the
             // effective runtime config even when they are not user-declared in
             // `config.mcp_servers`.
             .chain(effective_servers.keys().cloned())

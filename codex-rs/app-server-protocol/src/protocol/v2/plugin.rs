@@ -15,7 +15,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
@@ -26,19 +26,6 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
-
-    /// Optional per-cwd extra roots to scan as user-scoped skills.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsListExtraRootsForCwd {
-    pub cwd: PathBuf,
-    pub extra_user_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -231,6 +218,7 @@ pub struct PluginShareSaveResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsParams {
     pub remote_plugin_id: String,
+    pub discoverability: PluginShareUpdateDiscoverability,
     pub share_targets: Vec<PluginShareTarget>,
 }
 
@@ -239,6 +227,7 @@ pub struct PluginShareUpdateTargetsParams {
 #[ts(export_to = "v2/")]
 pub struct PluginShareUpdateTargetsResponse {
     pub principals: Vec<PluginSharePrincipal>,
+    pub discoverability: PluginShareDiscoverability,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -270,7 +259,6 @@ pub struct PluginShareDeleteResponse {}
 #[ts(export_to = "v2/")]
 pub struct PluginShareListItem {
     pub plugin: PluginSummary,
-    pub share_url: String,
     pub local_plugin_path: Option<AbsolutePathBuf>,
 }
 
@@ -280,6 +268,17 @@ pub enum PluginShareDiscoverability {
     #[serde(rename = "LISTED")]
     #[ts(rename = "LISTED")]
     Listed,
+    #[serde(rename = "UNLISTED")]
+    #[ts(rename = "UNLISTED")]
+    Unlisted,
+    #[serde(rename = "PRIVATE")]
+    #[ts(rename = "PRIVATE")]
+    Private,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginShareUpdateDiscoverability {
     #[serde(rename = "UNLISTED")]
     #[ts(rename = "UNLISTED")]
     Unlisted,
@@ -308,6 +307,7 @@ pub enum PluginSharePrincipalType {
 pub struct PluginShareTarget {
     pub principal_type: PluginSharePrincipalType,
     pub principal_id: String,
+    pub role: PluginShareTargetRole,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -316,7 +316,27 @@ pub struct PluginShareTarget {
 pub struct PluginSharePrincipal {
     pub principal_type: PluginSharePrincipalType,
     pub principal_id: String,
+    pub role: PluginSharePrincipalRole,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum PluginShareTargetRole {
+    Reader,
+    Editor,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum PluginSharePrincipalRole {
+    Reader,
+    Editor,
+    Owner,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -518,6 +538,8 @@ pub enum PluginAvailability {
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
     pub id: String,
+    /// Backend remote plugin identifier when available.
+    pub remote_plugin_id: Option<String>,
     pub name: String,
     /// Remote sharing context associated with this plugin when available.
     pub share_context: Option<PluginShareContext>,
@@ -539,10 +561,11 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    pub discoverability: Option<PluginShareDiscoverability>,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
-    pub share_targets: Option<Vec<PluginSharePrincipal>>,
+    pub share_principals: Option<Vec<PluginSharePrincipal>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

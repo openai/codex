@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› /pet                                                      "
+"                                                            "
+"                                                            "
+"  /pets  choose or hide the terminal pet                    "

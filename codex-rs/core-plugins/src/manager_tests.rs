@@ -2040,6 +2040,116 @@ enabled = false
 }
 
 #[tokio::test]
+async fn list_marketplaces_installed_git_source_reads_metadata_from_cache_without_cloning() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let missing_remote_repo = tmp.path().join("missing-remote-plugin-repo");
+    let missing_remote_repo_url = url::Url::from_directory_path(&missing_remote_repo)
+        .unwrap()
+        .to_string();
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{missing_remote_repo_url}",
+        "path": "plugins/toolkit"
+      }},
+      "category": "Developer Tools"
+    }}
+  ]
+}}"#
+        ),
+    );
+    let cached_plugin_root = tmp.path().join("plugins/cache/debug/toolkit/local");
+    write_file(
+        &cached_plugin_root.join(".codex-plugin/plugin.json"),
+        r##"{
+  "name": "toolkit",
+  "interface": {
+    "displayName": "Toolkit",
+    "shortDescription": "Search cached data",
+    "category": "Cached Category",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png",
+    "screenshots": ["./assets/screenshot.png"]
+  }
+}"##,
+    );
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."toolkit@debug"]
+enabled = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .unwrap()
+        .marketplaces;
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "debug")
+        .expect("debug marketplace should be listed");
+
+    assert_eq!(
+        marketplace.plugins,
+        vec![ConfiguredMarketplacePlugin {
+            id: "toolkit@debug".to_string(),
+            name: "toolkit".to_string(),
+            source: MarketplacePluginSource::Git {
+                url: missing_remote_repo_url,
+                path: Some("plugins/toolkit".to_string()),
+                ref_name: None,
+                sha: None,
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: Some(PluginManifestInterface {
+                display_name: Some("Toolkit".to_string()),
+                short_description: Some("Search cached data".to_string()),
+                category: Some("Developer Tools".to_string()),
+                brand_color: Some("#3B82F6".to_string()),
+                composer_icon: Some(
+                    AbsolutePathBuf::try_from(cached_plugin_root.join("assets/icon.png")).unwrap(),
+                ),
+                logo: Some(
+                    AbsolutePathBuf::try_from(cached_plugin_root.join("assets/logo.png")).unwrap(),
+                ),
+                screenshots: vec![
+                    AbsolutePathBuf::try_from(cached_plugin_root.join("assets/screenshot.png"))
+                        .unwrap(),
+                ],
+                ..Default::default()
+            }),
+            keywords: Vec::new(),
+            installed: true,
+            enabled: true,
+        }]
+    );
+    assert!(
+        !tmp.path()
+            .join("plugins/.marketplace-plugin-source-staging")
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn sync_plugins_from_remote_returns_default_when_feature_disabled() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(

@@ -12,17 +12,19 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::ToolTelemetryTags;
+use codex_mcp::ToolInfo;
 use codex_tools::ToolName;
+use serde_json::Map;
 use serde_json::Value;
 
 pub struct McpHandler {
-    tool_name: ToolName,
+    tool_info: ToolInfo,
 }
 
 impl McpHandler {
-    pub fn new(tool_name: ToolName) -> Self {
-        Self { tool_name }
+    pub fn new(tool_info: ToolInfo) -> Self {
+        Self { tool_info }
     }
 }
 
@@ -30,37 +32,67 @@ impl ToolHandler for McpHandler {
     type Output = McpToolOutput;
 
     fn tool_name(&self) -> ToolName {
-        self.tool_name.clone()
+        self.tool_info.canonical_tool_name()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Mcp
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.tool_info.supports_parallel_tool_calls
+    }
+
+    async fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
+        let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
+        if let Some(origin) = &self.tool_info.server_origin {
+            tags.push(("mcp_server_origin", origin.clone()));
+        }
+        tags
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        let ToolPayload::Mcp { raw_arguments, .. } = &invocation.payload else {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
 
         Some(PreToolUsePayload {
-            tool_name: HookToolName::new(self.tool_name.display()),
-            tool_input: mcp_hook_tool_input(raw_arguments),
+            tool_name: HookToolName::new(self.tool_name().to_string()),
+            tool_input: mcp_hook_tool_input(arguments),
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        invocation.payload = match invocation.payload {
+            ToolPayload::Function { .. } => ToolPayload::Function {
+                arguments: serde_json::to_string(&updated_input).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to serialize rewritten MCP arguments: {err}"
+                    ))
+                })?,
+            },
+            payload => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "tool {} does not support hook input rewriting for payload {payload:?}",
+                    self.tool_name()
+                )));
+            }
+        };
+        Ok(invocation)
+    }
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Mcp { .. } = &invocation.payload else {
+        let ToolPayload::Function { .. } = &invocation.payload else {
             return None;
         };
 
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: HookToolName::new(self.tool_name.display()),
+            tool_name: HookToolName::new(self.tool_name().to_string()),
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.tool_input.clone(),
             tool_response,
@@ -77,11 +109,7 @@ impl ToolHandler for McpHandler {
         } = invocation;
 
         let payload = match payload {
-            ToolPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            } => (server, tool, raw_arguments),
+            ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "mcp handler received unsupported payload".to_string(),
@@ -89,18 +117,15 @@ impl ToolHandler for McpHandler {
             }
         };
 
-        let (server, tool, raw_arguments) = payload;
-        let arguments_str = raw_arguments;
-
         let started = Instant::now();
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &turn,
             call_id.clone(),
-            server,
-            tool,
-            self.tool_name.display(),
-            arguments_str,
+            self.tool_info.server_name.clone(),
+            self.tool_info.tool.name.to_string(),
+            self.tool_name().to_string(),
+            payload,
         )
         .await;
 
@@ -116,7 +141,7 @@ impl ToolHandler for McpHandler {
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
     if raw_arguments.trim().is_empty() {
-        return Value::Object(serde_json::Map::new());
+        return Value::Object(Map::new());
     }
 
     serde_json::from_str(raw_arguments).unwrap_or_else(|_| Value::String(raw_arguments.to_string()))
@@ -135,10 +160,8 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_pre_tool_use_payload_uses_model_tool_name_and_raw_args() {
-        let payload = ToolPayload::Mcp {
-            server: "memory".to_string(),
-            tool: "create_entities".to_string(),
-            raw_arguments: json!({
+        let payload = ToolPayload::Function {
+            arguments: json!({
                 "entities": [{
                     "name": "Ada",
                     "entityType": "person"
@@ -147,11 +170,7 @@ mod tests {
             .to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(codex_tools::ToolName::namespaced(
-            "mcp__memory__",
-            "create_entities",
-        ));
-
+        let handler = McpHandler::new(tool_info("memory", "mcp__memory__", "create_entities"));
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
@@ -176,11 +195,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_pre_tool_use_payload_keeps_builtin_like_tool_names_namespaced() {
+        let payload = ToolPayload::Function {
+            arguments: json!({ "message": "hello" }).to_string(),
+        };
+        let (session, turn) = make_session_and_context().await;
+        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"));
+
+        assert_eq!(
+            handler.pre_tool_use_payload(&ToolInvocation {
+                session: session.into(),
+                turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-mcp-pre-builtin-like".to_string(),
+                tool_name: codex_tools::ToolName::namespaced("mcp__foo__", "exec_command"),
+                source: ToolCallSource::Direct,
+                payload,
+            }),
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::new("mcp__foo__exec_command"),
+                tool_input: json!({ "message": "hello" }),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_updated_input_rewrites_builtin_like_tool_names_as_mcp() {
+        let payload = ToolPayload::Function {
+            arguments: json!({ "message": "hello" }).to_string(),
+        };
+        let (session, turn) = make_session_and_context().await;
+        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"));
+
+        let invocation = handler
+            .with_updated_hook_input(
+                ToolInvocation {
+                    session: session.into(),
+                    turn: turn.into(),
+                    cancellation_token: tokio_util::sync::CancellationToken::new(),
+                    tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                    call_id: "call-mcp-rewrite-builtin-like".to_string(),
+                    tool_name: codex_tools::ToolName::namespaced("mcp__foo__", "exec_command"),
+                    source: ToolCallSource::Direct,
+                    payload,
+                },
+                json!({ "message": "rewritten" }),
+            )
+            .expect("MCP rewrite should succeed");
+
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            panic!("builtin-like MCP tool should stay function-shaped");
+        };
+        assert_eq!(arguments, json!({ "message": "rewritten" }).to_string());
+    }
+
+    #[tokio::test]
     async fn mcp_post_tool_use_payload_uses_model_tool_name_args_and_result() {
-        let payload = ToolPayload::Mcp {
-            server: "filesystem".to_string(),
-            tool: "read_file".to_string(),
-            raw_arguments: json!({ "path": "/tmp/notes.txt" }).to_string(),
+        let payload = ToolPayload::Function {
+            arguments: json!({ "path": "/tmp/notes.txt" }).to_string(),
         };
         let output = McpToolOutput {
             result: codex_protocol::mcp::CallToolResult {
@@ -202,10 +275,7 @@ mod tests {
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(codex_tools::ToolName::namespaced(
-            "mcp__filesystem__",
-            "read_file",
-        ));
+        let handler = McpHandler::new(tool_info("filesystem", "mcp__filesystem__", "read_file"));
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
@@ -240,5 +310,32 @@ mod tests {
     #[test]
     fn mcp_hook_tool_input_defaults_empty_args_to_object() {
         assert_eq!(mcp_hook_tool_input("  "), json!({}));
+    }
+
+    fn tool_info(server_name: &str, callable_namespace: &str, tool_name: &str) -> ToolInfo {
+        ToolInfo {
+            server_name: server_name.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
+            callable_name: tool_name.to_string(),
+            callable_namespace: callable_namespace.to_string(),
+            namespace_description: None,
+            tool: rmcp::model::Tool {
+                name: tool_name.to_string().into(),
+                title: None,
+                description: None,
+                input_schema: Arc::new(rmcp::model::object(serde_json::json!({
+                    "type": "object",
+                }))),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: None,
+            connector_name: None,
+            plugin_display_names: Vec::new(),
+        }
     }
 }

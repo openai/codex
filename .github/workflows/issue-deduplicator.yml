@@ -19,7 +19,9 @@ jobs:
       reason: ${{ steps.normalize-all.outputs.reason }}
       has_matches: ${{ steps.normalize-all.outputs.has_matches }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Prepare Codex inputs
         env:
@@ -155,7 +157,9 @@ jobs:
       reason: ${{ steps.normalize-open.outputs.reason }}
       has_matches: ${{ steps.normalize-open.outputs.has_matches }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Prepare Codex inputs
         env:
@@ -342,7 +346,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
           CODEX_OUTPUT: ${{ needs.select-final.outputs.codex_output }}
         with:

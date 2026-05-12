@@ -35,7 +35,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 
 #[derive(Default)]
 pub struct RequestPluginInstallHandler {
@@ -63,10 +62,6 @@ impl ToolHandler for RequestPluginInstallHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     #[expect(

@@ -13,8 +13,7 @@ use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
-use codex_app_server_protocol::PluginSharePrincipal;
-use codex_app_server_protocol::PluginSharePrincipalType;
+use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::RequestId;
@@ -241,6 +240,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
             interface: None,
             plugins: vec![PluginSummary {
                 id: "valid-plugin@valid-marketplace".to_string(),
+                remote_plugin_id: None,
                 name: "valid-plugin".to_string(),
                 share_context: None,
                 source: PluginSource::Local {
@@ -530,6 +530,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
             plugins: vec![
                 PluginSummary {
                     id: "valid-plugin@alternate-marketplace".to_string(),
+                    remote_plugin_id: None,
                     name: "valid-plugin".to_string(),
                     share_context: None,
                     source: PluginSource::Local {
@@ -563,6 +564,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                 },
                 PluginSummary {
                     id: "missing-plugin@alternate-marketplace".to_string(),
+                    remote_plugin_id: None,
                     name: "missing-plugin".to_string(),
                     share_context: None,
                     source: PluginSource::Local {
@@ -689,15 +691,17 @@ async fn plugin_list_returns_share_context_for_shared_local_plugin() -> Result<(
         .flat_map(|marketplace| marketplace.plugins.iter())
         .find(|plugin| plugin.name == "demo-plugin")
         .expect("expected demo-plugin entry");
+    assert_eq!(plugin.remote_plugin_id, None);
     let share_context = plugin
         .share_context
         .as_ref()
         .expect("expected share context");
     assert_eq!(share_context.remote_plugin_id, "plugins_123");
+    assert_eq!(share_context.discoverability, None);
     assert_eq!(share_context.share_url, None);
     assert_eq!(share_context.creator_account_user_id, None);
     assert_eq!(share_context.creator_name, None);
-    assert_eq!(share_context.share_targets, None);
+    assert_eq!(share_context.share_principals, None);
     Ok(())
 }
 
@@ -1142,6 +1146,124 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_list_returns_installed_git_source_interface_from_cache() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let missing_remote_repo = repo_root.path().join("missing-remote-plugin-repo");
+    let missing_remote_repo_url = url::Url::from_directory_path(&missing_remote_repo)
+        .unwrap()
+        .to_string();
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{missing_remote_repo_url}",
+        "path": "plugins/toolkit"
+      }},
+      "category": "Developer Tools"
+    }}
+  ]
+}}"#
+        ),
+    )?;
+    let cached_plugin_root = codex_home.path().join("plugins/cache/debug/toolkit/local");
+    std::fs::create_dir_all(cached_plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        cached_plugin_root.join(".codex-plugin/plugin.json"),
+        r##"{
+  "name": "toolkit",
+  "interface": {
+    "displayName": "Toolkit",
+    "shortDescription": "Search cached data",
+    "category": "Cached Category",
+    "brandColor": "#3B82F6",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
+  }
+}"##,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."toolkit@debug"]
+enabled = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            marketplace_kinds: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let plugin = response
+        .marketplaces
+        .iter()
+        .flat_map(|marketplace| marketplace.plugins.iter())
+        .find(|plugin| plugin.name == "toolkit")
+        .expect("expected toolkit entry");
+
+    assert_eq!(plugin.id, "toolkit@debug");
+    assert_eq!(plugin.installed, true);
+    assert_eq!(plugin.enabled, true);
+    assert_eq!(
+        plugin.source,
+        PluginSource::Git {
+            url: missing_remote_repo_url,
+            path: Some("plugins/toolkit".to_string()),
+            ref_name: None,
+            sha: None,
+        }
+    );
+    let interface = plugin
+        .interface
+        .as_ref()
+        .expect("expected cached plugin interface");
+    assert_eq!(interface.display_name.as_deref(), Some("Toolkit"));
+    assert_eq!(
+        interface.short_description.as_deref(),
+        Some("Search cached data")
+    );
+    assert_eq!(interface.category.as_deref(), Some("Developer Tools"));
+    assert_eq!(interface.brand_color.as_deref(), Some("#3B82F6"));
+    let canonical_cached_plugin_root = std::fs::canonicalize(&cached_plugin_root)?;
+    assert_eq!(
+        interface.composer_icon,
+        Some(AbsolutePathBuf::try_from(
+            canonical_cached_plugin_root.join("assets/icon.png")
+        )?)
+    );
+    assert_eq!(
+        interface.logo,
+        Some(AbsolutePathBuf::try_from(
+            canonical_cached_plugin_root.join("assets/logo.png")
+        )?)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -1346,11 +1468,7 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
             .into_iter()
             .map(|plugin| (plugin.id, plugin.installed, plugin.enabled))
             .collect::<Vec<_>>(),
-        vec![(
-            "plugins~Plugin_00000000000000000000000000000000".to_string(),
-            true,
-            true
-        )]
+        vec![("linear@chatgpt-global".to_string(), true, true)]
     );
 
     wait_for_path_exists(&new_path.join(".codex-plugin/plugin.json")).await?;
@@ -1511,9 +1629,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         Some("ChatGPT Plugins")
     );
     assert_eq!(remote_marketplace.plugins.len(), 1);
+    assert_eq!(remote_marketplace.plugins[0].id, "linear@chatgpt-global");
     assert_eq!(
-        remote_marketplace.plugins[0].id,
-        "plugins~Plugin_00000000000000000000000000000000"
+        remote_marketplace.plugins[0].remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_00000000000000000000000000000000")
     );
     assert_eq!(remote_marketplace.plugins[0].name, "linear");
     assert_eq!(remote_marketplace.plugins[0].source, PluginSource::Remote);
@@ -1607,12 +1726,14 @@ async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag
         "plugins~Plugin_11111111111111111111111111111111",
         "workspace-linear",
         "Workspace Linear",
+        "LISTED",
         /*enabled*/ None,
     );
     let workspace_installed_body = workspace_remote_plugin_page_body(
         "plugins~Plugin_11111111111111111111111111111111",
         "workspace-linear",
         "Workspace Linear",
+        "LISTED",
         /*enabled*/ Some(false),
     );
     mount_remote_plugin_list(&server, "WORKSPACE", &workspace_plugin_body).await;
@@ -1646,6 +1767,14 @@ async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag
         Some("Workspace Directory")
     );
     assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(
+        marketplace.plugins[0].id,
+        "workspace-linear@workspace-directory"
+    );
+    assert_eq!(
+        marketplace.plugins[0].remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_11111111111111111111111111111111")
+    );
     assert_eq!(marketplace.plugins[0].name, "workspace-linear");
     assert_eq!(marketplace.plugins[0].installed, true);
     assert_eq!(marketplace.plugins[0].enabled, false);
@@ -1680,16 +1809,21 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let shared_plugin_body = workspace_remote_plugin_page_body(
-        "plugins~Plugin_22222222222222222222222222222222",
-        "shared-linear",
-        "Shared Linear",
-        /*enabled*/ None,
-    );
+    let mut shared_plugin_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_22222222222222222222222222222222",
+            "shared-linear",
+            "Shared Linear",
+            "PRIVATE",
+            /*enabled*/ None,
+        ))?;
+    shared_plugin_body["plugins"][0]["share_principals"] = serde_json::Value::Null;
+    let shared_plugin_body = serde_json::to_string(&shared_plugin_body)?;
     let workspace_installed_body = workspace_remote_plugin_page_body(
         "plugins~Plugin_22222222222222222222222222222222",
         "shared-linear",
         "Shared Linear",
+        "PRIVATE",
         /*enabled*/ Some(true),
     );
     mount_shared_workspace_plugins(&server, &shared_plugin_body).await;
@@ -1723,6 +1857,11 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some("Shared with me")
     );
     assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(marketplace.plugins[0].id, "shared-linear@shared-with-me");
+    assert_eq!(
+        marketplace.plugins[0].remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_22222222222222222222222222222222")
+    );
     assert_eq!(marketplace.plugins[0].name, "shared-linear");
     assert_eq!(marketplace.plugins[0].installed, true);
     assert_eq!(marketplace.plugins[0].enabled, true);
@@ -1735,6 +1874,10 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         "plugins~Plugin_22222222222222222222222222222222"
     );
     assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Private)
+    );
+    assert_eq!(
         share_context.creator_account_user_id.as_deref(),
         Some("user-gavin__account-123")
     );
@@ -1743,14 +1886,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         share_context.share_url.as_deref(),
         Some("https://chatgpt.example/plugins/share/share-key-1")
     );
-    assert_eq!(
-        share_context.share_targets,
-        Some(vec![PluginSharePrincipal {
-            principal_type: PluginSharePrincipalType::User,
-            principal_id: "user-ada__account-123".to_string(),
-            name: "Ada".to_string(),
-        }])
-    );
+    assert_eq!(share_context.share_principals, None);
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
@@ -2263,6 +2399,7 @@ fn workspace_remote_plugin_page_body(
     remote_plugin_id: &str,
     plugin_name: &str,
     display_name: &str,
+    discoverability: &str,
     enabled: Option<bool>,
 ) -> String {
     let enabled_field = enabled
@@ -2275,6 +2412,7 @@ fn workspace_remote_plugin_page_body(
       "id": "{remote_plugin_id}",
       "name": "{plugin_name}",
       "scope": "WORKSPACE",
+      "discoverability": "{discoverability}",
       "creator_account_user_id": "user-gavin__account-123",
       "share_url": "https://chatgpt.example/plugins/share/share-key-1",
       "installation_policy": "AVAILABLE",

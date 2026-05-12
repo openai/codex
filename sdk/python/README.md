@@ -1,8 +1,12 @@
-# Codex App Server Python SDK (Experimental)
+# OpenAI Codex Python SDK (Experimental)
 
 Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
 
-The generated wire-model layer is currently sourced from the bundled v2 schema and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
+The generated wire-model layer is sourced from the pinned `openai-codex-cli-bin`
+runtime package and exposed as Pydantic models with snake_case Python fields
+that serialize back to the app-server’s camelCase wire format.
+The package root exports the ergonomic client API; public app-server value and
+event types live in `openai_codex.types`.
 
 ## Install
 
@@ -21,7 +25,7 @@ automatically.
 ## Quickstart
 
 ```python
-from codex_app_server import Codex
+from openai_codex import Codex
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5")
@@ -68,10 +72,11 @@ notebook bootstrap the pinned runtime package automatically.
 
 ```bash
 cd sdk/python
+uv sync
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
-  /tmp/codex-python-release/openai-codex-app-server-sdk \
+  /tmp/codex-python-release/openai-codex \
   --codex-version <codex-release-tag-or-pep440-version>
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
@@ -89,13 +94,13 @@ matrix is `macosx_11_0_arm64`, `macosx_10_9_x86_64`,
 This supports the CI release flow:
 
 - run `generate-types` before packaging
-- stage `openai-codex-app-server-sdk` once with an exact `openai-codex-cli-bin==...` dependency
+- stage `openai-codex` once with an exact `openai-codex-cli-bin==...` dependency
 - stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
+- build and publish `openai-codex-cli-bin` as platform wheels only through PyPI trusted publishing; do not publish an sdist
 
 ## Compatibility and versioning
 
-- Package: `openai-codex-app-server-sdk`
+- Package: `openai-codex`
 - Runtime package: `openai-codex-cli-bin`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
@@ -107,4 +112,4 @@ This supports the CI release flow:
 - Use context managers (`with Codex() as codex:`) to ensure shutdown.
 - Prefer `thread.run("...")` for the common case. Use `thread.turn(...)` when
   you need streaming, steering, or interrupt control.
-- For transient overload, use `codex_app_server.retry.retry_on_overload`.
+- For transient overload, use `retry_on_overload` from the package root.

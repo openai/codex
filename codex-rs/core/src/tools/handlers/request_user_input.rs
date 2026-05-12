@@ -9,7 +9,6 @@ use crate::tools::handlers::request_user_input_spec::normalize_request_user_inpu
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -30,10 +29,6 @@ impl ToolHandler for RequestUserInputHandler {
         Some(create_request_user_input_tool(
             request_user_input_tool_description(&self.available_modes),
         ))
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

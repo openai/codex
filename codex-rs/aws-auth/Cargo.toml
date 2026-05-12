@@ -13,7 +13,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-aws-config = { workspace = true }
+aws-config = { workspace = true, features = ["credentials-login"] }
 aws-credential-types = { workspace = true }
 aws-sigv4 = { workspace = true }
 aws-types = { workspace = true }

@@ -15,6 +15,11 @@ use std::time::Duration;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -23,8 +28,8 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
-use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -113,6 +118,67 @@ fn restrictive_workspace_write_profile() -> PermissionProfile {
     )
 }
 
+fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> PermissionProfile {
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: read_only_root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
+#[cfg(unix)]
+fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> PermissionProfile {
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: unreadable_path,
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
+#[cfg(unix)]
+fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, link)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(source, link)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_file_symlink(_source: &std::path::Path, _link: &std::path::Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "file symlinks are unsupported on this platform",
+    ))
+}
+
 pub async fn mount_apply_patch(
     harness: &TestCodexHarness,
     call_id: &str,
@@ -172,14 +238,14 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
         call_id,
         patch,
         "done",
-        ApplyPatchModelOutput::Function,
+        ApplyPatchModelOutput::Freeform,
     )
     .await;
 
     harness.submit("please apply helper alias patch").await?;
 
     let out = harness
-        .apply_patch_output(call_id, ApplyPatchModelOutput::Function)
+        .apply_patch_output(call_id, ApplyPatchModelOutput::Freeform)
         .await;
     assert_regex_match(
         r"(?s)^Exit code: 0.*Success\. Updated the following files:\nA helper-alias\.txt\n?$",
@@ -192,7 +258,6 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_cli_multiple_operations_integration(
@@ -237,7 +302,6 @@ D delete.txt
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -265,7 +329,6 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -294,7 +357,6 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -323,7 +385,6 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -353,7 +414,6 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -385,7 +445,6 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -425,7 +484,6 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -453,7 +511,6 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -485,7 +542,6 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -521,7 +577,6 @@ async fn apply_patch_cli_reports_missing_context(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -557,7 +612,6 @@ async fn apply_patch_cli_reports_missing_target_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -594,7 +648,6 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -619,7 +672,6 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -646,7 +698,6 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -691,9 +742,236 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
+async fn intercepted_apply_patch_verification_uses_local_sandbox(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(Ok(()), "symlink setup needs local filesystem link creation");
+
+    let harness = apply_patch_harness().await?;
+    let denied_target = harness.path("denied-target.txt");
+    std::fs::write(&denied_target, "outside content\n")?;
+
+    let link_rel = "soft-link.txt";
+    create_file_symlink(&denied_target, &harness.path(link_rel))?;
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {link_rel}
+@@
+-outside content
++pwned
+*** End Patch"#
+    );
+    let call_id = "apply-sandboxed-read";
+    mount_apply_patch(&harness, call_id, &patch, "fail", model_output).await;
+
+    harness
+        .submit_with_permission_profile(
+            "attempt to read denied target via intercepted apply_patch",
+            workspace_write_with_unreadable_path(AbsolutePathBuf::try_from(denied_target.clone())?),
+        )
+        .await?;
+
+    let out = harness.apply_patch_output(call_id, model_output).await;
+    assert!(
+        out.contains("apply_patch verification failed"),
+        "expected sandboxed verification failure: {out}"
+    );
+    assert!(
+        out.contains("Failed to read"),
+        "expected read failure: {out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&denied_target)?,
+        "outside content\n",
+        "verification failure should leave the denied target unchanged"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
+#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
+async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "link escape setup needs local filesystem link creation"
+    );
+
+    let test_root = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let work_dir = AbsolutePathBuf::try_from(test_root.path().join("work"))?;
+    let outside_dir = AbsolutePathBuf::try_from(test_root.path().join("outside"))?;
+    std::fs::create_dir_all(work_dir.as_path())?;
+    std::fs::create_dir_all(outside_dir.as_path())?;
+
+    let harness_work_dir = work_dir.clone();
+    let harness = apply_patch_harness_with(move |builder| {
+        builder.with_config(move |config| {
+            config.cwd = harness_work_dir;
+        })
+    })
+    .await?;
+    let original_contents = "original outside content\n";
+    let outside_file = outside_dir.join("victim.txt");
+    std::fs::write(&outside_file, original_contents)?;
+
+    let link_rel = "soft-link.txt";
+    let link_path = harness.path(link_rel);
+    match create_file_symlink(&outside_file, &link_path) {
+        Ok(()) => {}
+        Err(error) if cfg!(windows) => {
+            eprintln!("Skipping Windows symlink apply_patch sandbox test: {error}");
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {link_rel}
+@@
+-original outside content
++pwned
+*** End Patch"#
+    );
+    let call_id = "apply-symlink-escape";
+    mount_apply_patch(&harness, call_id, &patch, "fail", model_output).await;
+
+    harness
+        .submit_with_permission_profile(
+            "attempt to escape workspace via apply_patch link",
+            workspace_write_with_read_only_root(outside_dir.clone()),
+        )
+        .await?;
+
+    let out = harness.apply_patch_output(call_id, model_output).await;
+    assert_eq!(
+        std::fs::read_to_string(&outside_file)?,
+        original_contents,
+        "symlink escape should not modify the outside victim; tool output: {out}",
+    );
+    let metadata = std::fs::symlink_metadata(&link_path)?;
+    assert!(metadata.file_type().is_symlink());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
+#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
+async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "link setup needs local filesystem hard link creation"
+    );
+
+    let test_root = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let work_dir = AbsolutePathBuf::try_from(test_root.path().join("work"))?;
+    let outside_dir = AbsolutePathBuf::try_from(test_root.path().join("outside"))?;
+    std::fs::create_dir_all(work_dir.as_path())?;
+    std::fs::create_dir_all(outside_dir.as_path())?;
+
+    let harness_work_dir = work_dir.clone();
+    let harness = apply_patch_harness_with(move |builder| {
+        builder.with_config(move |config| {
+            config.cwd = harness_work_dir;
+        })
+    })
+    .await?;
+    let outside_file = outside_dir.join("victim.txt");
+    std::fs::write(&outside_file, "original outside content\n")?;
+
+    let link_rel = "hard-link.txt";
+    let link_path = harness.path(link_rel);
+    std::fs::hard_link(&outside_file, &link_path)?;
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {link_rel}
+@@
+-original outside content
++updated through existing hard link
+*** End Patch"#
+    );
+    let call_id = "apply-hard-link";
+    mount_apply_patch(&harness, call_id, &patch, "ok", model_output).await;
+
+    harness
+        .submit_with_permission_profile(
+            "update existing hard link via apply_patch",
+            workspace_write_with_read_only_root(outside_dir.clone()),
+        )
+        .await?;
+
+    let out = harness.apply_patch_output(call_id, model_output).await;
+    if cfg!(windows) {
+        assert!(
+            out.contains("patch rejected: writing outside of the project"),
+            "Windows sandboxing intentionally rejects writes through existing hard links to files outside the workspace; tool output: {out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside_file)?,
+            "original outside content\n",
+            "Windows rejection must leave the outside hard-link target unchanged"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&link_path)?,
+            "original outside content\n",
+            "Windows rejection must leave the workspace hard-link path unchanged"
+        );
+
+        std::fs::write(&outside_file, "post-reject outside write\n")?;
+        assert_eq!(
+            std::fs::read_to_string(&link_path)?,
+            "post-reject outside write\n",
+            "Windows rejection must not unlink or replace an existing hard link"
+        );
+
+        return Ok(());
+    }
+
+    assert!(
+        out.contains("Success. Updated the following files:"),
+        "apply_patch should intentionally allow updates through existing hard links; tool output: {out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&outside_file)?,
+        "updated through existing hard link\n",
+        "apply_patch intentionally preserves existing hard-link semantics; the outside path observes the shared inode update"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&link_path)?,
+        "updated through existing hard link\n",
+        "apply_patch intentionally preserves existing hard-link semantics; the workspace path observes the same update"
+    );
+
+    std::fs::write(&outside_file, "post-apply outside write\n")?;
+    assert_eq!(
+        std::fs::read_to_string(&link_path)?,
+        "post-apply outside write\n",
+        "apply_patch must not unlink or replace an existing hard link; later writes through either path should still be visible"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -743,7 +1021,6 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -1171,7 +1448,7 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
         call_id,
         patch,
         "updated repo-relative path",
-        ApplyPatchModelOutput::Function,
+        ApplyPatchModelOutput::Freeform,
     )
     .await;
 
@@ -1260,7 +1537,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
+async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1281,7 +1558,6 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -1303,7 +1579,6 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -1340,7 +1615,6 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
@@ -1394,12 +1668,12 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
 
     let s1 = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_function_call(call1, patch1),
+        ev_apply_patch_custom_tool_call(call1, patch1),
         ev_completed("resp-1"),
     ]);
     let s2 = sse(vec![
         ev_response_created("resp-2"),
-        ev_apply_patch_function_call(call2, patch2),
+        ev_apply_patch_custom_tool_call(call2, patch2),
         ev_completed("resp-2"),
     ]);
     let s3 = sse(vec![
@@ -1446,12 +1720,12 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_apply_patch_function_call(call_success, patch_success),
+            ev_apply_patch_custom_tool_call(call_success, patch_success),
             ev_completed("resp-1"),
         ]),
         sse(vec![
             ev_response_created("resp-2"),
-            ev_apply_patch_function_call(call_failure, patch_failure),
+            ev_apply_patch_custom_tool_call(call_failure, patch_failure),
             ev_completed("resp-2"),
         ]),
         sse(vec![
@@ -1488,7 +1762,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
         "diff should include contents from successful patch: {diff}"
     );
 
-    let failure_out = harness.function_call_stdout(call_failure).await;
+    let failure_out = harness.custom_tool_call_output(call_failure).await;
     assert!(
         failure_out.contains("apply_patch verification failed"),
         "expected verification failure output: {failure_out}"
@@ -1529,12 +1803,12 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_apply_patch_function_call(call_success, patch_success),
+            ev_apply_patch_custom_tool_call(call_success, patch_success),
             ev_completed("resp-1"),
         ]),
         sse(vec![
             ev_response_created("resp-2"),
-            ev_apply_patch_function_call(call_inexact, patch_inexact),
+            ev_apply_patch_custom_tool_call(call_inexact, patch_inexact),
             ev_completed("resp-2"),
         ]),
         sse(vec![
@@ -1573,7 +1847,6 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]

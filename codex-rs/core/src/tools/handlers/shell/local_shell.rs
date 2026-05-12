@@ -6,11 +6,11 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -46,10 +46,6 @@ impl ToolHandler for LocalShellHandler {
         self.include_spec
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::LocalShell { .. })
     }
@@ -67,6 +63,26 @@ impl ToolHandler for LocalShellHandler {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": command }),
         })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let command = updated_hook_command(&updated_input)?;
+        invocation.payload = match invocation.payload {
+            ToolPayload::LocalShell { mut params } => {
+                params.command = shlex::split(command).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "hook returned shell input with an invalid command string".to_string(),
+                    )
+                })?;
+                ToolPayload::LocalShell { params }
+            }
+            payload => payload,
+        };
+        Ok(invocation)
     }
 
     fn post_tool_use_payload(
@@ -104,7 +120,7 @@ impl ToolHandler for LocalShellHandler {
         let exec_params =
             ShellHandler::to_exec_params(&params, turn.as_ref(), session.conversation_id);
         run_exec_like(RunExecLikeArgs {
-            tool_name: "local_shell".to_string(),
+            tool_name: ToolName::plain("local_shell"),
             exec_params,
             hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
             additional_permissions: None,

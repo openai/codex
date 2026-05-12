@@ -52,6 +52,7 @@ impl SessionStartupPrewarmHandle {
         session_telemetry: &SessionTelemetry,
         cancellation_token: &CancellationToken,
     ) -> SessionStartupPrewarmResolution {
+        let resolve_started_at = Instant::now();
         let Self {
             mut task,
             started_at,
@@ -78,6 +79,11 @@ impl SessionStartupPrewarmHandle {
                 }
                 None => {
                     task.abort();
+                    session_telemetry.record_startup_phase(
+                        "startup_prewarm_resolve",
+                        resolve_started_at.elapsed(),
+                        Some("cancelled"),
+                    );
                     session_telemetry.record_duration(
                         STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC,
                         age_at_first_turn,
@@ -92,6 +98,16 @@ impl SessionStartupPrewarmHandle {
                 }
             }
         };
+        let status = match &resolution {
+            SessionStartupPrewarmResolution::Cancelled => "cancelled",
+            SessionStartupPrewarmResolution::Ready(_) => "ready",
+            SessionStartupPrewarmResolution::Unavailable { status, .. } => status,
+        };
+        session_telemetry.record_startup_phase(
+            "startup_prewarm_resolve",
+            resolve_started_at.elapsed(),
+            Some(status),
+        );
 
         match resolution {
             SessionStartupPrewarmResolution::Cancelled => {
@@ -165,6 +181,11 @@ impl Session {
             let result =
                 schedule_startup_prewarm_inner(startup_prewarm_session, base_instructions).await;
             let status = if result.is_ok() { "ready" } else { "failed" };
+            session_telemetry.record_startup_phase(
+                "startup_prewarm_total",
+                started_at.elapsed(),
+                Some(status),
+            );
             session_telemetry.record_duration(
                 STARTUP_PREWARM_DURATION_METRIC,
                 started_at.elapsed(),
@@ -200,10 +221,17 @@ async fn schedule_startup_prewarm_inner(
     session: Arc<Session>,
     base_instructions: String,
 ) -> CodexResult<ModelClientSession> {
+    let prewarm_started_at = Instant::now();
     let startup_turn_context = session
         .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_create_turn_context",
+        prewarm_started_at.elapsed(),
+        /*status*/ None,
+    );
     let startup_cancellation_token = CancellationToken::new();
+    let built_tools_started_at = Instant::now();
     let startup_router = built_tools(
         session.as_ref(),
         startup_turn_context.as_ref(),
@@ -213,6 +241,12 @@ async fn schedule_startup_prewarm_inner(
         &startup_cancellation_token,
     )
     .await?;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_tools",
+        built_tools_started_at.elapsed(),
+        /*status*/ None,
+    );
+    let build_prompt_started_at = Instant::now();
     let startup_prompt = build_prompt(
         Vec::new(),
         startup_router.as_ref(),
@@ -221,10 +255,16 @@ async fn schedule_startup_prewarm_inner(
             text: base_instructions,
         },
     );
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_build_prompt",
+        build_prompt_started_at.elapsed(),
+        /*status*/ None,
+    );
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
         .current_header_value();
     let mut client_session = session.services.model_client.new_session();
+    let websocket_warmup_started_at = Instant::now();
     client_session
         .prewarm_websocket(
             &startup_prompt,
@@ -236,6 +276,11 @@ async fn schedule_startup_prewarm_inner(
             startup_turn_metadata_header.as_deref(),
         )
         .await?;
+    startup_turn_context.session_telemetry.record_startup_phase(
+        "startup_prewarm_websocket_warmup",
+        websocket_warmup_started_at.elapsed(),
+        /*status*/ None,
+    );
 
     Ok(client_session)
 }
