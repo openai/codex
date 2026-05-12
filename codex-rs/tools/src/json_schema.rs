@@ -228,7 +228,10 @@ fn sanitize_json_schema(value: &mut JsonValue) {
                 {
                     schema_types.push(JsonSchemaPrimitiveType::Number);
                 } else {
-                    schema_types.push(JsonSchemaPrimitiveType::String);
+                    // With no schema hints, fall back to an open object so unknown
+                    // tool argument shapes can still carry arbitrary named fields.
+                    schema_types.push(JsonSchemaPrimitiveType::Object);
+                    map.insert("additionalProperties".to_string(), JsonValue::Bool(true));
                 }
             }
 

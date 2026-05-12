@@ -29,7 +29,15 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
             input_schema: JsonSchema::object(
                 BTreeMap::from([(
                     "id".to_string(),
-                    JsonSchema::string(Some("Ticket identifier".to_string()),),
+                    JsonSchema {
+                        schema_type: Some(crate::JsonSchemaType::Single(
+                            crate::JsonSchemaPrimitiveType::Object,
+                        )),
+                        description: Some("Ticket identifier".to_string()),
+                        properties: Some(BTreeMap::new()),
+                        additional_properties: Some(true.into()),
+                        ..Default::default()
+                    },
                 )]),
                 /*required*/ None,
                 /*additional_properties*/ None
