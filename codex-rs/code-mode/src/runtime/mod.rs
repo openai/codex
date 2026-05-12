@@ -76,6 +76,10 @@ pub enum ExecuteToPendingOutcome {
     Pending {
         cell_id: String,
         content_items: Vec<FunctionCallOutputContentItem>,
+        /// Runtime tool-call ids emitted before this paused execution frontier
+        /// sealed. Hosts can use these ids to drain their tool-call transport
+        /// before surfacing the pending boundary to callers.
+        pending_tool_call_ids: Vec<String>,
     },
     /// The cell reached a terminal runtime response before going pending.
     Completed(RuntimeResponse),

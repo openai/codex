@@ -445,6 +445,7 @@ async fn run_session_control(
         runtime_terminate_handle,
     } = context;
     let mut content_items = Vec::new();
+    let mut pending_tool_call_ids = Vec::new();
     let mut pending_result: Option<PendingResult> = None;
     let mut response_tx = Some(initial_response_tx);
     let mut termination_requested = false;
@@ -506,6 +507,9 @@ async fn run_session_control(
                                     let _ = response_tx.send(ExecuteToPendingOutcome::Pending {
                                         cell_id: cell_id.clone(),
                                         content_items: std::mem::take(&mut content_items),
+                                        pending_tool_call_ids: std::mem::take(
+                                            &mut pending_tool_call_ids,
+                                        ),
                                     });
                                 }
                             }
@@ -531,6 +535,9 @@ async fn run_session_control(
                         kind,
                         input,
                     } => {
+                        if pending_mode == PendingRuntimeMode::PauseUntilResumed {
+                            pending_tool_call_ids.push(id.clone());
+                        }
                         let tool_call = CodeModeNestedToolCall {
                             cell_id: cell_id.clone(),
                             runtime_tool_call_id: id,
@@ -675,6 +682,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
 
+    use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
@@ -693,7 +701,9 @@ mod tests {
     use super::WaitToPendingOutcome;
     use super::WaitToPendingRequest;
     use super::run_session_control;
+    use crate::CodeModeToolKind;
     use crate::FunctionCallOutputContentItem;
+    use crate::ToolDefinition;
     use crate::runtime::ExecuteRequest;
     use crate::runtime::ExecuteToPendingOutcome;
     use crate::runtime::RuntimeEvent;
@@ -797,7 +807,151 @@ mod tests {
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "before".to_string(),
                 }],
+                pending_tool_call_ids: Vec::new(),
             }
+        );
+
+        let termination = service
+            .wait(WaitRequest {
+                cell_id: "1".to_string(),
+                yield_time_ms: 1,
+                terminate: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            termination,
+            WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_to_pending_identifies_tool_calls_in_paused_frontier() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute_to_pending(ExecuteRequest {
+                enabled_tools: vec![ToolDefinition {
+                    name: "echo".to_string(),
+                    tool_name: ToolName::plain("echo"),
+                    description: String::new(),
+                    kind: CodeModeToolKind::Function,
+                    input_schema: None,
+                    output_schema: None,
+                }],
+                source: r#"
+await Promise.all([
+  tools.echo({ value: "first" }),
+  tools.echo({ value: "second" }),
+]);
+"#
+                .to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            ExecuteToPendingOutcome::Pending {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                pending_tool_call_ids: vec!["tool-1".to_string(), "tool-2".to_string()],
+            }
+        );
+
+        let termination = service
+            .wait(WaitRequest {
+                cell_id: "1".to_string(),
+                yield_time_ms: 1,
+                terminate: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            termination,
+            WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_to_pending_excludes_delayed_timeout_tool_calls_until_wait() {
+        let service = CodeModeService::new();
+
+        let initial_response = service
+            .execute_to_pending(ExecuteRequest {
+                enabled_tools: vec![ToolDefinition {
+                    name: "echo".to_string(),
+                    tool_name: ToolName::plain("echo"),
+                    description: String::new(),
+                    kind: CodeModeToolKind::Function,
+                    input_schema: None,
+                    output_schema: None,
+                }],
+                source: r#"
+setTimeout(() => {
+  tools.echo({ value: "delayed" });
+}, 1000);
+await Promise.all([
+  tools.echo({ value: "second" }),
+  tools.echo({ value: "third" }),
+]);
+"#
+                .to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            initial_response,
+            ExecuteToPendingOutcome::Pending {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                pending_tool_call_ids: vec!["tool-1".to_string(), "tool-2".to_string()],
+            }
+        );
+
+        let runtime_tx = service
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get("1")
+            .unwrap()
+            .runtime_tx
+            .clone();
+        runtime_tx
+            .send(RuntimeCommand::TimeoutFired { id: 1 })
+            .unwrap();
+
+        let resumed_response = tokio::time::timeout(
+            Duration::from_secs(1),
+            service.wait_to_pending(WaitToPendingRequest {
+                cell_id: "1".to_string(),
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            resumed_response,
+            WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Pending {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                pending_tool_call_ids: vec!["tool-3".to_string()],
+            })
         );
 
         let termination = service
@@ -841,6 +995,7 @@ await new Promise(() => {});
             ExecuteToPendingOutcome::Pending {
                 cell_id: "1".to_string(),
                 content_items: Vec::new(),
+                pending_tool_call_ids: Vec::new(),
             }
         );
 
@@ -874,6 +1029,7 @@ await new Promise(() => {});
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "after".to_string(),
                 }],
+                pending_tool_call_ids: Vec::new(),
             })
         );
 
@@ -917,6 +1073,7 @@ text("done");
             ExecuteToPendingOutcome::Pending {
                 cell_id: "1".to_string(),
                 content_items: Vec::new(),
+                pending_tool_call_ids: Vec::new(),
             }
         );
 
