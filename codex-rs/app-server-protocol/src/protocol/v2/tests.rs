@@ -2896,10 +2896,12 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
                 PluginShareTarget {
                     principal_type: PluginSharePrincipalType::User,
                     principal_id: "user-1".to_string(),
+                    role: PluginShareTargetRole::Reader,
                 },
                 PluginShareTarget {
-                    principal_type: PluginSharePrincipalType::Workspace,
-                    principal_id: "workspace-1".to_string(),
+                    principal_type: PluginSharePrincipalType::Group,
+                    principal_id: "group-1".to_string(),
+                    role: PluginShareTargetRole::Reader,
                 },
             ]),
         })
@@ -2912,10 +2914,12 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
                 {
                     "principalType": "user",
                     "principalId": "user-1",
+                    "role": "reader",
                 },
                 {
-                    "principalType": "workspace",
-                    "principalId": "workspace-1",
+                    "principalType": "group",
+                    "principalId": "group-1",
+                    "role": "reader",
                 },
             ],
         }),
@@ -2940,6 +2944,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
             share_targets: vec![PluginShareTarget {
                 principal_type: PluginSharePrincipalType::Group,
                 principal_id: "group-1".to_string(),
+                role: PluginShareTargetRole::Editor,
             }],
         })
         .unwrap(),
@@ -2949,6 +2954,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
             "shareTargets": [{
                 "principalType": "group",
                 "principalId": "group-1",
+                "role": "editor",
             }],
         }),
     );
@@ -2958,6 +2964,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
             principals: vec![PluginSharePrincipal {
                 principal_type: PluginSharePrincipalType::User,
                 principal_id: "user-1".to_string(),
+                role: PluginSharePrincipalRole::Owner,
                 name: "Gavin".to_string(),
             }],
             discoverability: PluginShareDiscoverability::Unlisted,
@@ -2967,6 +2974,7 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
             "principals": [{
                 "principalType": "user",
                 "principalId": "user-1",
+                "role": "owner",
                 "name": "Gavin",
             }],
             "discoverability": "UNLISTED",
@@ -2995,7 +3003,10 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    id: "gmail@chatgpt-global".to_string(),
+                    remote_plugin_id: Some(
+                        "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    ),
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3007,7 +3018,6 @@ fn plugin_share_list_response_serializes_share_items() {
                     interface: None,
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: None,
             }],
         })
@@ -3015,7 +3025,8 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "id": "gmail@chatgpt-global",
+                    "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
@@ -3027,7 +3038,6 @@ fn plugin_share_list_response_serializes_share_items() {
                     "interface": null,
                     "keywords": [],
                 },
-                "shareUrl": "https://chatgpt.example/plugins/share/share-key-1",
                 "localPluginPath": null,
             }],
         }),

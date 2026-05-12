@@ -12,11 +12,12 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -88,10 +89,6 @@ impl ToolHandler for ExecCommandHandler {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -131,6 +128,27 @@ impl ToolHandler for ExecCommandHandler {
                 tool_name: HookToolName::bash(),
                 tool_input: serde_json::json!({ "command": args.cmd }),
             })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported exec_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "exec_command",
+                "cmd",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
     }
 
     fn post_tool_use_payload(
@@ -273,6 +291,7 @@ impl ToolHandler for ExecCommandHandler {
             &command,
             &cwd,
             fs.as_ref(),
+            turn_environment.clone(),
             context.session.clone(),
             context.turn.clone(),
             Some(&tracker),

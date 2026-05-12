@@ -249,8 +249,10 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             /*success*/ true,
             "secret output\nsecond line",
             &[],
-            Some("internal-mcp"),
-            Some("stdio"),
+            &[
+                ("mcp_server", "internal-mcp"),
+                ("mcp_server_origin", "stdio"),
+            ],
         );
     });
 
@@ -277,6 +279,10 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
         tool_log_attrs.get("mcp_server").map(String::as_str),
         Some("internal-mcp")
     );
+    assert_eq!(
+        tool_log_attrs.get("mcp_server_origin").map(String::as_str),
+        Some("stdio")
+    );
 
     let spans = span_exporter.get_finished_spans().expect("span export");
     assert_eq!(spans.len(), 1);
@@ -298,14 +304,6 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             .get("output_line_count")
             .map(String::as_str),
         Some("2")
-    );
-    assert_eq!(
-        tool_trace_attrs.get("tool_origin").map(String::as_str),
-        Some("mcp")
-    );
-    assert_eq!(
-        tool_trace_attrs.get("mcp_tool").map(String::as_str),
-        Some("true")
     );
     assert!(!tool_trace_attrs.contains_key("arguments"));
     assert!(!tool_trace_attrs.contains_key("output"));

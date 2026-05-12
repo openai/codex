@@ -14,6 +14,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -25,13 +26,11 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
-use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
@@ -211,8 +210,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         ))
     }
 
-    fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+    fn sandbox_permissions(&self, req: &UnifiedExecRequest) -> SandboxPermissions {
+        req.sandbox_permissions
     }
 }
 
@@ -233,7 +232,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             mode: NetworkApprovalMode::Deferred,
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
-                tool_name: ctx.tool_name.clone(),
+                tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
                 cwd: req.cwd.clone(),
                 sandbox_permissions: req.sandbox_permissions,

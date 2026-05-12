@@ -76,7 +76,6 @@ pub use tool_discovery::collect_request_plugin_install_entries;
 pub use tool_discovery::collect_tool_search_source_infos;
 pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_client;
 pub use tool_discovery::tool_search_result_source_to_loadable_tool_spec;
-pub use tool_spec::ConfiguredToolSpec;
 pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;
 pub use tool_spec::ToolSpec;

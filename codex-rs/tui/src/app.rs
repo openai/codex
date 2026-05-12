@@ -40,6 +40,7 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::hooks_rpc::HookTrustUpdate;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
@@ -91,8 +92,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::HooksListParams;
-use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 #[cfg(test)]
@@ -156,6 +156,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -181,6 +182,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
+mod agent_message_consolidation;
 mod agent_navigation;
 mod app_server_event_targets;
 mod app_server_events;
@@ -192,6 +194,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod pets;
 mod platform_actions;
 mod replay_filter;
 mod resize_reflow;
@@ -245,6 +248,26 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
             _ => None,
         },
         _ => None,
+    }
+}
+
+fn collab_receiver_is_not_found(
+    notification: &ServerNotification,
+    receiver_thread_id: &str,
+) -> bool {
+    match notification {
+        ServerNotification::ItemCompleted(notification) => match &notification.item {
+            ThreadItem::CollabAgentToolCall { agents_states, .. } => {
+                agents_states.get(receiver_thread_id).is_some_and(|state| {
+                    matches!(
+                        &state.status,
+                        codex_app_server_protocol::CollabAgentStatus::NotFound
+                    )
+                })
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -577,6 +600,7 @@ impl App {
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            environment_manager: self.environment_manager.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             workspace_command_runner: self.workspace_command_runner.clone(),
@@ -620,6 +644,7 @@ impl App {
         remote_app_server_auth_token: Option<String>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        startup_hooks_browser: Option<HooksListEntry>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -742,6 +767,7 @@ impl App {
                         .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
@@ -778,6 +804,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
@@ -819,6 +846,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
@@ -914,6 +942,9 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
+        if let Some(entry) = startup_hooks_browser {
+            app.chat_widget.open_hooks_browser(entry);
+        }
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -957,7 +988,6 @@ See the Codex keymap documentation for supported actions and examples."
 
         tui.frame_requester().schedule_frame();
         app.refresh_startup_skills(&app_server);
-        app.refresh_startup_hooks(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {
@@ -1056,13 +1086,18 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
+        let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
+                clear_pet_result?;
                 clear_result?;
                 exit_reason
             }
             Err(err) => {
+                if let Err(clear_pet_err) = clear_pet_result {
+                    tracing::warn!(error = %clear_pet_err, "failed to clear ambient pet image");
+                }
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
                 }
@@ -1130,9 +1165,11 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    let mut rendered_area = Rect::default();
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
                             let area = frame.area();
+                            rendered_area = area;
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
                                 frame.set_cursor_style(self.chat_widget.cursor_style(area));
@@ -1142,12 +1179,37 @@ See the Codex keymap documentation for supported actions and examples."
                     } else {
                         tui.draw(desired_height, |frame| {
                             let area = frame.area();
+                            rendered_area = area;
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
                                 frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
+                    }
+                    if self.chat_widget.ambient_pet_image_enabled() {
+                        let terminal_size = tui.terminal.size()?;
+                        let ambient_pet_area = Rect::new(
+                            /*x*/ 0,
+                            /*y*/ 0,
+                            terminal_size.width,
+                            terminal_size.height,
+                        );
+                        if let Err(err) = tui.draw_ambient_pet_image(
+                            self.chat_widget
+                                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
+                        ) {
+                            self.handle_ambient_pet_image_render_error(tui, err)?;
+                        }
+                    }
+                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
+                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                            self.handle_pet_picker_preview_image_render_error(tui, err)?;
+                        }
+                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
+                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
+                    {
+                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
                     }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget

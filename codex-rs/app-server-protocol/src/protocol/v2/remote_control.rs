@@ -3,12 +3,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-/// Current remote-control connection status and environment id exposed to clients.
+/// Current remote-control connection status and remote identity exposed to clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct RemoteControlStatusChangedNotification {
     pub status: RemoteControlConnectionStatus,
+    pub installation_id: String,
     pub environment_id: Option<String>,
 }
 

@@ -1,6 +1,4 @@
 use std::process::Stdio;
-use std::time::Duration;
-
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -8,6 +6,8 @@ use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
+
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
@@ -17,29 +17,34 @@ use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
-const ENVIRONMENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const ENVIRONMENT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
         match transport_params {
-            crate::client_api::ExecServerTransportParams::WebSocketUrl(websocket_url) => {
+            crate::client_api::ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout,
+                initialize_timeout,
+            } => {
                 Self::connect_websocket(RemoteExecServerConnectArgs {
                     websocket_url,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
-                    connect_timeout: ENVIRONMENT_CONNECT_TIMEOUT,
-                    initialize_timeout: ENVIRONMENT_INITIALIZE_TIMEOUT,
+                    connect_timeout,
+                    initialize_timeout,
                     resume_session_id: None,
                 })
                 .await
             }
-            crate::client_api::ExecServerTransportParams::StdioCommand(command) => {
+            crate::client_api::ExecServerTransportParams::StdioCommand {
+                command,
+                initialize_timeout,
+            } => {
                 Self::connect_stdio_command(StdioExecServerConnectArgs {
                     command,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
-                    initialize_timeout: ENVIRONMENT_INITIALIZE_TIMEOUT,
+                    initialize_timeout,
                     resume_session_id: None,
                 })
                 .await
@@ -50,6 +55,7 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))

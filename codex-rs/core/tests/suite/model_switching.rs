@@ -9,6 +9,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -320,9 +321,28 @@ async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let model_slug = "test-flex-model";
+    let mut flex_model = test_model_info(
+        model_slug,
+        model_slug,
+        "supports flex tier",
+        default_input_modalities(),
+    );
+    flex_model.service_tiers = vec![ModelServiceTier {
+        id: ServiceTier::Flex.request_value().to_string(),
+        name: "flex".to_string(),
+        description: "Flexible processing.".to_string(),
+    }];
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let test = test_codex().build(&server).await?;
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![flex_model],
+            });
+        });
+    let test = builder.build(&server).await?;
 
     test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex))
         .await?;
@@ -330,6 +350,39 @@ async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
     let request = resp_mock.single_request();
     let body = request.body_json();
     assert_eq!(body["service_tier"].as_str(), Some("flex"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let model_slug = "test-no-tier-model";
+    let model = test_model_info(
+        model_slug,
+        model_slug,
+        "no service tiers",
+        default_input_modalities(),
+    );
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast))
+        .await?;
+
+    let request = resp_mock.single_request();
+    let body = request.body_json();
+    assert_eq!(body.get("service_tier"), None);
 
     Ok(())
 }

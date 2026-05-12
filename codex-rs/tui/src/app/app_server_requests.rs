@@ -134,6 +134,12 @@ impl PendingAppServerRequests {
                 })
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+            ServerRequest::AttestationGenerate { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Attestation generation is not available in TUI.".to_string(),
+                })
+            }
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),
@@ -332,6 +338,7 @@ impl PendingAppServerRequests {
                 .any(|pending_request_id| pending_request_id == request_id),
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => true,
         }

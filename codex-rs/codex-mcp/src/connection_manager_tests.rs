@@ -10,7 +10,7 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
-use crate::rmcp_client::elicitation_capability_for_server;
+use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -39,6 +39,8 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     let tool_namespace = format!("mcp__{server_name}__");
     ToolInfo {
         server_name: server_name.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
         namespace_description: None,
@@ -93,6 +95,18 @@ fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
         .collect::<HashSet<_>>()
 }
 
+fn model_tool_name_len(name: &ToolName) -> usize {
+    name.namespace.as_deref().map_or(0, str::len) + name.name.len()
+}
+
+fn is_code_mode_compatible_tool_name(name: &ToolName) -> bool {
+    name.namespace
+        .as_deref()
+        .into_iter()
+        .chain(std::iter::once(name.name.as_str()))
+        .flat_map(str::chars)
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 #[test]
 fn declared_openai_file_fields_treat_names_literally() {
     let meta = serde_json::json!({
@@ -334,17 +348,14 @@ fn test_normalize_tools_long_names_same_server() {
 
     let names = model_tool_names(&model_tools);
 
-    assert!(names.iter().all(|name| name.display().len() == 64));
+    assert!(names.iter().all(|name| model_tool_name_len(name) == 64));
     assert!(
         names
             .iter()
             .all(|name| name.namespace.as_deref() == Some("mcp__my_server__"))
     );
     assert!(
-        names.iter().all(|name| name
-            .display()
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        names.iter().all(is_code_mode_compatible_tool_name),
         "model-visible names must be code-mode compatible: {names:?}"
     );
 }
@@ -363,10 +374,9 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
         ToolName::namespaced("mcp__server_one__", "tool_two_three")
     );
     assert_eq!(
-        format!("{}{}", tool.callable_namespace, tool.callable_name),
-        model_name.display()
+        ToolName::namespaced(tool.callable_namespace.clone(), tool.callable_name.clone()),
+        model_name
     );
-
     // The callable parts are sanitized for model-visible tool calls, but the raw
     // MCP name is preserved for the actual MCP call.
     assert_eq!(tool.server_name, "server.one");
@@ -375,10 +385,7 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
     assert_eq!(tool.tool.name, "tool.two-three");
 
     assert!(
-        model_name
-            .display()
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        is_code_mode_compatible_tool_name(&model_name),
         "model-visible name must be code-mode compatible: {model_name:?}"
     );
 }
@@ -425,10 +432,7 @@ fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
     assert_eq!(raw_servers, HashSet::from(["basic-server", "basic_server"]));
     let model_names = model_tool_names(&model_tools);
     assert!(
-        model_names.iter().all(|name| name
-            .display()
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')),
+        model_names.iter().all(is_code_mode_compatible_tool_name),
         "model-visible names must be code-mode compatible: {model_names:?}"
     );
 }
@@ -712,44 +716,6 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
-    let startup_tools = vec![create_test_tool("rmcp", "echo")];
-    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
-        .boxed()
-        .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
-    manager.clients.insert(
-        "rmcp".to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
-        },
-    );
-
-    let tool = manager
-        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
-        .await
-        .expect("split MCP tool namespace and name should resolve");
-
-    let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
-    assert_eq!(
-        (
-            tool.server_name.as_str(),
-            tool.callable_namespace.as_str(),
-            tool.callable_name.as_str(),
-            tool.tool.name.as_ref(),
-        ),
-        expected
-    );
-}
-
-#[tokio::test]
 async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -841,16 +807,68 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     assert_eq!(tool.callable_name, "calendar_create_event");
 }
 
+#[tokio::test]
+async fn list_all_tools_adds_server_metadata_to_cached_tools() {
+    let server_name = "docs";
+    let startup_tools = vec![create_test_tool(server_name, "search")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    manager.server_metadata.insert(
+        server_name.to_string(),
+        McpServerMetadata {
+            pollutes_memory: true,
+            origin: Some(McpServerOrigin::StreamableHttp(
+                "https://docs.example".to_string(),
+            )),
+            supports_parallel_tool_calls: true,
+        },
+    );
+    manager.clients.insert(
+        server_name.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = manager.list_all_tools().await;
+    assert_eq!(tools.len(), 1);
+    let tool = &tools[0];
+    assert_eq!(tool.server_name, server_name);
+    assert!(tool.supports_parallel_tool_calls);
+    assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
+}
+
 #[test]
-fn elicitation_capability_uses_2025_06_18_shape_for_all_servers() {
-    for server_name in [CODEX_APPS_MCP_SERVER_NAME, "custom_mcp"] {
-        let capability = elicitation_capability_for_server(server_name);
-        assert_eq!(capability, Some(ElicitationCapability::default()));
-        assert_eq!(
-            serde_json::to_value(capability).expect("serialize elicitation capability"),
-            serde_json::json!({})
-        );
-    }
+fn elicitation_capability_uses_2025_06_18_shape_for_form_only_support() {
+    let capability = Some(ElicitationCapability::default());
+    assert_eq!(
+        serde_json::to_value(capability).expect("serialize elicitation capability"),
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn elicitation_capability_advertises_url_support_when_enabled() {
+    let capability = Some(ElicitationCapability {
+        form: Some(rmcp::model::FormElicitationCapability::default()),
+        url: Some(rmcp::model::UrlElicitationCapability::default()),
+    });
+    assert_eq!(
+        serde_json::to_value(capability).expect("serialize elicitation capability"),
+        serde_json::json!({
+            "form": {},
+            "url": {},
+        })
+    );
 }
 
 #[test]

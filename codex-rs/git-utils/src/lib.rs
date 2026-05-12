@@ -24,6 +24,7 @@ pub use errors::GitToolingError;
 pub use info::CommitLogEntry;
 pub use info::GitDiffToRemote;
 pub use info::GitInfo;
+pub use info::canonicalize_git_remote_url;
 pub use info::collect_git_info;
 pub use info::current_branch_name;
 pub use info::default_branch_name;

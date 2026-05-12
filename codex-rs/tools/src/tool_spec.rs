@@ -75,25 +75,6 @@ impl From<LoadableToolSpec> for ToolSpec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConfiguredToolSpec {
-    pub spec: ToolSpec,
-    pub supports_parallel_tool_calls: bool,
-}
-
-impl ConfiguredToolSpec {
-    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool) -> Self {
-        Self {
-            spec,
-            supports_parallel_tool_calls,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        self.spec.name()
-    }
-}
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses

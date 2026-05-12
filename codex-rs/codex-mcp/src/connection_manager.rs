@@ -7,7 +7,6 @@
 //! `codex-core`.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,7 +43,6 @@ use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
-use codex_protocol::ToolName;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -55,6 +53,7 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
+use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -130,17 +129,6 @@ impl McpConnectionManager {
             .is_none_or(|metadata| metadata.pollutes_memory)
     }
 
-    pub fn parallel_tool_call_server_names(&self) -> HashSet<String> {
-        self.server_metadata
-            .iter()
-            .filter_map(|(name, metadata)| {
-                metadata
-                    .supports_parallel_tool_calls
-                    .then_some(name.clone())
-            })
-            .collect()
-    }
-
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
@@ -178,6 +166,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         host_owned_codex_apps_enabled: bool,
+        client_elicitation_capability: ElicitationCapability,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
@@ -246,8 +235,8 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
-                codex_home.clone(),
                 runtime_auth_provider,
+                client_elicitation_capability.clone(),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -371,7 +360,11 @@ impl McpConnectionManager {
             let Some(server_tools) = managed_client.listed_tools().await else {
                 continue;
             };
-            tools.extend(server_tools);
+            tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
         }
         normalize_tools_for_model(tools)
     }
@@ -422,9 +415,24 @@ impl McpConnectionManager {
             .into_iter()
             .map(|mut tool| {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                tool
+                self.with_server_metadata(tool)
             });
         Ok(normalize_tools_for_model(tools))
+    }
+
+    fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
+        let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
+            tool.supports_parallel_tool_calls = false;
+            tool.server_origin = None;
+            return tool;
+        };
+
+        tool.supports_parallel_tool_calls = metadata.supports_parallel_tool_calls;
+        tool.server_origin = metadata
+            .origin
+            .as_ref()
+            .map(|origin| origin.as_str().to_string());
+        tool
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -658,13 +666,6 @@ impl McpConnectionManager {
             .read_resource(params, timeout)
             .await
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
-    }
-
-    pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        let all_tools = self.list_all_tools().await;
-        all_tools
-            .into_iter()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {

@@ -18,6 +18,10 @@ mod feature_configs;
 mod legacy;
 pub use feature_configs::AppsMcpPathOverrideConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
+pub use feature_configs::NetworkProxyConfigToml;
+pub use feature_configs::NetworkProxyDomainPermissionToml;
+pub use feature_configs::NetworkProxyModeToml;
+pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -134,14 +138,14 @@ pub enum Feature {
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
-    /// Enable product-owned built-in MCP servers.
-    BuiltInMcp,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Start the managed network proxy for sandboxed sessions.
+    NetworkProxy,
     /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
@@ -152,7 +156,7 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
-    /// Use the new path for the built-in apps MCP server.
+    /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
     /// Enable the tool_search tool for apps.
     ToolSearch,
@@ -192,6 +196,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
@@ -574,6 +580,7 @@ pub struct FeaturesToml {
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
+    pub network_proxy: Option<FeatureToml<NetworkProxyConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,
@@ -599,6 +606,9 @@ impl FeaturesToml {
         {
             entries.insert(Feature::AppsMcpPathOverride.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
+        }
         entries
     }
 
@@ -606,6 +616,7 @@ impl FeaturesToml {
         let Self {
             multi_agent_v2,
             apps_mcp_path_override,
+            network_proxy,
             entries,
         } = self;
         for key in legacy::legacy_feature_keys() {
@@ -617,6 +628,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::AppsMcpPathOverride {
                 materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
+            } else if spec.id == Feature::NetworkProxy {
+                materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
                 entries.insert(spec.key.to_string(), enabled);
             }
@@ -798,12 +811,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::BuiltInMcp,
-        key: "builtin_mcp",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Chronicle,
         key: "chronicle",
         stage: Stage::UnderDevelopment,
@@ -886,6 +893,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "enable_request_compression",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::NetworkProxy,
+        key: "network_proxy",
+        stage: Stage::Experimental {
+            name: "Network proxy",
+            menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
+            announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Collab,
@@ -1015,6 +1032,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Experimental {
+            name: "Mentions v2",
+            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

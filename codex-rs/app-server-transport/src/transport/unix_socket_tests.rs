@@ -52,6 +52,14 @@ fn listen_unix_socket_accepts_relative_custom_path() {
     );
 }
 
+#[test]
+fn listen_websocket_url_is_not_supported() {
+    assert!(matches!(
+        AppServerTransport::from_listen_url("ws://127.0.0.1:0"),
+        Err(super::AppServerTransportParseError::UnsupportedListenUrl(_))
+    ));
+}
+
 #[tokio::test]
 async fn control_socket_acceptor_upgrades_and_forwards_websocket_text_messages_and_pings() {
     let temp_dir = tempfile::TempDir::new().expect("temp dir");

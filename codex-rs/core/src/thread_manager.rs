@@ -1,11 +1,11 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
-use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -13,8 +13,6 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills_watcher::SkillsWatcher;
-use crate::skills_watcher::SkillsWatcherEvent;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -22,6 +20,8 @@ use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -70,8 +70,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::runtime::Handle;
-use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -103,47 +101,6 @@ impl Drop for TempCodexHomeGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
-    if should_use_test_thread_manager_behavior()
-        && let Ok(handle) = Handle::try_current()
-        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
-    {
-        // The real watcher spins background tasks that can starve the
-        // current-thread test runtime and cause event waits to time out.
-        warn!("using noop skills watcher under current-thread test runtime");
-        return Arc::new(SkillsWatcher::noop());
-    }
-
-    let file_watcher = match FileWatcher::new() {
-        Ok(file_watcher) => Arc::new(file_watcher),
-        Err(err) => {
-            warn!("failed to initialize file watcher: {err}");
-            Arc::new(FileWatcher::noop())
-        }
-    };
-    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
-
-    let mut rx = skills_watcher.subscribe();
-    let skills_manager = Arc::clone(&skills_manager);
-    if let Ok(handle) = Handle::try_current() {
-        handle.spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
-                        skills_manager.clear_cache();
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-        });
-    } else {
-        warn!("skills watcher listener skipped: no Tokio runtime available");
-    }
-
-    skills_watcher
 }
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
@@ -246,8 +203,9 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
-    skills_watcher: Arc<SkillsWatcher>,
+    extensions: Arc<ExtensionRegistry<Config>>,
     thread_store: Arc<dyn ThreadStore>,
+    attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
@@ -287,10 +245,12 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
         installation_id: String,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
@@ -305,7 +265,6 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
-        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -315,8 +274,9 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                skills_watcher,
+                extensions,
                 thread_store,
+                attestation_provider,
                 auth_manager,
                 session_source,
                 installation_id,
@@ -395,7 +355,6 @@ impl ThreadManager {
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
-        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
@@ -416,8 +375,9 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                skills_watcher,
+                extensions: empty_extension_registry(),
                 thread_store,
+                attestation_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
@@ -605,6 +565,36 @@ impl ThreadManager {
             /*user_shell_override*/ None,
         ))
         .await
+    }
+
+    // TODO(jif) merge with fork_agent
+    /// Spawn a subagent by forking persisted history from `forked_from_thread_id`.
+    pub async fn spawn_subagent(
+        &self,
+        forked_from_thread_id: ThreadId,
+        mut options: StartThreadOptions,
+    ) -> CodexResult<NewThread> {
+        let fork_source = self.get_thread(forked_from_thread_id).await?;
+        // Persist queued rollout updates before reading the fork snapshot.
+        fork_source.ensure_rollout_materialized().await;
+        fork_source.flush_rollout().await?;
+        let stored_thread = fork_source
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ true,
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to read subagent fork source {forked_from_thread_id}: {err}"
+                ))
+            })?;
+        let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
+        options.initial_history = fork_history_from_snapshot(
+            ForkSnapshot::Interrupted,
+            history,
+            InterruptedTurnHistoryMarker::from_config(&options.config),
+        );
+        self.start_thread_with_options(options).await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -1160,19 +1150,6 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let watch_registration = match environment_selections.primary() {
-            Some(turn_environment) if !turn_environment.environment.is_remote() => {
-                self.skills_watcher
-                    .register_config(
-                        &config,
-                        self.skills_manager.as_ref(),
-                        self.plugins_manager.as_ref(),
-                        Some(turn_environment.environment.get_filesystem()),
-                    )
-                    .await
-            }
-            Some(_) | None => crate::file_watcher::WatchRegistration::default(),
-        };
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -1188,7 +1165,7 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
-            skills_watcher: Arc::clone(&self.skills_watcher),
+            extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
             session_source,
             thread_source,
@@ -1204,10 +1181,11 @@ impl ThreadManagerState {
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
+            attestation_provider: self.attestation_provider.clone(),
         })
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread
             && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
@@ -1222,7 +1200,6 @@ impl ThreadManagerState {
         codex: Codex,
         thread_id: ThreadId,
         session_source: SessionSource,
-        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -1243,7 +1220,6 @@ impl ThreadManagerState {
                     session_configured.clone(),
                     session_configured.rollout_path.clone(),
                     session_source,
-                    watch_registration,
                 ));
                 e.insert(thread.clone());
                 return Ok(NewThread {

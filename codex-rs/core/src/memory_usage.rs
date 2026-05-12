@@ -1,5 +1,6 @@
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::flat_tool_name;
 use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
 use codex_memories_read::usage::memories_usage_kinds_from_command;
@@ -17,14 +18,14 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
     }
 
     let success = if success { "true" } else { "false" };
-    let tool_name = invocation.tool_name.display();
+    let tool_name = flat_tool_name(&invocation.tool_name);
     for kind in kinds {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
             /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
-                ("tool", &tool_name),
+                ("tool", tool_name.as_ref()),
                 ("success", success),
             ],
         );

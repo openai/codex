@@ -11,10 +11,10 @@ use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 
 use super::RunExecLikeArgs;
+use super::rewrite_shell_function_updated_hook_input;
 use super::run_exec_like;
 use super::shell_function_post_tool_use_payload;
 use super::shell_function_pre_tool_use_payload;
@@ -27,10 +27,6 @@ impl ToolHandler for ContainerExecHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("container.exec")
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -49,6 +45,14 @@ impl ToolHandler for ContainerExecHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_function_pre_tool_use_payload(invocation)
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        rewrite_shell_function_updated_hook_input(invocation, updated_input, "container.exec")
     }
 
     fn post_tool_use_payload(
@@ -84,7 +88,7 @@ impl ToolHandler for ContainerExecHandler {
         let exec_params =
             ShellHandler::to_exec_params(&params, turn.as_ref(), session.conversation_id);
         run_exec_like(RunExecLikeArgs {
-            tool_name: "container.exec".to_string(),
+            tool_name: ToolName::plain("container.exec"),
             exec_params,
             hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
             additional_permissions: params.additional_permissions.clone(),
