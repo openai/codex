@@ -724,6 +724,56 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_install_resolves_remote_bundle_template_app_ids() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_apps(
+            "linear",
+            &["templated_apps_GitHubEnterprise"],
+        )?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
+    mount_remote_template_connector_ids(
+        &server,
+        "templated_apps_GitHubEnterprise",
+        &["asdk_app_ghe"],
+    )
+    .await;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        "/ps/connectors/by_template_id/templated_apps_GitHubEnterprise",
+        /*expected_count*/ 1,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -1429,6 +1479,24 @@ async fn mount_remote_plugin_install(server: &MockServer, remote_plugin_id: &str
         .await;
 }
 
+async fn mount_remote_template_connector_ids(
+    server: &MockServer,
+    template_id: &str,
+    connector_ids: &[&str],
+) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/backend-api/ps/connectors/by_template_id/{template_id}"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "connector_ids": connector_ids,
+        })))
+        .mount(server)
+        .await;
+}
+
 #[derive(Debug, Clone)]
 struct CacheManifestExists {
     manifest_path: std::path::PathBuf,
@@ -1575,8 +1643,20 @@ fn write_plugin_source(
 }
 
 fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Result<Vec<u8>> {
+    remote_plugin_bundle_tar_gz_bytes_with_apps(plugin_name, &[])
+}
+
+fn remote_plugin_bundle_tar_gz_bytes_with_apps(
+    plugin_name: &str,
+    app_ids: &[&str],
+) -> Result<Vec<u8>> {
     let manifest = format!(r#"{{"name":"{plugin_name}"}}"#);
     let skill = "# Plan Work\n\nTrack work in Linear.\n";
+    let apps = app_ids
+        .iter()
+        .map(|app_id| ((*app_id).to_string(), json!({ "id": app_id })))
+        .collect::<serde_json::Map<_, _>>();
+    let apps = serde_json::to_vec_pretty(&json!({ "apps": apps }))?;
     let encoder = GzEncoder::new(Vec::new(), Compression::default());
     let mut tar = tar::Builder::new(encoder);
     for (path, contents, mode) in [
@@ -1590,6 +1670,7 @@ fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Result<Vec<u8>> {
             skill.as_bytes(),
             /*mode*/ 0o644,
         ),
+        (".app.json", apps.as_slice(), /*mode*/ 0o644),
     ] {
         let mut header = tar::Header::new_gnu();
         header.set_size(contents.len() as u64);

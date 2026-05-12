@@ -493,6 +493,7 @@ impl PluginsManager {
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_app_overrides(config),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -541,6 +542,7 @@ impl PluginsManager {
         load_plugins_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_app_overrides(config),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -600,6 +602,32 @@ impl PluginsManager {
         };
 
         remote_installed_plugins_to_config(plugins, &self.store)
+    }
+
+    fn remote_installed_plugin_app_overrides(
+        &self,
+        config: &PluginsConfigInput,
+    ) -> HashMap<String, Vec<AppConnectorId>> {
+        if !config.remote_plugin_enabled {
+            return HashMap::new();
+        }
+
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let Some(plugins) = cache.as_ref() else {
+            return HashMap::new();
+        };
+
+        plugins
+            .iter()
+            .filter_map(|plugin| {
+                PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
+                    .ok()
+                    .map(|plugin_id| (plugin_id.as_key(), plugin.app_connector_ids.clone()))
+            })
+            .collect()
     }
 
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
@@ -1756,7 +1784,26 @@ impl PluginsManager {
             )
             .await;
             match installed_plugins {
-                Ok(installed_plugins) => {
+                Ok(mut installed_plugins) => {
+                    for installed_plugin in &mut installed_plugins {
+                        let Ok(plugin_id) = PluginId::new(
+                            installed_plugin.name.clone(),
+                            installed_plugin.marketplace_name.clone(),
+                        ) else {
+                            continue;
+                        };
+                        let Some(plugin_root) = self.store.active_plugin_root(&plugin_id) else {
+                            continue;
+                        };
+                        let bundle_app_ids = load_plugin_apps(plugin_root.as_path()).await;
+                        installed_plugin.app_connector_ids =
+                            crate::remote::resolve_remote_plugin_app_ids(
+                                &request.service_config,
+                                request.auth.as_ref(),
+                                &bundle_app_ids,
+                            )
+                            .await;
+                    }
                     // TODO(remote plugins): reconcile missing or stale local bundles before
                     // publishing remote installed state as effective local plugin config.
                     let changed = self.write_remote_installed_plugins_cache(installed_plugins);

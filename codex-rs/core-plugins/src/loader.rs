@@ -110,6 +110,7 @@ struct PluginAppConfig {
 pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
+    app_overrides: HashMap<String, Vec<AppConnectorId>>,
     store: &PluginStore,
     restriction_product: Option<Product>,
     plugin_hooks_enabled: bool,
@@ -123,7 +124,7 @@ pub async fn load_plugins_from_layer_stack(
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
     for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(
+        let mut loaded_plugin = load_plugin(
             configured_name.clone(),
             &plugin,
             store,
@@ -132,6 +133,9 @@ pub async fn load_plugins_from_layer_stack(
             plugin_hooks_enabled,
         )
         .await;
+        if let Some(apps) = app_overrides.get(&configured_name) {
+            loaded_plugin.apps = apps.clone();
+        }
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())

@@ -1176,6 +1176,12 @@ impl PluginRequestProcessor {
         }
 
         let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_apps = codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &plugin_apps,
+        )
+        .await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
