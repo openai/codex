@@ -648,6 +648,14 @@ mod tests {
         dir
     }
 
+    fn load_pet_from_dir(dir: &tempfile::TempDir) -> Pet {
+        Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap()
+    }
+
+    fn load_pet_error_from_dir(dir: &tempfile::TempDir) -> anyhow::Error {
+        Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap_err()
+    }
+
     #[test]
     fn load_builtin_pet_uses_app_catalog_storage() {
         let codex_home = tempfile::tempdir().unwrap();
@@ -744,8 +752,7 @@ mod tests {
     fn load_pet_directory_uses_app_pet_manifest_defaults() {
         let dir = write_minimal_pet();
 
-        let pet =
-            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+        let pet = load_pet_from_dir(&dir);
 
         assert_eq!(pet.id, "chefito");
         assert_eq!(pet.display_name, "Chefito");
@@ -761,8 +768,7 @@ mod tests {
     fn frame_cache_key_changes_with_spritesheet_contents() {
         let dir = write_minimal_pet();
         let spritesheet_path = dir.path().join("spritesheet.webp");
-        let pet =
-            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+        let pet = load_pet_from_dir(&dir);
         let first_key = pet.frame_cache_key().unwrap();
 
         let image = image::RgbaImage::from_pixel(
@@ -771,8 +777,7 @@ mod tests {
             image::Rgba([1, 2, 3, 255]),
         );
         image.save(&spritesheet_path).unwrap();
-        let pet =
-            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+        let pet = load_pet_from_dir(&dir);
 
         assert_ne!(pet.frame_cache_key().unwrap(), first_key);
     }
@@ -780,11 +785,7 @@ mod tests {
     #[test]
     fn frame_cache_key_changes_with_frame_spec() {
         let default_dir = write_minimal_pet();
-        let default_pet = Pet::load_with_codex_home(
-            default_dir.path().to_str().unwrap(),
-            /*codex_home*/ None,
-        )
-        .unwrap();
+        let default_pet = load_pet_from_dir(&default_dir);
         let custom_dir = write_pet_manifest(
             r#"{
                 "displayName": "Tall",
@@ -792,11 +793,7 @@ mod tests {
                 "frame": { "width": 384, "height": 104, "columns": 4, "rows": 18 }
             }"#,
         );
-        let custom_pet = Pet::load_with_codex_home(
-            custom_dir.path().to_str().unwrap(),
-            /*codex_home*/ None,
-        )
-        .unwrap();
+        let custom_pet = load_pet_from_dir(&custom_dir);
 
         assert_ne!(
             custom_pet.frame_cache_key().unwrap(),
@@ -900,8 +897,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()
@@ -919,8 +915,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()
@@ -938,8 +933,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(err.to_string().contains("exceeds maximum"));
     }
@@ -956,8 +950,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()
@@ -977,8 +970,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()
@@ -998,8 +990,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()
@@ -1019,8 +1010,7 @@ mod tests {
             }"#,
         );
 
-        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
-            .unwrap_err();
+        let err = load_pet_error_from_dir(&dir);
 
         assert!(
             err.to_string()

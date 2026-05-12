@@ -260,12 +260,13 @@ impl AmbientPet {
             return None;
         }
 
+        let y = area.y + area.height.saturating_sub(size.rows) / 2;
         Some(AmbientPetDraw {
             frame: self.first_idle_frame_path()?,
             protocol,
             x: area.x + area.width.saturating_sub(size.columns) / 2,
-            y: area.y + area.height.saturating_sub(size.rows) / 2,
-            clear_top_y: area.y + area.height.saturating_sub(size.rows) / 2,
+            y,
+            clear_top_y: y,
             columns: size.columns,
             rows: size.rows,
             height_px: size.height_px,

@@ -177,9 +177,7 @@ fn supports_sixel(info: &TerminalInfo) -> bool {
 }
 
 fn terminal_field_contains(value: Option<&str>, needle: &str) -> bool {
-    value
-        .map(|value| value.to_ascii_lowercase().contains(needle))
-        .unwrap_or(false)
+    value.is_some_and(|value| value.to_ascii_lowercase().contains(needle))
 }
 
 pub fn kitty_delete_image(image_id: u32) -> String {
