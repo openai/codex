@@ -27,7 +27,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
@@ -60,17 +59,6 @@ pub trait ToolHandler: Send + Sync {
         _invocation: &ToolInvocation,
     ) -> impl std::future::Future<Output = ToolTelemetryTags> + Send {
         async { Vec::new() }
-    }
-
-    /// Returns `true` if the [ToolInvocation] *might* mutate the environment of the
-    /// user (through file system, OS operations, ...).
-    /// This function must remains defensive and return `true` if a doubt exist on the
-    /// exact effect of a ToolInvocation.
-    fn is_mutating(
-        &self,
-        _invocation: &ToolInvocation,
-    ) -> impl std::future::Future<Output = bool> + Send {
-        async { false }
     }
 
     fn post_tool_use_payload(
@@ -185,8 +173,6 @@ trait AnyToolHandler: Send + Sync {
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
-    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool>;
-
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
     fn with_updated_hook_input(
@@ -217,10 +203,6 @@ where
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         ToolHandler::matches_kind(self, payload)
-    }
-
-    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool> {
-        Box::pin(ToolHandler::is_mutating(self, invocation))
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -305,7 +287,8 @@ impl ToolRegistry {
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
-        Some(self.handler(name)?.supports_parallel_tool_calls())
+        let handler = self.handler(name)?;
+        Some(handler.supports_parallel_tool_calls())
     }
 
     #[expect(
@@ -424,7 +407,6 @@ impl ToolRegistry {
             }
         }
 
-        let is_mutating = handler.is_mutating(&invocation).await;
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
         let log_payload = invocation.payload.log_payload();
@@ -440,11 +422,6 @@ impl ToolRegistry {
                     let handler = handler.clone();
                     let response_cell = &response_cell;
                     async move {
-                        if is_mutating {
-                            tracing::trace!("waiting for tool gate");
-                            invocation_for_tool.turn.tool_call_gate.wait_ready().await;
-                            tracing::trace!("tool gate released");
-                        }
                         match handler.handle_any(invocation_for_tool).await {
                             Ok(result) => {
                                 let preview = result.result.log_preview();

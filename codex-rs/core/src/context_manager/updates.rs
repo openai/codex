@@ -73,6 +73,10 @@ fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
 ) -> Option<String> {
+    if !next.config.include_collaboration_mode_instructions {
+        return None;
+    }
+
     let prev = previous?;
     if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
         // If the next mode has empty developer instructions, this returns None and we emit no
