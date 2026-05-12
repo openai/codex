@@ -324,6 +324,7 @@ impl ToolHandler for ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens: Some(max_output_tokens),
                     cwd,
+                    sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
                     network: context.turn.network.clone(),
                     tty,

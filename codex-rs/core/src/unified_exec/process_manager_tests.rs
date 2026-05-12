@@ -176,6 +176,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         yield_time_ms: 1000,
         max_output_tokens: None,
         cwd: turn.cwd.clone(),
+        sandbox_cwd: turn.cwd.clone(),
         environment: turn
             .environments
             .primary_environment()

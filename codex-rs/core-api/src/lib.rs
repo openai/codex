@@ -22,6 +22,7 @@ pub use codex_config::types::SessionPickerViewMode;
 pub use codex_config::types::ToolSuggestConfig;
 pub use codex_config::types::TuiKeymap;
 pub use codex_config::types::TuiNotificationSettings;
+pub use codex_config::types::TuiPetAnchor;
 pub use codex_config::types::UriBasedFileOpener;
 pub use codex_core::CodexThread;
 pub use codex_core::ForkSnapshot;

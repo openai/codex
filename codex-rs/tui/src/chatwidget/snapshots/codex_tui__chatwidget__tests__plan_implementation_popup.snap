@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/plan_mode.rs
 expression: popup
 ---
   Implement this plan?
