@@ -9,6 +9,7 @@ mod in_memory;
 mod live_thread;
 mod local;
 mod store;
+mod thread_metadata_sync;
 mod types;
 
 pub use error::ThreadStoreError;

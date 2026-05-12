@@ -15,7 +15,32 @@ use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
+
+mod optional_option {
+    use super::*;
+
+    pub fn serialize<T, S>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        match value {
+            Some(value) => value.serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer).map(Some)
+    }
+}
 
 /// Controls how many event variants should be persisted for future replay.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,19 +386,116 @@ pub struct GitInfoPatch {
     pub origin_url: OptionalStringPatch,
 }
 
-/// Patch for mutable thread metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Patch for thread metadata.
+///
+/// Every field is literal: `None` leaves that field unchanged, while `Some`
+/// applies the supplied value. Fields whose value may itself be cleared use an
+/// inner `Option`, where `Some(None)` clears the field.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ThreadMetadataPatch {
     /// Replacement user-facing thread name.
-    pub name: Option<String>,
-    /// Replacement thread memory behavior.
-    pub memory_mode: Option<MemoryMode>,
-    /// Optional Git metadata patch.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub name: OptionalStringPatch,
+    /// Known local rollout path for stores that expose one.
+    pub rollout_path: Option<PathBuf>,
+    /// Best available preview text for discovery/listing.
+    pub preview: Option<String>,
+    /// Best-effort title derived from history.
+    pub title: Option<String>,
+    /// Model provider associated with the thread.
+    pub model_provider: Option<String>,
+    /// Latest observed model.
+    pub model: Option<String>,
+    /// Latest observed reasoning effort.
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Creation timestamp when known.
+    pub created_at: Option<DateTime<Utc>>,
+    /// Last update timestamp for this metadata observation.
+    pub updated_at: Option<DateTime<Utc>>,
+    /// Session source.
+    pub source: Option<SessionSource>,
+    /// Optional analytics source classification.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub thread_source: Option<Option<ThreadSource>>,
+    /// Optional agent nickname.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub agent_nickname: Option<Option<String>>,
+    /// Optional agent role.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub agent_role: Option<Option<String>>,
+    /// Optional canonical agent path.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub agent_path: Option<Option<String>>,
+    /// Working directory.
+    pub cwd: Option<PathBuf>,
+    /// CLI version that created the thread.
+    pub cli_version: Option<String>,
+    /// Approval mode.
+    pub approval_mode: Option<AskForApproval>,
+    /// Sandbox policy.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Last observed token usage.
+    pub token_usage: Option<TokenUsage>,
+    /// First user message observed for this thread.
+    pub first_user_message: Option<String>,
+    /// Git metadata patch.
     pub git_info: Option<GitInfoPatch>,
+    /// Thread memory behavior.
+    pub memory_mode: Option<MemoryMode>,
+    /// Dynamic tools available to this thread.
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+}
+
+impl ThreadMetadataPatch {
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.rollout_path.is_none()
+            && self.preview.is_none()
+            && self.title.is_none()
+            && self.model_provider.is_none()
+            && self.model.is_none()
+            && self.reasoning_effort.is_none()
+            && self.created_at.is_none()
+            && self.updated_at.is_none()
+            && self.source.is_none()
+            && self.thread_source.is_none()
+            && self.agent_nickname.is_none()
+            && self.agent_role.is_none()
+            && self.agent_path.is_none()
+            && self.cwd.is_none()
+            && self.cli_version.is_none()
+            && self.approval_mode.is_none()
+            && self.sandbox_policy.is_none()
+            && self.token_usage.is_none()
+            && self.first_user_message.is_none()
+            && self.git_info.is_none()
+            && self.memory_mode.is_none()
+            && self.dynamic_tools.is_none()
+    }
 }
 
 /// Parameters for patching mutable thread metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateThreadMetadataParams {
     /// Thread id to update.
     pub thread_id: ThreadId,
@@ -388,4 +510,47 @@ pub struct UpdateThreadMetadataParams {
 pub struct ArchiveThreadParams {
     /// Thread id to archive or unarchive.
     pub thread_id: ThreadId,
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn thread_metadata_patch_round_trips_optional_clears() {
+        let patch = ThreadMetadataPatch {
+            name: Some(None),
+            thread_source: Some(None),
+            agent_nickname: Some(None),
+            agent_role: Some(None),
+            agent_path: Some(None),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&patch).expect("serialize patch");
+        assert_eq!(value["name"], json!(null));
+        assert_eq!(value["thread_source"], json!(null));
+        assert_eq!(value["agent_nickname"], json!(null));
+        assert_eq!(value["agent_role"], json!(null));
+        assert_eq!(value["agent_path"], json!(null));
+
+        let decoded: ThreadMetadataPatch =
+            serde_json::from_value(value).expect("deserialize patch");
+        assert_eq!(decoded.name, Some(None));
+        assert_eq!(decoded.thread_source, Some(None));
+        assert_eq!(decoded.agent_nickname, Some(None));
+        assert_eq!(decoded.agent_role, Some(None));
+        assert_eq!(decoded.agent_path, Some(None));
+    }
+
+    #[test]
+    fn thread_metadata_patch_accepts_missing_fields() {
+        let decoded: ThreadMetadataPatch =
+            serde_json::from_value(json!({})).expect("deserialize legacy patch");
+
+        assert!(decoded.is_empty());
+    }
 }
