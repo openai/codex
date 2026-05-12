@@ -85,19 +85,19 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     send_relay_message(
         &mut websocket,
         stream_a,
-        0,
+        /*seq*/ 0,
         initialize_request(/*id*/ 1, "relay-test-a")?,
     )
     .await?;
     send_relay_message(
         &mut websocket,
         stream_b,
-        0,
+        /*seq*/ 0,
         initialize_request(/*id*/ 1, "relay-test-b")?,
     )
     .await?;
 
-    let initialize_responses = read_relay_messages_by_stream(&mut websocket, 2).await?;
+    let initialize_responses = read_relay_messages_by_stream(&mut websocket, /*count*/ 2).await?;
     let session_a =
         assert_initialize_response(initialize_responses.get(stream_a), stream_a, /*id*/ 1)?;
     let session_b =
@@ -107,14 +107,14 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     send_relay_message(
         &mut websocket,
         stream_a,
-        1,
+        /*seq*/ 1,
         notification("initialized", serde_json::json!({})),
     )
     .await?;
     send_relay_message(
         &mut websocket,
         stream_b,
-        1,
+        /*seq*/ 1,
         notification("initialized", serde_json::json!({})),
     )
     .await?;
@@ -122,19 +122,20 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     send_relay_message(
         &mut websocket,
         stream_a,
-        2,
+        /*seq*/ 2,
         request(/*id*/ 2, "test/unknown-a", serde_json::json!({})),
     )
     .await?;
     send_relay_message(
         &mut websocket,
         stream_b,
-        2,
+        /*seq*/ 2,
         request(/*id*/ 2, "test/unknown-b", serde_json::json!({})),
     )
     .await?;
 
-    let unknown_method_responses = read_relay_messages_by_stream(&mut websocket, 2).await?;
+    let unknown_method_responses =
+        read_relay_messages_by_stream(&mut websocket, /*count*/ 2).await?;
     assert_error_response(
         unknown_method_responses.get(stream_a),
         stream_a,
@@ -152,7 +153,7 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     send_relay_message(
         &mut websocket,
         stream_b,
-        3,
+        /*seq*/ 3,
         request(
             /*id*/ 3,
             "test/unknown-b-after-reset",
