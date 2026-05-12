@@ -99,7 +99,7 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
-        router: Arc<ToolRouter>,
+        _router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<codex_code_mode::CodeModeTurnWorker> {
         if !turn.features.enabled(Feature::CodeMode) {
@@ -110,6 +110,7 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
+        let router = Arc::new(build_nested_router(&exec).await);
         let tool_runtime =
             ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
         let host = Arc::new(CoreTurnHost { exec, tool_runtime });
