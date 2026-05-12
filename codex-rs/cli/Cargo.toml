@@ -36,6 +36,7 @@ codex-exec = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
+codex-install-context = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
@@ -55,6 +56,7 @@ codex-utils-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
