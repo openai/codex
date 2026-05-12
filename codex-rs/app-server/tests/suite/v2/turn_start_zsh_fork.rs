@@ -104,6 +104,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            sandbox: Some(codex_app_server_protocol::SandboxMode::DangerFullAccess),
             ..Default::default()
         })
         .await?;
@@ -123,7 +124,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             }],
             cwd: Some(workspace.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
             summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
@@ -515,6 +515,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            sandbox: Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
         .await?;
@@ -533,13 +534,9 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
+            workspace_roots: Some(vec![workspace.clone().try_into()?]),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![workspace.clone().try_into()?],
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }),
+            sandbox_policy: None,
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
             summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),

@@ -1893,10 +1893,12 @@ impl ChatWidget {
             );
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            self.config.permissions.permission_profile =
-                Constrained::allow_only(session.permission_profile.clone());
-            self.config.permissions.active_permission_profile =
-                session.active_permission_profile.clone();
+            self.config
+                .permissions
+                .replace_permission_profile_constraint_with_active_profile(
+                    Constrained::allow_only(session.permission_profile.clone()),
+                    session.active_permission_profile.clone(),
+                );
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
