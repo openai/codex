@@ -897,14 +897,18 @@ impl BottomPaneView for ListSelectionView {
             _ if allow_plain_char_navigation && self.keymap.jump_bottom.is_pressed(key_event) => {
                 self.jump_bottom()
             }
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            } if self.tabs_enabled() => self.switch_tab(/*step*/ -1),
-            KeyEvent {
-                code: KeyCode::Right,
-                ..
-            } if self.tabs_enabled() => self.switch_tab(/*step*/ 1),
+            _ if allow_plain_char_navigation
+                && self.tabs_enabled()
+                && self.keymap.move_left.is_pressed(key_event) =>
+            {
+                self.switch_tab(/*step*/ -1)
+            }
+            _ if allow_plain_char_navigation
+                && self.tabs_enabled()
+                && self.keymap.move_right.is_pressed(key_event) =>
+            {
+                self.switch_tab(/*step*/ 1)
+            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -1674,6 +1678,10 @@ mod tests {
 
         assert_eq!(view.active_tab_id(), Some("alpha"));
         assert_eq!(view.search_query, "");
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(view.active_tab_id(), Some("beta"));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(view.active_tab_id(), Some("alpha"));
         let rendered = render_lines(&view);
         assert!(
             rendered.contains("Alpha Item") && !rendered.contains("Beta Item"),

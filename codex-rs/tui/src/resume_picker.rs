@@ -1199,14 +1199,10 @@ impl PickerState {
                 self.focus_previous_toolbar_control();
                 self.request_frame();
             }
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Right,
-                ..
-            } => {
+            _ if allow_plain_char_navigation
+                && (self.list_keymap.move_left.is_pressed(key)
+                    || self.list_keymap.move_right.is_pressed(key)) =>
+            {
                 self.change_focused_toolbar_value();
                 self.request_frame();
             }
@@ -5359,7 +5355,7 @@ session_picker_view = "dense"
             .await
             .unwrap();
         state
-            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL))
             .await
             .unwrap();
 

@@ -205,6 +205,8 @@ pub(crate) struct PagerKeymap {
 pub(crate) struct ListKeymap {
     pub(crate) move_up: Vec<KeyBinding>,
     pub(crate) move_down: Vec<KeyBinding>,
+    pub(crate) move_left: Vec<KeyBinding>,
+    pub(crate) move_right: Vec<KeyBinding>,
     pub(crate) page_up: Vec<KeyBinding>,
     pub(crate) page_down: Vec<KeyBinding>,
     pub(crate) jump_top: Vec<KeyBinding>,
@@ -512,6 +514,8 @@ impl RuntimeKeymap {
         let list = ListKeymap {
             move_up: resolve_local!(keymap, defaults, list, move_up),
             move_down: resolve_local!(keymap, defaults, list, move_down),
+            move_left: resolve_local!(keymap, defaults, list, move_left),
+            move_right: resolve_local!(keymap, defaults, list, move_right),
             page_up: resolve_local!(keymap, defaults, list, page_up),
             page_down: resolve_local!(keymap, defaults, list, page_down),
             jump_top: resolve_local!(keymap, defaults, list, jump_top),
@@ -728,6 +732,8 @@ impl RuntimeKeymap {
                     ctrl(KeyCode::Char('j')),
                     plain(KeyCode::Char('j'))
                 ],
+                move_left: default_bindings![plain(KeyCode::Left), ctrl(KeyCode::Char('h'))],
+                move_right: default_bindings![plain(KeyCode::Right), ctrl(KeyCode::Char('l'))],
                 page_up: default_bindings![plain(KeyCode::PageUp), ctrl(KeyCode::Char('b'))],
                 page_down: default_bindings![plain(KeyCode::PageDown), ctrl(KeyCode::Char('f'))],
                 jump_top: default_bindings![plain(KeyCode::Home)],
@@ -849,7 +855,7 @@ impl RuntimeKeymap {
             MAIN_RESERVED_BINDINGS,
         )?;
 
-        validate_no_shadow(
+        validate_no_shadow_with_allowed_overlaps(
             "app",
             [
                 ("open_transcript", self.app.open_transcript.as_slice()),
@@ -866,6 +872,8 @@ impl RuntimeKeymap {
             [
                 ("list.move_up", self.list.move_up.as_slice()),
                 ("list.move_down", self.list.move_down.as_slice()),
+                ("list.move_left", self.list.move_left.as_slice()),
+                ("list.move_right", self.list.move_right.as_slice()),
                 ("list.page_up", self.list.page_up.as_slice()),
                 ("list.page_down", self.list.page_down.as_slice()),
                 ("list.jump_top", self.list.jump_top.as_slice()),
@@ -890,6 +898,11 @@ impl RuntimeKeymap {
                 ("approval.decline", self.approval.decline.as_slice()),
                 ("approval.cancel", self.approval.cancel.as_slice()),
             ],
+            [(
+                "clear_terminal",
+                "list.move_right",
+                key_hint::ctrl(KeyCode::Char('l')),
+            )],
         )?;
 
         // While the composer is focused, these main-surface handlers always
@@ -1141,6 +1154,8 @@ impl RuntimeKeymap {
             [
                 ("move_up", self.list.move_up.as_slice()),
                 ("move_down", self.list.move_down.as_slice()),
+                ("move_left", self.list.move_left.as_slice()),
+                ("move_right", self.list.move_right.as_slice()),
                 ("page_up", self.list.page_up.as_slice()),
                 ("page_down", self.list.page_down.as_slice()),
                 ("jump_top", self.list.jump_top.as_slice()),
@@ -1174,6 +1189,8 @@ impl RuntimeKeymap {
         for (action, bindings) in [
             ("list.move_up", self.list.move_up.as_slice()),
             ("list.move_down", self.list.move_down.as_slice()),
+            ("list.move_left", self.list.move_left.as_slice()),
+            ("list.move_right", self.list.move_right.as_slice()),
             ("list.page_up", self.list.page_up.as_slice()),
             ("list.page_down", self.list.page_down.as_slice()),
             ("list.jump_top", self.list.jump_top.as_slice()),
@@ -1245,14 +1262,6 @@ See the Codex keymap documentation for supported actions and examples."
         }
     }
     Ok(())
-}
-
-fn validate_no_shadow<const N: usize, const M: usize>(
-    context: &str,
-    primary: [(&'static str, &[KeyBinding]); N],
-    shadowed: [(&'static str, &[KeyBinding]); M],
-) -> Result<(), String> {
-    validate_no_shadow_with_allowed_overlaps(context, primary, shadowed, [])
 }
 
 fn validate_no_shadow_with_allowed_overlaps<const N: usize, const M: usize, const A: usize>(
@@ -1708,6 +1717,20 @@ mod tests {
             ]
         );
         assert_eq!(
+            runtime.list.move_left,
+            vec![
+                key_hint::plain(KeyCode::Left),
+                key_hint::ctrl(KeyCode::Char('h')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.move_right,
+            vec![
+                key_hint::plain(KeyCode::Right),
+                key_hint::ctrl(KeyCode::Char('l')),
+            ]
+        );
+        assert_eq!(
             runtime.list.page_up,
             vec![
                 key_hint::plain(KeyCode::PageUp),
@@ -1803,6 +1826,12 @@ mod tests {
         keymap.list.move_down = Some(one("up"));
 
         expect_conflict(&keymap, "move_up", "move_down");
+
+        let mut keymap = TuiKeymap::default();
+        keymap.list.move_left = Some(one("left"));
+        keymap.list.move_right = Some(one("left"));
+
+        expect_conflict(&keymap, "move_left", "move_right");
     }
 
     #[test]

@@ -29,6 +29,8 @@ use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
@@ -238,10 +240,24 @@ pub(crate) struct AppLinkView {
     screen: AppLinkScreen,
     selected_action: usize,
     complete: bool,
+    list_keymap: ListKeymap,
 }
 
 impl AppLinkView {
+    #[cfg(test)]
     pub(crate) fn new(params: AppLinkViewParams, app_event_tx: AppEventSender) -> Self {
+        Self::new_with_keymap(
+            params,
+            app_event_tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        )
+    }
+
+    pub(crate) fn new_with_keymap(
+        params: AppLinkViewParams,
+        app_event_tx: AppEventSender,
+        list_keymap: ListKeymap,
+    ) -> Self {
         let AppLinkViewParams {
             app_id,
             title,
@@ -269,6 +285,7 @@ impl AppLinkView {
             screen: AppLinkScreen::Link,
             selected_action: 0,
             complete: false,
+            list_keymap,
         }
     }
 
@@ -697,6 +714,7 @@ impl BottomPaneView for AppLinkView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_prev(),
+            _ if self.list_keymap.move_left.is_pressed(key_event) => self.move_selection_prev(),
             KeyEvent {
                 code: KeyCode::Down,
                 ..
@@ -718,6 +736,7 @@ impl BottomPaneView for AppLinkView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_next(),
+            _ if self.list_keymap.move_right.is_pressed(key_event) => self.move_selection_next(),
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers: KeyModifiers::NONE,
@@ -1085,6 +1104,33 @@ mod tests {
         );
 
         assert!(view.terminal_title_requires_action());
+    }
+
+    #[test]
+    fn horizontal_list_keys_move_action_selection() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
+            },
+            tx,
+        );
+
+        assert_eq!(view.selected_action, 0);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_action, 1);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_action, 0);
     }
 
     #[test]

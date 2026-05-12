@@ -537,16 +537,16 @@ impl BottomPaneView for MultiSelectPicker {
         let allow_plain_char_navigation = !is_plain_text_char;
 
         match key_event {
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            } if self.ordering_enabled => {
+            _ if allow_plain_char_navigation
+                && self.ordering_enabled
+                && self.keymap.move_left.is_pressed(key_event) =>
+            {
                 self.move_selected_item(Direction::Up);
             }
-            KeyEvent {
-                code: KeyCode::Right,
-                ..
-            } if self.ordering_enabled => {
+            _ if allow_plain_char_navigation
+                && self.ordering_enabled
+                && self.keymap.move_right.is_pressed(key_event) =>
+            {
                 self.move_selected_item(Direction::Down);
             }
             _ if allow_plain_char_navigation && self.keymap.move_up.is_pressed(key_event) => {
@@ -833,11 +833,16 @@ impl MultiSelectPickerBuilder {
                 key_hint::plain(KeyCode::Char(' ')).into(),
                 " to toggle".into(),
             ];
-            if self.ordering_enabled {
+            if self.ordering_enabled
+                && let (Some(move_left), Some(move_right)) = (
+                    primary_binding(&self.keymap.move_left),
+                    primary_binding(&self.keymap.move_right),
+                )
+            {
                 spans.push("; ".into());
-                spans.push(key_hint::plain(KeyCode::Left).into());
+                spans.push(move_left.into());
                 spans.push("/".into());
-                spans.push(key_hint::plain(KeyCode::Right).into());
+                spans.push(move_right.into());
                 spans.push(" to move".into());
             }
             if let Some(accept) = primary_binding(&self.keymap.accept) {
@@ -974,6 +979,38 @@ mod tests {
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["theme-colors", "model", "branch"]
+        );
+    }
+
+    #[test]
+    fn horizontal_list_keys_reorder_orderable_items() {
+        let mut picker = test_picker(vec![
+            item(
+                "model", /*orderable*/ true, /*section_break_after*/ false,
+            ),
+            item(
+                "branch", /*orderable*/ true, /*section_break_after*/ false,
+            ),
+        ]);
+
+        picker.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(
+            picker
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["branch", "model"]
+        );
+
+        picker.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(
+            picker
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["model", "branch"]
         );
     }
 

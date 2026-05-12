@@ -2603,6 +2603,8 @@
               "jump_bottom": null,
               "jump_top": null,
               "move_down": null,
+              "move_left": null,
+              "move_right": null,
               "move_up": null,
               "page_down": null,
               "page_up": null
@@ -3239,6 +3241,8 @@
             "jump_bottom": null,
             "jump_top": null,
             "move_down": null,
+            "move_left": null,
+            "move_right": null,
             "move_up": null,
             "page_down": null,
             "page_up": null
@@ -3361,6 +3365,22 @@
             }
           ],
           "description": "Move list selection down."
+        },
+        "move_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move horizontally left in list pickers that support horizontal actions."
+        },
+        "move_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move horizontally right in list pickers that support horizontal actions."
         },
         "move_up": {
           "allOf": [

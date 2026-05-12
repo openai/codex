@@ -10,6 +10,7 @@ use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::{self};
 use crossterm::execute;
 use crossterm::terminal::EnterAlternateScreen;
@@ -178,29 +179,61 @@ impl OssSelectionWidget<'_> {
     }
 
     fn handle_select_key(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('c')
-                if key_event
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_decision("__CANCELLED__".to_string());
             }
-            KeyCode::Left => {
+            KeyEvent {
+                code: KeyCode::Left,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char(''),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
                 self.selected_option = (self.selected_option + self.select_options.len() - 1)
                     % self.select_options.len();
             }
-            KeyCode::Right => {
+            KeyEvent {
+                code: KeyCode::Right,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char(''),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
                 self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
-            KeyCode::Enter => {
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
                 let opt = &self.select_options[self.selected_option];
                 self.send_decision(opt.provider_id.to_string());
             }
-            KeyCode::Esc => {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
                 self.send_decision(LMSTUDIO_OSS_PROVIDER_ID.to_string());
             }
-            other => {
+            KeyEvent { code, .. } => {
+                let other = code;
                 let normalized = Self::normalize_keycode(other);
                 if let Some(opt) = self
                     .select_options
@@ -369,5 +402,22 @@ async fn check_port_status(port: u16) -> io::Result<bool> {
     match client.get(&url).send().await {
         Ok(response) => Ok(response.status().is_success()),
         Err(_) => Ok(false), // Connection failed = not running
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_h_l_move_provider_selection() {
+        let mut widget = OssSelectionWidget::new(ProviderStatus::Unknown, ProviderStatus::Unknown)
+            .expect("widget should initialize");
+
+        assert_eq!(widget.selected_option, 0);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 1);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 0);
     }
 }
