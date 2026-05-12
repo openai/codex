@@ -44,7 +44,7 @@ impl Drop for EnvVarGuard {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(codex_home)]
 async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
     let temp_home = TempDir::new()?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
@@ -124,7 +124,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 }
 
 #[tokio::test]
-#[serial]
+#[serial(codex_home)]
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
     let temp_home = TempDir::new()?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
