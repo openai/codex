@@ -1,4 +1,4 @@
-//! Unified exec bookkeeping helpers for `ChatWidget`.
+//! Unified exec bookkeeping state and helpers for `ChatWidget`.
 
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
