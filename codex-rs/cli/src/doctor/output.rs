@@ -76,7 +76,7 @@ pub(super) fn render_human_report(report: &DoctorReport, options: HumanOutputOpt
     let _ = writeln!(out, "{}", dim(&separator(options), options));
     let _ = writeln!(out, "{}", summary_line(report, options));
     out.push('\n');
-    write_footer(&mut out, report, options);
+    write_footer(&mut out, options);
     out
 }
 
@@ -225,7 +225,7 @@ fn styled_overall_status(label: &str, status: CheckStatus, options: HumanOutputO
     }
 }
 
-fn write_footer(out: &mut String, _report: &DoctorReport, options: HumanOutputOptions) {
+fn write_footer(out: &mut String, options: HumanOutputOptions) {
     let _ = writeln!(
         out,
         "{} {}",

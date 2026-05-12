@@ -345,7 +345,6 @@ fn installation_check(verbose: bool) -> DoctorCheck {
                 summary = "npm-managed launch could not inspect npm global root".to_string();
                 details.push(format!("npm root -g failed: {error}"));
             }
-            NpmRootCheck::NotNpmManaged => {}
         }
     }
 
@@ -426,14 +425,9 @@ enum NpmRootCheck {
     },
     MissingPackageRoot,
     NpmUnavailable(String),
-    NotNpmManaged,
 }
 
 fn npm_global_root_check() -> NpmRootCheck {
-    if env::var_os("CODEX_MANAGED_BY_NPM").is_none() {
-        return NpmRootCheck::NotNpmManaged;
-    }
-
     let Some(running_package_root) = env::var_os("CODEX_MANAGED_PACKAGE_ROOT").map(PathBuf::from)
     else {
         return NpmRootCheck::MissingPackageRoot;

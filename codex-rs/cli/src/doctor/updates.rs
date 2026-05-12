@@ -68,7 +68,6 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
                 summary = "npm update target could not be inspected".to_string();
                 details.push(format!("npm root -g failed: {error}"));
             }
-            NpmRootCheck::NotNpmManaged => {}
         }
     }
 
