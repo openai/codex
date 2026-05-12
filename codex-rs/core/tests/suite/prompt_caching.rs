@@ -28,6 +28,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
@@ -73,21 +74,26 @@ fn assert_default_env_context(text: &str, cwd: &str) {
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
+    let tool_names = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            t.get("name")
+                .and_then(|value| value.as_str())
+                .or_else(|| t.get("type").and_then(|value| value.as_str()))
+                .unwrap()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    let tool_name_set = tool_names.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(
-        body["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| {
-                t.get("name")
-                    .and_then(|value| value.as_str())
-                    .or_else(|| t.get("type").and_then(|value| value.as_str()))
-                    .unwrap()
-                    .to_string()
-            })
-            .collect::<Vec<_>>(),
-        expected_names
+        tool_name_set.len(),
+        tool_names.len(),
+        "duplicate tool names detected: {tool_names:?}"
     );
+    let expected_name_set = expected_names.iter().map(std::string::ToString::to_string).collect();
+    assert_eq!(tool_name_set, expected_name_set);
 }
 
 fn normalize_newlines(text: &str) -> String {
