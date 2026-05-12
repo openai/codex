@@ -75,6 +75,7 @@ def _workspace_root_test_impl(ctx):
     workspace_root_marker = ctx.file.workspace_root_marker
     launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
     runfile_env_exports = _windows_runfile_env_exports(ctx) if is_windows else _bash_runfile_env_exports(ctx)
+    windows_test_resource_staging = _windows_test_resource_staging(ctx) if is_windows else ""
     workspace_root_setup = _windows_workspace_root_setup(ctx) if is_windows else _bash_workspace_root_setup(ctx)
     ctx.actions.expand_template(
         template = launcher_template,
@@ -83,6 +84,7 @@ def _workspace_root_test_impl(ctx):
         substitutions = {
             "__RUNFILE_ENV_EXPORTS__": runfile_env_exports,
             "__TEST_BIN__": test_bin.short_path,
+            "__WINDOWS_TEST_RESOURCE_STAGING__": windows_test_resource_staging,
             "__WORKSPACE_ROOT_SETUP__": workspace_root_setup,
             "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
         },
@@ -98,6 +100,12 @@ def _workspace_root_test_impl(ctx):
             fail("{} does not provide an executable for runfile_env".format(runfile_dep.label))
         runfiles = runfiles.merge(ctx.runfiles(files = [executable]))
         runfiles = runfiles.merge(runfile_dep[DefaultInfo].default_runfiles)
+    for resource_dep in ctx.attr.windows_test_resource_binaries:
+        executable = resource_dep[DefaultInfo].files_to_run.executable
+        if executable == None:
+            fail("{} does not provide an executable for windows_test_resource_binaries".format(resource_dep.label))
+        runfiles = runfiles.merge(ctx.runfiles(files = [executable]))
+        runfiles = runfiles.merge(resource_dep[DefaultInfo].default_runfiles)
 
     location_targets = (
         ctx.attr.data +
@@ -139,6 +147,16 @@ def _windows_runfile_env_exports(ctx):
         lines.append("if errorlevel 1 exit /b 1")
     return "\n".join(lines)
 
+def _windows_test_resource_staging(ctx):
+    lines = []
+    for resource_dep in ctx.attr.windows_test_resource_binaries:
+        executable = resource_dep[DefaultInfo].files_to_run.executable
+        if executable == None:
+            fail("{} does not provide an executable for windows_test_resource_binaries".format(resource_dep.label))
+        lines.append('call :stage_test_resource "{}"'.format(executable.short_path))
+        lines.append("if errorlevel 1 exit /b 1")
+    return "\n".join(lines)
+
 def _bash_workspace_root_setup(ctx):
     if not ctx.attr.chdir_workspace_root:
         return ""
@@ -163,6 +181,9 @@ workspace_root_test = rule(
         ),
         "env": attr.string_dict(),
         "runfile_env": attr.label_keyed_string_dict(
+            cfg = "target",
+        ),
+        "windows_test_resource_binaries": attr.label_list(
             cfg = "target",
         ),
         "test_bin": attr.label(
@@ -210,7 +231,8 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
-        extra_binaries = []):
+        extra_binaries = [],
+        windows_test_resource_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
     The macro mirrors Cargo conventions: it builds a library when `src/` exists,
@@ -255,6 +277,8 @@ def codex_rust_crate(
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
+        windows_test_resource_binaries: Windows-only helper binaries to stage
+            under `codex-resources/` next to generated integration test binaries.
     """
     test_env = {
         # The launcher resolves an absolute workspace root at runtime so
@@ -464,6 +488,7 @@ def codex_rust_crate(
                 # time so tests keep working after chdir_workspace_root and on
                 # manifest-only platforms.
                 runfile_env = cargo_env_runfiles,
+                windows_test_resource_binaries = windows_test_resource_binaries,
                 test_bin = ":" + integration_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
@@ -526,6 +551,7 @@ def codex_rust_crate(
             chdir_workspace_root = False,
             env = cargo_env,
             runfile_env = cargo_env_runfiles,
+            windows_test_resource_binaries = windows_test_resource_binaries,
             test_bin = ":" + windows_cross_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = WINDOWS_GNULLVM_ONLY,

@@ -1,4 +1,3 @@
-use anyhow::Context;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
@@ -130,23 +129,6 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
     let temp_home = TempDir::new()?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
-    let setup_helper = codex_utils_cargo_bin::cargo_bin("codex-windows-sandbox-setup")?;
-    let command_runner = codex_utils_cargo_bin::cargo_bin("codex-command-runner")?;
-    let setup_helper_dir = setup_helper
-        .parent()
-        .context("Windows sandbox setup helper path should have a parent directory")?;
-    let command_runner_dir = command_runner
-        .parent()
-        .context("Windows sandbox command runner path should have a parent directory")?;
-    let mut path_entries = vec![
-        setup_helper_dir.to_path_buf(),
-        command_runner_dir.to_path_buf(),
-    ];
-    if let Some(path) = std::env::var_os("PATH") {
-        path_entries.extend(std::env::split_paths(&path));
-    }
-    let setup_helper_path = std::env::join_paths(path_entries)?;
-    let _path_guard = EnvVarGuard::set("PATH", setup_helper_path.as_os_str());
     let workspace = TempDir::new()?;
     let cwd = dunce::canonicalize(workspace.path())?.abs();
     let glob_secret = cwd.join("secret.env");
