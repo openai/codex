@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -33,7 +34,6 @@ use crate::tools::router::extension_tool_bundles;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
@@ -300,6 +300,7 @@ async fn call_nested_tool(
         cell_id,
         runtime_tool_call_id,
         tool_name,
+        tool_kind,
         input,
     } = invocation;
     if is_exec_tool_name(&tool_name) {
@@ -308,11 +309,10 @@ async fn call_nested_tool(
         )));
     }
 
-    let payload =
-        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        };
+    let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
+        Ok(payload) => payload,
+        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+    };
 
     let call = ToolCall {
         tool_name,
@@ -332,36 +332,14 @@ async fn call_nested_tool(
     Ok(result.code_mode_result())
 }
 
-fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
-    if matches!(spec, ToolSpec::Freeform(_)) {
-        codex_code_mode::CodeModeToolKind::Freeform
-    } else {
-        codex_code_mode::CodeModeToolKind::Function
-    }
-}
-
-fn tool_kind_for_name(
-    spec: Option<ToolSpec>,
-    tool_name: &ToolName,
-) -> Result<codex_code_mode::CodeModeToolKind, String> {
-    spec.as_ref()
-        .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
-}
-
 fn build_nested_tool_payload(
-    spec: Option<ToolSpec>,
+    tool_kind: CodeModeToolKind,
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(spec, tool_name)?;
-    match actual_kind {
-        codex_code_mode::CodeModeToolKind::Function => {
-            build_function_tool_payload(tool_name, input)
-        }
-        codex_code_mode::CodeModeToolKind::Freeform => {
-            build_freeform_tool_payload(tool_name, input)
-        }
+    match tool_kind {
+        CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
+        CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }
 }
 
@@ -394,5 +372,48 @@ fn build_freeform_tool_payload(
     match input {
         Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
         _ => Err(format!("tool `{tool_name}` expects a string input")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_nested_tool_payload;
+    use crate::tools::context::ToolPayload;
+    use codex_code_mode::CodeModeToolKind;
+    use codex_tools::ToolName;
+    use serde_json::json;
+
+    #[test]
+    fn build_nested_tool_payload_uses_function_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Function,
+            &ToolName::plain("example"),
+            Some(json!({ "value": 1 })),
+        )
+        .expect("function payload should serialize");
+
+        match payload {
+            ToolPayload::Function { arguments } => {
+                assert_eq!(arguments, r#"{"value":1}"#.to_string());
+            }
+            other => panic!("expected function payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_nested_tool_payload_uses_freeform_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Freeform,
+            &ToolName::plain("example"),
+            Some(json!("hello")),
+        )
+        .expect("freeform payload should preserve string input");
+
+        match payload {
+            ToolPayload::Custom { input } => {
+                assert_eq!(input, "hello".to_string());
+            }
+            other => panic!("expected freeform payload, got {other:?}"),
+        }
     }
 }
