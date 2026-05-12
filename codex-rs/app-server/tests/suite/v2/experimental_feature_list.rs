@@ -326,6 +326,50 @@ async fn experimental_feature_enablement_set_allows_remote_control() -> Result<(
 }
 
 #[tokio::test]
+async fn experimental_feature_enablement_set_enables_remote_control_ignored_from_config_toml()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nremote_control = true\n",
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("remote_control")),
+        Some(&json!(false))
+    );
+
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("remote_control".to_string(), true)]),
+    )
+    .await?;
+    assert_eq!(
+        actual,
+        ExperimentalFeatureEnablementSetResponse {
+            enablement: BTreeMap::from([("remote_control".to_string(), true)]),
+        }
+    );
+
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("remote_control")),
+        Some(&json!(true))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;

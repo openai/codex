@@ -258,6 +258,9 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     if let Some(features) = cfg.features.as_ref() {
         for (key, enabled) in features.entries() {
             if let Some(feature) = feature_for_key(&key) {
+                if !feature.can_override_from_config_toml() {
+                    continue;
+                }
                 explicit_settings.push((format!("features.{key}"), feature, enabled));
             }
         }
@@ -280,6 +283,9 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
         if let Some(features) = profile.features.as_ref() {
             for (key, enabled) in features.entries() {
                 if let Some(feature) = feature_for_key(&key) {
+                    if !feature.can_override_from_config_toml() {
+                        continue;
+                    }
                     explicit_settings.push((
                         format!("profiles.{profile_name}.features.{key}"),
                         feature,

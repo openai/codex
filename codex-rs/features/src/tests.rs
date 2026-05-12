@@ -567,6 +567,10 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     let entries = features_toml.entries();
     assert_eq!(entries.get("include_apply_patch_tool"), None);
     for spec in crate::FEATURES {
+        if !spec.id.can_override_from_config_toml() {
+            assert_eq!(entries.get(spec.key), None, "{}", spec.key);
+            continue;
+        }
         assert_eq!(
             entries.get(spec.key),
             Some(&features.enabled(spec.id)),

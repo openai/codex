@@ -4177,6 +4177,48 @@ async fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn config_toml_remote_control_feature_is_ignored() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        features: Some(FeaturesToml::from(BTreeMap::from([(
+            "remote_control".to_string(),
+            true,
+        )]))),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.features.enabled(Feature::RemoteControl));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_remote_control_feature_override_is_preserved() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        // `codex --enable remote_control` is folded into this session override
+        // before config loading.
+        .cli_overrides(vec![(
+            "features.remote_control".to_string(),
+            toml::Value::Boolean(true),
+        )])
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::RemoteControl));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_toggles_map_to_features() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
@@ -9124,6 +9166,28 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
     assert!(!config.features.enabled(Feature::BrowserUse));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_control_feature_requirements_are_valid() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
+                    entries: BTreeMap::from([("remote_control".to_string(), true)]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::RemoteControl));
 
     Ok(())
 }

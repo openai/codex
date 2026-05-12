@@ -8,6 +8,7 @@ use super::merge::merge_toml_values;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_features::feature_for_key;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -301,7 +302,8 @@ impl ConfigLayerStack {
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
         ) {
-            merge_toml_values(&mut merged, &layer.config);
+            let config = effective_layer_config(layer);
+            merge_toml_values(&mut merged, &config);
         }
         merged
     }
@@ -317,7 +319,8 @@ impl ConfigLayerStack {
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
         ) {
-            let config = normalized_with_key_aliases(&layer.config, &[]);
+            let config = effective_layer_config(layer);
+            let config = normalized_with_key_aliases(&config, &[]);
             record_origins(&config, &layer.metadata(), &mut path, &mut origins);
         }
 
@@ -352,6 +355,26 @@ impl ConfigLayerStack {
         }
         layers
     }
+}
+
+fn effective_layer_config(layer: &ConfigLayerEntry) -> TomlValue {
+    let mut config = layer.config.clone();
+    if matches!(layer.name, ConfigLayerSource::SessionFlags) {
+        return config;
+    }
+    remove_config_toml_only_feature_overrides(&mut config);
+    config
+}
+
+fn remove_config_toml_only_feature_overrides(config: &mut TomlValue) {
+    let Some(features) = config.get_mut("features").and_then(TomlValue::as_table_mut) else {
+        return;
+    };
+
+    features.retain(|key, _| match feature_for_key(key) {
+        Some(feature) => feature.can_override_from_config_toml(),
+        None => true,
+    });
 }
 
 /// Ensures precedence ordering of config layers is correct. Returns the index
