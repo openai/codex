@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Utc;
 use codex_git_utils::collect_git_info;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
@@ -51,11 +52,15 @@ impl ThreadMetadataSync {
     pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
-        let git_info = collect_git_info(cwd.as_path()).await.map(|info| GitInfo {
-            commit_hash: info.commit_hash,
-            branch: info.branch,
-            repository_url: info.repository_url,
-        });
+        let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
+            collect_git_info(cwd.as_path()).await.map(|info| GitInfo {
+                commit_hash: info.commit_hash,
+                branch: info.branch,
+                repository_url: info.repository_url,
+            })
+        } else {
+            None
+        };
         let dynamic_tools =
             (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone());
         let update = ThreadMetadataPatch {
