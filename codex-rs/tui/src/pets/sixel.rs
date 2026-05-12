@@ -9,11 +9,11 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 
-const ESC: &[u8] = b"\x1b";
 const ST: &[u8] = b"\x1b\\";
 const SIXEL_BAND_HEIGHT: u32 = 6;
 const PALETTE_COLOR_COUNT: usize = 256;
 const TRANSPARENT_ALPHA_THRESHOLD: u8 = 128;
+const TRANSPARENT_BACKGROUND_DCS: &[u8] = b"\x1bP9;1;0q";
 
 pub(crate) fn encode_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     if width == 0 || height == 0 {
@@ -32,8 +32,7 @@ pub(crate) fn encode_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
 
     let palette = Palette::from_rgba(rgba);
     let mut output = Vec::new();
-    output.extend_from_slice(ESC);
-    output.extend_from_slice(b"Pq");
+    output.extend_from_slice(TRANSPARENT_BACKGROUND_DCS);
     output.extend_from_slice(format!("\"1;1;{width};{height}").as_bytes());
     palette.write_definitions(&mut output);
     write_pixels(&mut output, rgba, width, height, &palette)?;
@@ -252,12 +251,17 @@ impl Palette {
 mod tests {
     use super::*;
 
+    const EXPECTED_TRANSPARENT_BACKGROUND_DCS: &str = "\x1bP9;1;0q";
+
     #[test]
     fn encodes_red_pixel_with_palette_and_pixel_data() {
         let sixel = encode_rgba(&[255, 0, 0, 255], /*width*/ 1, /*height*/ 1).unwrap();
         let sixel = String::from_utf8(sixel).unwrap();
 
-        assert_eq!(sixel, "\x1bPq\"1;1;1;1#224;2;100;0;0#224@\x1b\\");
+        assert_eq!(
+            sixel,
+            format!("{EXPECTED_TRANSPARENT_BACKGROUND_DCS}\"1;1;1;1#224;2;100;0;0#224@\x1b\\")
+        );
     }
 
     #[test]
@@ -265,7 +269,10 @@ mod tests {
         let sixel = encode_rgba(&[255, 0, 0, 0], /*width*/ 1, /*height*/ 1).unwrap();
         let sixel = String::from_utf8(sixel).unwrap();
 
-        assert_eq!(sixel, "\x1bPq\"1;1;1;1\x1b\\");
+        assert_eq!(
+            sixel,
+            format!("{EXPECTED_TRANSPARENT_BACKGROUND_DCS}\"1;1;1;1\x1b\\")
+        );
     }
 
     #[test]
@@ -278,7 +285,12 @@ mod tests {
         let sixel = encode_rgba(&rgba, /*width*/ 1, /*height*/ 7).unwrap();
         let sixel = String::from_utf8(sixel).unwrap();
 
-        assert_eq!(sixel, "\x1bPq\"1;1;1;7#224;2;100;0;0#224~$-#224@\x1b\\");
+        assert_eq!(
+            sixel,
+            format!(
+                "{EXPECTED_TRANSPARENT_BACKGROUND_DCS}\"1;1;1;7#224;2;100;0;0#224~$-#224@\x1b\\"
+            )
+        );
     }
 
     #[test]

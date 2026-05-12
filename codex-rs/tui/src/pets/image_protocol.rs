@@ -20,6 +20,7 @@ use super::sixel;
 const ESC: &str = "\x1b";
 const ST: &str = "\x1b\\";
 const KITTY_CHUNK_SIZE: usize = 4096;
+const SIXEL_CACHE_VERSION: &str = "v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageProtocol {
@@ -253,7 +254,7 @@ pub fn sixel_frame(frame_path: &Path, cache_dir: &Path, height_px: u16) -> Resul
         .file_stem()
         .and_then(|stem| stem.to_str())
         .context("frame path has no valid file stem")?;
-    let path = cache_dir.join(format!("{stem}_h{height_px}.six"));
+    let path = cache_dir.join(format!("{stem}_h{height_px}_{SIXEL_CACHE_VERSION}.six"));
     if path.exists() {
         return Ok(path);
     }
@@ -558,7 +559,7 @@ mod tests {
             sixel_frame(&frame_path, &dir.path().join("sixel"), /*height_px*/ 1).unwrap();
         let sixel = fs::read_to_string(sixel_path).unwrap();
 
-        assert!(sixel.starts_with("\x1bPq\"1;1;1;1"));
+        assert!(sixel.starts_with("\x1bP9;1;0q\"1;1;1;1"));
         assert!(sixel.contains("#224;2;100;0;0"));
         assert!(sixel.contains("#224@"));
         assert!(sixel.ends_with("\x1b\\"));

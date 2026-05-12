@@ -355,7 +355,7 @@ mod tests {
         std::fs::write(&frame, b"png").unwrap();
         let sixel_dir = dir.path().join("sixel");
         std::fs::create_dir(&sixel_dir).unwrap();
-        let sixel_frame = sixel_dir.join("frame_h75.six");
+        let sixel_frame = sixel_dir.join("frame_h75_v2.six");
         std::fs::write(&sixel_frame, b"fake-sixel").unwrap();
         let request = AmbientPetDraw {
             frame,
@@ -386,7 +386,7 @@ mod tests {
         std::fs::write(&frame, b"png").unwrap();
         let sixel_dir = dir.path().join("sixel");
         std::fs::create_dir(&sixel_dir).unwrap();
-        let sixel_frame = sixel_dir.join("frame_h75.six");
+        let sixel_frame = sixel_dir.join("frame_h75_v2.six");
         std::fs::write(&sixel_frame, b"fake-sixel").unwrap();
         let request = AmbientPetDraw {
             frame,
