@@ -47,7 +47,6 @@ use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tool_api::ToolExecutor;
 use codex_tool_api::ToolFuture;
 use codex_tools::AdditionalProperties;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::FreeformTool;
@@ -132,7 +131,7 @@ fn extension_tools_do_not_replace_builtin_tools() {
     );
 
     assert_eq!(
-        find_tool(&tools, "update_plan").spec,
+        find_tool(&tools, "update_plan").clone(),
         create_update_plan_tool()
     );
     assert_eq!(
@@ -171,7 +170,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let mut duplicate_names = Vec::new();
     for tool in &tools {
         let name = tool.name().to_string();
-        if actual.insert(name.clone(), tool.spec.clone()).is_some() {
+        if actual.insert(name.clone(), tool.clone()).is_some() {
             duplicate_names.push(name);
         }
     }
@@ -365,7 +364,7 @@ fn test_build_specs_collab_tools_enabled() {
     assert_lacks_tool_name(&tools, "list_agents");
 
     let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &spawn_agent.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = spawn_agent else {
         panic!("spawn_agent should be a function tool");
     };
     let (properties, _) = expect_object_schema(parameters);
@@ -459,7 +458,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         parameters,
         output_schema,
         ..
-    }) = &spawn_agent.spec
+    }) = spawn_agent
     else {
         panic!("spawn_agent should be a function tool");
     };
@@ -483,7 +482,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         parameters,
         output_schema,
         ..
-    }) = &send_message.spec
+    }) = send_message
     else {
         panic!("send_message should be a function tool");
     };
@@ -503,7 +502,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         parameters,
         output_schema,
         ..
-    }) = &followup_task.spec
+    }) = followup_task
     else {
         panic!("followup_task should be a function tool");
     };
@@ -522,7 +521,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         parameters,
         output_schema,
         ..
-    }) = &wait_agent.spec
+    }) = wait_agent
     else {
         panic!("wait_agent should be a function tool");
     };
@@ -543,7 +542,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         parameters,
         output_schema,
         ..
-    }) = &list_agents.spec
+    }) = list_agents
     else {
         panic!("list_agents should be a function tool");
     };
@@ -660,7 +659,7 @@ fn view_image_tool_omits_detail_without_original_detail_support() {
         &[],
     );
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = view_image else {
         panic!("view_image should be a function tool");
     };
     let (properties, _) = expect_object_schema(parameters);
@@ -690,7 +689,7 @@ fn view_image_tool_includes_detail_with_original_detail_support() {
         &[],
     );
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = view_image else {
         panic!("view_image should be a function tool");
     };
     let (properties, _) = expect_object_schema(parameters);
@@ -841,7 +840,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
-        request_user_input_tool.spec,
+        request_user_input_tool.clone(),
         request_user_input_tool_spec(&request_user_input_available_modes(&features))
     );
 
@@ -864,7 +863,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
-        request_user_input_tool.spec,
+        request_user_input_tool.clone(),
         request_user_input_tool_spec(&request_user_input_available_modes(&features))
     );
 }
@@ -912,7 +911,7 @@ fn request_permissions_requires_feature_flag() {
     );
     let request_permissions_tool = find_tool(&tools, "request_permissions");
     assert_eq!(
-        request_permissions_tool.spec,
+        request_permissions_tool.clone(),
         create_request_permissions_tool(request_permissions_tool_description())
     );
 }
@@ -973,7 +972,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
     assert!(
         !default_tools
             .iter()
-            .any(|tool| tool.spec.name() == "image_generation"),
+            .any(|tool| tool.name() == "image_generation"),
         "image_generation should be disabled when the feature is disabled"
     );
 
@@ -996,7 +995,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
     assert_contains_tool_names(&supported_tools, &["image_generation"]);
     let image_generation_tool = find_tool(&supported_tools, "image_generation");
     assert_eq!(
-        serde_json::to_value(&image_generation_tool.spec).expect("serialize image tool"),
+        serde_json::to_value(image_generation_tool).expect("serialize image tool"),
         serde_json::json!({
             "type": "image_generation",
             "output_format": "png"
@@ -1020,9 +1019,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
         &[],
     );
     assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.spec.name() == "image_generation"),
+        !tools.iter().any(|tool| tool.name() == "image_generation"),
         "image_generation should be disabled for unsupported models"
     );
 }
@@ -1052,7 +1049,7 @@ fn web_search_mode_cached_sets_external_web_access_false() {
 
     let tool = find_tool(&tools, "web_search");
     assert_eq!(
-        tool.spec,
+        tool.clone(),
         ToolSpec::WebSearch {
             external_web_access: Some(false),
             filters: None,
@@ -1088,7 +1085,7 @@ fn web_search_mode_live_sets_external_web_access_true() {
 
     let tool = find_tool(&tools, "web_search");
     assert_eq!(
-        tool.spec,
+        tool.clone(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -1138,7 +1135,7 @@ fn web_search_config_is_forwarded_to_tool_spec() {
 
     let tool = find_tool(&tools, "web_search");
     assert_eq!(
-        tool.spec,
+        tool.clone(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: web_search_config
@@ -1179,7 +1176,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
 
     let tool = find_tool(&tools, "web_search");
     assert_eq!(
-        tool.spec,
+        tool.clone(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -1214,7 +1211,7 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
 
     assert!(
         !tools.iter().any(|tool| matches!(
-            tool.spec.name(),
+            tool.name(),
             "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
         )),
         "MCP resource tools should be omitted when no MCP servers are configured"
@@ -1277,8 +1274,7 @@ fn test_parallel_support_flags() {
         &[],
     );
 
-    assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
-    assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
+    assert_contains_tool_names(&tools, &["exec_command", "write_stdin"]);
 }
 
 #[test]
@@ -1505,7 +1501,7 @@ fn test_build_specs_mcp_namespace_description_falls_back_when_missing() {
     );
 
     let namespace_tool = find_tool(&tools, "test_server/");
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
         panic!("expected namespace tool");
     };
     assert_eq!(
@@ -1631,7 +1627,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
     );
 
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
         panic!("expected tool_search tool");
     };
     let description = description.as_str();
@@ -1810,7 +1806,7 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
     );
 
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
         panic!("expected tool_search tool");
     };
     assert!(description.contains("- Dynamic tools: Tools provided by the current Codex thread."));
@@ -1959,11 +1955,9 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
 
     assert_contains_tool_names(&tools, &[REQUEST_PLUGIN_INSTALL_TOOL_NAME]);
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
-    assert!(request_plugin_install.supports_parallel_tool_calls);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &request_plugin_install.spec
-    else {
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = request_plugin_install else {
         panic!("expected function tool");
     };
     assert!(description.contains(
@@ -2030,7 +2024,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
         description,
         parameters,
         ..
-    }) = &request_plugin_install.spec
+    }) = request_plugin_install
     else {
         panic!("expected function tool");
     };
@@ -2247,7 +2241,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
         &[],
     );
     let ToolSpec::Function(ResponsesApiTool { description, .. }) =
-        &find_tool(&tools, VIEW_IMAGE_TOOL_NAME).spec
+        find_tool(&tools, VIEW_IMAGE_TOOL_NAME)
     else {
         panic!("expected function tool");
     };
@@ -2282,8 +2276,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
         /*deferred_mcp_tools*/ None,
         &[],
     );
-    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
-    else {
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
         panic!("expected freeform tool");
     };
 
@@ -2326,8 +2319,7 @@ fn code_mode_only_exec_description_includes_extension_tool_details() {
         &extension_tool_bundles,
         &[],
     );
-    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
-    else {
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
         panic!("expected freeform tool");
     };
 
@@ -2358,8 +2350,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
         /*deferred_mcp_tools*/ None,
         &[],
     );
-    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
-    else {
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
         panic!("expected freeform tool");
     };
 
@@ -2417,7 +2408,7 @@ fn build_specs(
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
-) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+) -> (Vec<ToolSpec>, ToolRegistry) {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
@@ -2435,7 +2426,7 @@ fn build_specs_with_discoverable_tools(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
-) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+) -> (Vec<ToolSpec>, ToolRegistry) {
     build_specs_with_optional_tool_namespaces(
         config,
         mcp_tools,
@@ -2455,7 +2446,7 @@ fn build_specs_with_optional_tool_namespaces(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
-) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+) -> (Vec<ToolSpec>, ToolRegistry) {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
@@ -2636,12 +2627,12 @@ fn deferred_mcp_tool(
     }
 }
 
-fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
+fn assert_contains_tool_names(tools: &[ToolSpec], expected_subset: &[&str]) {
     use std::collections::HashSet;
 
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().map(ConfiguredToolSpec::name) {
+    for name in tools.iter().map(ToolSpec::name) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -2658,11 +2649,8 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     }
 }
 
-fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
-    let names = tools
-        .iter()
-        .map(ConfiguredToolSpec::name)
-        .collect::<Vec<_>>();
+fn assert_lacks_tool_name(tools: &[ToolSpec], expected_absent: &str) {
+    let names = tools.iter().map(ToolSpec::name).collect::<Vec<_>>();
     assert!(
         !names.contains(&expected_absent),
         "expected tool {expected_absent} to be absent; had: {names:?}"
@@ -2692,7 +2680,7 @@ fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
     }
 }
 
-fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
+fn find_tool<'a>(tools: &'a [ToolSpec], expected_name: &str) -> &'a ToolSpec {
     tools
         .iter()
         .find(|tool| tool.name() == expected_name)
@@ -2700,12 +2688,12 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
 }
 
 fn assert_process_tool_environment_id(
-    tools: &[ConfiguredToolSpec],
+    tools: &[ToolSpec],
     expected_name: &str,
     expected_present: bool,
 ) {
     let tool = find_tool(tools, expected_name);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &tool.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
         panic!("expected function tool {expected_name}");
     };
     let (properties, _) = expect_object_schema(parameters);
@@ -2716,9 +2704,9 @@ fn assert_process_tool_environment_id(
     );
 }
 
-fn assert_apply_patch_environment_id(tools: &[ConfiguredToolSpec], expected_present: bool) {
+fn assert_apply_patch_environment_id(tools: &[ToolSpec], expected_present: bool) {
     let tool = find_tool(tools, "apply_patch");
-    let ToolSpec::Freeform(FreeformTool { format, .. }) = &tool.spec else {
+    let ToolSpec::Freeform(FreeformTool { format, .. }) = tool else {
         panic!("expected freeform apply_patch tool");
     };
     assert_eq!(
@@ -2729,12 +2717,12 @@ fn assert_apply_patch_environment_id(tools: &[ConfiguredToolSpec], expected_pres
 }
 
 fn find_namespace_function_tool<'a>(
-    tools: &'a [ConfiguredToolSpec],
+    tools: &'a [ToolSpec],
     expected_namespace: &str,
     expected_name: &str,
 ) -> &'a ResponsesApiTool {
     let namespace_tool = find_tool(tools, expected_namespace);
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
         panic!("expected namespace tool {expected_namespace}");
     };
     namespace
@@ -2747,9 +2735,9 @@ fn find_namespace_function_tool<'a>(
         .unwrap_or_else(|| panic!("expected tool {expected_namespace}{expected_name} in namespace"))
 }
 
-fn namespace_function_names(tools: &[ConfiguredToolSpec], expected_namespace: &str) -> Vec<String> {
+fn namespace_function_names(tools: &[ToolSpec], expected_namespace: &str) -> Vec<String> {
     let namespace_tool = find_tool(tools, expected_namespace);
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
         panic!("expected namespace tool {expected_namespace}");
     };
     namespace

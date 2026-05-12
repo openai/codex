@@ -157,7 +157,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> {
+async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let router = ToolRouter::from_config(
         &turn.tools_config,
@@ -184,14 +184,14 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
         },
     );
 
-    let deferred_call = ToolCall {
+    let call = ToolCall {
         tool_name: ToolName::namespaced("mcp__echo__", "query_with_delay"),
-        call_id: "call-deferred".to_string(),
+        call_id: "call-handler".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
     };
-    assert!(router.tool_supports_parallel(&deferred_call));
+    assert!(router.tool_supports_parallel(&call));
 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
@@ -201,6 +201,32 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
         },
     };
     assert!(!router.tool_supports_parallel(&different_server_call));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+        },
+    );
+
+    assert!(!router.tool_supports_parallel(&ToolCall {
+        tool_name: ToolName::plain("web_search"),
+        call_id: "call-web-search".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    }));
 
     Ok(())
 }

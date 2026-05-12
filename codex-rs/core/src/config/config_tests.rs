@@ -55,6 +55,7 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::TuiPetAnchor;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
@@ -566,6 +567,8 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
@@ -2531,6 +2534,19 @@ session_picker_view = "dense"
 }
 
 #[test]
+fn tui_pet_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet = "chefito"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.pet.as_deref()),
+        Some("chefito"),
+    );
+}
+
+#[test]
 fn tui_session_picker_view_defaults_to_none() {
     let cfg = r#"
 [tui]
@@ -2539,6 +2555,56 @@ fn tui_session_picker_view_defaults_to_none() {
     assert_eq!(
         parsed.tui.as_ref().and_then(|t| t.session_picker_view),
         None,
+    );
+}
+
+#[test]
+fn tui_pet_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(parsed.tui.as_ref().and_then(|t| t.pet.as_deref()), None);
+}
+
+#[test]
+fn tui_pet_anchor_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet_anchor = "screen-bottom"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::ScreenBottom),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_defaults_to_composer() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::Composer),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_rejects_unknown_value() {
+    let cfg = r#"
+[tui]
+pet_anchor = "bottom"
+"#;
+    let err = toml::from_str::<ConfigToml>(cfg).expect_err("reject unknown pet anchor");
+    let err = err.to_string();
+    assert!(
+        err.contains("unknown variant `bottom`")
+            && err.contains("composer")
+            && err.contains("screen-bottom"),
+        "unexpected error: {err}"
     );
 }
 
@@ -2565,6 +2631,8 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -7322,6 +7390,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_pet: None,
+            tui_pet_anchor: TuiPetAnchor::Composer,
             tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
@@ -7766,6 +7836,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
@@ -7924,6 +7996,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
@@ -8067,6 +8141,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };

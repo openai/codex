@@ -99,6 +99,7 @@ async fn queue_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::guardian_agent_spawner;
     use crate::extensions::thread_extensions;
     use async_trait::async_trait;
     use codex_arg0::Arg0DispatchPaths;
@@ -179,18 +180,20 @@ mod tests {
             .await
             .expect("refresh tests require state db");
         let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
-        let thread_manager = Arc::new(ThreadManager::new(
-            &good_config,
-            auth_manager,
-            SessionSource::Exec,
-            Arc::new(EnvironmentManager::default_for_tests()),
-            thread_extensions(),
-            /*analytics_events_client*/ None,
-            thread_store,
-            Some(state_db.clone()),
-            "11111111-1111-4111-8111-111111111111".to_string(),
-            /*attestation_provider*/ None,
-        ));
+        let thread_manager = Arc::new_cyclic(|thread_manager| {
+            ThreadManager::new(
+                &good_config,
+                auth_manager,
+                SessionSource::Exec,
+                Arc::new(EnvironmentManager::default_for_tests()),
+                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
+                /*analytics_events_client*/ None,
+                thread_store,
+                Some(state_db.clone()),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+                /*attestation_provider*/ None,
+            )
+        });
         thread_manager.start_thread(good_config).await?;
         thread_manager.start_thread(bad_config).await?;
 

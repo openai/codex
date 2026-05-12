@@ -209,9 +209,10 @@ plugins = true
     let response: PluginReadResponse = to_response(response)?;
 
     assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
     assert_eq!(
-        response.plugin.summary.id,
-        "plugins~Plugin_00000000000000000000000000000000"
+        response.plugin.summary.remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_00000000000000000000000000000000")
     );
     assert_eq!(response.plugin.summary.name, "linear");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
@@ -313,6 +314,12 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
+    assert_eq!(response.plugin.marketplace_name, "shared-with-me");
+    assert_eq!(response.plugin.summary.id, "shared-linear@shared-with-me");
+    assert_eq!(
+        response.plugin.summary.remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_11111111111111111111111111111111")
+    );
     let share_context = response
         .plugin
         .summary
@@ -482,9 +489,10 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
+    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
     assert_eq!(
-        response.plugin.summary.id,
-        "plugins~Plugin_00000000000000000000000000000000"
+        response.plugin.summary.remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_00000000000000000000000000000000")
     );
     assert_eq!(response.plugin.summary.name, "linear");
     assert_eq!(response.plugin.summary.installed, true);
@@ -856,6 +864,7 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
+    assert_eq!(response.plugin.summary.remote_plugin_id, None);
     let share_context = response
         .plugin
         .summary
@@ -931,6 +940,7 @@ async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> 
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
+    assert_eq!(response.plugin.summary.remote_plugin_id, None);
     let share_context = response
         .plugin
         .summary

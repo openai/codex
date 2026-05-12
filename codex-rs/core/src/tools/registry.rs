@@ -25,7 +25,6 @@ use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
@@ -554,7 +553,7 @@ impl ToolRegistry {
 
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
-    specs: Vec<ConfiguredToolSpec>,
+    specs: Vec<ToolSpec>,
     code_mode_enabled: bool,
 }
 
@@ -567,14 +566,13 @@ impl ToolRegistryBuilder {
         }
     }
 
-    pub(crate) fn push_spec(&mut self, spec: ToolSpec, supports_parallel_tool_calls: bool) {
+    pub(crate) fn push_spec(&mut self, spec: ToolSpec) {
         let spec = if self.code_mode_enabled {
             codex_tools::augment_tool_spec_for_code_mode(spec)
         } else {
             spec
         };
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+        self.specs.push(spec);
     }
 
     pub fn register_handler<H>(&mut self, handler: Arc<H>)
@@ -588,8 +586,7 @@ impl ToolRegistryBuilder {
         }
 
         if let Some(spec) = handler.spec() {
-            let supports_parallel_tool_calls = handler.supports_parallel_tool_calls();
-            self.push_spec(spec, supports_parallel_tool_calls);
+            self.push_spec(spec);
         }
 
         let handler: Arc<dyn AnyToolHandler> = handler;
@@ -612,17 +609,17 @@ impl ToolRegistryBuilder {
                 return;
             }
         };
-        self.push_spec(spec.clone(), /*supports_parallel_tool_calls*/ false);
+        self.push_spec(spec.clone());
 
         let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);
     }
 
-    pub(crate) fn specs(&self) -> &[ConfiguredToolSpec] {
+    pub(crate) fn specs(&self) -> &[ToolSpec] {
         &self.specs
     }
 
-    pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+    pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
     }
