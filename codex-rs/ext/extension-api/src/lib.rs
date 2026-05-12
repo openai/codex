@@ -1,7 +1,10 @@
+mod capabilities;
 mod contributors;
 mod registry;
 mod state;
 
+pub use capabilities::AgentSpawnFuture;
+pub use capabilities::AgentSpawner;
 pub use codex_tool_api::FunctionToolSpec;
 pub use codex_tool_api::ToolBundle;
 pub use codex_tool_api::ToolCall;
