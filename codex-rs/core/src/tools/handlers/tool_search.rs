@@ -130,15 +130,20 @@ impl ToolSearchHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::ToolCallSource;
     use crate::tools::tool_search_entry::build_tool_search_entries;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_mcp::ToolInfo;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::models::SearchToolCallParams;
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
@@ -226,6 +231,70 @@ mod tests {
                 }),
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn omitted_limit_uses_default_tool_search_result_limit() {
+        let tool_count = TOOL_SEARCH_DEFAULT_LIMIT + 5;
+        let dynamic_tools = numbered_dynamic_tools(tool_count);
+        let handler = handler_from_tools(/*mcp_tools*/ None, &dynamic_tools);
+
+        let output = tool_search_output(&handler, /*limit*/ None).await;
+
+        assert_eq!(output.tools.len(), TOOL_SEARCH_DEFAULT_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn explicit_limit_controls_tool_search_result_count() {
+        let explicit_limit = 3;
+        let tool_count = TOOL_SEARCH_DEFAULT_LIMIT + explicit_limit;
+        let dynamic_tools = numbered_dynamic_tools(tool_count);
+        let handler = handler_from_tools(/*mcp_tools*/ None, &dynamic_tools);
+
+        let output = tool_search_output(&handler, Some(explicit_limit)).await;
+
+        assert_eq!(output.tools.len(), explicit_limit);
+    }
+
+    async fn tool_search_output(
+        handler: &ToolSearchHandler,
+        limit: Option<usize>,
+    ) -> ToolSearchOutput {
+        let (session, turn) = make_session_and_context().await;
+        handler
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-tool-search".to_string(),
+                tool_name: ToolName::plain(TOOL_SEARCH_TOOL_NAME),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::ToolSearch {
+                    arguments: SearchToolCallParams {
+                        query: "calendar".to_string(),
+                        limit,
+                    },
+                },
+            })
+            .await
+            .expect("tool_search should succeed")
+    }
+
+    fn numbered_dynamic_tools(count: usize) -> Vec<DynamicToolSpec> {
+        (0..count)
+            .map(|index| DynamicToolSpec {
+                namespace: None,
+                name: format!("calendar_tool_{index:03}"),
+                description: "Calendar search helper.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            })
+            .collect()
     }
 
     fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
