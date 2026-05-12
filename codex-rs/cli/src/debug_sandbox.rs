@@ -370,14 +370,13 @@ async fn run_command_under_windows_session(
             cwd.as_path(),
             env,
             None,
-            /*read_roots_override*/ None,
-            /*read_roots_include_platform_defaults*/ false,
-            /*write_roots_override*/ None,
-            /*deny_read_paths_override*/ &[],
-            /*deny_write_paths_override*/ &[],
             /*tty*/ false,
             /*stdin_open*/ true,
             config.permissions.windows_sandbox_private_desktop,
+            None,
+            false,
+            None,
+            &[],
         )
         .await
     } else {
@@ -389,8 +388,6 @@ async fn run_command_under_windows_session(
             cwd.as_path(),
             env,
             None,
-            /*additional_deny_read_paths*/ &[],
-            /*additional_deny_write_paths*/ &[],
             /*tty*/ false,
             /*stdin_open*/ true,
             config.permissions.windows_sandbox_private_desktop,

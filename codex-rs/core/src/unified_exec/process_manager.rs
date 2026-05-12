@@ -37,6 +37,7 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
@@ -53,7 +54,6 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
-use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
@@ -371,7 +371,10 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-        let cwd = request.cwd.clone();
+        let cwd = request
+            .workdir
+            .clone()
+            .unwrap_or_else(|| context.turn.cwd.clone());
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
@@ -826,11 +829,11 @@ impl UnifiedExecProcessManager {
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
-        let pruned_entry = {
+        let (number_processes, pruned_entry) = {
             let mut store = self.process_store.lock().await;
             let pruned_entry = Self::prune_processes_if_needed(&mut store);
             store.processes.insert(process_id, entry);
-            pruned_entry
+            (store.processes.len(), pruned_entry)
         };
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
@@ -838,6 +841,16 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
+
+        if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
+            context
+                .session
+                .record_model_warning(
+                    format!("The maximum number of unified exec processes you can keep open is {WARNING_UNIFIED_EXEC_PROCESSES} and you currently have {number_processes} processes open. Reuse older processes or close them to prevent automatic pruning of old processes"),
+                    &context.turn
+                )
+                .await;
+        };
 
         spawn_exit_watcher(
             Arc::clone(&process),
@@ -875,68 +888,67 @@ impl UnifiedExecProcessManager {
                     "windows sandbox: failed to resolve codex_home: {err}"
                 ))
             })?;
-            let additional_deny_write_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_write_paths.clone())
-                .unwrap_or_default();
-            let additional_deny_read_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_read_paths.clone())
-                .unwrap_or_default();
-            let elevated_read_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.read_roots_override.clone());
-            let elevated_read_roots_include_platform_defaults = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
-            let elevated_write_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.write_roots_override.clone());
-            let spawned = match request.windows_sandbox_level {
-                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
-                        policy_json.as_str(),
-                        request.windows_sandbox_policy_cwd.as_path(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        request.cwd.as_path(),
-                        request.env.clone(),
-                        None,
-                        elevated_read_roots_override.as_deref(),
-                        elevated_read_roots_include_platform_defaults,
-                        elevated_write_roots_override.as_deref(),
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
-                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
-                        policy_json.as_str(),
-                        request.windows_sandbox_policy_cwd.as_path(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        request.cwd.as_path(),
-                        request.env.clone(),
-                        None,
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-            };
+            let windows_sandbox_filesystem_overrides =
+                crate::exec::resolve_windows_filesystem_overrides_for_exec_request(request)
+                    .map_err(UnifiedExecError::create_process)?;
+            let spawned =
+                match request.windows_sandbox_level {
+                    codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
+                        let elevated_read_roots_override = windows_sandbox_filesystem_overrides
+                            .as_ref()
+                            .and_then(|overrides| overrides.read_roots_override.clone());
+                        let elevated_read_roots_include_platform_defaults =
+                            windows_sandbox_filesystem_overrides.as_ref().is_some_and(
+                                |overrides| overrides.read_roots_include_platform_defaults,
+                            );
+                        let elevated_write_roots_override = windows_sandbox_filesystem_overrides
+                            .as_ref()
+                            .and_then(|overrides| overrides.write_roots_override.clone());
+                        let elevated_deny_write_paths = windows_sandbox_filesystem_overrides
+                            .as_ref()
+                            .map(|overrides| {
+                                overrides
+                                    .additional_deny_write_paths
+                                    .iter()
+                                    .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
+                            policy_json.as_str(),
+                            request.windows_sandbox_policy_cwd.as_path(),
+                            codex_home.as_ref(),
+                            request.command.clone(),
+                            request.cwd.as_path(),
+                            request.env.clone(),
+                            None,
+                            tty,
+                            tty,
+                            request.windows_sandbox_private_desktop,
+                            elevated_read_roots_override.as_deref(),
+                            elevated_read_roots_include_platform_defaults,
+                            elevated_write_roots_override.as_deref(),
+                            &elevated_deny_write_paths,
+                        )
+                        .await
+                    }
+                    codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
+                    | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
+                        codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
+                            policy_json.as_str(),
+                            request.windows_sandbox_policy_cwd.as_path(),
+                            codex_home.as_ref(),
+                            request.command.clone(),
+                            request.cwd.as_path(),
+                            request.env.clone(),
+                            None,
+                            tty,
+                            tty,
+                            request.windows_sandbox_private_desktop,
+                        )
+                        .await
+                    }
+                };
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_spawned(
                 spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
@@ -1028,9 +1040,7 @@ impl UnifiedExecProcessManager {
                 approval_policy: context.turn.approval_policy.value(),
                 permission_profile: context.turn.permission_profile(),
                 file_system_sandbox_policy: &file_system_sandbox_policy,
-                // The process cwd may be model-controlled. Policy resolution
-                // stays anchored to the selected turn environment cwd instead.
-                sandbox_cwd: request.sandbox_cwd.as_path(),
+                sandbox_cwd: context.turn.cwd.as_path(),
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -1044,8 +1054,6 @@ impl UnifiedExecProcessManager {
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
-            sandbox_cwd: request.sandbox_cwd.clone(),
-            environment: Arc::clone(&request.environment),
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
@@ -1062,7 +1070,7 @@ impl UnifiedExecProcessManager {
             session: context.session.clone(),
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
-            tool_name: ToolName::plain("exec_command"),
+            tool_name: "exec_command".to_string(),
         };
         orchestrator
             .run(
