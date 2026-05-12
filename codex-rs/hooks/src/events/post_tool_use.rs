@@ -298,6 +298,7 @@ fn parse_completed(
             additional_contexts_for_model,
             feedback_messages_for_model,
         },
+        completion_order: 0,
     }
 }
 
