@@ -50,7 +50,7 @@ impl ChatWidget {
             return;
         };
         let next_tier = if self.current_service_tier() == Some(fast_tier.id.as_str()) {
-            None
+            Some(ServiceTier::Default.request_value().to_string())
         } else {
             Some(fast_tier.id)
         };
@@ -59,7 +59,7 @@ impl ChatWidget {
 
     pub(crate) fn toggle_service_tier_from_ui(&mut self, command: ServiceTierCommand) {
         let next_tier = if self.current_service_tier() == Some(command.id.as_str()) {
-            None
+            Some(ServiceTier::Default.request_value().to_string())
         } else {
             Some(command.id)
         };
@@ -98,9 +98,6 @@ impl ChatWidget {
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<String>) {
-        if service_tier.is_none() {
-            self.config.notices.fast_default_opt_out = Some(true);
-        }
         self.set_service_tier(service_tier.clone());
         self.app_event_tx
             .send(AppEvent::CodexOp(AppCommand::override_turn_context(

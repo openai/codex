@@ -1315,9 +1315,6 @@ impl App {
                     profile,
                     service_tier.as_deref(),
                 );
-                if service_tier.is_none() {
-                    self.config.notices.fast_default_opt_out = Some(true);
-                }
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {

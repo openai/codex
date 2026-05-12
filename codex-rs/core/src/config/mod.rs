@@ -515,6 +515,7 @@ pub struct Config {
     pub model: Option<String>,
 
     /// Effective service tier request id preference for new turns.
+    /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
 
     /// Model used specifically for review sessions.
@@ -3091,19 +3092,15 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let mut notices = cfg.notice.unwrap_or_default();
+        let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
-            Some(None) => {
-                // Preserve explicit standard/clear intent after the nested override
-                // collapses into `Config.service_tier = None`.
-                notices.fast_default_opt_out = Some(true);
-                None
-            }
+            Some(None) => Some(ServiceTier::Default.request_value().to_string()),
             None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = service_tier.and_then(|service_tier| {
             match ServiceTier::from_request_value(&service_tier) {
+                Some(ServiceTier::Default) => Some(ServiceTier::Default.request_value().to_string()),
                 Some(ServiceTier::Fast) => features
                     .enabled(Feature::FastMode)
                     .then(|| ServiceTier::Fast.request_value().to_string()),

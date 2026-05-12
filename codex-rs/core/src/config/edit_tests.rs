@@ -35,6 +35,20 @@ model_reasoning_effort = "high"
 }
 
 #[test]
+fn set_service_tier_saves_default_as_default() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_service_tier(Some(ServiceTier::Default.request_value().to_string()))
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "service_tier = \"default\"\n");
+}
+
+#[test]
 fn set_service_tier_saves_priority_as_fast() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

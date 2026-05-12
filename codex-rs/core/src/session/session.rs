@@ -219,12 +219,15 @@ impl SessionConfiguration {
         if let Some(service_tier) = updates.service_tier.clone() {
             // TODO(aibrahim): Remove once v2 clients no longer send the legacy
             // "fast" service tier value.
-            next_configuration.service_tier = service_tier.map(|service_tier| {
-                ServiceTier::from_request_value(&service_tier)
-                    .map_or(service_tier, |service_tier| {
-                        service_tier.request_value().to_string()
-                    })
-            });
+            next_configuration.service_tier = match service_tier {
+                Some(service_tier) => Some(
+                    ServiceTier::from_request_value(&service_tier)
+                        .map_or(service_tier, |service_tier| {
+                            service_tier.request_value().to_string()
+                        }),
+                ),
+                None => Some(ServiceTier::Default.request_value().to_string()),
+            };
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);

@@ -1,6 +1,7 @@
 //! User-message and shell-prompt submission behavior for `ChatWidget`.
 
 use super::*;
+use codex_protocol::config_types::ServiceTier;
 
 impl ChatWidget {
     pub(super) fn user_message_from_submission(
@@ -333,7 +334,9 @@ impl ChatWidget {
             .filter(|_| self.current_model_supports_personality());
         let service_tier = match self.config.service_tier.clone() {
             Some(service_tier) => Some(Some(service_tier)),
-            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
+            None if self.config.notices.fast_default_opt_out == Some(true) => {
+                Some(Some(ServiceTier::Default.request_value().to_string()))
+            }
             None => None,
         };
         let active_permission_profile = self.config.permissions.active_permission_profile();

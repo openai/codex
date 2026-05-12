@@ -69,6 +69,7 @@ pub(crate) fn build_service_tier_selection_edits(
         |service_tier| {
             let config_value =
                 match codex_protocol::config_types::ServiceTier::from_request_value(service_tier) {
+                    Some(codex_protocol::config_types::ServiceTier::Default) => "default",
                     Some(codex_protocol::config_types::ServiceTier::Fast) => "fast",
                     Some(codex_protocol::config_types::ServiceTier::Flex) => "flex",
                     None => service_tier,
@@ -79,14 +80,7 @@ pub(crate) fn build_service_tier_selection_edits(
             )
         },
     );
-    let mut edits = vec![service_tier_edit];
-    if service_tier.is_none() {
-        edits.push(replace_config_value(
-            "notice.fast_default_opt_out",
-            serde_json::json!(true),
-        ));
-    }
-    edits
+    vec![service_tier_edit]
 }
 
 pub(crate) async fn write_config_batch(
