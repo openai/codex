@@ -11,7 +11,6 @@ call :resolve_runfile test_bin "__TEST_BIN__"
 if errorlevel 1 exit /b 1
 
 __RUNFILE_ENV_EXPORTS__
-__WINDOWS_TEST_RESOURCE_STAGING__
 
 __WORKSPACE_ROOT_SETUP__
 
@@ -32,20 +31,6 @@ if defined TOTAL_SHARDS if not "%TOTAL_SHARDS%"=="0" (
 
 "%test_bin%" %*
 exit /b %ERRORLEVEL%
-
-:stage_test_resource
-setlocal EnableExtensions EnableDelayedExpansion
-call :resolve_runfile resource_source "%~1"
-if errorlevel 1 endlocal & exit /b 1
-
-for %%I in ("%test_bin%") do set "test_bin_dir=%%~dpI"
-for %%I in ("%resource_source%") do set "resource_name=%%~nxI"
-set "resource_dir=!test_bin_dir!codex-resources"
-if not exist "!resource_dir!" mkdir "!resource_dir!"
-if errorlevel 1 endlocal & exit /b 1
-copy /Y "%resource_source%" "!resource_dir!\!resource_name!" >nul
-if errorlevel 1 endlocal & exit /b 1
-endlocal & exit /b 0
 
 :run_selected_libtest
 if defined TEST_SHARD_STATUS_FILE if defined TEST_TOTAL_SHARDS if not "%TEST_TOTAL_SHARDS%"=="0" (

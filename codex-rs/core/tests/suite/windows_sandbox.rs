@@ -1,3 +1,4 @@
+use anyhow::Context;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
@@ -16,6 +17,7 @@ use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::Path;
 use tempfile::TempDir;
 
 struct EnvVarGuard {
@@ -42,6 +44,21 @@ impl Drop for EnvVarGuard {
             }
         }
     }
+}
+
+fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
+    let test_exe = std::env::current_exe().context("resolve current Windows test executable")?;
+    let test_exe_dir = test_exe
+        .parent()
+        .context("Windows test executable should have a parent directory")?;
+    let resources_dir = test_exe_dir.join("codex-resources");
+    std::fs::create_dir_all(&resources_dir)?;
+    for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
+        let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
+        let file_name = Path::new(helper_name).with_extension("exe");
+        std::fs::copy(helper, resources_dir.join(file_name))?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -129,6 +146,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
     let temp_home = TempDir::new()?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    stage_windows_sandbox_helpers()?;
     let workspace = TempDir::new()?;
     let cwd = dunce::canonicalize(workspace.path())?.abs();
     let glob_secret = cwd.join("secret.env");
