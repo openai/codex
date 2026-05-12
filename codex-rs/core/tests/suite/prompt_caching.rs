@@ -92,7 +92,10 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
         tool_names.len(),
         "duplicate tool names detected: {tool_names:?}"
     );
-    let expected_name_set = expected_names.iter().map(std::string::ToString::to_string).collect();
+    let expected_name_set = expected_names
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     assert_eq!(tool_name_set, expected_name_set);
 }
 
