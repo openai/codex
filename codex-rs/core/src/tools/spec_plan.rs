@@ -27,6 +27,7 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -67,7 +68,7 @@ pub fn build_tool_registry_builder(
     config: &ToolsConfig,
     params: ToolRegistryBuildParams<'_>,
 ) -> ToolRegistryBuilder {
-    let mut builder = ToolRegistryBuilder::new(config.code_mode_enabled);
+    let mut builder = ToolRegistryBuilder::new();
     let all_deferred_tools = params
         .deferred_mcp_tools
         .into_iter()
@@ -98,10 +99,16 @@ pub fn build_tool_registry_builder(
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let code_mode_nested_tool_specs = handlers
+        let mut code_mode_nested_tool_specs = handlers
             .iter()
             .filter_map(|handler| handler.spec())
             .collect::<Vec<_>>();
+        code_mode_nested_tool_specs.extend(
+            params
+                .extension_tool_bundles
+                .iter()
+                .filter_map(|bundle| extension_tool_spec(bundle.spec()).ok()),
+        );
         let mut enabled_tools =
             collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
         enabled_tools
@@ -143,6 +150,11 @@ pub fn build_tool_registry_builder(
         if !config.namespace_tools && matches!(spec, ToolSpec::Namespace(_)) {
             continue;
         }
+        let spec = if config.code_mode_enabled {
+            codex_tools::augment_tool_spec_for_code_mode(spec)
+        } else {
+            spec
+        };
         builder.push_spec(spec);
     }
 
@@ -178,7 +190,13 @@ pub fn build_tool_registry_builder(
     }
 
     for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle);
+        builder.register_tool_bundle(bundle, |spec| {
+            if config.code_mode_enabled {
+                codex_tools::augment_tool_spec_for_code_mode(spec)
+            } else {
+                spec
+            }
+        });
     }
 
     builder

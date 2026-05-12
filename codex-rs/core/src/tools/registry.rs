@@ -543,24 +543,17 @@ impl ToolRegistry {
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
     specs: Vec<ToolSpec>,
-    code_mode_enabled: bool,
 }
 
 impl ToolRegistryBuilder {
-    pub fn new(code_mode_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
             specs: Vec::new(),
-            code_mode_enabled,
         }
     }
 
     pub(crate) fn push_spec(&mut self, spec: ToolSpec) {
-        let spec = if self.code_mode_enabled {
-            codex_tools::augment_tool_spec_for_code_mode(spec)
-        } else {
-            spec
-        };
         self.specs.push(spec);
     }
 
@@ -597,7 +590,11 @@ impl ToolRegistryBuilder {
         self.handlers.insert(name, handler);
     }
 
-    pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
+    pub fn register_tool_bundle(
+        &mut self,
+        bundle: ExtensionToolBundle,
+        transform_spec: impl FnOnce(ToolSpec) -> ToolSpec,
+    ) {
         let tool_name = ToolName::plain(bundle.tool_name());
         if self.handlers.contains_key(&tool_name) {
             warn!("Skipping extension tool `{tool_name}`: handler already registered");
@@ -613,7 +610,7 @@ impl ToolRegistryBuilder {
                 return;
             }
         };
-        self.push_spec(spec.clone());
+        self.push_spec(transform_spec(spec.clone()));
 
         let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);
