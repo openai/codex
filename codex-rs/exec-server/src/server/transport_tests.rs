@@ -1,8 +1,6 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::StatusCode;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -17,17 +15,13 @@ use tokio::time::timeout;
 
 use super::DEFAULT_LISTEN_URL;
 use super::ExecServerListenTransport;
-use super::ExecServerWebSocketState;
-use super::health_check_handler;
 use super::parse_listen_url;
-use super::readiness_handler;
 use super::run_stdio_connection_with_io;
 use crate::ExecServerRuntimePaths;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::server::processor::ConnectionProcessor;
 
 #[test]
 fn parse_listen_url_accepts_default_websocket_url() {
@@ -129,31 +123,6 @@ fn parse_listen_url_accepts_websocket_url() {
                 .expect("valid socket address")
         )
     );
-}
-
-#[tokio::test]
-async fn readiness_handler_reports_shutdown_state() {
-    let shutdown_token = tokio_util::sync::CancellationToken::new();
-    let state = ExecServerWebSocketState {
-        processor: ConnectionProcessor::new(test_runtime_paths()),
-        shutdown_token: shutdown_token.clone(),
-    };
-
-    assert_eq!(
-        readiness_handler(State(state.clone())).await,
-        StatusCode::OK
-    );
-
-    shutdown_token.cancel();
-    assert_eq!(
-        readiness_handler(State(state)).await,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-}
-
-#[tokio::test]
-async fn health_check_handler_stays_ok_during_shutdown() {
-    assert_eq!(health_check_handler().await, StatusCode::OK);
 }
 
 #[test]

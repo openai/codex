@@ -141,7 +141,6 @@ async fn run_websocket_listener(
     let router = Router::new()
         .route("/", any(websocket_upgrade_handler))
         .route("/readyz", get(readiness_handler))
-        .route("/healthz", get(health_check_handler))
         .with_state(ExecServerWebSocketState {
             processor: processor.clone(),
             shutdown_token: shutdown_token.clone(),
@@ -173,15 +172,7 @@ struct ExecServerWebSocketState {
     shutdown_token: CancellationToken,
 }
 
-async fn readiness_handler(State(state): State<ExecServerWebSocketState>) -> StatusCode {
-    if state.shutdown_token.is_cancelled() {
-        StatusCode::SERVICE_UNAVAILABLE
-    } else {
-        StatusCode::OK
-    }
-}
-
-async fn health_check_handler() -> StatusCode {
+async fn readiness_handler() -> StatusCode {
     StatusCode::OK
 }
 
