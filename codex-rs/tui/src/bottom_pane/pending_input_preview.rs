@@ -89,12 +89,12 @@ impl PendingInputPreview {
                 Line::from("Queued sends paused after usage limit".cyan().bold()),
             );
             lines.push(Line::from(vec![
-                "  Press ".into(),
+                "  Empty composer: press ".into(),
                 key_hint::plain(KeyCode::Enter)
                     .display_label()
                     .cyan()
                     .bold(),
-                " to resume queued sends".into(),
+                " to review queue".into(),
             ]));
         }
 

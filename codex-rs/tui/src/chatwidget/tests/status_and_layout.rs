@@ -833,6 +833,30 @@ async fn rate_limit_switch_prompt_shows_when_paused_queue_is_cleared() {
 }
 
 #[tokio::test]
+async fn resuming_paused_queue_keeps_rate_limit_switch_prompt_deferred() {
+    let (mut chat, _, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.has_chatgpt_account = true;
+    chat.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued follow-up").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    chat.input_queue.queued_sends_paused_after_usage_limit = true;
+
+    chat.resume_queued_sends();
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    assert!(matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. }));
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;

@@ -51,7 +51,9 @@ impl ChatWidget {
 
     pub(crate) fn resume_queued_sends(&mut self) {
         self.input_queue.queued_sends_paused_after_usage_limit = false;
-        self.refresh_pending_input_preview();
-        self.maybe_send_next_queued_input();
+        let resumed_queue = self.maybe_send_next_queued_input();
+        if !resumed_queue && !self.has_queued_follow_up_messages() {
+            self.maybe_show_pending_rate_limit_prompt();
+        }
     }
 }
