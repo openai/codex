@@ -656,8 +656,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
-        self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -668,8 +668,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
-        self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -680,7 +680,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         let visible = Self::max_visible_rows(len);
         self.state.page_up_clamped(len, visible);
-        self.skip_disabled_up();
+        self.skip_disabled_up_clamped();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -691,7 +692,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         let visible = Self::max_visible_rows(len);
         self.state.page_down_clamped(len, visible);
-        self.skip_disabled_down();
+        self.skip_disabled_down_clamped();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -702,7 +704,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         let visible = Self::max_visible_rows(len);
         self.state.jump_top(len, visible);
-        self.skip_disabled_down();
+        self.skip_disabled_down_clamped();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -713,7 +716,8 @@ impl ListSelectionView {
         let len = self.visible_len();
         let visible = Self::max_visible_rows(len);
         self.state.jump_bottom(len, visible);
-        self.skip_disabled_up();
+        self.skip_disabled_up_clamped();
+        self.state.ensure_visible(len, visible);
         if self.selected_actual_idx() != before {
             self.fire_selection_changed();
         }
@@ -833,13 +837,7 @@ impl ListSelectionView {
     fn skip_disabled_down(&mut self) {
         let len = self.visible_len();
         for _ in 0..len {
-            if let Some(idx) = self.state.selected_idx
-                && let Some(actual_idx) = self.filtered_indices.get(idx)
-                && self
-                    .active_items()
-                    .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
-            {
+            if self.selected_visible_idx_is_disabled() {
                 self.state.move_down_wrap(len);
             } else {
                 break;
@@ -850,18 +848,60 @@ impl ListSelectionView {
     fn skip_disabled_up(&mut self) {
         let len = self.visible_len();
         for _ in 0..len {
-            if let Some(idx) = self.state.selected_idx
-                && let Some(actual_idx) = self.filtered_indices.get(idx)
-                && self
-                    .active_items()
-                    .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
-            {
+            if self.selected_visible_idx_is_disabled() {
                 self.state.move_up_wrap(len);
             } else {
                 break;
             }
         }
+    }
+
+    fn skip_disabled_down_clamped(&mut self) {
+        let Some(start) = self.state.selected_idx else {
+            return;
+        };
+        if !self.visible_idx_is_disabled(start) {
+            return;
+        }
+
+        let len = self.visible_len();
+        self.state.selected_idx = ((start + 1)..len)
+            .find(|idx| !self.visible_idx_is_disabled(*idx))
+            .or_else(|| {
+                (0..start)
+                    .rev()
+                    .find(|idx| !self.visible_idx_is_disabled(*idx))
+            })
+            .or(Some(start));
+    }
+
+    fn skip_disabled_up_clamped(&mut self) {
+        let Some(start) = self.state.selected_idx else {
+            return;
+        };
+        if !self.visible_idx_is_disabled(start) {
+            return;
+        }
+
+        let len = self.visible_len();
+        self.state.selected_idx = (0..start)
+            .rev()
+            .find(|idx| !self.visible_idx_is_disabled(*idx))
+            .or_else(|| ((start + 1)..len).find(|idx| !self.visible_idx_is_disabled(*idx)))
+            .or(Some(start));
+    }
+
+    fn selected_visible_idx_is_disabled(&self) -> bool {
+        self.state
+            .selected_idx
+            .is_some_and(|idx| self.visible_idx_is_disabled(idx))
+    }
+
+    fn visible_idx_is_disabled(&self, idx: usize) -> bool {
+        self.filtered_indices
+            .get(idx)
+            .and_then(|actual_idx| self.active_items().get(*actual_idx))
+            .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
     }
 }
 
@@ -2155,6 +2195,38 @@ mod tests {
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
         assert_eq!(view.selected_actual_idx(), Some(0));
+    }
+
+    #[test]
+    fn page_and_jump_navigation_skip_trailing_disabled_rows_without_wrapping() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: (0..12)
+                    .map(|idx| SelectionItem {
+                        name: format!("Item {idx}"),
+                        is_disabled: idx >= 8,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(view.selected_actual_idx(), Some(7));
+        let selected = view.state.selected_idx.expect("selection should be set");
+        assert!(view.state.scroll_top <= selected);
+        assert!(selected < view.state.scroll_top + ListSelectionView::max_visible_rows(/*len*/ 12));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::End));
+        assert_eq!(view.selected_actual_idx(), Some(7));
+        let selected = view.state.selected_idx.expect("selection should be set");
+        assert!(view.state.scroll_top <= selected);
+        assert!(selected < view.state.scroll_top + ListSelectionView::max_visible_rows(/*len*/ 12));
     }
 
     #[test]

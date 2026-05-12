@@ -697,20 +697,11 @@ impl BottomPaneView for AppLinkView {
                 code: KeyCode::Up, ..
             }
             | KeyEvent {
-                code: KeyCode::Left,
-                ..
-            }
-            | KeyEvent {
                 code: KeyCode::BackTab,
                 ..
             }
             | KeyEvent {
                 code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_prev(),
@@ -720,19 +711,10 @@ impl BottomPaneView for AppLinkView {
                 ..
             }
             | KeyEvent {
-                code: KeyCode::Right,
-                ..
-            }
-            | KeyEvent {
                 code: KeyCode::Tab, ..
             }
             | KeyEvent {
                 code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('l'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_selection_next(),
@@ -1130,6 +1112,47 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
         assert_eq!(view.selected_action, 1);
         view.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(view.selected_action, 0);
+    }
+
+    #[test]
+    fn remapped_horizontal_list_keys_control_action_selection() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut list_keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        list_keymap.move_left = vec![key_hint::plain(KeyCode::Char('x'))];
+        list_keymap.move_right = vec![key_hint::plain(KeyCode::Char('z'))];
+        let mut view = AppLinkView::new_with_keymap(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
+            },
+            tx,
+            list_keymap,
+        );
+
+        assert_eq!(view.selected_action, 0);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert_eq!(view.selected_action, 0);
+        view.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(view.selected_action, 0);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(view.selected_action, 1);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert_eq!(view.selected_action, 1);
+        view.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(view.selected_action, 1);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         assert_eq!(view.selected_action, 0);
     }
 

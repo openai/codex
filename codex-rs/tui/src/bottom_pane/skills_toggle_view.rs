@@ -17,6 +17,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListKeymap;
+use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -73,7 +74,7 @@ impl SkillsToggleView {
             complete: false,
             app_event_tx,
             header: Box::new(header),
-            footer_hint: skills_toggle_hint_line(),
+            footer_hint: skills_toggle_hint_line(&keymap),
             search_query: String::new(),
             filtered_indices: Vec::new(),
             keymap,
@@ -386,16 +387,37 @@ impl Renderable for SkillsToggleView {
     }
 }
 
-fn skills_toggle_hint_line() -> Line<'static> {
-    Line::from(vec![
-        "Press ".into(),
-        key_hint::plain(KeyCode::Char(' ')).into(),
-        " or ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
-        " to toggle; ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " to close".into(),
-    ])
+fn skills_toggle_hint_line(keymap: &ListKeymap) -> Line<'static> {
+    let space = key_hint::plain(KeyCode::Char(' '));
+    let accept = primary_binding(&keymap.accept).filter(|binding| *binding != space);
+    let cancel = primary_binding(&keymap.cancel);
+
+    match (accept, cancel) {
+        (Some(accept), Some(cancel)) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " or ".into(),
+            accept.into(),
+            " to toggle; ".into(),
+            cancel.into(),
+            " to close".into(),
+        ]),
+        (Some(accept), None) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " or ".into(),
+            accept.into(),
+            " to toggle".into(),
+        ]),
+        (None, Some(cancel)) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " to toggle; ".into(),
+            cancel.into(),
+            " to close".into(),
+        ]),
+        (None, None) => Line::from(vec!["Press ".into(), space.into(), " to toggle".into()]),
+    }
 }
 
 #[cfg(test)]
@@ -453,5 +475,21 @@ mod tests {
         ];
         let view = SkillsToggleView::new(items, tx, crate::keymap::RuntimeKeymap::defaults().list);
         assert_snapshot!("skills_toggle_basic", render_lines(&view, /*width*/ 72));
+    }
+
+    #[test]
+    fn footer_hint_uses_list_keymap_accept_and_cancel() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.accept = vec![key_hint::ctrl(KeyCode::Char('t'))];
+        keymap.cancel = vec![key_hint::ctrl(KeyCode::Char('x'))];
+        let view = SkillsToggleView::new(Vec::new(), tx, keymap);
+        let rendered = render_lines(&view, /*width*/ 72);
+
+        assert!(rendered.contains("ctrl + t"));
+        assert!(rendered.contains("ctrl + x"));
+        assert!(!rendered.contains("enter"));
+        assert!(!rendered.contains("esc"));
     }
 }
