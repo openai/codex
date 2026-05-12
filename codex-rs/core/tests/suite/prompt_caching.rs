@@ -73,23 +73,21 @@ fn assert_default_env_context(text: &str, cwd: &str) {
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
-    let tool_names = body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| {
-            t.get("name")
-                .and_then(|value| value.as_str())
-                .or_else(|| t.get("type").and_then(|value| value.as_str()))
-                .unwrap()
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    let expected_names = expected_names
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect::<Vec<_>>();
-    assert_eq!(tool_names, expected_names);
+    assert_eq!(
+        body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                t.get("name")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| t.get("type").and_then(|value| value.as_str()))
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
+        expected_names
+    );
 }
 
 fn normalize_newlines(text: &str) -> String {
