@@ -258,14 +258,14 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let parsed_items = handle_non_tool_response_item(
+            let turn_item = handle_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
                 plan_mode,
             )
             .await;
-            let modified_item = if let Some((turn_item, modified_item)) = parsed_items {
+            let item_for_history = if let Some(turn_item) = turn_item {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -279,19 +279,19 @@ pub(crate) async fn handle_output_item_done(
                         .await;
                 }
 
+                let item_for_history =
+                    item_for_completed_history(&item, &turn_item, ctx.turn_context.as_ref());
                 ctx.sess
                     .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
-
-                Some(modified_item)
+                item_for_history
             } else {
-                None
+                item.clone()
             };
-            let item_for_history = modified_item.as_ref().unwrap_or(&item);
             record_completed_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
-                item_for_history,
+                &item_for_history,
             )
             .await;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
@@ -362,7 +362,7 @@ pub(crate) async fn handle_non_tool_response_item(
     turn_context: &TurnContext,
     item: &ResponseItem,
     plan_mode: bool,
-) -> Option<(TurnItem, ResponseItem)> {
+) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
     match item {
@@ -370,7 +370,6 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
-            let mut modified_item = item.clone();
             let mut turn_item = parse_turn_item(item)?;
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
@@ -397,21 +396,7 @@ pub(crate) async fn handle_non_tool_response_item(
                 .await
                 {
                     Ok(path) => {
-                        let image_output_dir = path
-                            .parent()
-                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let saved_path_text = path.display().to_string();
-                        let output_hint_text = ImageGenerationInstructions::new(
-                            image_output_dir.display(),
-                            saved_path_text,
-                        )
-                        .body();
                         image_item.saved_path = Some(path);
-                        if let ResponseItem::ImageGenerationCall { output_hint, .. } =
-                            &mut modified_item
-                        {
-                            *output_hint = Some(output_hint_text);
-                        }
                     }
                     Err(err) => {
                         let output_path = image_generation_artifact_path(
@@ -430,7 +415,7 @@ pub(crate) async fn handle_non_tool_response_item(
                     }
                 }
             }
-            Some((turn_item, modified_item))
+            Some(turn_item)
         }
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
@@ -440,6 +425,31 @@ pub(crate) async fn handle_non_tool_response_item(
         }
         _ => None,
     }
+}
+
+fn item_for_completed_history(
+    item: &ResponseItem,
+    turn_item: &TurnItem,
+    turn_context: &TurnContext,
+) -> ResponseItem {
+    let mut item_for_history = item.clone();
+
+    if let (
+        ResponseItem::ImageGenerationCall { output_hint, .. },
+        TurnItem::ImageGeneration(image_item),
+    ) = (&mut item_for_history, turn_item)
+        && let Some(saved_path) = image_item.saved_path.as_ref()
+    {
+        let image_output_dir = saved_path
+            .parent()
+            .unwrap_or_else(|| turn_context.config.codex_home.clone());
+        *output_hint = Some(
+            ImageGenerationInstructions::new(image_output_dir.display(), saved_path.display())
+                .body(),
+        );
+    }
+
+    item_for_history
 }
 
 pub(crate) fn last_assistant_message_from_item(
