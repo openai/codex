@@ -7,6 +7,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadStartContributor;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
 
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
@@ -42,6 +43,7 @@ struct GitAttributionConfig {
 impl ThreadStartContributor<Config> for GitAttributionExtension {
     fn contribute(
         &self,
+        _thread_id: ThreadId,
         config: &Config,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,

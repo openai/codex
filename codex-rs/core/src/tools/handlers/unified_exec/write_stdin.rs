@@ -45,10 +45,6 @@ impl ToolHandler for WriteStdinHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,

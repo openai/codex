@@ -1,5 +1,6 @@
 use std::future::Future;
 
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_tool_api::ToolBundle;
 
@@ -10,10 +11,16 @@ mod prompt;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 
-/// Contributor that receives host-owned thread-start input before later
-/// contributors read from extension stores.
+/// Contributor that receives the live thread id and host-owned thread-start
+/// input before later contributors read from extension stores.
 pub trait ThreadStartContributor<C>: Send + Sync {
-    fn contribute(&self, input: &C, session_store: &ExtensionData, thread_store: &ExtensionData);
+    fn contribute(
+        &self,
+        thread_id: ThreadId,
+        input: &C,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+    );
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
