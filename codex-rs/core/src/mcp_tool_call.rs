@@ -192,12 +192,6 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
-    let request_meta = build_mcp_tool_call_request_meta(
-        turn_context.as_ref(),
-        &server,
-        &call_id,
-        metadata.as_ref(),
-    );
     let connector_id = metadata
         .as_ref()
         .and_then(|metadata| metadata.connector_id.clone());
@@ -235,7 +229,6 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     metadata.as_ref(),
-                    request_meta,
                     mcp_app_resource_uri,
                 )
                 .await;
@@ -303,7 +296,6 @@ pub(crate) async fn handle_mcp_tool_call(
         &call_id,
         invocation,
         metadata.as_ref(),
-        request_meta,
         mcp_app_resource_uri,
     )
     .await
@@ -320,7 +312,6 @@ async fn handle_approved_mcp_tool_call(
     call_id: &str,
     invocation: McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-    request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
 ) -> HandledMcpToolCall {
     let server = invocation.server.clone();
@@ -353,6 +344,8 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
+        let request_meta =
+            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
         let result = execute_mcp_tool_call(
             sess,
             turn_context,

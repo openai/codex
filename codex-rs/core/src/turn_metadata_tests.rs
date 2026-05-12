@@ -214,6 +214,56 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
 }
 
 #[test]
+fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_request_meta() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert!(meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY).is_none());
+
+    state.mark_user_input_requested_during_turn();
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert_eq!(
+        meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
