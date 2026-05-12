@@ -151,14 +151,13 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin \
 - Add `policy.products` only when the user explicitly asks for that override.
 - Keep marketplace `source.path` relative to the selected marketplace root as `./plugins/<plugin-name>`.
 - When the workflow created or updated a marketplace-backed plugin, end the final user-facing
-  response with this Codex app handoff block, in this order, and do not add any text after the links.
-  First write the standalone line `To view this in the Codex app:`. Then write:
-  - `[View <normalized plugin name>](codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>)`
-  - `[Share <normalized plugin name>](codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>&mode=share)`
-- Replace the normalized plugin-name placeholder in both the Markdown label and the deeplink path
-  segment with the real normalized plugin name. Replace the marketplace path placeholder with the
-  real absolute `marketplace.json` path from the scaffolded plugin. URL-encode the path segment and
-  query value when needed.
+  response with a short Codex app handoff. Say `To view this in the Codex app:` and write
+  `View <normalized plugin name>` and `Share <normalized plugin name>` as Markdown links, not raw
+  URLs or code spans.
+- The View deeplink uses `codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>`.
+  The Share deeplink uses the same URL with `&mode=share`.
+- Replace the placeholders with the real normalized plugin name and absolute `marketplace.json`
+  path from the scaffolded plugin. URL-encode the path segment and query value when needed.
 - Do not add `pluginName` or `hostId` query parameters to these deeplinks. Codex derives both after
   the user clicks the link.
 - Do not emit the `View <normalized plugin name>` or `Share <normalized plugin name>` links when no marketplace entry was
