@@ -14,6 +14,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
@@ -26,75 +27,162 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         return Ok(arguments_value);
     };
 
-    let Some(arguments_value) = arguments_value else {
-        return Ok(None);
-    };
-    let Some(arguments) = arguments_value.as_object() else {
-        return Ok(Some(arguments_value));
-    };
     let auth = sess.services.auth_manager.auth().await;
-    let mut rewritten_arguments = arguments.clone();
-
-    for field_name in openai_file_input_params {
-        let Some(value) = arguments.get(field_name) else {
-            continue;
-        };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
-        else {
-            continue;
-        };
-        rewritten_arguments.insert(field_name.clone(), uploaded_value);
-    }
-
-    if rewritten_arguments == *arguments {
-        return Ok(Some(arguments_value));
-    }
-
-    Ok(Some(JsonValue::Object(rewritten_arguments)))
+    OpenAiFileBroker::new(turn_context, auth.as_ref())
+        .rewrite_tool_arguments(arguments_value, openai_file_input_params)
+        .await
 }
 
+struct OpenAiFileBroker<'a> {
+    turn_context: &'a TurnContext,
+    auth: Option<&'a CodexAuth>,
+}
+
+impl<'a> OpenAiFileBroker<'a> {
+    fn new(turn_context: &'a TurnContext, auth: Option<&'a CodexAuth>) -> Self {
+        Self { turn_context, auth }
+    }
+
+    async fn rewrite_tool_arguments(
+        &self,
+        arguments_value: Option<JsonValue>,
+        openai_file_input_params: &[String],
+    ) -> Result<Option<JsonValue>, String> {
+        let Some(arguments_value) = arguments_value else {
+            return Ok(None);
+        };
+        let Some(arguments) = arguments_value.as_object() else {
+            return Ok(Some(arguments_value));
+        };
+        let mut rewritten_arguments = arguments.clone();
+
+        for field_name in openai_file_input_params {
+            let Some(value) = arguments.get(field_name) else {
+                continue;
+            };
+            let Some(uploaded_value) = self.rewrite_argument_value(field_name, value).await? else {
+                continue;
+            };
+            rewritten_arguments.insert(field_name.clone(), uploaded_value);
+        }
+
+        if rewritten_arguments == *arguments {
+            return Ok(Some(arguments_value));
+        }
+
+        Ok(Some(JsonValue::Object(rewritten_arguments)))
+    }
+
+    async fn rewrite_argument_value(
+        &self,
+        field_name: &str,
+        value: &JsonValue,
+    ) -> Result<Option<JsonValue>, String> {
+        match value {
+            JsonValue::String(path_or_file_ref) => {
+                let rewritten = self
+                    .build_uploaded_argument_value(
+                        field_name,
+                        /*index*/ None,
+                        path_or_file_ref,
+                    )
+                    .await?;
+                Ok(Some(rewritten))
+            }
+            JsonValue::Array(values) => {
+                let mut rewritten_values = Vec::with_capacity(values.len());
+                for (index, item) in values.iter().enumerate() {
+                    let Some(path_or_file_ref) = item.as_str() else {
+                        return Ok(None);
+                    };
+                    let rewritten = self
+                        .build_uploaded_argument_value(field_name, Some(index), path_or_file_ref)
+                        .await?;
+                    rewritten_values.push(rewritten);
+                }
+                Ok(Some(JsonValue::Array(rewritten_values)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn build_uploaded_argument_value(
+        &self,
+        field_name: &str,
+        index: Option<usize>,
+        file_path: &str,
+    ) -> Result<JsonValue, String> {
+        let file_input = FileBrokerInput::local_path(self.turn_context, file_path);
+        let Some(auth) = self.auth else {
+            return Err(
+                "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
+            );
+        };
+        if !auth.uses_codex_backend() {
+            return Err(
+                "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
+            );
+        }
+        let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
+        let uploaded = upload_local_file(
+            self.turn_context
+                .config
+                .chatgpt_base_url
+                .trim_end_matches('/'),
+            upload_auth.as_ref(),
+            &file_input.resolved_path,
+        )
+        .await
+        .map_err(|error| match index {
+            Some(index) => {
+                format!(
+                    "failed to upload `{}` for `{field_name}[{index}]`: {error}",
+                    file_input.original
+                )
+            }
+            None => format!(
+                "failed to upload `{}` for `{field_name}`: {error}",
+                file_input.original
+            ),
+        })?;
+        Ok(serde_json::json!({
+            "download_url": uploaded.download_url,
+            "file_id": uploaded.file_id,
+            "mime_type": uploaded.mime_type,
+            "file_name": uploaded.file_name,
+            "uri": uploaded.uri,
+            "file_size_bytes": uploaded.file_size_bytes,
+        }))
+    }
+}
+
+struct FileBrokerInput<'a> {
+    original: &'a str,
+    resolved_path: AbsolutePathBuf,
+}
+
+impl<'a> FileBrokerInput<'a> {
+    fn local_path(turn_context: &TurnContext, path: &'a str) -> Self {
+        Self {
+            original: path,
+            resolved_path: turn_context.resolve_path(Some(path.to_string())),
+        }
+    }
+}
+
+#[cfg(test)]
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
 ) -> Result<Option<JsonValue>, String> {
-    match value {
-        JsonValue::String(path_or_file_ref) => {
-            let rewritten = build_uploaded_local_argument_value(
-                turn_context,
-                auth,
-                field_name,
-                /*index*/ None,
-                path_or_file_ref,
-            )
-            .await?;
-            Ok(Some(rewritten))
-        }
-        JsonValue::Array(values) => {
-            let mut rewritten_values = Vec::with_capacity(values.len());
-            for (index, item) in values.iter().enumerate() {
-                let Some(path_or_file_ref) = item.as_str() else {
-                    return Ok(None);
-                };
-                let rewritten = build_uploaded_local_argument_value(
-                    turn_context,
-                    auth,
-                    field_name,
-                    Some(index),
-                    path_or_file_ref,
-                )
-                .await?;
-                rewritten_values.push(rewritten);
-            }
-            Ok(Some(JsonValue::Array(rewritten_values)))
-        }
-        _ => Ok(None),
-    }
+    OpenAiFileBroker::new(turn_context, auth)
+        .rewrite_argument_value(field_name, value)
+        .await
 }
 
+#[cfg(test)]
 async fn build_uploaded_local_argument_value(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
@@ -102,38 +190,9 @@ async fn build_uploaded_local_argument_value(
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
-    let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
-    let Some(auth) = auth else {
-        return Err(
-            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
-        );
-    };
-    if !auth.uses_codex_backend() {
-        return Err(
-            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
-        );
-    }
-    let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
-    let uploaded = upload_local_file(
-        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        upload_auth.as_ref(),
-        &resolved_path,
-    )
-    .await
-    .map_err(|error| match index {
-        Some(index) => {
-            format!("failed to upload `{file_path}` for `{field_name}[{index}]`: {error}")
-        }
-        None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
-    })?;
-    Ok(serde_json::json!({
-        "download_url": uploaded.download_url,
-        "file_id": uploaded.file_id,
-        "mime_type": uploaded.mime_type,
-        "file_name": uploaded.file_name,
-        "uri": uploaded.uri,
-        "file_size_bytes": uploaded.file_size_bytes,
-    }))
+    OpenAiFileBroker::new(turn_context, auth)
+        .build_uploaded_argument_value(field_name, index, file_path)
+        .await
 }
 
 #[cfg(test)]
