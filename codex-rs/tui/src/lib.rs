@@ -29,6 +29,7 @@ use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -54,6 +55,7 @@ use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::WorktreeDirtyCliArg;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
@@ -62,6 +64,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 pub use token_usage::TokenUsage;
 use tracing::Level;
 use tracing::error;
@@ -72,6 +75,9 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+use workspace_command::AppServerWorkspaceCommandRunner;
+use workspace_command::WorkspaceCommand;
+use workspace_command::WorkspaceCommandExecutor;
 
 pub(crate) use codex_app_server_client::legacy_core;
 
@@ -180,6 +186,8 @@ mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
+mod worktree;
+mod worktree_labels;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;
 mod update_prompt;
@@ -706,6 +714,77 @@ fn latest_session_cwd_filter<'a>(
     }
 }
 
+async fn resolve_remote_startup_worktree(
+    cli: &mut Cli,
+    app_server: &mut AppServerSession,
+    remote_cwd_override: &mut Option<PathBuf>,
+) -> color_eyre::Result<()> {
+    let Some(branch) = cli.worktree.take() else {
+        return Ok(());
+    };
+
+    let mut command = WorkspaceCommand::codex_self([
+        "worktree".to_string(),
+        "__internal".to_string(),
+        "create".to_string(),
+        branch,
+        "--dirty".to_string(),
+        worktree_dirty_policy_arg(cli.worktree_dirty).to_string(),
+    ])
+    .disable_output_cap()
+    .sandbox_policy(SandboxPolicy::DangerFullAccess)
+    .timeout(Duration::from_secs(/*secs*/ 120));
+    if let Some(base_ref) = cli.worktree_base.take() {
+        command.argv.push("--base".to_string());
+        command.argv.push(base_ref);
+    }
+    if let Some(cwd) = remote_cwd_override.clone() {
+        command = command.cwd(cwd);
+    }
+
+    let runner = AppServerWorkspaceCommandRunner::new(app_server.request_handle());
+    let output = runner
+        .run(command)
+        .await
+        .map_err(|err| color_eyre::eyre::eyre!("failed to run remote worktree helper: {err}"))?;
+    if !output.success() {
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout.trim()
+        } else {
+            output.stderr.trim()
+        };
+        if detail.is_empty() {
+            color_eyre::eyre::bail!(
+                "remote worktree helper failed with exit code {}",
+                output.exit_code
+            );
+        }
+        color_eyre::eyre::bail!("{detail}");
+    }
+
+    let resolution: codex_worktree::WorktreeResolution = serde_json::from_str(output.stdout.trim())
+        .wrap_err("failed to parse remote worktree helper output")?;
+    let workspace_cwd = resolution.info.workspace_cwd;
+    *remote_cwd_override = Some(workspace_cwd.clone());
+    app_server.set_remote_cwd_override(Some(workspace_cwd.clone()));
+    cli.cwd = Some(workspace_cwd);
+    for warning in resolution.warnings {
+        tracing::warn!(message = %warning.message, "remote worktree startup warning");
+    }
+    Ok(())
+}
+
+fn worktree_dirty_policy_arg(arg: WorktreeDirtyCliArg) -> &'static str {
+    match arg {
+        WorktreeDirtyCliArg::Fail => "fail",
+        WorktreeDirtyCliArg::Ignore => "ignore",
+        WorktreeDirtyCliArg::CopyTracked => "copy-tracked",
+        WorktreeDirtyCliArg::CopyAll => "copy-all",
+        WorktreeDirtyCliArg::MoveTracked => "move-tracked",
+        WorktreeDirtyCliArg::MoveAll => "move-all",
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1099,11 +1178,11 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     app_server_target: AppServerTarget,
-    remote_cwd_override: Option<PathBuf>,
+    mut remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -1184,6 +1263,14 @@ async fn run_ratatui_app(
             }
         },
     );
+
+    if remote_mode {
+        let Some(startup_app_server) = app_server.as_mut() else {
+            unreachable!("app server should be initialized for remote --worktree");
+        };
+        resolve_remote_startup_worktree(&mut cli, startup_app_server, &mut remote_cwd_override)
+            .await?;
+    }
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;

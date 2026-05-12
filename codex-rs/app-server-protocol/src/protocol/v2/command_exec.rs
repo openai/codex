@@ -31,6 +31,12 @@ pub struct CommandExecTerminalSize {
 pub struct CommandExecParams {
     /// Command argv vector. Empty arrays are rejected.
     pub command: Vec<String>,
+    /// Replace argv[0] with the app-server's own Codex executable.
+    ///
+    /// This is for internal helper commands that must run on the same machine
+    /// as the app-server while still using the generic command execution path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_codex_self_exe: bool,
     /// Optional client-supplied, connection-scoped process id.
     ///
     /// Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up

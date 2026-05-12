@@ -16,6 +16,12 @@ export type CommandExecParams = {/**
  * Command argv vector. Empty arrays are rejected.
  */
 command: Array<string>, /**
+ * Replace argv[0] with the app-server's own Codex executable.
+ *
+ * This is for internal helper commands that must run on the same machine
+ * as the app-server while still using the generic command execution path.
+ */
+useCodexSelfExe?: boolean, /**
  * Optional client-supplied, connection-scoped process id.
  *
  * Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up

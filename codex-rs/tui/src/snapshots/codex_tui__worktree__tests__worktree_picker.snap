@@ -1,0 +1,15 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(params, 86)"
+---
+
+  Worktrees
+  Create a worktree or fork this chat into an existing workspace.
+
+  Search worktrees
+  New worktree...        Create a sibling worktree and start this chat there.
+› fcoury/demo (current)  Already in this worktree
+  codex                  clean · app · /repo/codex.codex
+  main                   dirty · git · /repo/codex.main
+
+  Press enter to confirm or esc to go back

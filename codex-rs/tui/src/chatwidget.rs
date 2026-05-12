@@ -5166,6 +5166,30 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_bottom_pane_view(
+        &mut self,
+        view: Box<dyn crate::bottom_pane::BottomPaneView>,
+    ) {
+        self.bottom_pane.show_view(view);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
+    }
+
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_active(view_id, params);
+        if replaced {
+            self.refresh_plan_mode_nudge();
+            self.request_redraw();
+        }
+        replaced
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }

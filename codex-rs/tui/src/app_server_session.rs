@@ -119,6 +119,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -166,6 +167,7 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
@@ -187,6 +189,10 @@ impl AppServerSession {
 
     pub(crate) fn remote_cwd_override(&self) -> Option<&std::path::Path> {
         self.remote_cwd_override.as_deref()
+    }
+
+    pub(crate) fn set_remote_cwd_override(&mut self, remote_cwd_override: Option<PathBuf>) {
+        self.remote_cwd_override = remote_cwd_override;
     }
 
     pub(crate) fn is_remote(&self) -> bool {
@@ -966,6 +972,101 @@ impl AppServerSession {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
+    }
+}
+
+pub(crate) async fn start_thread_with_request_handle(
+    request_handle: AppServerRequestHandle,
+    config: Config,
+    remote_cwd_override: Option<PathBuf>,
+) -> Result<AppServerStartedThread> {
+    let thread_params_mode = thread_params_mode_from_request_handle(&request_handle);
+    let response: ThreadStartResponse = request_handle
+        .request_typed(ClientRequest::ThreadStart {
+            request_id: worktree_request_id("worktree-thread-start"),
+            params: thread_start_params_from_config(
+                &config,
+                thread_params_mode,
+                remote_cwd_override.as_deref(),
+                /*session_start_source*/ None,
+            ),
+        })
+        .await
+        .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;
+    started_thread_from_start_response(response, &config, thread_params_mode).await
+}
+
+pub(crate) async fn fork_thread_with_request_handle(
+    request_handle: AppServerRequestHandle,
+    config: Config,
+    thread_id: ThreadId,
+    remote_cwd_override: Option<PathBuf>,
+) -> Result<AppServerStartedThread> {
+    let thread_params_mode = thread_params_mode_from_request_handle(&request_handle);
+    let response: ThreadForkResponse = request_handle
+        .request_typed(ClientRequest::ThreadFork {
+            request_id: worktree_request_id("worktree-thread-fork"),
+            params: thread_fork_params_from_config(
+                config.clone(),
+                thread_id,
+                thread_params_mode,
+                remote_cwd_override.as_deref(),
+            ),
+        })
+        .await
+        .map_err(|err| bootstrap_request_error("thread/fork failed during TUI bootstrap", err))?;
+    let fork_parent_title = fork_parent_title_from_request_handle(
+        &request_handle,
+        response.thread.forked_from_id.as_deref(),
+    )
+    .await;
+    let mut started =
+        started_thread_from_fork_response(response, &config, thread_params_mode).await?;
+    started.session.fork_parent_title = fork_parent_title;
+    Ok(started)
+}
+
+fn worktree_request_id(prefix: &str) -> RequestId {
+    RequestId::String(format!("{prefix}-{}", Uuid::new_v4()))
+}
+
+fn thread_params_mode_from_request_handle(
+    request_handle: &AppServerRequestHandle,
+) -> ThreadParamsMode {
+    match request_handle {
+        AppServerRequestHandle::InProcess(_) => ThreadParamsMode::Embedded,
+        AppServerRequestHandle::Remote(_) => ThreadParamsMode::Remote,
+    }
+}
+
+async fn fork_parent_title_from_request_handle(
+    request_handle: &AppServerRequestHandle,
+    forked_from_id: Option<&str>,
+) -> Option<String> {
+    let forked_from_id = forked_from_id?;
+    let forked_from_id = match ThreadId::from_string(forked_from_id) {
+        Ok(thread_id) => thread_id,
+        Err(err) => {
+            tracing::warn!("Failed to parse fork parent thread id from app server: {err}");
+            return None;
+        }
+    };
+
+    match request_handle
+        .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+            request_id: worktree_request_id("worktree-thread-read"),
+            params: ThreadReadParams {
+                thread_id: forked_from_id.to_string(),
+                include_turns: false,
+            },
+        })
+        .await
+    {
+        Ok(thread) => thread.thread.name,
+        Err(err) => {
+            tracing::warn!("Failed to read fork parent metadata from app server: {err}");
+            None
+        }
     }
 }
 

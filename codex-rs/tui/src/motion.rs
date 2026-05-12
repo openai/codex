@@ -3,12 +3,17 @@
 //! Callers choose an explicit reduced-motion fallback here instead of reaching
 //! directly for time-varying spinner or shimmer helpers.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
 use crate::shimmer::shimmer_spans;
+
+const ACTIVITY_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub(crate) const ACTIVITY_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MotionMode {
@@ -57,6 +62,12 @@ pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'sta
             }
         }
     }
+}
+
+pub(crate) fn activity_spinner_frame_at(origin: Instant, now: Instant) -> &'static str {
+    let elapsed = now.saturating_duration_since(origin);
+    let frame_index = (elapsed.as_millis() / ACTIVITY_SPINNER_INTERVAL.as_millis()) as usize;
+    ACTIVITY_SPINNER_FRAMES[frame_index % ACTIVITY_SPINNER_FRAMES.len()]
 }
 
 fn animated_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
@@ -114,6 +125,24 @@ mod tests {
         assert_eq!(
             shimmer_text("", MotionMode::Reduced),
             Vec::<Span<'static>>::new()
+        );
+    }
+
+    #[test]
+    fn activity_spinner_frame_advances_and_wraps() {
+        let origin = Instant::now();
+
+        assert_eq!(activity_spinner_frame_at(origin, origin), "⠋");
+        assert_eq!(
+            activity_spinner_frame_at(origin, origin + ACTIVITY_SPINNER_INTERVAL),
+            "⠙"
+        );
+        assert_eq!(
+            activity_spinner_frame_at(
+                origin,
+                origin + ACTIVITY_SPINNER_INTERVAL * ACTIVITY_SPINNER_FRAMES.len() as u32,
+            ),
+            "⠋"
         );
     }
 

@@ -2227,6 +2227,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codex-app-server",
+ "codex-app-server-client",
  "codex-app-server-daemon",
  "codex-app-server-protocol",
  "codex-app-server-test-client",
@@ -2259,11 +2260,13 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "codex-worktree",
  "libc",
  "owo-colors",
  "predicates",
  "pretty_assertions",
  "regex-lite",
+ "serde",
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
@@ -3753,6 +3756,7 @@ dependencies = [
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
  "codex-windows-sandbox",
+ "codex-worktree",
  "color-eyre",
  "cpal",
  "crossterm",
@@ -4059,6 +4063,19 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "winres",
+]
+
+[[package]]
+name = "codex-worktree"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

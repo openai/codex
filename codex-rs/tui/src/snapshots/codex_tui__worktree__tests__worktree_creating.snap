@@ -1,0 +1,13 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(creating_params(\"fcoury/demo\".to_string(),\nFrameRequester::test_dummy(), false), 92)"
+---
+
+  Worktrees
+  • Creating fcoury/demo...
+  Codex is creating the worktree before starting the chat in that workspace.
+
+›    Preparing worktree...  Codex is creating the worktree before starting the chat in
+                            that workspace.
+
+  Press enter to confirm or esc to go back

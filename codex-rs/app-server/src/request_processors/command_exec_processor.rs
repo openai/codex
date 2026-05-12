@@ -94,7 +94,8 @@ impl CommandExecRequestProcessor {
         }
 
         let CommandExecParams {
-            command,
+            mut command,
+            use_codex_self_exe,
             process_id,
             tty,
             stream_stdin,
@@ -113,6 +114,13 @@ impl CommandExecRequestProcessor {
             return Err(invalid_request(
                 "`permissionProfile` cannot be combined with `sandboxPolicy`",
             ));
+        }
+
+        if use_codex_self_exe {
+            let codex_self_exe = self.arg0_paths.codex_self_exe.as_ref().ok_or_else(|| {
+                internal_error("app-server does not know its Codex executable path")
+            })?;
+            command[0] = codex_self_exe.to_string_lossy().into_owned();
         }
 
         if size.is_some() && !tty {

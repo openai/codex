@@ -1601,6 +1601,7 @@ mod tests {
             request_id: request_id(),
             params: v2::CommandExecParams {
                 command: vec!["sleep".to_string(), "10".to_string()],
+                use_codex_self_exe: false,
                 process_id: Some("proc-1".to_string()),
                 tty: false,
                 stream_stdin: false,
@@ -1842,6 +1843,7 @@ mod tests {
             request_id: request_id(),
             params: v2::CommandExecParams {
                 command: vec!["true".to_string()],
+                use_codex_self_exe: false,
                 process_id: None,
                 tty: false,
                 stream_stdin: false,
@@ -2911,6 +2913,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::CommandExecParams {
                 command: vec!["pwd".to_string()],
+                use_codex_self_exe: false,
                 process_id: None,
                 tty: false,
                 stream_stdin: false,

@@ -22,6 +22,7 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
+codex-app-server-client = { workspace = true }
 codex-app-server-daemon = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
@@ -50,11 +51,13 @@ codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
+codex-worktree = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }

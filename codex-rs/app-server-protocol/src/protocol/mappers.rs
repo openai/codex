@@ -4,6 +4,7 @@ impl From<v1::ExecOneOffCommandParams> for v2::CommandExecParams {
     fn from(value: v1::ExecOneOffCommandParams) -> Self {
         Self {
             command: value.command,
+            use_codex_self_exe: false,
             process_id: None,
             tty: false,
             stream_stdin: false,

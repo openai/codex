@@ -201,6 +201,7 @@ mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
+mod worktree;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -869,6 +870,9 @@ impl App {
             }
         };
         if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
+        if let Some(message) = managed_worktree_startup_message(&config) {
             chat_widget.add_info_message(message, /*hint*/ None);
         }
 

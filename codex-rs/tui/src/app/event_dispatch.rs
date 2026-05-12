@@ -187,6 +187,67 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenWorktreePicker => {
+                self.open_worktree_picker(tui, app_server);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreesLoaded { cwd, result } => {
+                self.on_worktrees_loaded(cwd, result);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreeCreatePrompt => {
+                self.open_worktree_create_prompt();
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CreateWorktreeAndSwitch {
+                branch,
+                base_ref,
+                dirty_policy,
+            } => {
+                self.create_worktree_and_switch(tui, app_server, branch, base_ref, dirty_policy)
+                    .await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeCreated { cwd, result } => {
+                self.on_worktree_created(tui, app_server, cwd, result).await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SwitchToWorktree { target } => {
+                self.begin_switch_to_worktree_target(tui, app_server, target)
+                    .await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SwitchToWorktreeInfo { info } => {
+                self.begin_switch_to_worktree_info(tui, info);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CurrentWorktreeSelected { target } => {
+                self.current_worktree_selected(target);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SwitchToWorktreeAfterLoading { info } => {
+                self.switch_to_worktree_info_after_loading(tui, app_server, info)
+                    .await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeSessionReady(event) => {
+                self.on_worktree_session_ready(tui, app_server, event).await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ShowWorktreePath { target } => {
+                self.show_worktree_path(app_server, target).await;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::RemoveWorktree {
+                target,
+                force,
+                delete_branch,
+                confirmed,
+            } => {
+                self.remove_worktree(app_server, target, force, delete_branch, confirmed)
+                    .await;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();
             }

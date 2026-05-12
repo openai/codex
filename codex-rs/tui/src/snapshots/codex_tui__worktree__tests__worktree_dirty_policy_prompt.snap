@@ -1,0 +1,14 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(dirty_policy_prompt_params(\"fcoury/demo\".to_string(), None),\n82)"
+---
+
+  Source checkout has pending changes
+  Move them to the new worktree or leave them here.
+
+› 1. Move changes        Move tracked changes and untracked files; leave the
+                         source checkout clean.
+  2. Leave changes here  Create the worktree and keep pending changes in this
+                         checkout.
+
+  Press enter to confirm or esc to go back

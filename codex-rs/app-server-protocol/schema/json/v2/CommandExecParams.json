@@ -553,6 +553,10 @@
     "tty": {
       "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
       "type": "boolean"
+    },
+    "useCodexSelfExe": {
+      "description": "Replace argv[0] with the app-server's own Codex executable.\n\nThis is for internal helper commands that must run on the same machine as the app-server while still using the generic command execution path.",
+      "type": "boolean"
     }
   },
   "required": [

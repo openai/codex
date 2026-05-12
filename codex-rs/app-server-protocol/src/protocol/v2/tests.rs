@@ -858,6 +858,7 @@ fn command_exec_params_default_optional_streaming_flags() {
         params,
         CommandExecParams {
             command: vec!["ls".to_string(), "-la".to_string()],
+            use_codex_self_exe: false,
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -879,6 +880,7 @@ fn command_exec_params_default_optional_streaming_flags() {
 fn command_exec_params_round_trips_disable_timeout() {
     let params = CommandExecParams {
         command: vec!["sleep".to_string(), "30".to_string()],
+        use_codex_self_exe: false,
         process_id: Some("sleep-1".to_string()),
         tty: false,
         stream_stdin: false,
@@ -1011,6 +1013,7 @@ fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
 fn command_exec_params_round_trips_disable_output_cap() {
     let params = CommandExecParams {
         command: vec!["yes".to_string()],
+        use_codex_self_exe: false,
         process_id: Some("yes-1".to_string()),
         tty: false,
         stream_stdin: false,
@@ -1053,6 +1056,7 @@ fn command_exec_params_round_trips_disable_output_cap() {
 fn command_exec_params_round_trips_env_overrides_and_unsets() {
     let params = CommandExecParams {
         command: vec!["printenv".to_string(), "FOO".to_string()],
+        use_codex_self_exe: false,
         process_id: Some("env-1".to_string()),
         tty: false,
         stream_stdin: false,
@@ -1143,6 +1147,7 @@ fn command_exec_terminate_round_trips() {
 fn command_exec_params_round_trip_with_size() {
     let params = CommandExecParams {
         command: vec!["top".to_string()],
+        use_codex_self_exe: false,
         process_id: Some("pty-1".to_string()),
         tty: true,
         stream_stdin: false,

@@ -171,6 +171,9 @@ impl ChatWidget {
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
+            SlashCommand::Worktree => {
+                self.app_event_tx.send(AppEvent::OpenWorktreePicker);
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
                 if init_target.exists() {
@@ -765,6 +768,13 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
             }
+            SlashCommand::Worktree if !trimmed.is_empty() => {
+                if let Err(message) =
+                    crate::worktree::dispatch_worktree_slash_args(trimmed, &self.app_event_tx)
+                {
+                    self.add_error_message(message);
+                }
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
@@ -930,6 +940,7 @@ impl ChatWidget {
             | SlashCommand::Clear
             | SlashCommand::Resume
             | SlashCommand::Fork
+            | SlashCommand::Worktree
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Review

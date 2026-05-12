@@ -31,12 +31,16 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use codex_worktree::DirtyPolicy;
+use codex_worktree::WorktreeInfo;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
+use crate::legacy_core::config::Config;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -67,6 +71,15 @@ pub(crate) struct HistoryLookupResponse {
     pub(crate) offset: usize,
     pub(crate) log_id: u64,
     pub(crate) entry: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorktreeSessionReadyEvent {
+    pub(crate) info: WorktreeInfo,
+    pub(crate) config: Config,
+    pub(crate) forked: bool,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) result: Result<AppServerStartedThread, String>,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -189,6 +202,67 @@ pub(crate) enum AppEvent {
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
+
+    /// Open the managed worktree picker.
+    OpenWorktreePicker,
+
+    /// Result of loading worktrees for the picker.
+    WorktreesLoaded {
+        cwd: PathBuf,
+        result: Result<Vec<WorktreeInfo>, String>,
+    },
+
+    /// Open the prompt for creating a managed worktree.
+    OpenWorktreeCreatePrompt,
+
+    /// Create or reuse a managed worktree and switch the TUI into it.
+    CreateWorktreeAndSwitch {
+        branch: String,
+        base_ref: Option<String>,
+        dirty_policy: Option<DirtyPolicy>,
+    },
+
+    /// Result of creating or reusing a managed worktree.
+    WorktreeCreated {
+        cwd: PathBuf,
+        result: Result<codex_worktree::WorktreeResolution, String>,
+    },
+
+    /// Switch the TUI into an existing worktree.
+    SwitchToWorktree {
+        target: String,
+    },
+
+    /// Switch the TUI into a picker-selected existing worktree.
+    SwitchToWorktreeInfo {
+        info: WorktreeInfo,
+    },
+
+    /// A picker row for the current worktree was selected.
+    CurrentWorktreeSelected {
+        target: String,
+    },
+
+    /// Continue switching into an existing worktree after the loading view has rendered.
+    SwitchToWorktreeAfterLoading {
+        info: WorktreeInfo,
+    },
+
+    /// Result of starting or forking a session in a worktree.
+    WorktreeSessionReady(WorktreeSessionReadyEvent),
+
+    /// Show the filesystem path for an existing worktree.
+    ShowWorktreePath {
+        target: String,
+    },
+
+    /// Remove a Codex-managed worktree.
+    RemoveWorktree {
+        target: String,
+        force: bool,
+        delete_branch: bool,
+        confirmed: bool,
+    },
 
     /// Request to exit the application.
     ///

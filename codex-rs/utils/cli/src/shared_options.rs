@@ -1,6 +1,7 @@
 //! Shared command-line flags used by both interactive and non-interactive Codex entry points.
 
 use crate::SandboxModeCliArg;
+use crate::WorktreeDirtyCliArg;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -51,6 +52,18 @@ pub struct SharedCliOptions {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Create or reuse a Codex-managed Git worktree for this branch and run from that workspace.
+    #[arg(long = "worktree", value_name = "BRANCH")]
+    pub worktree: Option<String>,
+
+    /// Base ref for a newly created managed worktree.
+    #[arg(long = "worktree-base", value_name = "REF")]
+    pub worktree_base: Option<String>,
+
+    /// How to handle uncommitted source checkout changes when creating a worktree.
+    #[arg(long = "worktree-dirty", value_enum, default_value_t = WorktreeDirtyCliArg::Fail)]
+    pub worktree_dirty: WorktreeDirtyCliArg,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
@@ -69,6 +82,9 @@ impl SharedCliOptions {
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
             cwd,
+            worktree,
+            worktree_base,
+            worktree_dirty,
             add_dir,
         } = self;
         let Self {
@@ -80,6 +96,9 @@ impl SharedCliOptions {
             sandbox_mode: root_sandbox_mode,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
             cwd: root_cwd,
+            worktree: root_worktree,
+            worktree_base: root_worktree_base,
+            worktree_dirty: root_worktree_dirty,
             add_dir: root_add_dir,
         } = root;
 
@@ -105,6 +124,15 @@ impl SharedCliOptions {
         if cwd.is_none() {
             cwd.clone_from(root_cwd);
         }
+        if worktree.is_none() {
+            worktree.clone_from(root_worktree);
+        }
+        if worktree_base.is_none() {
+            worktree_base.clone_from(root_worktree_base);
+        }
+        if *worktree_dirty == WorktreeDirtyCliArg::Fail {
+            *worktree_dirty = *root_worktree_dirty;
+        }
         if !root_images.is_empty() {
             let mut merged_images = root_images.clone();
             merged_images.append(images);
@@ -129,6 +157,9 @@ impl SharedCliOptions {
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
             cwd,
+            worktree,
+            worktree_base,
+            worktree_dirty,
             add_dir,
         } = subcommand;
 
@@ -151,6 +182,15 @@ impl SharedCliOptions {
         }
         if let Some(cwd) = cwd {
             self.cwd = Some(cwd);
+        }
+        if let Some(worktree) = worktree {
+            self.worktree = Some(worktree);
+        }
+        if let Some(worktree_base) = worktree_base {
+            self.worktree_base = Some(worktree_base);
+        }
+        if worktree_dirty != WorktreeDirtyCliArg::Fail {
+            self.worktree_dirty = worktree_dirty;
         }
         if !images.is_empty() {
             self.images = images;

@@ -22,6 +22,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use uuid::Uuid;
 
 /// Shared handle for running workspace commands from TUI components.
@@ -47,6 +48,10 @@ pub(crate) struct WorkspaceCommand {
     pub(crate) output_bytes_cap: usize,
     /// Whether app-server should return uncapped stdout/stderr.
     pub(crate) disable_output_cap: bool,
+    /// Optional sandbox override for this internal workspace command.
+    pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    /// Whether app-server should replace argv[0] with its own Codex executable.
+    pub(crate) use_codex_self_exe: bool,
 }
 
 impl WorkspaceCommand {
@@ -59,6 +64,18 @@ impl WorkspaceCommand {
             timeout: Duration::from_secs(/*secs*/ 5),
             output_bytes_cap: 64 * 1024,
             disable_output_cap: false,
+            sandbox_policy: None,
+            use_codex_self_exe: false,
+        }
+    }
+
+    /// Creates a command that runs the app-server's own Codex executable.
+    pub(crate) fn codex_self(args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut argv = vec!["codex".to_string()];
+        argv.extend(args.into_iter().map(Into::into));
+        Self {
+            use_codex_self_exe: true,
+            ..Self::new(argv)
         }
     }
 
@@ -83,6 +100,12 @@ impl WorkspaceCommand {
     /// Requests uncapped stdout/stderr capture from app-server.
     pub(crate) fn disable_output_cap(mut self) -> Self {
         self.disable_output_cap = true;
+        self
+    }
+
+    /// Overrides the session sandbox for this internal workspace command.
+    pub(crate) fn sandbox_policy(mut self, sandbox_policy: SandboxPolicy) -> Self {
+        self.sandbox_policy = Some(sandbox_policy);
         self
     }
 }
@@ -187,6 +210,7 @@ impl WorkspaceCommandExecutor for AppServerWorkspaceCommandRunner {
                     request_id: RequestId::String(format!("workspace-command-{}", Uuid::new_v4())),
                     params: CommandExecParams {
                         command: command.argv,
+                        use_codex_self_exe: command.use_codex_self_exe,
                         process_id: None,
                         tty: false,
                         stream_stdin: false,
@@ -199,7 +223,7 @@ impl WorkspaceCommandExecutor for AppServerWorkspaceCommandRunner {
                         cwd: command.cwd,
                         env,
                         size: None,
-                        sandbox_policy: None,
+                        sandbox_policy: command.sandbox_policy,
                         permission_profile: None,
                     },
                 })

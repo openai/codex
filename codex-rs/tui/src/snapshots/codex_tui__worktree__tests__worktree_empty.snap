@@ -1,0 +1,10 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(empty_params(), 84)"
+---
+
+  Worktrees
+
+› 1. New worktree...  Type the branch name for the new worktree.
+
+  Press enter to confirm or esc to go back

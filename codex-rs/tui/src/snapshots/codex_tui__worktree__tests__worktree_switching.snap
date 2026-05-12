@@ -1,0 +1,13 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(switching_params(\"fcoury/demo\".to_string(),\nFrameRequester::test_dummy(), false), 92)"
+---
+
+  Worktrees
+  • Switching to fcoury/demo...
+  Codex is rebuilding configuration and starting the chat in that workspace.
+
+›    Preparing worktree session...  Codex is rebuilding configuration and starting the
+                                    chat in that workspace.
+
+  Press enter to confirm or esc to go back

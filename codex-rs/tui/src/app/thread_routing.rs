@@ -1011,6 +1011,9 @@ impl App {
         turns: Vec<Turn>,
     ) -> Result<()> {
         let thread_id = session.thread_id;
+        let thread_id_string = thread_id.to_string();
+        self.bind_current_worktree_thread_best_effort(session.cwd.as_path(), &thread_id_string)
+            .await;
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());
         self.upsert_agent_picker_thread(

@@ -1,0 +1,12 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(remove_confirmation_params(\"fcoury/demo\".to_string(), false,\nfalse), 80)"
+---
+
+  Remove worktree fcoury/demo?
+  Only Codex-managed worktrees can be removed.
+
+› 1. Remove  Remove the selected worktree.
+  2. Cancel  Keep the worktree.
+
+  Press enter to confirm or esc to go back

@@ -23,6 +23,8 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use crate::worktree_labels::WorktreeLabel;
+use crate::worktree_labels::label_for_cwd;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
@@ -375,6 +377,7 @@ async fn run_resume_picker_with_launch_context(
             app_server,
             include_non_interactive,
             raw_reasoning_visibility(config),
+            (!is_remote).then(|| config.codex_home.to_path_buf()),
             bg_tx,
         ),
         bg_rx,
@@ -420,6 +423,7 @@ pub async fn run_fork_picker_with_app_server(
             app_server,
             /*include_non_interactive*/ false,
             raw_reasoning_visibility(config),
+            (!is_remote).then(|| config.codex_home.to_path_buf()),
             bg_tx,
         ),
         bg_rx,
@@ -540,6 +544,7 @@ fn spawn_app_server_page_loader(
     app_server: AppServerSession,
     include_non_interactive: bool,
     raw_reasoning_visibility: RawReasoningVisibility,
+    codex_home: Option<PathBuf>,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PickerLoader {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
@@ -557,6 +562,7 @@ fn spawn_app_server_page_loader(
                         request.provider_filter,
                         request.sort_key,
                         include_non_interactive,
+                        codex_home.as_deref(),
                     )
                     .await;
                     let _ = bg_tx.send(BackgroundEvent::Page {
@@ -725,6 +731,7 @@ async fn load_app_server_page(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    codex_home: Option<&Path>,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
         .thread_list(thread_list_params(
@@ -742,7 +749,7 @@ async fn load_app_server_page(
         rows: response
             .data
             .into_iter()
-            .filter_map(row_from_app_server_thread)
+            .filter_map(|thread| row_from_app_server_thread(thread, codex_home))
             .collect(),
         next_cursor: response.next_cursor.map(PageCursor::AppServer),
         num_scanned_files,
@@ -824,6 +831,7 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    worktree_label: Option<WorktreeLabel>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -842,6 +850,24 @@ impl Row {
 
     fn display_preview(&self) -> &str {
         self.thread_name.as_deref().unwrap_or(&self.preview)
+    }
+
+    fn display_branch(&self) -> Option<&str> {
+        self.worktree_label
+            .as_ref()
+            .and_then(|label| label.branch.as_deref())
+            .or(self.git_branch.as_deref())
+    }
+
+    fn display_cwd(&self) -> Option<String> {
+        let cwd = self
+            .cwd
+            .as_ref()
+            .map(|path| format_directory_display(path, /*max_width*/ None))?;
+        Some(match self.worktree_label.as_ref() {
+            Some(label) => format!("{} · {cwd}", label.summary()),
+            None => cwd,
+        })
     }
 
     fn matches_query(&self, query: &str) -> bool {
@@ -870,6 +896,16 @@ impl Row {
             .cwd
             .as_ref()
             .is_some_and(|cwd| cwd.to_string_lossy().to_lowercase().contains(query))
+        {
+            return true;
+        }
+        if let Some(label) = self.worktree_label.as_ref()
+            && (label.name.to_lowercase().contains(query)
+                || label.repo_name.to_lowercase().contains(query)
+                || label
+                    .branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.to_lowercase().contains(query)))
         {
             return true;
         }
@@ -1793,7 +1829,7 @@ impl PickerState {
     }
 }
 
-fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
+fn row_from_app_server_thread(thread: Thread, codex_home: Option<&Path>) -> Option<Row> {
     let thread_id = match ThreadId::from_string(&thread.id) {
         Ok(thread_id) => thread_id,
         Err(err) => {
@@ -1802,6 +1838,8 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
         }
     };
     let preview = thread.preview.trim();
+    let cwd = thread.cwd.to_path_buf();
+    let worktree_label = codex_home.and_then(|codex_home| label_for_cwd(codex_home, &cwd));
     Some(Row {
         path: thread.path,
         preview: if preview.is_empty() {
@@ -1815,8 +1853,9 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
-        cwd: Some(thread.cwd.to_path_buf()),
+        cwd: Some(cwd),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        worktree_label,
     })
 }
 
@@ -2571,11 +2610,8 @@ fn render_comfortable_session_lines(
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
-    let branch = row.git_branch.as_deref();
-    let cwd = row
-        .cwd
-        .as_ref()
-        .map(|path| format_directory_display(path, /*max_width*/ None));
+    let branch = row.display_branch();
+    let cwd = row.display_cwd();
     let footer_lines = render_footer_lines(
         state.sort_key,
         &created,
@@ -2973,12 +3009,10 @@ fn render_expanded_session_details(
         .map(|path| format_directory_display(path, /*max_width*/ None))
         .unwrap_or_else(|| "-".to_string());
     let branch = row
-        .git_branch
-        .as_ref()
+        .display_branch()
         .map(|branch| format!("{SESSION_META_BRANCH_ICON} {branch}"))
         .unwrap_or_else(|| format!("{SESSION_META_BRANCH_ICON} no branch"));
-
-    vec![
+    let mut details = vec![
         expanded_detail_line("Session:", &session, width),
         expanded_time_detail_line("Created:", reference, row.created_at, width),
         expanded_time_detail_line(
@@ -2987,11 +3021,17 @@ fn render_expanded_session_details(
             row.updated_at.or(row.created_at),
             width,
         ),
+    ];
+    if let Some(worktree) = row.worktree_label.as_ref().map(WorktreeLabel::summary) {
+        details.push(expanded_detail_line("Workspace:", &worktree, width));
+    }
+    details.extend([
         expanded_detail_line("Directory:", &directory, width),
         expanded_detail_line("Branch:", &branch, width),
         vec!["  │".dim()].into(),
         vec!["  │ ".dim(), "Conversation:".dim()].into(),
-    ]
+    ]);
+    details
 }
 
 fn render_conversation_preview_lines(
@@ -3263,6 +3303,7 @@ mod tests {
             updated_at: Some(timestamp),
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }
     }
 
@@ -3309,6 +3350,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -3349,11 +3391,43 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/tmp/codex-session-picker")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            worktree_label: None,
         };
 
         assert!(row.matches_query("session-picker"));
         assert!(row.matches_query("fcoury"));
         assert!(row.matches_query(&thread_id.to_string()[..8]));
+    }
+
+    #[test]
+    fn row_worktree_label_overrides_branch_and_prefixes_cwd() {
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: Some(ThreadId::new()),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: Some(PathBuf::from(
+                "/Users/felipe.coury/.codex/worktrees/abcd/parser-fix/codex",
+            )),
+            git_branch: Some(String::from("main")),
+            worktree_label: Some(WorktreeLabel {
+                name: String::from("parser-fix"),
+                branch: Some(String::from("parser-fix")),
+                repo_name: String::from("codex"),
+                dirty: false,
+            }),
+        };
+
+        assert_eq!(row.display_branch(), Some("parser-fix"));
+        assert!(
+            row.display_cwd()
+                .expect("cwd")
+                .starts_with("parser-fix · clean · codex · ")
+        );
+        assert!(row.matches_query("parser-fix"));
+        assert!(row.matches_query("codex"));
     }
 
     #[test]
@@ -3409,6 +3483,7 @@ mod tests {
             updated_at: parse_timestamp_str("2026-05-02T14:48:19Z"),
             cwd: Some(PathBuf::from("/Users/felipe.coury/code/codex")),
             git_branch: Some(String::from("codex/raw-scrollback-mode")),
+            worktree_label: None,
         };
 
         let rendered = render_expanded_session_details(&row, &state, /*width*/ 120)
@@ -3615,6 +3690,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/real-project")),
             git_branch: None,
+            worktree_label: None,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -3640,6 +3716,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            worktree_label: None,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -3671,6 +3748,7 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -3681,6 +3759,7 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -3691,6 +3770,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -4119,6 +4199,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
 
         state
@@ -4157,6 +4238,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
             Row {
                 path: None,
@@ -4167,6 +4249,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
         ];
         state.pending_transcript_open = Some(thread_id);
@@ -4236,6 +4319,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
             Row {
                 path: None,
@@ -4246,6 +4330,7 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             },
         ];
         state.update_viewport(/*rows*/ 7, /*width*/ 80);
@@ -4301,6 +4386,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
 
         state
@@ -4331,6 +4417,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
 
         state
@@ -4407,6 +4494,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
         state.transcript_cells.insert(
             thread_id,
@@ -4606,6 +4694,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
 
         state
@@ -4645,6 +4734,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         }];
 
         state
@@ -4723,6 +4813,7 @@ session_picker_view = "dense"
                 "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
             )),
             git_branch: Some(String::from("fcoury/session-picker")),
+            worktree_label: None,
         }
     }
 
@@ -4975,6 +5066,7 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            worktree_label: None,
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5044,6 +5136,7 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            worktree_label: None,
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5102,6 +5195,7 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -5154,6 +5248,7 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                worktree_label: None,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -5622,6 +5717,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -5661,6 +5757,7 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            worktree_label: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -5704,7 +5801,8 @@ session_picker_view = "dense"
             turns: Vec::new(),
         };
 
-        let row = row_from_app_server_thread(thread).expect("row should be preserved");
+        let row = row_from_app_server_thread(thread, /*codex_home*/ None)
+            .expect("row should be preserved");
 
         assert_eq!(row.path, None);
         assert_eq!(row.thread_id, Some(thread_id));

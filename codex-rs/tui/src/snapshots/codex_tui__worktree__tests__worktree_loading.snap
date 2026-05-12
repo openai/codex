@@ -1,0 +1,13 @@
+---
+source: tui/src/worktree.rs
+expression: "render_selection(loading_params(FrameRequester::test_dummy(), false), 92)"
+---
+
+  Worktrees
+  • Loading worktrees...
+  This can take a moment when Codex is checking app, CLI, and Git worktrees.
+
+›    Loading worktrees...  This can take a moment when Codex is checking app, CLI, and Git
+                           worktrees.
+
+  Press enter to confirm or esc to go back
