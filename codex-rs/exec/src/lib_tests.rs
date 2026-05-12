@@ -412,6 +412,7 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            default_permissions: Some(":workspace".to_string()),
             ..Default::default()
         })
         .fallback_cwd(Some(cwd.path().to_path_buf()))
@@ -456,7 +457,7 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
 }
 
 #[tokio::test]
-async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile() {
+async fn thread_lifecycle_params_handle_legacy_sandbox_when_no_active_profile() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
@@ -471,7 +472,11 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
         .expect("build config with legacy sandbox override");
 
     let start_params = thread_start_params_from_config(&config);
-    let resume_params = thread_resume_params_from_config(&config, "thread-id".to_string());
+    let resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*workspace_roots_explicit*/ false,
+    );
 
     assert_eq!(config.permissions.active_permission_profile(), None);
     assert_eq!(
@@ -479,11 +484,43 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
         Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
     );
     assert_eq!(start_params.permissions, None);
-    assert_eq!(
-        resume_params.sandbox,
-        Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
-    );
+    assert_eq!(resume_params.sandbox, None);
     assert_eq!(resume_params.permissions, None);
+    assert_eq!(resume_params.workspace_roots, None);
+}
+
+#[tokio::test]
+async fn thread_resume_params_include_workspace_roots_only_when_explicit() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let extra_root = test_path_buf("/tmp/exec-resume-extra-root");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            additional_writable_roots: vec![extra_root.clone()],
+            ..Default::default()
+        })
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with additional writable root");
+
+    let implicit_resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*workspace_roots_explicit*/ false,
+    );
+    let explicit_resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*workspace_roots_explicit*/ true,
+    );
+
+    assert_eq!(implicit_resume_params.workspace_roots, None);
+    assert_eq!(
+        explicit_resume_params.workspace_roots,
+        Some(config.workspace_roots)
+    );
 }
 
 #[tokio::test]
@@ -513,7 +550,7 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
 }
 
 #[tokio::test]
-async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+async fn session_configured_from_thread_response_uses_sandbox_projection() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
@@ -523,12 +560,99 @@ async fn session_configured_from_thread_response_uses_permission_profile_from_re
         .await
         .expect("build config");
     let mut response = sample_thread_start_response();
-    response.permission_profile = Some(PermissionProfile::Disabled.into());
+    response.sandbox = codex_app_server_protocol::SandboxPolicy::DangerFullAccess;
 
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
     assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_prefers_exact_permission_profile() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_start_response();
+    response.permission_profile = Some(codex_app_server_protocol::PermissionProfile::Disabled);
+    response.sandbox = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_resume_response_prefers_exact_permission_profile() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_resume_response();
+    response.permission_profile = Some(codex_app_server_protocol::PermissionProfile::Disabled);
+    response.sandbox = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    let event = session_configured_from_thread_resume_response(&response, &config)
+        .expect("build resumed session configured event");
+
+    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_uses_workspace_roots_from_response() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_start_response();
+    let extra_root = test_path_buf("/tmp/extra-root").abs();
+    response.workspace_roots = vec![response.cwd.clone(), extra_root.clone()];
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.workspace_roots, vec![response.cwd, extra_root]);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_preserves_empty_workspace_roots() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_resume_response();
+    response.workspace_roots = Vec::new();
+
+    let event = session_configured_from_thread_resume_response(&response, &config)
+        .expect("build resumed session configured event");
+
+    assert_eq!(event.workspace_roots, Vec::<AbsolutePathBuf>::new());
 }
 
 fn sample_thread_start_response() -> ThreadStartResponse {
@@ -558,11 +682,11 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
         approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -570,5 +694,24 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
+    }
+}
+
+fn sample_thread_resume_response() -> ThreadResumeResponse {
+    let start = sample_thread_start_response();
+    ThreadResumeResponse {
+        thread: start.thread,
+        model: start.model,
+        model_provider: start.model_provider,
+        service_tier: start.service_tier,
+        cwd: start.cwd,
+        workspace_roots: start.workspace_roots,
+        instruction_sources: start.instruction_sources,
+        approval_policy: start.approval_policy,
+        approvals_reviewer: start.approvals_reviewer,
+        sandbox: start.sandbox,
+        permission_profile: start.permission_profile,
+        active_permission_profile: start.active_permission_profile,
+        reasoning_effort: start.reasoning_effort,
     }
 }
