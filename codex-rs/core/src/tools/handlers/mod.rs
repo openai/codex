@@ -86,7 +86,7 @@ where
     })
 }
 
-pub(crate) fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
+fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
     updated_input
         .get("command")
         .and_then(Value::as_str)
@@ -97,7 +97,7 @@ pub(crate) fn updated_hook_command(updated_input: &Value) -> Result<&str, Functi
         })
 }
 
-pub(crate) fn rewrite_function_arguments(
+fn rewrite_function_arguments(
     arguments: &str,
     tool_name: &str,
     rewrite: impl FnOnce(&mut Map<String, Value>),
@@ -116,7 +116,7 @@ pub(crate) fn rewrite_function_arguments(
     })
 }
 
-pub(crate) fn rewrite_function_string_argument(
+fn rewrite_function_string_argument(
     arguments: &str,
     tool_name: &str,
     field_name: &str,

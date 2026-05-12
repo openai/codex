@@ -12,7 +12,6 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
@@ -186,6 +185,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
     };
     let (session, turn) = make_session_and_context().await;
     let handler = ExecCommandHandler::default();
+
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
@@ -197,7 +197,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
-        Some(PreToolUsePayload {
+        Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": "printf exec command" }),
         })
@@ -211,6 +211,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     };
     let (session, turn) = make_session_and_context().await;
     let handler = WriteStdinHandler;
+
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),

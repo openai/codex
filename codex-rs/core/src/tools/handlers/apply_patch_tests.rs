@@ -50,6 +50,7 @@ async fn pre_tool_use_payload_uses_freeform_patch_input() {
     };
     let invocation = invocation_for_payload(payload).await;
     let handler = ApplyPatchHandler::default();
+
     assert_eq!(
         handler.pre_tool_use_payload(&invocation),
         Some(PreToolUsePayload {
