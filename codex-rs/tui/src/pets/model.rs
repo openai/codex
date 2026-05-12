@@ -21,6 +21,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use serde::Deserialize;
+use sha2::Digest as _;
+use sha2::Sha256;
 
 use super::catalog;
 
@@ -95,6 +97,16 @@ impl Pet {
 
     pub fn frame_count(&self) -> usize {
         self.frame_count
+    }
+
+    pub(super) fn frame_cache_key(&self) -> Result<String> {
+        let bytes = fs::read(&self.spritesheet_path)
+            .with_context(|| format!("read {}", self.spritesheet_path.display()))?;
+        let digest = Sha256::digest(&bytes);
+        Ok(format!(
+            "sha256-{digest:x}-{}x{}-{}x{}",
+            self.frame_width, self.frame_height, self.columns, self.rows
+        ))
     }
 }
 
@@ -455,6 +467,12 @@ fn validate_animation_indices(
                 );
             }
         }
+        if !animations.contains_key(&animation.fallback) {
+            bail!(
+                "animation {name} fallback {} does not exist",
+                animation.fallback
+            );
+        }
     }
     Ok(())
 }
@@ -740,6 +758,53 @@ mod tests {
     }
 
     #[test]
+    fn frame_cache_key_changes_with_spritesheet_contents() {
+        let dir = write_minimal_pet();
+        let spritesheet_path = dir.path().join("spritesheet.webp");
+        let pet =
+            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+        let first_key = pet.frame_cache_key().unwrap();
+
+        let image = image::RgbaImage::from_pixel(
+            catalog::SPRITESHEET_WIDTH,
+            catalog::SPRITESHEET_HEIGHT,
+            image::Rgba([1, 2, 3, 255]),
+        );
+        image.save(&spritesheet_path).unwrap();
+        let pet =
+            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+
+        assert_ne!(pet.frame_cache_key().unwrap(), first_key);
+    }
+
+    #[test]
+    fn frame_cache_key_changes_with_frame_spec() {
+        let default_dir = write_minimal_pet();
+        let default_pet = Pet::load_with_codex_home(
+            default_dir.path().to_str().unwrap(),
+            /*codex_home*/ None,
+        )
+        .unwrap();
+        let custom_dir = write_pet_manifest(
+            r#"{
+                "displayName": "Tall",
+                "spritesheetPath": "spritesheet.webp",
+                "frame": { "width": 384, "height": 104, "columns": 4, "rows": 18 }
+            }"#,
+        );
+        let custom_pet = Pet::load_with_codex_home(
+            custom_dir.path().to_str().unwrap(),
+            /*codex_home*/ None,
+        )
+        .unwrap();
+
+        assert_ne!(
+            custom_pet.frame_cache_key().unwrap(),
+            default_pet.frame_cache_key().unwrap()
+        );
+    }
+
+    #[test]
     fn load_pet_json_path_uses_containing_directory() {
         let dir = write_minimal_pet();
 
@@ -939,6 +1004,45 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("animation idle fps must be finite and between")
+        );
+    }
+
+    #[test]
+    fn custom_pet_accepts_animation_fallback_to_existing_animation() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Fallback",
+                "spritesheetPath": "spritesheet.webp",
+                "animations": {
+                    "wave": { "frames": [1], "loop": false, "fallback": "idle" }
+                }
+            }"#,
+        );
+
+        let pet =
+            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
+
+        assert_eq!(pet.animations["wave"].fallback, "idle");
+    }
+
+    #[test]
+    fn custom_pet_rejects_animation_fallback_to_missing_animation() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Fallback",
+                "spritesheetPath": "spritesheet.webp",
+                "animations": {
+                    "wave": { "frames": [1], "loop": false, "fallback": "missing" }
+                }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("animation wave fallback missing does not exist")
         );
     }
 

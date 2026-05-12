@@ -8,16 +8,6 @@ use image::GenericImageView;
 
 use super::model::Pet;
 
-pub(super) fn cache_dir() -> PathBuf {
-    if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(cache_home);
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".cache");
-    }
-    std::env::temp_dir()
-}
-
 pub(super) fn prepare_png_frames(pet: &Pet, frame_dir: &Path) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(frame_dir).with_context(|| format!("create {}", frame_dir.display()))?;
 

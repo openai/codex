@@ -82,7 +82,14 @@ impl std::fmt::Display for PetImageRenderError {
     }
 }
 
-impl std::error::Error for PetImageRenderError {}
+impl std::error::Error for PetImageRenderError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Terminal(err) => Some(err),
+            Self::Asset(err) => Some(err.as_ref()),
+        }
+    }
+}
 
 impl From<std::io::Error> for PetImageRenderError {
     fn from(err: std::io::Error) -> Self {
@@ -244,6 +251,7 @@ fn clear_sixel_area(writer: &mut impl Write, area: SixelClearArea) -> std::io::R
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::io;
     use std::path::PathBuf;
 
@@ -426,6 +434,7 @@ mod tests {
         let err = render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap_err();
 
         assert!(matches!(err, PetImageRenderError::Asset(_)));
+        assert!(err.source().is_some());
     }
 
     #[test]
@@ -454,5 +463,6 @@ mod tests {
         let err = render_ambient_pet_image(&mut writer, &mut state, /*request*/ None).unwrap_err();
 
         assert!(matches!(err, PetImageRenderError::Terminal(_)));
+        assert!(err.source().is_some());
     }
 }

@@ -434,6 +434,53 @@ async fn helpers_are_available_and_do_not_panic() {
 }
 
 #[tokio::test]
+async fn configured_pet_load_is_deferred_until_after_construction() {
+    let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+    let tx = AppEventSender::new(tx_raw);
+    let mut cfg = test_config().await;
+    cfg.tui_pet = Some(crate::pets::DEFAULT_PET_ID.to_string());
+    crate::pets::write_test_pack(&cfg.codex_home);
+    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        model_catalog: test_model_catalog(&cfg),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(resolved_model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+    };
+
+    let chat = ChatWidget::new_with_app_event(init);
+
+    assert!(!chat.ambient_pet_image_enabled());
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_matches!(
+        event,
+        AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+            assert_eq!(pet_id, crate::pets::DEFAULT_PET_ID);
+            assert!(result.unwrap().is_some());
+        }
+    );
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

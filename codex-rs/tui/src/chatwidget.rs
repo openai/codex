@@ -4807,10 +4807,9 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
-        let ambient_pet = pets::load_ambient_pet(&config, frame_requester.clone());
         pets::start_configured_pet_load_if_needed(
             &config,
-            ambient_pet.is_none(),
+            /*ambient_pet_missing*/ true,
             frame_requester.clone(),
             app_event_tx.clone(),
         );
@@ -4888,7 +4887,7 @@ impl ChatWidget {
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,
-            ambient_pet,
+            ambient_pet: None,
             pet_picker_preview_state: crate::pets::PetPickerPreviewState::default(),
             pet_picker_preview_pet: None,
             pet_picker_preview_request_id: 0,

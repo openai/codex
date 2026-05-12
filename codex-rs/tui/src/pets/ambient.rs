@@ -138,11 +138,11 @@ pub(crate) struct AmbientPet {
 impl AmbientPet {
     /// Load the active ambient pet and prepare its frame cache.
     ///
-    /// This resolves the selected pet id, extracts per-frame PNGs into the OS
-    /// cache, and records the terminal protocol support snapshot used for later
-    /// draw requests. A caller that repeatedly recreates `AmbientPet` instead of
-    /// mutating one instance would lose animation timing continuity and pay the
-    /// frame-cache preparation cost more often than necessary.
+    /// This resolves the selected pet id, extracts per-frame PNGs into the
+    /// CODEX_HOME cache, and records the terminal protocol support snapshot used
+    /// for later draw requests. A caller that repeatedly recreates `AmbientPet`
+    /// instead of mutating one instance would lose animation timing continuity
+    /// and pay the frame-cache preparation cost more often than necessary.
     pub(crate) fn load(
         selected_pet: Option<&str>,
         codex_home: &std::path::Path,
@@ -154,7 +154,12 @@ impl AmbientPet {
             /*codex_home*/ Some(codex_home),
         )
         .with_context(|| "load ambient pet")?;
-        let cache_dir = frames::cache_dir().join("tui-pets").join(&pet.id);
+        let cache_dir = codex_home
+            .join("cache")
+            .join("tui-pets")
+            .join("frame-cache")
+            .join(&pet.id)
+            .join(pet.frame_cache_key()?);
         let frame_dir = cache_dir.join("frames");
         let sixel_dir = cache_dir.join("sixel");
         let frames = frames::prepare_png_frames(&pet, &frame_dir)?;
