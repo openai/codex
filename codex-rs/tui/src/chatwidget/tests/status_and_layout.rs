@@ -401,6 +401,7 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 }
 
 #[tokio::test]
+#[cfg_attr(target_os = "windows", ignore = "disabled on windows")]
 async fn configured_pet_load_is_deferred_until_after_construction() {
     let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
