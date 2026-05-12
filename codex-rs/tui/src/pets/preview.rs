@@ -102,29 +102,29 @@ pub(crate) struct PetPickerPreviewRenderable {
 
 impl Renderable for PetPickerPreviewRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let status = {
+        let (title, body) = {
             let Ok(mut inner) = self.inner.lock() else {
                 return;
             };
             inner.last_area = Some(area);
             match &inner.status {
                 PetPickerPreviewStatus::Hidden => return,
-                PetPickerPreviewStatus::Loading => {
-                    PreviewText::new("Loading preview...", /*body*/ None::<String>)
-                }
-                PetPickerPreviewStatus::Disabled => {
-                    PreviewText::new("Terminal pets disabled", Some("No pet will be shown."))
-                }
+                PetPickerPreviewStatus::Loading => ("Loading preview...", None),
+                PetPickerPreviewStatus::Disabled => (
+                    "Terminal pets disabled",
+                    Some("No pet will be shown.".to_string()),
+                ),
                 PetPickerPreviewStatus::Ready => return,
                 PetPickerPreviewStatus::Error { message } => {
-                    PreviewText::new("Preview unavailable", Some(message.clone()))
+                    ("Preview unavailable", Some(message.clone()))
                 }
             }
         };
 
-        let text_area = centered_text_area(area, status.height());
-        let mut lines = vec![Line::from(status.title.bold())];
-        if let Some(body) = status.body {
+        let text_height = if body.is_some() { 2 } else { 1 };
+        let text_area = centered_text_area(area, text_height);
+        let mut lines = vec![Line::from(title.bold())];
+        if let Some(body) = body {
             lines.push(Line::from(body.dim()));
         }
         Paragraph::new(lines)
@@ -134,24 +134,6 @@ impl Renderable for PetPickerPreviewRenderable {
 
     fn desired_height(&self, _width: u16) -> u16 {
         4
-    }
-}
-
-struct PreviewText {
-    title: String,
-    body: Option<String>,
-}
-
-impl PreviewText {
-    fn new(title: impl Into<String>, body: Option<impl Into<String>>) -> Self {
-        Self {
-            title: title.into(),
-            body: body.map(Into::into),
-        }
-    }
-
-    fn height(&self) -> u16 {
-        if self.body.is_some() { 2 } else { 1 }
     }
 }
 
