@@ -1004,7 +1004,12 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                     }
                 }
                 for env_var in env_vars {
-                    if !env_var.is_remote_source() && !env_var_present(env_var.name()) {
+                    if env_var.is_remote_source() {
+                        missing_env.push(format!(
+                            "{name}: env_vars entry `{}` uses source `remote`, which requires remote MCP stdio",
+                            env_var.name()
+                        ));
+                    } else if !env_var_present(env_var.name()) {
                         missing_env.push(format!("{name}: env var {} is not set", env_var.name()));
                     }
                 }
@@ -1721,6 +1726,34 @@ mod tests {
                 .iter()
                 .any(|detail| detail.contains("optional reachability failed: optional:"))
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_check_fails_required_remote_stdio_env_var() {
+        let command = toml::Value::String(
+            std::env::current_exe()
+                .expect("current exe")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let required_server: McpServerConfig = toml::from_str(&format!(
+            r#"
+                command = {command}
+                required = true
+                env_vars = [{{ name = "REMOTE_ONLY_TOKEN", source = "remote" }}]
+            "#,
+        ))
+        .expect("should deserialize required MCP config");
+        let servers = HashMap::from([("required".to_string(), required_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(check.details.iter().any(|detail| {
+            detail.contains(
+                "required: env_vars entry `REMOTE_ONLY_TOKEN` uses source `remote`, which requires remote MCP stdio",
+            )
+        }));
     }
 
     #[test]
