@@ -226,7 +226,12 @@ async fn build_report(
         }
     }
 
-    checks.push(timed_check_async(openai_reachability_check).await);
+    let openai_reachability_required = config_result
+        .as_ref()
+        .map(|config| config.model_provider.requires_openai_auth)
+        .unwrap_or(true);
+    checks
+        .push(timed_check_async(|| openai_reachability_check(openai_reachability_required)).await);
 
     let overall_status = overall_status(&checks);
     DoctorReport {
@@ -615,6 +620,15 @@ fn auth_check(config: &Config) -> DoctorCheck {
             env_auth_vars.join(", ")
         ));
     }
+    if let Some(check) = provider_specific_auth_check(
+        config.model_provider.requires_openai_auth,
+        config.model_provider.env_key.as_deref(),
+        config.model_provider.env_key_instructions.as_deref(),
+        details.clone(),
+        env_var_present,
+    ) {
+        return check;
+    }
 
     match load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => {
@@ -660,6 +674,61 @@ fn auth_check(config: &Config) -> DoctorCheck {
         )
         .detail(err.to_string())
         .remediation("Fix auth storage access or run codex login again."),
+    }
+}
+
+fn provider_specific_auth_check(
+    requires_openai_auth: bool,
+    provider_env_key: Option<&str>,
+    provider_env_key_instructions: Option<&str>,
+    mut details: Vec<String>,
+    env_var_present: impl Fn(&str) -> bool,
+) -> Option<DoctorCheck> {
+    details.push(format!(
+        "model provider requires OpenAI auth: {requires_openai_auth}"
+    ));
+    if requires_openai_auth {
+        return None;
+    }
+
+    match provider_env_key {
+        Some(env_key) if env_var_present(env_key) => {
+            details.push(format!("provider auth env var: {env_key} (present)"));
+            Some(
+                DoctorCheck::new(
+                    "auth.credentials",
+                    "auth",
+                    CheckStatus::Ok,
+                    "auth is provided by the active model provider",
+                )
+                .details(details),
+            )
+        }
+        Some(env_key) => {
+            details.push(format!("provider auth env var: {env_key} (missing)"));
+            let remediation = provider_env_key_instructions
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Set {env_key} for the active model provider."));
+            Some(
+                DoctorCheck::new(
+                    "auth.credentials",
+                    "auth",
+                    CheckStatus::Fail,
+                    "active model provider auth env var is missing",
+                )
+                .details(details)
+                .remediation(remediation),
+            )
+        }
+        None => Some(
+            DoctorCheck::new(
+                "auth.credentials",
+                "auth",
+                CheckStatus::Ok,
+                "OpenAI auth is not required for the active model provider",
+            )
+            .details(details),
+        ),
     }
 }
 
@@ -748,7 +817,8 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
     let mut transport_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut disabled = 0usize;
     let mut missing_env = Vec::new();
-    let mut unreachable_http = Vec::new();
+    let mut unreachable_required_http = Vec::new();
+    let mut unreachable_optional_http = Vec::new();
 
     for (name, server) in servers {
         let disabled_server = !server.enabled || server.disabled_reason.is_some();
@@ -810,7 +880,12 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                     }
                 }
                 if let Err(err) = http_probe_url(url).await {
-                    unreachable_http.push(format!("{name}: {url} ({err})"));
+                    let detail = format!("{name}: {url} ({err})");
+                    if server.required {
+                        unreachable_required_http.push(detail);
+                    } else {
+                        unreachable_optional_http.push(detail);
+                    }
                 }
             }
         }
@@ -823,9 +898,14 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
     }
     details.extend(missing_env.iter().cloned());
     details.extend(
-        unreachable_http
+        unreachable_required_http
             .iter()
-            .map(|detail| format!("reachability failed: {detail}")),
+            .map(|detail| format!("required reachability failed: {detail}")),
+    );
+    details.extend(
+        unreachable_optional_http
+            .iter()
+            .map(|detail| format!("optional reachability failed: {detail}")),
     );
 
     let required_missing = servers.iter().any(|(name, server)| {
@@ -834,16 +914,16 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                 .iter()
                 .any(|missing| missing.starts_with(&format!("{name}:")))
     });
-    let status = if required_missing || !unreachable_http.is_empty() {
+    let status = if required_missing || !unreachable_required_http.is_empty() {
         CheckStatus::Fail
-    } else if !missing_env.is_empty() {
+    } else if !missing_env.is_empty() || !unreachable_optional_http.is_empty() {
         CheckStatus::Warning
     } else {
         CheckStatus::Ok
     };
     let summary = match status {
         CheckStatus::Ok => "MCP configuration is locally consistent",
-        CheckStatus::Warning => "MCP configuration has missing optional inputs",
+        CheckStatus::Warning => "MCP configuration has optional issues",
         CheckStatus::Fail => "MCP configuration has failing required inputs or reachability",
     };
 
@@ -986,9 +1066,9 @@ fn fallback_state_check() -> DoctorCheck {
     }
 }
 
-async fn openai_reachability_check() -> DoctorCheck {
+async fn openai_reachability_check(required: bool) -> DoctorCheck {
     let endpoints = ["https://api.openai.com/", "https://chatgpt.com/"];
-    let mut details = Vec::new();
+    let mut details = vec![format!("required for active model provider: {required}")];
     let mut failures = Vec::new();
     for url in endpoints {
         match http_probe_url(url).await {
@@ -1000,16 +1080,7 @@ async fn openai_reachability_check() -> DoctorCheck {
         }
     }
 
-    let status = if failures.is_empty() {
-        CheckStatus::Ok
-    } else {
-        CheckStatus::Fail
-    };
-    let summary = if failures.is_empty() {
-        "OpenAI endpoints are reachable over HTTP"
-    } else {
-        "one or more OpenAI endpoints are unreachable over HTTP"
-    };
+    let (status, summary) = openai_reachability_outcome(failures.is_empty(), required);
     let mut check = DoctorCheck::new(
         "network.openai_reachability",
         "reachability",
@@ -1021,6 +1092,20 @@ async fn openai_reachability_check() -> DoctorCheck {
         check = check.remediation("Check proxy, VPN, firewall, DNS, and custom CA configuration.");
     }
     check
+}
+
+fn openai_reachability_outcome(all_reachable: bool, required: bool) -> (CheckStatus, &'static str) {
+    match (all_reachable, required) {
+        (true, _) => (CheckStatus::Ok, "OpenAI endpoints are reachable over HTTP"),
+        (false, true) => (
+            CheckStatus::Fail,
+            "one or more required OpenAI endpoints are unreachable over HTTP",
+        ),
+        (false, false) => (
+            CheckStatus::Warning,
+            "OpenAI endpoints are unreachable but not required by the active provider",
+        ),
+    }
 }
 
 async fn http_probe_url(url: &str) -> Result<String, String> {
@@ -1200,6 +1285,86 @@ mod tests {
                 .details
                 .iter()
                 .all(|detail| !detail.contains("reachability failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_check_warns_for_optional_http_reachability() {
+        let optional_server: McpServerConfig = toml::from_str(
+            r#"
+                url = "http://127.0.0.1:9/mcp"
+            "#,
+        )
+        .expect("should deserialize optional MCP config");
+        let servers = HashMap::from([("optional".to_string(), optional_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "MCP configuration has optional issues");
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.contains("optional reachability failed: optional:"))
+        );
+    }
+
+    #[test]
+    fn provider_specific_auth_allows_non_openai_provider_without_env_key() {
+        let check = provider_specific_auth_check(
+            /*requires_openai_auth*/ false,
+            /*provider_env_key*/ None,
+            /*provider_env_key_instructions*/ None,
+            Vec::new(),
+            |_| false,
+        )
+        .expect("non-OpenAI provider should produce a provider-specific check");
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            check.summary,
+            "OpenAI auth is not required for the active model provider"
+        );
+    }
+
+    #[test]
+    fn provider_specific_auth_fails_when_provider_env_key_is_missing() {
+        let check = provider_specific_auth_check(
+            /*requires_openai_auth*/ false,
+            Some("PROVIDER_API_KEY"),
+            Some("Set PROVIDER_API_KEY before running Codex."),
+            Vec::new(),
+            |_| false,
+        )
+        .expect("non-OpenAI provider should produce a provider-specific check");
+
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert_eq!(
+            check.summary,
+            "active model provider auth env var is missing"
+        );
+        assert_eq!(
+            check.remediation,
+            Some("Set PROVIDER_API_KEY before running Codex.".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_reachability_warns_when_openai_is_not_required() {
+        assert_eq!(
+            openai_reachability_outcome(/*all_reachable*/ false, /*required*/ false,),
+            (
+                CheckStatus::Warning,
+                "OpenAI endpoints are unreachable but not required by the active provider",
+            )
+        );
+        assert_eq!(
+            openai_reachability_outcome(/*all_reachable*/ false, /*required*/ true,),
+            (
+                CheckStatus::Fail,
+                "one or more required OpenAI endpoints are unreachable over HTTP",
+            )
         );
     }
 
