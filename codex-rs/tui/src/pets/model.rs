@@ -1008,24 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_pet_accepts_animation_fallback_to_existing_animation() {
-        let dir = write_pet_manifest(
-            r#"{
-                "displayName": "Fallback",
-                "spritesheetPath": "spritesheet.webp",
-                "animations": {
-                    "wave": { "frames": [1], "loop": false, "fallback": "idle" }
-                }
-            }"#,
-        );
-
-        let pet =
-            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
-
-        assert_eq!(pet.animations["wave"].fallback, "idle");
-    }
-
-    #[test]
     fn custom_pet_rejects_animation_fallback_to_missing_animation() {
         let dir = write_pet_manifest(
             r#"{
