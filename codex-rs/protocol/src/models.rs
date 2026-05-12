@@ -1253,8 +1253,8 @@ pub struct SearchToolCallParams {
     pub limit: Option<usize>,
 }
 
-/// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or `shell`, the `arguments` field should deserialize to this struct.
+/// If the `name` of a `ResponseItem::FunctionCall` is `shell`, the
+/// `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
     pub command: Vec<String>,

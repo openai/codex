@@ -2,7 +2,6 @@ use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
-use crate::tools::handlers::ContainerExecHandler;
 use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
@@ -10,7 +9,6 @@ use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
-use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
@@ -128,9 +126,6 @@ pub fn build_tool_registry_builder(
                     exec_permission_approvals_enabled,
                 })));
             }
-            ConfigShellToolType::Local => {
-                builder.register_handler(Arc::new(LocalShellHandler::new()));
-            }
             ConfigShellToolType::UnifiedExec => {
                 builder.register_handler(Arc::new(ExecCommandHandler::new(
                     ExecCommandHandlerOptions {
@@ -142,7 +137,7 @@ pub fn build_tool_registry_builder(
                 builder.register_handler(Arc::new(WriteStdinHandler));
             }
             ConfigShellToolType::Disabled => {}
-            ConfigShellToolType::ShellCommand => {
+            ConfigShellToolType::Local | ConfigShellToolType::ShellCommand => {
                 builder.register_handler(Arc::new(ShellCommandHandler::new(
                     ShellCommandHandlerOptions {
                         backend_config: config.shell_command_backend,
@@ -159,31 +154,18 @@ pub fn build_tool_registry_builder(
     {
         match &config.shell_type {
             ConfigShellToolType::Default => {
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
                 builder.register_handler(Arc::new(ShellCommandHandler::from(
                     config.shell_command_backend,
                 )));
             }
-            ConfigShellToolType::Local => {
+            ConfigShellToolType::Local | ConfigShellToolType::ShellCommand => {
                 builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
             }
             ConfigShellToolType::UnifiedExec => {
                 builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
                 builder.register_handler(Arc::new(ShellCommandHandler::from(
                     config.shell_command_backend,
                 )));
-            }
-            ConfigShellToolType::ShellCommand => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
             }
             ConfigShellToolType::Disabled => {}
         }

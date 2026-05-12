@@ -11,10 +11,8 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
@@ -155,7 +153,6 @@ impl ToolRouter {
                 ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
                 ToolSpec::Namespace(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::LocalShell {}
                 | ToolSpec::ImageGeneration { .. }
                 | ToolSpec::WebSearch { .. } => false,
             })
@@ -223,24 +220,21 @@ impl ToolRouter {
                     .or(id)
                     .ok_or(FunctionCallError::MissingLocalShellCallId)?;
 
-                match action {
-                    LocalShellAction::Exec(exec) => {
-                        let params = ShellToolCallParams {
-                            command: exec.command,
-                            workdir: exec.working_directory,
-                            timeout_ms: exec.timeout_ms,
-                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
-                            additional_permissions: None,
-                            prefix_rule: None,
-                            justification: None,
-                        };
-                        Ok(Some(ToolCall {
-                            tool_name: ToolName::plain("local_shell"),
-                            call_id,
-                            payload: ToolPayload::LocalShell { params },
-                        }))
-                    }
-                }
+                let arguments = match action {
+                    codex_protocol::models::LocalShellAction::Exec(exec) => serde_json::json!({
+                        "command": exec.command,
+                        "workdir": exec.working_directory,
+                        "timeout_ms": exec.timeout_ms,
+                        "sandbox_permissions": SandboxPermissions::UseDefault,
+                    }),
+                };
+                Ok(Some(ToolCall {
+                    tool_name: ToolName::plain("shell"),
+                    call_id,
+                    payload: ToolPayload::Function {
+                        arguments: arguments.to_string(),
+                    },
+                }))
             }
             _ => Ok(None),
         }

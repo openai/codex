@@ -2821,7 +2821,6 @@ fn strip_descriptions_tool(spec: &mut ToolSpec) {
             }
         }
         ToolSpec::Freeform(FreeformTool { .. })
-        | ToolSpec::LocalShell {}
         | ToolSpec::ImageGeneration { .. }
         | ToolSpec::WebSearch { .. } => {}
     }

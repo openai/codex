@@ -185,7 +185,7 @@ impl ToolCallRuntime {
         if call.tool_name.namespace.is_none()
             && matches!(
                 call.tool_name.name.as_str(),
-                "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec"
+                "shell" | "shell_command" | "unified_exec"
             )
         {
             format!("Wall time: {secs:.1} seconds\naborted by user")

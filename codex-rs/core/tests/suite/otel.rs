@@ -1129,10 +1129,10 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
             .find(|line| line.contains("codex.tool_result") && line.contains("call_id=shell-call"))
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !line.contains("tool_name=local_shell") {
+        if !line.contains("tool_name=shell") {
             return Err("missing tool_name field".to_string());
         }
-        if !line.contains("arguments=/bin/echo shell") {
+        if !line.contains("\"command\":[\"/bin/echo\",\"shell\"]") {
             return Err("missing arguments field".to_string());
         }
         let output_idx = line
@@ -1168,8 +1168,8 @@ fn tool_decision_assertion<'a>(
             .ok_or_else(|| format!("missing codex.tool_decision event for {call_id}"))?;
 
         let lower = line.to_lowercase();
-        if !lower.contains("tool_name=local_shell") {
-            return Err("missing tool_name for local_shell".to_string());
+        if !lower.contains("tool_name=shell") {
+            return Err("missing tool_name for shell".to_string());
         }
         if !lower.contains(&format!("decision={expected_decision}")) {
             return Err(format!("unexpected decision for {call_id}"));

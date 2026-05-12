@@ -14,7 +14,6 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
@@ -61,7 +60,6 @@ pub enum ToolPayload {
     Function { arguments: String },
     ToolSearch { arguments: SearchToolCallParams },
     Custom { input: String },
-    LocalShell { params: ShellToolCallParams },
 }
 
 impl ToolPayload {
@@ -70,7 +68,6 @@ impl ToolPayload {
             ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
             ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
-            ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
         }
     }
 }

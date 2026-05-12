@@ -203,6 +203,7 @@ impl ToolsConfig {
             ConfigShellToolType::UnifiedExec if !unified_exec_enabled => {
                 ConfigShellToolType::ShellCommand
             }
+            ConfigShellToolType::Local => ConfigShellToolType::ShellCommand,
             other => other,
         };
         let shell_type = if !features.enabled(Feature::ShellTool) {

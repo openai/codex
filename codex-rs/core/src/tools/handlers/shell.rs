@@ -31,13 +31,9 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 
-mod container_exec;
-mod local_shell;
 mod shell_command;
 mod shell_handler;
 
-pub use container_exec::ContainerExecHandler;
-pub use local_shell::LocalShellHandler;
 pub use shell_command::ShellCommandHandler;
 pub(crate) use shell_command::ShellCommandHandlerOptions;
 pub use shell_handler::ShellHandler;
@@ -50,16 +46,6 @@ fn shell_function_payload_command(payload: &ToolPayload) -> Option<String> {
     parse_arguments::<ShellToolCallParams>(arguments)
         .ok()
         .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-}
-
-fn local_shell_payload_command(payload: &ToolPayload) -> Option<String> {
-    let ToolPayload::LocalShell { params } = payload else {
-        return None;
-    };
-
-    Some(codex_shell_command::parse_command::shlex_join(
-        &params.command,
-    ))
 }
 
 fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
