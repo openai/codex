@@ -15,6 +15,7 @@ use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -69,14 +70,13 @@ impl ExecServerClient {
                 source,
             })?;
 
-        Self::connect(
-            JsonRpcConnection::from_websocket(
-                stream,
-                format!("exec-server websocket {websocket_url}"),
-            ),
-            args.into(),
-        )
-        .await
+        let connection_label = format!("exec-server websocket {websocket_url}");
+        let connection = if is_rendezvous_harness_url(&websocket_url) {
+            harness_connection_from_websocket(stream, connection_label)
+        } else {
+            JsonRpcConnection::from_websocket(stream, connection_label)
+        };
+        Self::connect(connection, args.into()).await
     }
 
     pub(crate) async fn connect_stdio_command(
@@ -118,6 +118,16 @@ impl ExecServerClient {
         )
         .await
     }
+}
+
+fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
+    let Some((_path, query)) = websocket_url.split_once('?') else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .any(|(key, value)| key == "role" && value == "harness")
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {

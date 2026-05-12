@@ -385,11 +385,17 @@ async fn run_session_control(
                             text,
                         }).await;
                     }
-                    RuntimeEvent::ToolCall { id, name, input } => {
+                    RuntimeEvent::ToolCall {
+                        id,
+                        name,
+                        kind,
+                        input,
+                    } => {
                         let tool_call = CodeModeNestedToolCall {
                             cell_id: cell_id.clone(),
                             runtime_tool_call_id: id,
                             tool_name: name,
+                            tool_kind: kind,
                             input,
                         };
                         let _ = inner

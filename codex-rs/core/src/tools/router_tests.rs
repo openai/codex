@@ -273,11 +273,6 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
-            .is_some()
-    );
     assert_eq!(
         namespace_function_names(&router.specs(), "codex_app"),
         vec![hidden_tool.to_string(), visible_tool.to_string()]
@@ -341,8 +336,9 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
 
     assert!(
         router
-            .find_spec(&ToolName::plain("extension_echo"))
-            .is_some(),
+            .specs()
+            .iter()
+            .any(|spec| spec.name() == "extension_echo"),
         "expected extension-provided tool spec to be registered"
     );
     assert!(
