@@ -563,10 +563,6 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Some(candidate) = crate::setup_bazel::candidate() {
-        return candidate;
-    }
-
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
