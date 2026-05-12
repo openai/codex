@@ -190,13 +190,7 @@ pub fn build_tool_registry_builder(
     }
 
     for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle, |spec| {
-            if config.code_mode_enabled {
-                codex_tools::augment_tool_spec_for_code_mode(spec)
-            } else {
-                spec
-            }
-        });
+        builder.register_tool_bundle(bundle);
     }
 
     builder

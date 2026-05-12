@@ -590,11 +590,7 @@ impl ToolRegistryBuilder {
         self.handlers.insert(name, handler);
     }
 
-    pub fn register_tool_bundle(
-        &mut self,
-        bundle: ExtensionToolBundle,
-        transform_spec: impl FnOnce(ToolSpec) -> ToolSpec,
-    ) {
+    pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
         let tool_name = ToolName::plain(bundle.tool_name());
         if self.handlers.contains_key(&tool_name) {
             warn!("Skipping extension tool `{tool_name}`: handler already registered");
@@ -610,7 +606,7 @@ impl ToolRegistryBuilder {
                 return;
             }
         };
-        self.push_spec(transform_spec(spec.clone()));
+        self.push_spec(spec.clone());
 
         let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);
