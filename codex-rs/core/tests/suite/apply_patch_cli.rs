@@ -258,8 +258,6 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_cli_multiple_operations_integration(
     output_type: ApplyPatchModelOutput,
 ) -> Result<()> {
@@ -302,8 +300,6 @@ D delete.txt
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -329,8 +325,6 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_moves_file_to_new_directory(
     model_output: ApplyPatchModelOutput,
@@ -357,8 +351,6 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_updates_file_appends_trailing_newline(
     model_output: ApplyPatchModelOutput,
@@ -385,8 +377,6 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_insert_only_hunk_modifies_file(
     model_output: ApplyPatchModelOutput,
@@ -414,8 +404,6 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_move_overwrites_existing_destination(
     model_output: ApplyPatchModelOutput,
@@ -445,8 +433,6 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     model_output: ApplyPatchModelOutput,
@@ -484,8 +470,6 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_add_overwrites_existing_file(
     model_output: ApplyPatchModelOutput,
@@ -511,8 +495,6 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_rejects_invalid_hunk_header(
     model_output: ApplyPatchModelOutput,
@@ -542,8 +524,6 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_reports_missing_context(
     model_output: ApplyPatchModelOutput,
@@ -577,8 +557,6 @@ async fn apply_patch_cli_reports_missing_context(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_reports_missing_target_file(
     model_output: ApplyPatchModelOutput,
@@ -612,8 +590,6 @@ async fn apply_patch_cli_reports_missing_target_file(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_delete_missing_file_reports_error(
     model_output: ApplyPatchModelOutput,
@@ -648,8 +624,6 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -672,8 +646,6 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_delete_directory_reports_verification_error(
     model_output: ApplyPatchModelOutput,
@@ -698,8 +670,6 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     model_output: ApplyPatchModelOutput,
@@ -744,8 +714,6 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
 async fn intercepted_apply_patch_verification_uses_local_sandbox(
     model_output: ApplyPatchModelOutput,
@@ -797,8 +765,6 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
-#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
 async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace(
     model_output: ApplyPatchModelOutput,
@@ -868,8 +834,6 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
-#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
 async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
     model_output: ApplyPatchModelOutput,
@@ -972,8 +936,6 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
     model_output: ApplyPatchModelOutput,
@@ -1021,8 +983,6 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_verification_failure_has_no_side_effects(
     model_output: ApplyPatchModelOutput,
@@ -1535,7 +1495,6 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch(
     model_output: ApplyPatchModelOutput,
@@ -1558,8 +1517,6 @@ async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1579,8 +1536,6 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_cli_missing_second_chunk_context_rejected(
     model_output: ApplyPatchModelOutput,
@@ -1615,8 +1570,6 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     model_output: ApplyPatchModelOutput,
@@ -1847,8 +1800,6 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_change_context_disambiguates_target(
     model_output: ApplyPatchModelOutput,

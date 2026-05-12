@@ -17,7 +17,6 @@ use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
-use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
 use crate::tools::handlers::UpdateGoalHandler;
@@ -37,7 +36,6 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-use crate::tools::handlers::shell_spec::ShellToolOptions;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -121,11 +119,6 @@ pub fn build_tool_registry_builder(
         let include_environment_id =
             matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.register_handler(Arc::new(ShellHandler::new(ShellToolOptions {
-                    exec_permission_approvals_enabled,
-                })));
-            }
             ConfigShellToolType::UnifiedExec => {
                 builder.register_handler(Arc::new(ExecCommandHandler::new(
                     ExecCommandHandlerOptions {
@@ -137,7 +130,9 @@ pub fn build_tool_registry_builder(
                 builder.register_handler(Arc::new(WriteStdinHandler));
             }
             ConfigShellToolType::Disabled => {}
-            ConfigShellToolType::Local | ConfigShellToolType::ShellCommand => {
+            ConfigShellToolType::Default
+            | ConfigShellToolType::Local
+            | ConfigShellToolType::ShellCommand => {
                 builder.register_handler(Arc::new(ShellCommandHandler::new(
                     ShellCommandHandlerOptions {
                         backend_config: config.shell_command_backend,
@@ -153,21 +148,15 @@ pub fn build_tool_registry_builder(
         && config.shell_type != ConfigShellToolType::Disabled
     {
         match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.register_handler(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
-            }
-            ConfigShellToolType::Local | ConfigShellToolType::ShellCommand => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
-            }
             ConfigShellToolType::UnifiedExec => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
                 builder.register_handler(Arc::new(ShellCommandHandler::from(
                     config.shell_command_backend,
                 )));
             }
-            ConfigShellToolType::Disabled => {}
+            ConfigShellToolType::Default
+            | ConfigShellToolType::Local
+            | ConfigShellToolType::ShellCommand
+            | ConfigShellToolType::Disabled => {}
         }
     }
 

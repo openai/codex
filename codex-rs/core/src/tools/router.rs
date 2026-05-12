@@ -1,5 +1,4 @@
 use crate::function_tool::FunctionCallError;
-use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -210,32 +209,6 @@ impl ToolRouter {
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
-            ResponseItem::LocalShellCall {
-                id,
-                call_id,
-                action,
-                ..
-            } => {
-                let call_id = call_id
-                    .or(id)
-                    .ok_or(FunctionCallError::MissingLocalShellCallId)?;
-
-                let arguments = match action {
-                    codex_protocol::models::LocalShellAction::Exec(exec) => serde_json::json!({
-                        "command": exec.command,
-                        "workdir": exec.working_directory,
-                        "timeout_ms": exec.timeout_ms,
-                        "sandbox_permissions": SandboxPermissions::UseDefault,
-                    }),
-                };
-                Ok(Some(ToolCall {
-                    tool_name: ToolName::plain("shell"),
-                    call_id,
-                    payload: ToolPayload::Function {
-                        arguments: arguments.to_string(),
-                    },
-                }))
-            }
             _ => Ok(None),
         }
     }
