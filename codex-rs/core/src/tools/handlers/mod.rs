@@ -37,6 +37,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
@@ -67,9 +68,6 @@ pub use shell::LocalShellHandler;
 pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
 pub use shell::ShellHandler;
-pub(crate) use shell::local_shell_payload_command;
-pub(crate) use shell::shell_command_payload_command;
-pub(crate) use shell::shell_function_payload_command;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use unavailable_tool::UnavailableToolHandler;
@@ -85,6 +83,47 @@ where
 {
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
+    })
+}
+
+pub(crate) fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
+    updated_input
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "hook returned updatedInput without string field `command`".to_string(),
+            )
+        })
+}
+
+pub(crate) fn rewrite_function_arguments(
+    arguments: &str,
+    tool_name: &str,
+    rewrite: impl FnOnce(&mut Map<String, Value>),
+) -> Result<String, FunctionCallError> {
+    let mut arguments: Value = parse_arguments(arguments)?;
+    let Value::Object(arguments) = &mut arguments else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool_name} arguments must be an object"
+        )));
+    };
+    rewrite(arguments);
+    serde_json::to_string(&arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {tool_name} arguments: {err}"
+        ))
+    })
+}
+
+pub(crate) fn rewrite_function_string_argument(
+    arguments: &str,
+    tool_name: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<String, FunctionCallError> {
+    rewrite_function_arguments(arguments, tool_name, |arguments| {
+        arguments.insert(field_name.to_string(), Value::String(value.to_string()));
     })
 }
 

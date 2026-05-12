@@ -11,9 +11,12 @@ use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
+use serde_json::Map;
+use serde_json::Value;
 
 pub struct McpHandler {
     tool_name: ToolName,
@@ -46,6 +49,31 @@ impl ToolHandler for McpHandler {
             tool_name: HookToolName::new(flat_tool_name(tool_name).into_owned()),
             tool_input: mcp_hook_tool_input(raw_arguments),
         })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        invocation.payload = match invocation.payload {
+            ToolPayload::Mcp { server, tool, .. } => ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments: serde_json::to_string(&updated_input).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to serialize rewritten MCP arguments: {err}"
+                    ))
+                })?,
+            },
+            payload => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "tool {} does not support hook input rewriting for payload {payload:?}",
+                    flat_tool_name(&self.tool_name)
+                )));
+            }
+        };
+        Ok(invocation)
     }
     fn post_tool_use_payload(
         &self,
@@ -115,10 +143,17 @@ impl ToolHandler for McpHandler {
     }
 }
 
+fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
+    if raw_arguments.trim().is_empty() {
+        return Value::Object(Map::new());
+    }
+
+    serde_json::from_str(raw_arguments).unwrap_or_else(|_| Value::String(raw_arguments.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_runtime::tool_compat;
     use crate::session::tests::make_session_and_context;
     use crate::tools::context::ToolCallSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
@@ -141,8 +176,12 @@ mod tests {
             .to_string(),
         };
         let (session, turn) = make_session_and_context().await;
+        let handler = McpHandler::new(codex_tools::ToolName::namespaced(
+            "mcp__memory__",
+            "create_entities",
+        ));
         assert_eq!(
-            tool_compat::pre_tool_use_payload(&ToolInvocation {
+            handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
@@ -152,7 +191,7 @@ mod tests {
                 source: ToolCallSource::Direct,
                 payload,
             }),
-            Some(tool_compat::PreToolUsePayload {
+            Some(PreToolUsePayload {
                 tool_name: HookToolName::new("mcp__memory__create_entities"),
                 tool_input: json!({
                     "entities": [{
@@ -172,9 +211,13 @@ mod tests {
             raw_arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
+        let handler = McpHandler::new(codex_tools::ToolName::namespaced(
+            "mcp__foo__",
+            "exec_command",
+        ));
 
         assert_eq!(
-            tool_compat::pre_tool_use_payload(&ToolInvocation {
+            handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
@@ -184,7 +227,7 @@ mod tests {
                 source: ToolCallSource::Direct,
                 payload,
             }),
-            Some(tool_compat::PreToolUsePayload {
+            Some(PreToolUsePayload {
                 tool_name: HookToolName::new("mcp__foo__exec_command"),
                 tool_input: json!({ "message": "hello" }),
             })
@@ -199,21 +242,26 @@ mod tests {
             raw_arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
+        let handler = McpHandler::new(codex_tools::ToolName::namespaced(
+            "mcp__foo__",
+            "exec_command",
+        ));
 
-        let invocation = tool_compat::apply_updated_input(
-            ToolInvocation {
-                session: session.into(),
-                turn: turn.into(),
-                cancellation_token: tokio_util::sync::CancellationToken::new(),
-                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-mcp-rewrite-builtin-like".to_string(),
-                tool_name: codex_tools::ToolName::namespaced("mcp__foo__", "exec_command"),
-                source: ToolCallSource::Direct,
-                payload,
-            },
-            json!({ "message": "rewritten" }),
-        )
-        .expect("MCP rewrite should succeed");
+        let invocation = handler
+            .with_updated_hook_input(
+                ToolInvocation {
+                    session: session.into(),
+                    turn: turn.into(),
+                    cancellation_token: tokio_util::sync::CancellationToken::new(),
+                    tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                    call_id: "call-mcp-rewrite-builtin-like".to_string(),
+                    tool_name: codex_tools::ToolName::namespaced("mcp__foo__", "exec_command"),
+                    source: ToolCallSource::Direct,
+                    payload,
+                },
+                json!({ "message": "rewritten" }),
+            )
+            .expect("MCP rewrite should succeed");
 
         let ToolPayload::Mcp { raw_arguments, .. } = invocation.payload else {
             panic!("builtin-like MCP tool should stay MCP");
@@ -285,6 +333,6 @@ mod tests {
 
     #[test]
     fn mcp_hook_tool_input_defaults_empty_args_to_object() {
-        assert_eq!(tool_compat::mcp_hook_tool_input("  "), json!({}));
+        assert_eq!(mcp_hook_tool_input("  "), json!({}));
     }
 }

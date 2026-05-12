@@ -14,12 +14,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use crate::hook_runtime::tool_compat;
-use crate::hook_runtime::tool_compat::PreToolUsePayload;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolInvocation;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
 fn sample_patch() -> &'static str {
@@ -44,30 +43,15 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
 }
 
 #[tokio::test]
-async fn pre_tool_use_payload_uses_json_patch_input() {
-    let patch = sample_patch();
-    let payload = ToolPayload::Function {
-        arguments: json!({ "input": patch }).to_string(),
-    };
-    let invocation = invocation_for_payload(payload).await;
-    assert_eq!(
-        tool_compat::pre_tool_use_payload(&invocation),
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: json!({ "command": patch }),
-        })
-    );
-}
-
-#[tokio::test]
 async fn pre_tool_use_payload_uses_freeform_patch_input() {
     let patch = sample_patch();
     let payload = ToolPayload::Custom {
         input: patch.to_string(),
     };
     let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler;
     assert_eq!(
-        tool_compat::pre_tool_use_payload(&invocation),
+        handler.pre_tool_use_payload(&invocation),
         Some(PreToolUsePayload {
             tool_name: HookToolName::apply_patch(),
             tool_input: json!({ "command": patch }),

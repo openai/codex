@@ -2906,7 +2906,7 @@ async fn pre_tool_use_rewrites_apply_patch_before_execution() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_apply_patch_function_call(call_id, &original_patch),
+                ev_apply_patch_custom_tool_call(call_id, &original_patch),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -2937,7 +2937,7 @@ async fn pre_tool_use_rewrites_apply_patch_before_execution() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    requests[1].function_call_output(call_id);
+    requests[1].custom_tool_call_output(call_id);
     assert!(
         !test.workspace_path(original_file).exists(),
         "original patch should not create its target file"

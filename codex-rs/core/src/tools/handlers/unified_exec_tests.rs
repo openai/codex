@@ -6,13 +6,13 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
-use crate::hook_runtime::tool_compat;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
@@ -185,8 +185,9 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let handler = ExecCommandHandler::default();
     assert_eq!(
-        tool_compat::pre_tool_use_payload(&ToolInvocation {
+        handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
@@ -196,7 +197,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
-        Some(tool_compat::PreToolUsePayload {
+        Some(PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": "printf exec command" }),
         })
@@ -209,8 +210,9 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let handler = WriteStdinHandler;
     assert_eq!(
-        tool_compat::pre_tool_use_payload(&ToolInvocation {
+        handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),

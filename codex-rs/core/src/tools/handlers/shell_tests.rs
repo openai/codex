@@ -7,7 +7,6 @@ use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 
 use crate::exec_env::create_env;
-use crate::hook_runtime::tool_compat;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
 use crate::shell::Shell;
@@ -19,6 +18,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -221,9 +221,10 @@ async fn local_shell_pre_tool_use_payload_uses_joined_command() {
         },
     };
     let (session, turn) = make_session_and_context().await;
+    let handler = super::LocalShellHandler::default();
 
     assert_eq!(
-        tool_compat::pre_tool_use_payload(&ToolInvocation {
+        handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
@@ -233,7 +234,7 @@ async fn local_shell_pre_tool_use_payload_uses_joined_command() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
-        Some(tool_compat::PreToolUsePayload {
+        Some(PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "bash -lc 'printf hi'" }),
         })
@@ -246,9 +247,10 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
-        tool_compat::pre_tool_use_payload(&ToolInvocation {
+        handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
             cancellation_token: tokio_util::sync::CancellationToken::new(),
@@ -258,7 +260,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
-        Some(tool_compat::PreToolUsePayload {
+        Some(PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "printf shell command" }),
         })
