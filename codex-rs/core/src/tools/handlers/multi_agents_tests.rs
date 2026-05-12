@@ -3402,7 +3402,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     turn.cwd = temp_dir.abs();
     turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.permission_profile,
+        turn.config.permissions.permission_profile_constraint(),
         turn.config.legacy_sandbox_policy(),
         turn.cwd.as_path(),
     );

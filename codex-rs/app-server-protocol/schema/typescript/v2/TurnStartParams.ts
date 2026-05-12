@@ -21,7 +21,9 @@ approvalPolicy?: AskForApproval | null, /**
  * subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, /**
- * Override the sandbox policy for this turn and subsequent turns.
+ * Deprecated for turns. When present, the server treats this as a
+ * compatibility spelling for selecting a matching named permissions
+ * profile.
  */
 sandboxPolicy?: SandboxPolicy | null, /**
  * Override the model for this turn and subsequent turns.
