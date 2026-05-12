@@ -9,7 +9,6 @@ use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
 use codex_plugin::PluginId;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 
 use crate::marketplace_cmd::MarketplaceCli;
@@ -112,10 +111,8 @@ pub async fn run_plugin_list(
         manager,
         ..
     } = load_plugin_command_context(overrides).await?;
-    let current_dir = AbsolutePathBuf::try_from(std::env::current_dir()?)
-        .context("failed to resolve current directory")?;
     let outcome = manager
-        .list_marketplaces_for_config(&plugins_input, &[current_dir])
+        .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list marketplace plugins")?;
 
     let marketplaces = outcome
@@ -248,10 +245,8 @@ fn find_marketplace_for_plugin(
     marketplace_name: &str,
     plugin_name: &str,
 ) -> Result<ConfiguredMarketplace> {
-    let current_dir = AbsolutePathBuf::try_from(std::env::current_dir()?)
-        .context("failed to resolve current directory")?;
     let matches = manager
-        .list_marketplaces_for_config(plugins_input, &[current_dir])
+        .list_marketplaces_for_config(plugins_input, &[])
         .context("failed to list marketplace plugins")?
         .marketplaces
         .into_iter()

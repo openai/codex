@@ -54,9 +54,9 @@ mod plugin_cmd;
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
-use doctor::DoctorCommand;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
+use doctor::DoctorCommand;
 
 use codex_core::build_models_manager;
 use codex_core::config::ConfigBuilder;
