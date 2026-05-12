@@ -1,3 +1,15 @@
+//! Implements the `codex doctor` diagnostic report.
+//!
+//! Doctor is intentionally read-mostly: checks inspect the current installation,
+//! configuration, authentication, terminal, state paths, and bounded reachability
+//! probes without attempting repair or starting long-lived services. Each check
+//! returns a redacted, serializable row so the same data can back the human
+//! summary and `--json` support report.
+//!
+//! A failing check should describe the problem and remediation, but it should not
+//! mutate user state. That keeps the command safe to run before filing a support
+//! issue or while diagnosing a broken local installation.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
@@ -44,6 +56,11 @@ use runtime::runtime_check;
 use runtime::search_check;
 use updates::updates_check;
 
+/// Options for building a local Codex diagnostic report.
+///
+/// The command always runs the full bounded diagnostic set. Human output is
+/// concise by default, while --verbose exposes local paths and command output
+/// that are useful when debugging a specific installation.
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
     /// Emit a redacted machine-readable report.
@@ -72,6 +89,11 @@ enum CheckStatus {
     Skipped,
 }
 
+/// Machine-readable doctor output shared by human and JSON renderers.
+///
+/// The schema is intentionally flat: each check carries its own category,
+/// status, details, remediation, and duration so support tooling can filter or
+/// redact individual rows without understanding the renderer's section layout.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorReport {
@@ -82,6 +104,11 @@ struct DoctorReport {
     checks: Vec<DoctorCheck>,
 }
 
+/// One diagnostic result in the doctor report.
+///
+/// Summaries are safe for the default human view. Details may include local
+/// paths or command output and are therefore shown only with --verbose in
+/// human mode, while JSON consumers receive the full redacted report.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorCheck {
@@ -128,6 +155,11 @@ impl DoctorCheck {
     }
 }
 
+/// Builds, renders, and exits according to the current doctor report.
+///
+/// This is the CLI entry point for codex doctor. It does not repair issues;
+/// failures are represented in the report and cause a non-zero process exit so
+/// scripts can distinguish a clean environment from one that needs attention.
 pub async fn run_doctor(
     command: DoctorCommand,
     root_config_overrides: CliConfigOverrides,

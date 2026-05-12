@@ -1,3 +1,10 @@
+//! Captures how this Codex process was launched.
+//!
+//! Runtime diagnostics answer provenance questions that are hard to infer from
+//! user reports: which binary is running, which install channel it resembles,
+//! which platform it targets, and whether the search command comes from bundled
+//! standalone resources or from PATH.
+
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -10,6 +17,10 @@ use super::describe_install_context;
 use super::doctor_install_context;
 use super::push_path_detail;
 
+/// Builds the process provenance row for the current Codex executable.
+///
+/// This check is informational and should not fail on its own; inconsistent
+/// install state is reported by the installation and update checks instead.
 pub(super) fn runtime_check() -> DoctorCheck {
     let current_exe = env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());
@@ -37,6 +48,11 @@ pub(super) fn runtime_check() -> DoctorCheck {
     .details(details)
 }
 
+/// Verifies that the search command selected by the install context is usable.
+///
+/// Standalone installs should point at a bundled ripgrep binary, while local or
+/// package-managed installs usually resolve rg from PATH. A warning here means
+/// features that depend on file search may degrade even when the CLI launches.
 pub(super) fn search_check() -> DoctorCheck {
     let current_exe = env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());

@@ -1,3 +1,10 @@
+//! Renders doctor reports for terminal users.
+//!
+//! The renderer is intentionally separate from check construction so the JSON
+//! report can stay stable while the human view optimizes for scanability. It
+//! groups checks by concern, colors only status/actionable tokens, and redacts
+//! sensitive detail lines before showing them in verbose output.
+
 use std::fmt::Write as _;
 
 use owo_colors::OwoColorize;
@@ -37,6 +44,10 @@ struct OutputGroup {
     keys: &'static [&'static str],
 }
 
+/// Rendering controls for human doctor output.
+///
+/// These options affect presentation only. They must not change which checks
+/// run or which fields are present in the underlying JSON report.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct HumanOutputOptions {
     pub(super) verbose: bool,
@@ -44,6 +55,11 @@ pub(super) struct HumanOutputOptions {
     pub(super) color_enabled: bool,
 }
 
+/// Formats a doctor report into the grouped terminal layout.
+///
+/// The renderer expects checks to carry stable categories, but it owns their
+/// display order. Adding a new category without adding it to GROUPS keeps JSON
+/// output intact but hides that row from the human view.
 pub(super) fn render_human_report(report: &DoctorReport, options: HumanOutputOptions) -> String {
     let mut out = String::new();
     let _ = writeln!(

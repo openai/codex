@@ -1,3 +1,11 @@
+//! Diagnoses whether Codex update paths target the running installation.
+//!
+//! Update diagnostics combine cached version metadata, install-channel hints,
+//! and bounded latest-version probes. For npm-managed launches, this module also
+//! verifies that npm install -g would update the package root that launched the
+//! current process, which catches PATH and prefix mismatches before the user runs
+//! an update command.
+
 use std::path::Path;
 
 use codex_core::config::Config;
@@ -16,6 +24,11 @@ const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 
+/// Builds the update-health row for the current installation.
+///
+/// Network failures while fetching latest-version metadata degrade the row to a
+/// warning instead of failing doctor outright; update freshness is useful
+/// support context but should not mask more direct install/config failures.
 pub(super) fn updates_check(config: &Config) -> DoctorCheck {
     let current_exe = std::env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());

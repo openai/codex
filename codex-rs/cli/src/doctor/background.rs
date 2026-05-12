@@ -1,3 +1,11 @@
+//! Reports app-server daemon state without starting or stopping the daemon.
+//!
+//! The background-server check is deliberately passive. It reads the daemon
+//! state directory, PID files, settings file, and control socket path, then
+//! attempts only a local socket connection when a socket already exists. That
+//! keeps doctor safe to run while the user is debugging startup or update-loop
+//! issues.
+
 use std::path::Path;
 
 use codex_core::config::Config;
@@ -10,6 +18,11 @@ const SETTINGS_FILE_NAME: &str = "settings.json";
 const PID_FILE_NAME: &str = "app-server.pid";
 const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 
+/// Builds the app-server status row from existing daemon state.
+///
+/// Missing files are expected for the ephemeral/not-running case and should not
+/// be treated as failures. A stale socket is a warning because it can explain
+/// client connection problems without proving the daemon itself is broken.
 pub(super) fn background_server_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
     let state_dir = config.codex_home.join(STATE_DIR_NAME);
