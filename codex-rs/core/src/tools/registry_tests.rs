@@ -71,7 +71,7 @@ fn register_handler_adds_handler_and_augments_specs_for_code_mode() {
 
     assert_eq!(specs.len(), 1);
     assert_eq!(
-        specs[0].spec,
+        specs[0],
         codex_tools::augment_tool_spec_for_code_mode(create_get_goal_tool())
     );
     assert!(registry.has_handler(&codex_tools::ToolName::plain(GET_GOAL_TOOL_NAME)));
