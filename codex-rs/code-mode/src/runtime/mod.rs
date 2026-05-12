@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
+use crate::description::CodeModeToolKind;
 use crate::description::EnabledToolMetadata;
 use crate::description::ToolDefinition;
 use crate::description::enabled_tool_metadata;
@@ -97,6 +98,7 @@ pub struct CodeModeNestedToolCall {
     pub cell_id: String,
     pub runtime_tool_call_id: String,
     pub tool_name: ToolName,
+    pub tool_kind: CodeModeToolKind,
     pub input: Option<JsonValue>,
 }
 
@@ -126,6 +128,7 @@ pub(crate) enum RuntimeEvent {
     ToolCall {
         id: String,
         name: ToolName,
+        kind: CodeModeToolKind,
         input: Option<JsonValue>,
     },
     Notify {
