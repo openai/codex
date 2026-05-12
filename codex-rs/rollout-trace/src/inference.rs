@@ -156,11 +156,14 @@ impl InferenceTraceAttempt {
         let Some(inference_call_id) = self.inference_call_id() else {
             return;
         };
-        headers.insert(
-            INFERENCE_CALL_ID_HEADER,
-            HeaderValue::from_str(inference_call_id)
-                .expect("rollout-trace inference ids must be valid HTTP header values"),
-        );
+        let Ok(inference_call_id) = HeaderValue::from_str(inference_call_id) else {
+            // These IDs are generated internally as UUID strings, so rejection
+            // should be impossible in practice. Tracing remains best-effort,
+            // though, and must never make provider requests fail.
+            return;
+        };
+
+        headers.insert(INFERENCE_CALL_ID_HEADER, inference_call_id);
     }
 
     /// Records the exact request object about to be sent to the model provider.
