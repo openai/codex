@@ -248,6 +248,7 @@ mod tests {
     use crate::tools::context::ToolInvocation;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::PermissionProfile;
+    use core_test_support::TempDirExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
@@ -276,7 +277,15 @@ mod tests {
     #[tokio::test]
     async fn handle_passes_sandbox_context_for_local_filesystem_reads() {
         let (session, mut turn) = make_session_and_context().await;
-        let image_path = turn.cwd.join("image.png");
+        let image_dir = tempfile::tempdir().expect("create image temp dir");
+        let image_cwd = image_dir.abs();
+        turn.cwd = image_cwd.clone();
+        turn.environments
+            .turn_environments
+            .first_mut()
+            .expect("default local turn environment")
+            .cwd = image_cwd.clone();
+        let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::read_only();
 
