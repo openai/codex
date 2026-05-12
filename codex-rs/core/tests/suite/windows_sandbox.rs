@@ -202,28 +202,23 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
     assert_eq!(exit_code, 0, "sandboxed command should complete");
     assert!(
         stdout.text.contains("GLOB-DENIED"),
-        "glob deny-read should block the secret: {:?}",
-        stdout
+        "glob deny-read should block the secret: {stdout:?}"
     );
     assert!(
         !stdout.text.contains("GLOB-READ"),
-        "glob deny-read should not allow the secret: {:?}",
-        stdout
+        "glob deny-read should not allow the secret: {stdout:?}"
     );
     assert!(
         stdout.text.contains("EXACT-DENIED"),
-        "exact deny-read should block the secret: {:?}",
-        stdout
+        "exact deny-read should block the secret: {stdout:?}"
     );
     assert!(
         !stdout.text.contains("EXACT-READ"),
-        "exact deny-read should not allow the secret: {:?}",
-        stdout
+        "exact deny-read should not allow the secret: {stdout:?}"
     );
     assert!(
         stdout.text.contains("public ok"),
-        "allowed reads should still work: {:?}",
-        stdout
+        "allowed reads should still work: {stdout:?}"
     );
     assert_eq!(stderr.text, "");
     Ok(())
