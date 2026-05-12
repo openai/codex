@@ -1,6 +1,9 @@
 use std::io;
 use std::sync::LazyLock;
 
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::legacy_core::config::set_default_oss_provider;
 use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
 use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
@@ -77,6 +80,15 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
         },
     ]
 });
+
+const MOVE_LEFT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Left),
+    key_hint::ctrl(KeyCode::Char('h')),
+];
+const MOVE_RIGHT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Right),
+    key_hint::ctrl(KeyCode::Char('l')),
+];
 
 pub struct OssSelectionWidget<'a> {
     select_options: &'a Vec<SelectOption>,
@@ -187,37 +199,11 @@ impl OssSelectionWidget<'_> {
             } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_decision("__CANCELLED__".to_string());
             }
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char(''),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            _ if MOVE_LEFT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + self.select_options.len() - 1)
                     % self.select_options.len();
             }
-            KeyEvent {
-                code: KeyCode::Right,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char(''),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            _ if MOVE_RIGHT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
             KeyEvent {

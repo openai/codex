@@ -11,6 +11,7 @@ use crate::color::blend;
 use crate::color::is_light;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListKeymap;
 use crate::keymap::PagerKeymap;
 use crate::keymap::RuntimeKeymap;
@@ -1038,17 +1039,7 @@ impl PickerState {
         if !self.list_keymap.page_down.is_pressed(key) {
             self.pending_page_down_target = None;
         }
-        let is_plain_text_char = matches!(
-            key,
-            KeyEvent {
-                code: KeyCode::Char(ch),
-                modifiers,
-                ..
-            } if !ch.is_ascii_control()
-                && !modifiers.contains(KeyModifiers::CONTROL)
-                && !modifiers.contains(KeyModifiers::ALT)
-        );
-        let allow_plain_char_navigation = !is_plain_text_char;
+        let allow_plain_char_navigation = !is_plain_text_key_event(key);
         match key {
             KeyEvent {
                 code: KeyCode::Char('c'),

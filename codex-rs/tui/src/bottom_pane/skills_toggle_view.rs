@@ -15,6 +15,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
@@ -232,17 +233,7 @@ impl SkillsToggleView {
 
 impl BottomPaneView for SkillsToggleView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        let is_plain_text_char = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char(ch),
-                modifiers,
-                ..
-            } if !ch.is_ascii_control()
-                && !modifiers.contains(KeyModifiers::CONTROL)
-                && !modifiers.contains(KeyModifiers::ALT)
-        );
-        let allow_plain_char_navigation = !is_plain_text_char;
+        let allow_plain_char_navigation = !is_plain_text_key_event(key_event);
 
         match key_event {
             _ if allow_plain_char_navigation && self.keymap.move_up.is_pressed(key_event) => {

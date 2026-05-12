@@ -122,6 +122,19 @@ impl KeyBindingListExt for [KeyBinding] {
     }
 }
 
+pub(crate) fn is_plain_text_key_event(event: KeyEvent) -> bool {
+    matches!(
+        event,
+        KeyEvent {
+            code: KeyCode::Char(ch),
+            modifiers,
+            ..
+        } if !ch.is_ascii_control()
+            && !modifiers.contains(KeyModifiers::CONTROL)
+            && !modifiers.contains(KeyModifiers::ALT)
+    )
+}
+
 pub(crate) const fn plain(key: KeyCode) -> KeyBinding {
     KeyBinding::new(key, KeyModifiers::NONE)
 }
