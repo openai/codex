@@ -1,9 +1,10 @@
-use crate::ToolDefinition;
-use crate::parse_tool_input_schema;
+use codex_tool_api::FunctionToolSpec;
+use codex_tool_api::ToolDefinition;
+use codex_tool_api::ToolName;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_json::Error> {
+pub fn mcp_tool_definition(tool_name: ToolName, tool: &rmcp::model::Tool) -> ToolDefinition<()> {
     let mut serialized_input_schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
 
     // OpenAI models mandate the "properties" field in the schema. Some MCP
@@ -18,22 +19,25 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_
         );
     }
 
-    let input_schema = parse_tool_input_schema(&serialized_input_schema)?;
     let structured_content_schema = tool
         .output_schema
         .as_ref()
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
 
-    Ok(ToolDefinition {
-        name: tool.name.to_string(),
-        description: tool.description.clone().map(Into::into).unwrap_or_default(),
-        input_schema,
-        output_schema: Some(mcp_call_tool_result_output_schema(
-            structured_content_schema,
-        )),
-        defer_loading: false,
-    })
+    ToolDefinition::new(
+        tool_name.clone(),
+        FunctionToolSpec {
+            name: tool_name.name,
+            description: tool.description.clone().map(Into::into).unwrap_or_default(),
+            strict: false,
+            parameters: serialized_input_schema,
+        },
+        (),
+    )
+    .with_output_schema(mcp_call_tool_result_output_schema(
+        structured_content_schema,
+    ))
 }
 
 pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {

@@ -8,13 +8,17 @@ Crates that define contributed tools should depend on this crate. It owns:
 
 - the executable bundle contract: `ToolBundle`, `ToolExecutor`, `ToolCall`,
   and `ToolError`
+- the shared definition envelope: `ToolDefinition`, `ToolExposure`, and
+  `ToolName`
 - the one model-visible spec an extension may contribute directly:
   `FunctionToolSpec`
 
-The contract is intentionally narrow: contributed tools receive a call id plus
-raw JSON arguments and return a JSON value. If a feature needs richer host
-integration, its extension is expected to do that wiring before exposing the
-tool rather than widening this crate around the hardest native tools.
+The contract is intentionally narrow: a definition keeps one tool's canonical
+name, function metadata, exposure mode, and opaque runtime together. Contributed
+tools receive a call id plus raw JSON arguments and return a JSON value. If a
+feature needs richer host integration, its extension is expected to do that
+wiring before exposing the tool rather than widening this crate around the
+hardest native tools.
 
 The intended dependency direction is:
 

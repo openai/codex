@@ -3689,6 +3689,7 @@ dependencies = [
 name = "codex-tool-api"
 version = "0.0.0"
 dependencies = [
+ "codex-protocol",
  "pretty_assertions",
  "serde_json",
  "thiserror 2.0.18",
@@ -3702,6 +3703,7 @@ dependencies = [
  "codex-code-mode",
  "codex-features",
  "codex-protocol",
+ "codex-tool-api",
  "codex-utils-absolute-path",
  "codex-utils-pty",
  "pretty_assertions",

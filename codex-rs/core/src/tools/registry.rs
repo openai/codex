@@ -17,14 +17,11 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
-use crate::tools::handlers::extension_tools::BundledToolHandler;
-use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
@@ -180,7 +177,7 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-trait AnyToolHandler: Send + Sync {
+pub(crate) trait AnyToolHandler: Send + Sync {
     fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
@@ -593,26 +590,18 @@ impl ToolRegistryBuilder {
         self.handlers.insert(name, handler);
     }
 
-    pub fn register_tool_bundle(&mut self, bundle: ExtensionToolBundle) {
-        let tool_name = ToolName::plain(bundle.tool_name());
+    pub(crate) fn register_erased_handler(
+        &mut self,
+        tool_name: ToolName,
+        handler: Arc<dyn AnyToolHandler>,
+    ) -> bool {
         if self.handlers.contains_key(&tool_name) {
-            warn!("Skipping extension tool `{tool_name}`: handler already registered");
-            return;
+            warn!("Skipping tool handler `{tool_name}`: handler already registered");
+            return false;
         }
 
-        let spec = match extension_tool_spec(bundle.spec()) {
-            Ok(spec) => spec,
-            Err(error) => {
-                error_or_panic(format!(
-                    "failed to convert extension tool `{tool_name}` to a host spec: {error}"
-                ));
-                return;
-            }
-        };
-        self.push_spec(spec.clone());
-
-        let handler: Arc<dyn AnyToolHandler> = Arc::new(BundledToolHandler::new(bundle, spec));
         self.handlers.insert(tool_name, handler);
+        true
     }
 
     pub(crate) fn specs(&self) -> &[ToolSpec] {

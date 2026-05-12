@@ -1,12 +1,13 @@
 use super::parse_dynamic_tool;
-use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolExposure;
+use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::FunctionToolSpec;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 
 #[test]
-fn parse_dynamic_tool_sanitizes_input_schema() {
+fn parse_dynamic_tool_preserves_definition_metadata() {
     let tool = DynamicToolSpec {
         namespace: None,
         name: "lookup_ticket".to_string(),
@@ -22,21 +23,23 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
     };
 
     assert_eq!(
-        parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ToolDefinition {
-            name: "lookup_ticket".to_string(),
-            description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::from([(
-                    "id".to_string(),
-                    JsonSchema::string(Some("Ticket identifier".to_string()),),
-                )]),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
-            output_schema: None,
-            defer_loading: false,
-        }
+        parse_dynamic_tool(&tool),
+        ToolDefinition::new(
+            ToolName::plain("lookup_ticket"),
+            FunctionToolSpec {
+                name: "lookup_ticket".to_string(),
+                description: "Fetch a ticket".to_string(),
+                strict: false,
+                parameters: serde_json::json!({
+                    "properties": {
+                        "id": {
+                            "description": "Ticket identifier"
+                        }
+                    }
+                }),
+            },
+            (),
+        )
     );
 }
 
@@ -53,18 +56,8 @@ fn parse_dynamic_tool_preserves_defer_loading() {
         defer_loading: true,
     };
 
-    assert_eq!(
-        parse_dynamic_tool(&tool).expect("parse dynamic tool"),
-        ToolDefinition {
-            name: "lookup_ticket".to_string(),
-            description: "Fetch a ticket".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::new(),
-                /*required*/ None,
-                /*additional_properties*/ None
-            ),
-            output_schema: None,
-            defer_loading: true,
-        }
-    );
+    let definition = parse_dynamic_tool(&tool);
+
+    assert_eq!(definition.exposure(), ToolExposure::Deferred);
+    assert_eq!(definition.tool_name(), &ToolName::plain("lookup_ticket"));
 }

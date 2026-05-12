@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use crate::FunctionToolSpec;
 use crate::ToolCall;
+use crate::ToolDefinition;
 use crate::ToolError;
+use crate::ToolName;
 
 /// Future returned by one contributed function-tool invocation.
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + 'a>>;
@@ -15,29 +17,36 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, ToolError>> 
 /// function tool.
 #[derive(Clone)]
 pub struct ToolBundle {
-    spec: FunctionToolSpec,
-    executor: Arc<dyn ToolExecutor>,
+    definition: ToolDefinition<Arc<dyn ToolExecutor>>,
 }
 
 impl ToolBundle {
     /// Creates one contributed function-tool bundle.
     pub fn new(spec: FunctionToolSpec, executor: Arc<dyn ToolExecutor>) -> Self {
-        Self { spec, executor }
+        let tool_name = ToolName::plain(spec.name.clone());
+        Self {
+            definition: ToolDefinition::new(tool_name, spec, executor),
+        }
     }
 
     /// Returns the contributed function-tool spec.
     pub fn spec(&self) -> &FunctionToolSpec {
-        &self.spec
+        self.definition.spec()
     }
 
     /// Returns the contributed function-tool name.
     pub fn tool_name(&self) -> &str {
-        self.spec.name.as_str()
+        self.definition.tool_name().name.as_str()
     }
 
     /// Returns the executable implementation.
     pub fn executor(&self) -> Arc<dyn ToolExecutor> {
-        Arc::clone(&self.executor)
+        Arc::clone(self.definition.runtime())
+    }
+
+    /// Returns the shared definition behind this extension-owned bundle.
+    pub fn definition(&self) -> &ToolDefinition<Arc<dyn ToolExecutor>> {
+        &self.definition
     }
 }
 

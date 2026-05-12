@@ -1,9 +1,11 @@
 use crate::JsonSchema;
-use crate::ToolDefinition;
 use crate::ToolName;
+use crate::mcp_tool_definition;
 use crate::parse_dynamic_tool;
-use crate::parse_mcp_tool;
+use crate::parse_tool_input_schema;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::ToolDefinition;
+use codex_tool_api::ToolExposure;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -69,24 +71,16 @@ pub enum ResponsesApiNamespaceTool {
 pub fn dynamic_tool_to_responses_api_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(parse_dynamic_tool(
-        tool,
-    )?))
+    tool_definition_to_responses_api_tool(&parse_dynamic_tool(tool))
 }
 
 pub fn dynamic_tool_to_loadable_tool_spec(
     tool: &DynamicToolSpec,
 ) -> Result<LoadableToolSpec, serde_json::Error> {
-    let output_tool = dynamic_tool_to_responses_api_tool(tool)?;
-    Ok(match tool.namespace.as_ref() {
-        Some(namespace) => LoadableToolSpec::Namespace(ResponsesApiNamespace {
-            name: namespace.clone(),
-            // the user doesn't provide a description for dynamic tools, so we use the default
-            description: default_namespace_description(namespace),
-            tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
-        }),
-        None => LoadableToolSpec::Function(output_tool),
-    })
+    tool_definition_to_loadable_tool_spec(
+        &parse_dynamic_tool(tool),
+        /*namespace_description*/ None,
+    )
 }
 
 pub fn coalesce_loadable_tool_specs(
@@ -119,35 +113,41 @@ pub fn coalesce_loadable_tool_specs(
     coalesced_specs
 }
 
-pub fn mcp_tool_to_responses_api_tool(
-    tool_name: &ToolName,
-    tool: &rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
-    ))
-}
-
 pub fn mcp_tool_to_deferred_responses_api_tool(
     tool_name: &ToolName,
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?
-            .renamed(tool_name.name.clone())
-            .into_deferred(),
-    ))
+    tool_definition_to_responses_api_tool(&mcp_tool_definition(tool_name.clone(), tool).deferred())
 }
 
-pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
-    ResponsesApiTool {
-        name: tool_definition.name,
-        description: tool_definition.description,
-        strict: false,
-        defer_loading: tool_definition.defer_loading.then_some(true),
-        parameters: tool_definition.input_schema,
-        output_schema: tool_definition.output_schema,
-    }
+pub fn tool_definition_to_responses_api_tool<R>(
+    tool_definition: &ToolDefinition<R>,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let spec = tool_definition.spec();
+    Ok(ResponsesApiTool {
+        name: tool_definition.tool_name().name.clone(),
+        description: spec.description.clone(),
+        strict: spec.strict,
+        defer_loading: matches!(tool_definition.exposure(), ToolExposure::Deferred).then_some(true),
+        parameters: parse_tool_input_schema(&spec.parameters)?,
+        output_schema: tool_definition.output_schema().cloned(),
+    })
+}
+
+pub fn tool_definition_to_loadable_tool_spec<R>(
+    tool_definition: &ToolDefinition<R>,
+    namespace_description: Option<String>,
+) -> Result<LoadableToolSpec, serde_json::Error> {
+    let output_tool = tool_definition_to_responses_api_tool(tool_definition)?;
+    Ok(match tool_definition.tool_name().namespace.as_ref() {
+        Some(namespace) => LoadableToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace.clone(),
+            description: namespace_description
+                .unwrap_or_else(|| default_namespace_description(namespace)),
+            tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
+        }),
+        None => LoadableToolSpec::Function(output_tool),
+    })
 }
 
 #[cfg(test)]

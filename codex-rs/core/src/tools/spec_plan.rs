@@ -27,6 +27,7 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::extension_tools::BundledToolHandler;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -44,13 +45,15 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
+use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::spec_plan_types::ToolNamespace;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
 use codex_mcp::ToolInfo;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
+use codex_tool_api::ToolBundle as ExtensionToolBundle;
+use codex_tool_api::ToolDefinition;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchSource;
@@ -61,8 +64,9 @@ use codex_tools::coalesce_loadable_tool_specs;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_tool_search_source_infos;
 use codex_tools::default_namespace_description;
-use codex_tools::dynamic_tool_to_loadable_tool_spec;
-use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_tools::mcp_tool_definition;
+use codex_tools::parse_dynamic_tool;
+use codex_tools::tool_definition_to_loadable_tool_spec;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -333,88 +337,15 @@ pub fn build_tool_registry_builder(
         }
     }
 
-    if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries = mcp_tools
-            .iter()
-            .map(|tool| (tool.canonical_tool_name(), tool))
-            .collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-        let mut namespace_entries = BTreeMap::new();
-
-        for (tool_name, tool) in entries {
-            let Some(namespace) = tool_name.namespace.as_ref() else {
-                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
-                continue;
-            };
-            namespace_entries
-                .entry(namespace.clone())
-                .or_insert_with(Vec::new)
-                .push((tool_name, tool));
-        }
-
-        for (namespace, mut entries) in namespace_entries {
-            entries.sort_by_key(|(tool_name, _)| tool_name.name.clone());
-            let tool_namespace = params
-                .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace));
-            let description = tool_namespace
-                .and_then(|namespace| namespace.description.as_deref())
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    let namespace_name = tool_namespace
-                        .map(|namespace| namespace.name.as_str())
-                        .unwrap_or(namespace.as_str());
-                    default_namespace_description(namespace_name)
-                });
-            let mut tools = Vec::new();
-            for (tool_name, tool) in entries {
-                match mcp_tool_to_responses_api_tool(&tool_name, &tool.tool) {
-                    Ok(converted_tool) => {
-                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
-                        builder.register_handler(Arc::new(McpHandler::new(tool.clone())));
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
-            }
-
-            if config.namespace_tools && !tools.is_empty() {
-                builder.push_spec(ToolSpec::Namespace(ResponsesApiNamespace {
-                    name: namespace,
-                    description,
-                    tools,
-                }));
-            }
-        }
-    }
-
-    let mut dynamic_tool_specs = Vec::new();
-    for tool in params.dynamic_tools {
-        match dynamic_tool_to_loadable_tool_spec(tool) {
-            Ok(loadable_tool) => {
-                let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                dynamic_tool_specs.push(loadable_tool);
-                builder.register_handler(Arc::new(DynamicToolHandler::new(handler_name)));
-            }
-            Err(error) => {
-                tracing::error!(
-                    "Failed to convert dynamic tool {:?} to OpenAI tool: {error:?}",
-                    tool.name
-                );
-            }
-        }
-    }
-    for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
-        let spec = spec.into();
-        if config.namespace_tools || !matches!(spec, ToolSpec::Namespace(_)) {
-            builder.push_spec(spec);
-        }
-    }
+    register_and_publish_tool_definitions(
+        &mut builder,
+        config,
+        params.tool_namespaces,
+        mcp_tool_definitions(params.mcp_tools)
+            .into_iter()
+            .chain(dynamic_tool_definitions(params.dynamic_tools))
+            .chain(extension_tool_definitions(params.extension_tool_bundles)),
+    );
 
     if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
         let directly_registered_mcp_tools = params
@@ -425,16 +356,129 @@ pub fn build_tool_registry_builder(
             .collect::<HashSet<_>>();
         for tool in deferred_mcp_tools {
             if !directly_registered_mcp_tools.contains(&tool.canonical_tool_name()) {
-                builder.register_handler(Arc::new(McpHandler::new(tool.clone())));
+                let definition = mcp_tool_definition(tool.canonical_tool_name(), &tool.tool)
+                    .deferred()
+                    .with_runtime(
+                        Arc::new(McpHandler::new(tool.clone())) as Arc<dyn AnyToolHandler>
+                    );
+                register_tool_definition_handler(&mut builder, &definition);
             }
         }
     }
 
-    for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle);
+    builder
+}
+
+type RuntimeToolDefinition = ToolDefinition<Arc<dyn AnyToolHandler>>;
+
+fn register_and_publish_tool_definitions(
+    builder: &mut ToolRegistryBuilder,
+    config: &ToolsConfig,
+    tool_namespaces: Option<&std::collections::HashMap<String, ToolNamespace>>,
+    definitions: impl IntoIterator<Item = RuntimeToolDefinition>,
+) {
+    let mut loadable_specs = Vec::new();
+
+    for definition in definitions {
+        let tool_name = definition.tool_name().clone();
+        let namespace_description = namespace_description_for_tool(&tool_name, tool_namespaces);
+        let loadable_spec =
+            match tool_definition_to_loadable_tool_spec(&definition, namespace_description) {
+                Ok(spec) => spec,
+                Err(error) => {
+                    tracing::error!(
+                        "Failed to convert tool `{tool_name}` to OpenAI tool: {error:?}"
+                    );
+                    continue;
+                }
+            };
+        if register_tool_definition_handler(builder, &definition) {
+            loadable_specs.push(loadable_spec);
+        }
     }
 
-    builder
+    for spec in coalesce_loadable_tool_specs(loadable_specs) {
+        let spec = spec.into();
+        if config.namespace_tools || !matches!(spec, ToolSpec::Namespace(_)) {
+            builder.push_spec(spec);
+        }
+    }
+}
+
+fn register_tool_definition_handler(
+    builder: &mut ToolRegistryBuilder,
+    definition: &RuntimeToolDefinition,
+) -> bool {
+    builder.register_erased_handler(
+        definition.tool_name().clone(),
+        Arc::clone(definition.runtime()),
+    )
+}
+
+fn mcp_tool_definitions(mcp_tools: Option<&[ToolInfo]>) -> Vec<RuntimeToolDefinition> {
+    let mut tools = mcp_tools.into_iter().flatten().collect::<Vec<_>>();
+    tools.sort_by_key(|tool| tool.canonical_tool_name());
+
+    tools
+        .into_iter()
+        .filter_map(|tool| {
+            let tool_name = tool.canonical_tool_name();
+            if tool_name.namespace.is_none() {
+                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
+                return None;
+            }
+            Some(
+                mcp_tool_definition(tool_name, &tool.tool)
+                    .with_runtime(
+                        Arc::new(McpHandler::new(tool.clone())) as Arc<dyn AnyToolHandler>
+                    ),
+            )
+        })
+        .collect()
+}
+
+fn dynamic_tool_definitions(
+    dynamic_tools: &[codex_protocol::dynamic_tools::DynamicToolSpec],
+) -> Vec<RuntimeToolDefinition> {
+    dynamic_tools
+        .iter()
+        .map(|tool| {
+            let definition = parse_dynamic_tool(tool);
+            let handler = Arc::new(DynamicToolHandler::new(definition.tool_name().clone()))
+                as Arc<dyn AnyToolHandler>;
+            definition.with_runtime(handler)
+        })
+        .collect()
+}
+
+fn extension_tool_definitions(
+    extension_tool_bundles: &[ExtensionToolBundle],
+) -> Vec<RuntimeToolDefinition> {
+    extension_tool_bundles
+        .iter()
+        .map(|bundle| {
+            let handler =
+                Arc::new(BundledToolHandler::new(bundle.clone())) as Arc<dyn AnyToolHandler>;
+            bundle.definition().clone().with_runtime(handler)
+        })
+        .collect()
+}
+
+fn namespace_description_for_tool(
+    tool_name: &ToolName,
+    tool_namespaces: Option<&std::collections::HashMap<String, ToolNamespace>>,
+) -> Option<String> {
+    let namespace = tool_name.namespace.as_ref()?;
+    let tool_namespace = tool_namespaces.and_then(|namespaces| namespaces.get(namespace));
+    tool_namespace.map(|tool_namespace| {
+        tool_namespace
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| default_namespace_description(tool_namespace.name.as_str()))
+    })
 }
 
 fn compare_code_mode_tools(

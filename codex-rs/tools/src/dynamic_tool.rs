@@ -1,15 +1,25 @@
-use crate::ToolDefinition;
-use crate::parse_tool_input_schema;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::FunctionToolSpec;
+use codex_tool_api::ToolDefinition;
+use codex_tool_api::ToolName;
 
-pub fn parse_dynamic_tool(tool: &DynamicToolSpec) -> Result<ToolDefinition, serde_json::Error> {
-    Ok(ToolDefinition {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
-        input_schema: parse_tool_input_schema(&tool.input_schema)?,
-        output_schema: None,
-        defer_loading: tool.defer_loading,
-    })
+pub fn parse_dynamic_tool(tool: &DynamicToolSpec) -> ToolDefinition<()> {
+    let definition = ToolDefinition::new(
+        ToolName::new(tool.namespace.clone(), tool.name.clone()),
+        FunctionToolSpec {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            strict: false,
+            parameters: tool.input_schema.clone(),
+        },
+        (),
+    );
+
+    if tool.defer_loading {
+        definition.deferred()
+    } else {
+        definition
+    }
 }
 
 #[cfg(test)]

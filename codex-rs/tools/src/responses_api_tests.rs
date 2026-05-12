@@ -9,6 +9,7 @@ use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::FunctionToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -16,20 +17,27 @@ use std::collections::BTreeMap;
 #[test]
 fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
     assert_eq!(
-        tool_definition_to_responses_api_tool(ToolDefinition {
-            name: "lookup_order".to_string(),
-            description: "Look up an order".to_string(),
-            input_schema: JsonSchema::object(
-                BTreeMap::from([(
-                    "order_id".to_string(),
-                    JsonSchema::string(/*description*/ None),
-                )]),
-                Some(vec!["order_id".to_string()]),
-                Some(false.into())
-            ),
-            output_schema: Some(json!({"type": "object"})),
-            defer_loading: false,
-        }),
+        tool_definition_to_responses_api_tool(
+            &ToolDefinition::new(
+                ToolName::plain("lookup_order"),
+                FunctionToolSpec {
+                    name: "lookup_order".to_string(),
+                    description: "Look up an order".to_string(),
+                    strict: false,
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "order_id": {"type": "string"}
+                        },
+                        "required": ["order_id"],
+                        "additionalProperties": false,
+                    }),
+                },
+                (),
+            )
+            .with_output_schema(json!({"type": "object"})),
+        )
+        .expect("convert definition"),
         ResponsesApiTool {
             name: "lookup_order".to_string(),
             description: "Look up an order".to_string(),

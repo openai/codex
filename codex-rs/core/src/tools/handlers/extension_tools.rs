@@ -3,9 +3,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tool_api::ToolError as ExtensionToolError;
-use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
@@ -52,12 +50,11 @@ impl ToolOutput for BundledToolOutput {
 
 pub(crate) struct BundledToolHandler {
     bundle: ExtensionToolBundle,
-    spec: ToolSpec,
 }
 
 impl BundledToolHandler {
-    pub(crate) fn new(bundle: ExtensionToolBundle, spec: ToolSpec) -> Self {
-        Self { bundle, spec }
+    pub(crate) fn new(bundle: ExtensionToolBundle) -> Self {
+        Self { bundle }
     }
 
     fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
@@ -73,10 +70,6 @@ impl ToolHandler for BundledToolHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(self.bundle.tool_name())
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -133,19 +126,6 @@ impl ToolHandler for BundledToolHandler {
     }
 }
 
-pub(crate) fn extension_tool_spec(
-    spec: &codex_tool_api::FunctionToolSpec,
-) -> Result<ToolSpec, serde_json::Error> {
-    Ok(ToolSpec::Function(ResponsesApiTool {
-        name: spec.name.clone(),
-        description: spec.description.clone(),
-        strict: spec.strict,
-        defer_loading: None,
-        parameters: codex_tools::parse_tool_input_schema(&spec.parameters)?,
-        output_schema: None,
-    }))
-}
-
 fn map_extension_tool_error(error: ExtensionToolError) -> FunctionCallError {
     match error {
         ExtensionToolError::RespondToModel(message) => FunctionCallError::RespondToModel(message),
@@ -170,7 +150,6 @@ mod tests {
 
     use super::BundledToolHandler;
     use super::BundledToolOutput;
-    use super::extension_tool_spec;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
@@ -206,8 +185,7 @@ mod tests {
             },
             Arc::new(StubExtensionExecutor),
         );
-        let spec = extension_tool_spec(bundle.spec()).expect("extension spec should convert");
-        let handler = BundledToolHandler::new(bundle, spec);
+        let handler = BundledToolHandler::new(bundle);
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let invocation = ToolInvocation {
             session: session.into(),
