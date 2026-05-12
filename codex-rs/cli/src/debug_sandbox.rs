@@ -769,6 +769,16 @@ mod tests {
         Ok(())
     }
 
+    fn workspace_write_policy_for_codex_home(
+        codex_home: &TempDir,
+    ) -> codex_protocol::permissions::FileSystemSandboxPolicy {
+        let memories_root = AbsolutePathBuf::try_from(codex_home.path().join("memories"))
+            .expect("codex home tempdir should be absolute");
+        codex_protocol::models::PermissionProfile::workspace_write()
+            .file_system_sandbox_policy()
+            .with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&memories_root))
+    }
+
     #[tokio::test]
     async fn debug_sandbox_honors_active_permission_profiles() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
@@ -947,8 +957,7 @@ mod tests {
 
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+            workspace_write_policy_for_codex_home(&codex_home)
         );
 
         Ok(())
@@ -980,8 +989,7 @@ mod tests {
 
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+            workspace_write_policy_for_codex_home(&codex_home)
         );
 
         Ok(())
