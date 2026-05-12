@@ -458,7 +458,7 @@ mod tests {
                 "network.openai_reachability",
                 "reachability",
                 CheckStatus::Ok,
-                "OpenAI endpoints are reachable over TCP",
+                "OpenAI endpoints are reachable over HTTP",
             ),
         ];
         DoctorReport {
@@ -491,7 +491,7 @@ Updates
 
 Connectivity
   ✓ network      network environment readable
-  ✓ reachability OpenAI endpoints are reachable over TCP
+  ✓ reachability OpenAI endpoints are reachable over HTTP
 
 Background Server
   ✓ app-server   background server is not running
@@ -534,7 +534,7 @@ Updates
 
 Connectivity
   [ok] network      network environment readable
-  [ok] reachability OpenAI endpoints are reachable over TCP
+  [ok] reachability OpenAI endpoints are reachable over HTTP
 
 Background Server
   [ok] app-server   background server is not running

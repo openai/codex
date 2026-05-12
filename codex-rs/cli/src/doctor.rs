@@ -11,11 +11,11 @@
 //! issue or while diagnosing a broken local installation.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
+use std::future::Future;
 use std::io::IsTerminal;
-use std::net::TcpStream;
-use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -25,6 +25,7 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -34,6 +35,7 @@ use codex_install_context::StandalonePlatform;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
+use codex_login::default_client::build_reqwest_client;
 use codex_login::load_auth_dot_json;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
@@ -201,7 +203,7 @@ async fn build_report(
             checks.push(timed_check(|| auth_check(config)));
             checks.push(timed_check(|| updates_check(config)));
             checks.push(timed_check(network_check));
-            checks.push(timed_check(|| mcp_check(config)));
+            checks.push(timed_check_async(|| mcp_check(config)).await);
             checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
             checks.push(timed_check(terminal_check));
             checks.push(timed_check(|| state_check(config)));
@@ -224,7 +226,7 @@ async fn build_report(
         }
     }
 
-    checks.push(timed_check(openai_reachability_check));
+    checks.push(timed_check_async(openai_reachability_check).await);
 
     let overall_status = overall_status(&checks);
     DoctorReport {
@@ -267,6 +269,17 @@ async fn load_config(
 fn timed_check(f: impl FnOnce() -> DoctorCheck) -> DoctorCheck {
     let start = Instant::now();
     let mut check = f();
+    check.duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    check
+}
+
+async fn timed_check_async<F, Fut>(f: F) -> DoctorCheck
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = DoctorCheck>,
+{
+    let start = Instant::now();
+    let mut check = f().await;
     check.duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
     check
 }
@@ -717,8 +730,11 @@ fn network_check() -> DoctorCheck {
     DoctorCheck::new("network.env", "network", status, summary).details(details)
 }
 
-fn mcp_check(config: &Config) -> DoctorCheck {
-    let servers = config.mcp_servers.get();
+async fn mcp_check(config: &Config) -> DoctorCheck {
+    mcp_check_from_servers(config.mcp_servers.get()).await
+}
+
+async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> DoctorCheck {
     if servers.is_empty() {
         return DoctorCheck::new(
             "mcp.config",
@@ -735,7 +751,8 @@ fn mcp_check(config: &Config) -> DoctorCheck {
     let mut unreachable_http = Vec::new();
 
     for (name, server) in servers {
-        if !server.enabled || server.disabled_reason.is_some() {
+        let disabled_server = !server.enabled || server.disabled_reason.is_some();
+        if disabled_server {
             disabled += 1;
         }
         match &server.transport {
@@ -747,6 +764,9 @@ fn mcp_check(config: &Config) -> DoctorCheck {
                 ..
             } => {
                 *transport_counts.entry("stdio").or_default() += 1;
+                if disabled_server {
+                    continue;
+                }
                 if let Some(cwd) = cwd
                     && !cwd.exists()
                 {
@@ -773,6 +793,9 @@ fn mcp_check(config: &Config) -> DoctorCheck {
                 ..
             } => {
                 *transport_counts.entry("streamable_http").or_default() += 1;
+                if disabled_server {
+                    continue;
+                }
                 if let Some(env_var) = bearer_token_env_var
                     && !env_var_present(env_var)
                 {
@@ -786,7 +809,7 @@ fn mcp_check(config: &Config) -> DoctorCheck {
                         }
                     }
                 }
-                if let Err(err) = tcp_probe_url(url) {
+                if let Err(err) = http_probe_url(url).await {
                     unreachable_http.push(format!("{name}: {url} ({err})"));
                 }
             }
@@ -963,16 +986,16 @@ fn fallback_state_check() -> DoctorCheck {
     }
 }
 
-fn openai_reachability_check() -> DoctorCheck {
-    let endpoints = [("api.openai.com", 443), ("chatgpt.com", 443)];
+async fn openai_reachability_check() -> DoctorCheck {
+    let endpoints = ["https://api.openai.com/", "https://chatgpt.com/"];
     let mut details = Vec::new();
     let mut failures = Vec::new();
-    for (host, port) in endpoints {
-        match tcp_probe_host(host, port) {
-            Ok(()) => details.push(format!("{host}:{port}: reachable")),
+    for url in endpoints {
+        match http_probe_url(url).await {
+            Ok(status) => details.push(format!("{url}: reachable ({status})")),
             Err(err) => {
-                details.push(format!("{host}:{port}: {err}"));
-                failures.push(host);
+                details.push(format!("{url}: {err}"));
+                failures.push(url);
             }
         }
     }
@@ -983,9 +1006,9 @@ fn openai_reachability_check() -> DoctorCheck {
         CheckStatus::Fail
     };
     let summary = if failures.is_empty() {
-        "OpenAI endpoints are reachable over TCP"
+        "OpenAI endpoints are reachable over HTTP"
     } else {
-        "one or more OpenAI endpoints are unreachable over TCP"
+        "one or more OpenAI endpoints are unreachable over HTTP"
     };
     let mut check = DoctorCheck::new(
         "network.openai_reachability",
@@ -1000,42 +1023,24 @@ fn openai_reachability_check() -> DoctorCheck {
     check
 }
 
-fn tcp_probe_url(url: &str) -> Result<(), String> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| "URL is missing a scheme".to_string())?;
-    let default_port = match scheme {
-        "http" => 80,
-        "https" => 443,
-        _ => return Err(format!("unsupported scheme {scheme}")),
-    };
-    let authority = rest.split('/').next().unwrap_or(rest);
-    let (host, port) = parse_host_port(authority, default_port)?;
-    tcp_probe_host(&host, port)
-}
-
-fn parse_host_port(authority: &str, default_port: u16) -> Result<(String, u16), String> {
-    if authority.is_empty() {
-        return Err("URL host is empty".to_string());
-    }
-    if let Some((host, port)) = authority.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
-    {
-        return Ok((host.trim_matches(['[', ']']).to_string(), port));
-    }
-    Ok((authority.trim_matches(['[', ']']).to_string(), default_port))
-}
-
-fn tcp_probe_host(host: &str, port: u16) -> Result<(), String> {
-    let mut addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(|err| format!("DNS lookup failed: {err}"))?;
-    let Some(addr) = addrs.next() else {
-        return Err("DNS lookup returned no addresses".to_string());
-    };
-    TcpStream::connect_timeout(&addr, Duration::from_secs(3))
-        .map(|_| ())
-        .map_err(|err| format!("connect failed: {err}"))
+async fn http_probe_url(url: &str) -> Result<String, String> {
+    let response = build_reqwest_client()
+        .head(url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map_err(|err| {
+            if err.is_timeout() {
+                "request timed out".to_string()
+            } else if err.is_connect() {
+                "connect failed".to_string()
+            } else if err.is_builder() {
+                "request could not be built".to_string()
+            } else {
+                err.to_string()
+            }
+        })?;
+    Ok(format!("HTTP {}", response.status().as_u16()))
 }
 
 fn path_readiness(details: &mut Vec<String>, label: &str, path: &Path) {
@@ -1124,6 +1129,12 @@ fn should_enable_color(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    use pretty_assertions::assert_eq;
+
     use super::*;
 
     #[test]
@@ -1158,6 +1169,59 @@ mod tests {
                 npm_package_root: npm_root.join("@openai").join("codex"),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_check_ignores_disabled_servers() {
+        let disabled_server: McpServerConfig = toml::from_str(
+            r#"
+                url = "http://127.0.0.1:9/mcp"
+                enabled = false
+                required = true
+                bearer_token_env_var = "CODEX_DOCTOR_DISABLED_MCP_TOKEN"
+            "#,
+        )
+        .expect("should deserialize disabled MCP config");
+        let servers = HashMap::from([("disabled".to_string(), disabled_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "MCP configuration is locally consistent");
+        assert!(check.details.contains(&"disabled servers: 1".to_string()));
+        assert!(
+            check
+                .details
+                .iter()
+                .all(|detail| !detail.contains("CODEX_DOCTOR_DISABLED_MCP_TOKEN"))
+        );
+        assert!(
+            check
+                .details
+                .iter()
+                .all(|detail| !detail.contains("reachability failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn http_probe_treats_http_status_as_reachable() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept probe request");
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write response");
+        });
+
+        let status = http_probe_url(&format!("http://{addr}/mcp")).await;
+        server.join().expect("probe server thread should finish");
+
+        assert_eq!(status, Ok("HTTP 405".to_string()));
     }
 
     #[test]
