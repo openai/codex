@@ -13,15 +13,23 @@ const SEPARATOR_WIDTH: usize = 45;
 const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
-        keys: &["install", "terminal", "state"],
+        keys: &["runtime", "install", "search", "terminal", "state"],
     },
     OutputGroup {
         title: "Configuration",
         keys: &["config", "auth", "mcp", "sandbox"],
     },
     OutputGroup {
+        title: "Updates",
+        keys: &["updates"],
+    },
+    OutputGroup {
         title: "Connectivity",
-        keys: &["network", "app-server", "deep"],
+        keys: &["network", "deep"],
+    },
+    OutputGroup {
+        title: "Background Server",
+        keys: &["app-server"],
     },
 ];
 
@@ -251,7 +259,7 @@ fn write_footer(out: &mut String, report: &DoctorReport, options: HumanOutputOpt
             out,
             "{} {}",
             cyan("--deep", options),
-            dim("reachability probes (network, app-server, MCP)", options)
+            dim("reachability and latest-version probes", options)
         );
     }
     let _ = writeln!(
@@ -259,6 +267,14 @@ fn write_footer(out: &mut String, report: &DoctorReport, options: HumanOutputOpt
         "{} {}",
         cyan("--json", options),
         dim("redacted support report", options)
+    );
+    let _ = writeln!(
+        out,
+        "{}",
+        dim(
+            "Still having issues? Run codex doctor --json for support details.",
+            options
+        )
     );
 }
 
@@ -425,10 +441,22 @@ mod tests {
     fn sample_report() -> DoctorReport {
         let checks = vec![
             DoctorCheck::new(
+                "runtime.provenance",
+                "runtime",
+                CheckStatus::Ok,
+                "running local on darwin-arm64",
+            ),
+            DoctorCheck::new(
                 "installation",
                 "install",
                 CheckStatus::Ok,
                 "installation looks consistent",
+            ),
+            DoctorCheck::new(
+                "runtime.search",
+                "search",
+                CheckStatus::Ok,
+                "search is OK (bundled)",
             ),
             DoctorCheck::new(
                 "terminal.env",
@@ -451,10 +479,22 @@ mod tests {
             .detail("OPENAI_API_KEY: present")
             .remediation("Run `codex login`."),
             DoctorCheck::new(
+                "updates.status",
+                "updates",
+                CheckStatus::Ok,
+                "update configuration is locally consistent",
+            ),
+            DoctorCheck::new(
                 "network.env",
                 "network",
                 CheckStatus::Ok,
                 "network environment readable",
+            ),
+            DoctorCheck::new(
+                "app_server.status",
+                "app-server",
+                CheckStatus::Ok,
+                "background server is not running",
             ),
             DoctorCheck::new(
                 "deep.probes",
@@ -480,22 +520,31 @@ mod tests {
 Codex Doctor v0.0.0 · fast mode
 
 Environment
+  ✓ runtime      running local on darwin-arm64
   ✓ install      installation looks consistent
+  ✓ search       search is OK (bundled)
   ⚠ terminal     narrow terminal
   ✓ state        state paths inspectable
 
 Configuration
   ✗ auth         token expired — Run `codex login`.
 
+Updates
+  ✓ updates      update configuration is locally consistent
+
 Connectivity
   ✓ network      network environment readable
   ⊘ deep probes  skipped — run with --deep
 
-─────────────────────────────────────────────
-3 ok · 1 warn · 1 fail · 1 skipped failed
+Background Server
+  ✓ app-server   background server is not running
 
---deep reachability probes (network, app-server, MCP)
+─────────────────────────────────────────────
+7 ok · 1 warn · 1 fail · 1 skipped failed
+
+--deep reachability and latest-version probes
 --json redacted support report
+Still having issues? Run codex doctor --json for support details.
 ";
         assert_eq!(rendered, expected);
     }
@@ -515,22 +564,31 @@ Connectivity
 Codex Doctor v0.0.0 - fast mode
 
 Environment
+  [ok] runtime      running local on darwin-arm64
   [ok] install      installation looks consistent
+  [ok] search       search is OK (bundled)
   [!!] terminal     narrow terminal
   [ok] state        state paths inspectable
 
 Configuration
   [XX] auth         token expired - Run `codex login`.
 
+Updates
+  [ok] updates      update configuration is locally consistent
+
 Connectivity
   [ok] network      network environment readable
   [--] deep probes  skipped - run with --deep
 
-{}
-3 ok | 1 warn | 1 fail | 1 skipped failed
+Background Server
+  [ok] app-server   background server is not running
 
---deep reachability probes (network, app-server, MCP)
+{}
+7 ok | 1 warn | 1 fail | 1 skipped failed
+
+--deep reachability and latest-version probes
 --json redacted support report
+Still having issues? Run codex doctor --json for support details.
 ",
             "-".repeat(SEPARATOR_WIDTH)
         );

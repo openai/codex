@@ -32,10 +32,17 @@ use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
 use supports_color::Stream;
 
+mod background;
 mod output;
+mod runtime;
+mod updates;
 
+use background::background_server_check;
 use output::HumanOutputOptions;
 use output::render_human_report;
+use runtime::runtime_check;
+use runtime::search_check;
+use updates::updates_check;
 
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
@@ -165,18 +172,21 @@ async fn build_report(
 ) -> DoctorReport {
     let mut checks = Vec::new();
     checks.push(timed_check(|| installation_check(command.verbose)));
+    checks.push(timed_check(runtime_check));
+    checks.push(timed_check(search_check));
 
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
     match &config_result {
         Ok(config) => {
             checks.push(timed_check(|| config_check(config)));
             checks.push(timed_check(|| auth_check(config)));
+            checks.push(timed_check(|| updates_check(config, command.deep)));
             checks.push(timed_check(|| network_check(command.deep)));
             checks.push(timed_check(|| mcp_check(config, command.deep)));
             checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
             checks.push(timed_check(terminal_check));
             checks.push(timed_check(|| state_check(config)));
-            checks.push(timed_check(|| app_server_check(config)));
+            checks.push(timed_check(|| background_server_check(config)));
         }
         Err(err) => {
             checks.push(timed_check(|| {
@@ -541,6 +551,7 @@ fn config_check(config: &Config) -> DoctorCheck {
     details.push(format!("log dir: {}", config.log_dir.display()));
     details.push(format!("sqlite home: {}", config.sqlite_home.display()));
     details.push(format!("mcp servers: {}", config.mcp_servers.get().len()));
+    config_toml_details(config, &mut details);
 
     let status = if config.startup_warnings.is_empty() {
         CheckStatus::Ok
@@ -555,6 +566,21 @@ fn config_check(config: &Config) -> DoctorCheck {
     };
 
     DoctorCheck::new("config.load", "config", status, "config loaded").details(details)
+}
+
+fn config_toml_details(config: &Config, details: &mut Vec<String>) {
+    let config_path = config.codex_home.join(codex_config::CONFIG_TOML_FILE);
+    details.push(format!("config.toml: {}", config_path.display()));
+    match std::fs::read_to_string(&config_path) {
+        Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
+            Ok(_) => details.push("config.toml parse: ok".to_string()),
+            Err(err) => details.push(format!("config.toml parse: {err}")),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            details.push("config.toml: missing".to_string());
+        }
+        Err(err) => details.push(format!("config.toml read: {err}")),
+    }
 }
 
 fn auth_check(config: &Config) -> DoctorCheck {
@@ -944,29 +970,6 @@ fn fallback_state_check() -> DoctorCheck {
             "state",
             CheckStatus::Warning,
             "CODEX_HOME could not be resolved",
-        )
-        .detail(err.to_string()),
-    }
-}
-
-fn app_server_check(config: &Config) -> DoctorCheck {
-    match codex_app_server::app_server_control_socket_path(&config.codex_home) {
-        Ok(socket_path) => {
-            let exists = socket_path.exists();
-            DoctorCheck::new(
-                "app_server.socket",
-                "app-server",
-                CheckStatus::Ok,
-                "app-server control socket path is inspectable",
-            )
-            .detail(format!("control socket: {}", socket_path.display()))
-            .detail(format!("control socket exists: {exists}"))
-        }
-        Err(err) => DoctorCheck::new(
-            "app_server.socket",
-            "app-server",
-            CheckStatus::Warning,
-            "app-server control socket path could not be resolved",
         )
         .detail(err.to_string()),
     }
