@@ -5,6 +5,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -28,7 +29,7 @@ impl DynamicToolHandler {
     }
 }
 
-impl ToolHandler for DynamicToolHandler {
+impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -83,6 +84,8 @@ impl ToolHandler for DynamicToolHandler {
         Ok(FunctionToolOutput::from_content(body, Some(success)))
     }
 }
+
+impl ToolHandler for DynamicToolHandler {}
 
 #[expect(
     clippy::await_holding_invalid_type,

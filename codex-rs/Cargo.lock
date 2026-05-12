@@ -3716,10 +3716,12 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-pty",
+ "codex-utils-string",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

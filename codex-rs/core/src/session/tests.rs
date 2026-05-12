@@ -71,7 +71,7 @@ use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UpdateGoalHandler;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;

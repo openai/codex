@@ -5,7 +5,7 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
+impl ToolExecutor<ToolInvocation> for Handler {
     type Output = CloseAgentResult;
 
     fn tool_name(&self) -> ToolName {
@@ -14,10 +14,6 @@ impl ToolHandler for Handler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_close_agent_tool_v2())
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -111,6 +107,12 @@ impl ToolHandler for Handler {
         Ok(CloseAgentResult {
             previous_status: status,
         })
+    }
+}
+
+impl ToolHandler for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

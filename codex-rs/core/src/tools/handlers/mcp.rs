@@ -11,6 +11,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolTelemetryTags;
 use codex_mcp::ToolInfo;
@@ -28,7 +29,7 @@ impl McpHandler {
     }
 }
 
-impl ToolHandler for McpHandler {
+impl ToolExecutor<ToolInvocation> for McpHandler {
     type Output = McpToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -39,6 +40,47 @@ impl ToolHandler for McpHandler {
         self.tool_info.supports_parallel_tool_calls
     }
 
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
+
+        let payload = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "mcp handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let started = Instant::now();
+        let result = handle_mcp_tool_call(
+            Arc::clone(&session),
+            &turn,
+            call_id.clone(),
+            self.tool_info.server_name.clone(),
+            self.tool_info.tool.name.to_string(),
+            self.tool_name().to_string(),
+            payload,
+        )
+        .await;
+
+        Ok(McpToolOutput {
+            result: result.result,
+            tool_input: result.tool_input,
+            wall_time: started.elapsed(),
+            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
+            truncation_policy: turn.truncation_policy,
+        })
+    }
+}
+
+impl ToolHandler for McpHandler {
     async fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
         let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
         if let Some(origin) = &self.tool_info.server_origin {
@@ -96,45 +138,6 @@ impl ToolHandler for McpHandler {
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.tool_input.clone(),
             tool_response,
-        })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
-
-        let payload = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "mcp handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        let started = Instant::now();
-        let result = handle_mcp_tool_call(
-            Arc::clone(&session),
-            &turn,
-            call_id.clone(),
-            self.tool_info.server_name.clone(),
-            self.tool_info.tool.name.to_string(),
-            self.tool_name().to_string(),
-            payload,
-        )
-        .await;
-
-        Ok(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
-            wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.truncation_policy,
         })
     }
 }

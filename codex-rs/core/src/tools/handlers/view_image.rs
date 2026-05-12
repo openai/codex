@@ -20,6 +20,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -61,7 +62,7 @@ enum ViewImageDetail {
     Original,
 }
 
-impl ToolHandler for ViewImageHandler {
+impl ToolExecutor<ToolInvocation> for ViewImageHandler {
     type Output = ViewImageOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -200,6 +201,8 @@ impl ToolHandler for ViewImageHandler {
         })
     }
 }
+
+impl ToolHandler for ViewImageHandler {}
 
 pub struct ViewImageOutput {
     image_url: String,

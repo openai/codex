@@ -8,13 +8,14 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
 pub struct RequestPermissionsHandler;
 
-impl ToolHandler for RequestPermissionsHandler {
+impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -75,3 +76,5 @@ impl ToolHandler for RequestPermissionsHandler {
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
+
+impl ToolHandler for RequestPermissionsHandler {}

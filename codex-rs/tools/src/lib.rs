@@ -3,6 +3,7 @@
 
 mod code_mode;
 mod dynamic_tool;
+mod function_call_error;
 mod image_detail;
 mod json_schema;
 mod mcp_tool;
@@ -11,6 +12,9 @@ mod responses_api;
 mod tool_config;
 mod tool_definition;
 mod tool_discovery;
+mod tool_executor;
+mod tool_output;
+mod tool_payload;
 mod tool_spec;
 
 pub use code_mode::augment_tool_spec_for_code_mode;
@@ -20,6 +24,7 @@ pub use code_mode::collect_code_mode_tool_definitions;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
+pub use function_call_error::FunctionCallError;
 pub use image_detail::can_request_original_image_detail;
 pub use image_detail::normalize_output_image_detail;
 pub use image_detail::sanitize_original_image_detail;
@@ -76,6 +81,9 @@ pub use tool_discovery::collect_request_plugin_install_entries;
 pub use tool_discovery::collect_tool_search_source_infos;
 pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_client;
 pub use tool_discovery::tool_search_result_source_to_loadable_tool_spec;
+pub use tool_executor::ToolExecutor;
+pub use tool_output::ToolOutput;
+pub use tool_payload::ToolPayload;
 pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;
 pub use tool_spec::ToolSpec;

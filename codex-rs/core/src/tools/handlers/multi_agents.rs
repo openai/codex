@@ -15,6 +15,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 pub(crate) use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseInputItem;
