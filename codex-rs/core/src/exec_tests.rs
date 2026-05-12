@@ -665,6 +665,56 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
 }
 
 #[test]
+fn windows_restricted_token_supports_extra_split_writable_root_override() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dunce::canonicalize(temp_dir.path())
+        .expect("canonicalize temp dir")
+        .abs();
+    let extra_root = cwd.join("extra-root");
+    std::fs::create_dir_all(extra_root.as_path()).expect("create extra root");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: cwd.clone() },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path {
+                path: extra_root.clone(),
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+    ]);
+
+    assert_eq!(
+        resolve_windows_restricted_token_filesystem_overrides(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+            &cwd,
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+        Ok(Some(WindowsSandboxFilesystemOverrides {
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: Some(vec![cwd.to_path_buf(), extra_root.to_path_buf()]),
+            additional_deny_write_paths: vec![],
+        }))
+    );
+}
+
+#[test]
 fn windows_elevated_supports_split_restricted_read_roots() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
