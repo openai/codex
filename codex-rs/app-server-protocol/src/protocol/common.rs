@@ -2272,11 +2272,11 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd,
+                workspace_roots: vec![],
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
             },
@@ -2316,13 +2316,13 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": absolute_path_string("tmp"),
+                    "workspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
                     },
-                    "permissionProfile": null,
                     "activePermissionProfile": null,
                     "reasoningEffort": null
                 }

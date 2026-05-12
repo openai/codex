@@ -2,10 +2,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
+
 pub trait RolloutConfigView {
     fn codex_home(&self) -> &Path;
     fn sqlite_home(&self) -> &Path;
     fn cwd(&self) -> &Path;
+    fn workspace_roots(&self) -> &[AbsolutePathBuf];
     fn model_provider_id(&self) -> &str;
     fn generate_memories(&self) -> bool;
 }
@@ -15,6 +18,7 @@ pub struct RolloutConfig {
     pub codex_home: PathBuf,
     pub sqlite_home: PathBuf,
     pub cwd: PathBuf,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub model_provider_id: String,
     pub generate_memories: bool,
 }
@@ -27,6 +31,7 @@ impl RolloutConfig {
             codex_home: view.codex_home().to_path_buf(),
             sqlite_home: view.sqlite_home().to_path_buf(),
             cwd: view.cwd().to_path_buf(),
+            workspace_roots: view.workspace_roots().to_vec(),
             model_provider_id: view.model_provider_id().to_string(),
             generate_memories: view.generate_memories(),
         }
@@ -44,6 +49,10 @@ impl RolloutConfigView for RolloutConfig {
 
     fn cwd(&self) -> &Path {
         self.cwd.as_path()
+    }
+
+    fn workspace_roots(&self) -> &[AbsolutePathBuf] {
+        &self.workspace_roots
     }
 
     fn model_provider_id(&self) -> &str {
@@ -68,6 +77,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for &T {
         (*self).cwd()
     }
 
+    fn workspace_roots(&self) -> &[AbsolutePathBuf] {
+        (*self).workspace_roots()
+    }
+
     fn model_provider_id(&self) -> &str {
         (*self).model_provider_id()
     }
@@ -88,6 +101,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
 
     fn cwd(&self) -> &Path {
         self.as_ref().cwd()
+    }
+
+    fn workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.as_ref().workspace_roots()
     }
 
     fn model_provider_id(&self) -> &str {

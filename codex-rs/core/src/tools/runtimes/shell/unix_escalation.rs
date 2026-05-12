@@ -168,6 +168,7 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         arg0,
         sandbox_policy_cwd,
+        workspace_roots: attempt.workspace_roots.to_vec(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -232,7 +233,7 @@ pub(super) async fn try_run_zsh_fork(
 
 pub(crate) async fn prepare_unified_exec_zsh_fork(
     req: &crate::tools::runtimes::unified_exec::UnifiedExecRequest,
-    _attempt: &SandboxAttempt<'_>,
+    attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     exec_request: ExecRequest,
     shell_zsh_path: &std::path::Path,
@@ -269,6 +270,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
+        workspace_roots: attempt.workspace_roots.to_vec(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -753,6 +755,7 @@ struct CoreShellCommandExecutor {
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
     sandbox_policy_cwd: AbsolutePathBuf,
+    workspace_roots: Vec<AbsolutePathBuf>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -923,6 +926,7 @@ impl CoreShellCommandExecutor {
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
             sandbox_policy_cwd: &self.sandbox_policy_cwd,
+            workspace_roots: &self.workspace_roots,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
