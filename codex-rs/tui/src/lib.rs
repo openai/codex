@@ -1619,14 +1619,10 @@ impl Drop for TerminalRestoreGuard {
 ///   - `auto` (default): Use alternate screen
 fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
     if no_alt_screen {
-        false
-    } else {
-        match tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => true,
-        }
+        return false;
     }
+
+    tui_alternate_screen != AltScreenMode::Never
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
