@@ -32,6 +32,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_install_context::InstallContext;
 use codex_install_context::StandalonePlatform;
+use codex_login::AuthDotJson;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
@@ -231,12 +232,11 @@ async fn build_report(
         }
     }
 
-    let openai_reachability_required = config_result
+    let openai_reachability_mode = config_result
         .as_ref()
-        .map(|config| config.model_provider.requires_openai_auth)
-        .unwrap_or(true);
-    checks
-        .push(timed_check_async(|| openai_reachability_check(openai_reachability_required)).await);
+        .map(openai_reachability_mode)
+        .unwrap_or(OpenAiReachabilityMode::Chatgpt);
+    checks.push(timed_check_async(|| openai_reachability_check(openai_reachability_mode)).await);
 
     let overall_status = overall_status(&checks);
     DoctorReport {
@@ -687,17 +687,36 @@ fn auth_check(config: &Config) -> DoctorCheck {
                 "stored agent identity: {}",
                 auth.agent_identity.is_some()
             ));
-            let status = if env_auth_vars.len() > 1 {
+            let auth_issues = stored_auth_issues(&auth, env_var_present);
+            details.extend(
+                auth_issues
+                    .iter()
+                    .map(|issue| format!("stored auth issue: {issue}")),
+            );
+            let status = if !auth_issues.is_empty() && env_auth_vars.is_empty() {
+                CheckStatus::Fail
+            } else if !auth_issues.is_empty() || env_auth_vars.len() > 1 {
                 CheckStatus::Warning
             } else {
                 CheckStatus::Ok
             };
-            let summary = if status == CheckStatus::Warning {
-                "auth is configured, but multiple auth env vars are present"
-            } else {
-                "auth is configured"
+            let summary = match status {
+                CheckStatus::Ok => "auth is configured",
+                CheckStatus::Warning if !auth_issues.is_empty() => {
+                    "auth is provided by environment, but stored credentials are incomplete"
+                }
+                CheckStatus::Warning => {
+                    "auth is configured, but multiple auth env vars are present"
+                }
+                CheckStatus::Fail => "stored credentials are incomplete",
             };
-            DoctorCheck::new("auth.credentials", "auth", status, summary).details(details)
+            let mut check =
+                DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
+            if status == CheckStatus::Fail {
+                check =
+                    check.remediation("Run codex login again or provide a supported auth env var.");
+            }
+            check
         }
         Ok(None) if !env_auth_vars.is_empty() => DoctorCheck::new(
             "auth.credentials",
@@ -781,19 +800,85 @@ fn provider_specific_auth_check(
 }
 
 fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
+    match stored_auth_mode_value(auth) {
+        codex_app_server_protocol::AuthMode::ApiKey => "api_key",
+        codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
+        codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
+        codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+    }
+}
+
+fn stored_auth_mode_value(auth: &AuthDotJson) -> codex_app_server_protocol::AuthMode {
     if let Some(mode) = auth.auth_mode {
-        return match mode {
-            codex_app_server_protocol::AuthMode::ApiKey => "api_key",
-            codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
-            codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
-            codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
-        };
+        return mode;
     }
     if auth.openai_api_key.is_some() {
-        "api_key"
+        codex_app_server_protocol::AuthMode::ApiKey
     } else {
-        "chatgpt"
+        codex_app_server_protocol::AuthMode::Chatgpt
     }
+}
+
+fn stored_auth_issues(
+    auth: &AuthDotJson,
+    env_var_present: impl Fn(&str) -> bool,
+) -> Vec<&'static str> {
+    let mut issues = Vec::new();
+    match stored_auth_mode_value(auth) {
+        codex_app_server_protocol::AuthMode::ApiKey => {
+            let stored_key_present = auth
+                .openai_api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty());
+            let env_key_present =
+                env_var_present(OPENAI_API_KEY_ENV_VAR) || env_var_present(CODEX_API_KEY_ENV_VAR);
+            if !stored_key_present && !env_key_present {
+                issues.push("API key auth is missing an API key");
+            }
+        }
+        codex_app_server_protocol::AuthMode::Chatgpt => {
+            match auth.tokens.as_ref() {
+                Some(tokens) => {
+                    if tokens.access_token.trim().is_empty() {
+                        issues.push("ChatGPT auth is missing an access token");
+                    }
+                    if tokens.refresh_token.trim().is_empty() {
+                        issues.push("ChatGPT auth is missing a refresh token");
+                    }
+                }
+                None => issues.push("ChatGPT auth is missing token data"),
+            }
+            if auth.last_refresh.is_none() {
+                issues.push("ChatGPT auth is missing refresh metadata");
+            }
+        }
+        codex_app_server_protocol::AuthMode::ChatgptAuthTokens => {
+            match auth.tokens.as_ref() {
+                Some(tokens) => {
+                    if tokens.access_token.trim().is_empty() {
+                        issues.push("external ChatGPT auth is missing an access token");
+                    }
+                    if tokens.account_id.is_none() && tokens.id_token.chatgpt_account_id.is_none() {
+                        issues.push("external ChatGPT auth is missing a ChatGPT account id");
+                    }
+                }
+                None => issues.push("external ChatGPT auth is missing token data"),
+            }
+            if auth.last_refresh.is_none() {
+                issues.push("external ChatGPT auth is missing refresh metadata");
+            }
+        }
+        codex_app_server_protocol::AuthMode::AgentIdentity => {
+            if auth
+                .agent_identity
+                .as_deref()
+                .is_none_or(|token| token.trim().is_empty())
+            {
+                issues.push("agent identity auth is missing an agent identity token");
+            }
+        }
+    }
+    issues
 }
 
 fn network_check() -> DoctorCheck {
@@ -892,6 +977,12 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                 }
                 if command.trim().is_empty() {
                     missing_env.push(format!("{name}: stdio command is empty"));
+                } else if let Err(err) =
+                    stdio_command_resolves(command, cwd.as_deref(), env.as_ref())
+                {
+                    missing_env.push(format!(
+                        "{name}: stdio command {command:?} is not resolvable ({err})"
+                    ));
                 }
                 if let Some(env) = env {
                     for key in env.keys().filter(|key| key.trim().is_empty()) {
@@ -927,7 +1018,7 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
                         }
                     }
                 }
-                if let Err(err) = http_probe_url(url).await {
+                if let Err(err) = mcp_http_probe_url(url).await {
                     let detail = format!("{name}: {url} ({err})");
                     if server.required {
                         unreachable_required_http.push(detail);
@@ -1114,21 +1205,91 @@ fn fallback_state_check() -> DoctorCheck {
     }
 }
 
-async fn openai_reachability_check(required: bool) -> DoctorCheck {
-    let endpoints = ["https://api.openai.com/", "https://chatgpt.com/"];
-    let mut details = vec![format!("required for active model provider: {required}")];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiReachabilityMode {
+    NotRequired,
+    ApiKey,
+    Chatgpt,
+}
+
+impl OpenAiReachabilityMode {
+    fn description(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not required by active model provider",
+            Self::ApiKey => "API key auth",
+            Self::Chatgpt => "ChatGPT auth",
+        }
+    }
+}
+
+fn openai_reachability_mode(config: &Config) -> OpenAiReachabilityMode {
+    let stored_auth =
+        load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode)
+            .ok()
+            .flatten();
+    openai_reachability_mode_from_auth(
+        config.model_provider.requires_openai_auth,
+        env_var_present,
+        stored_auth.as_ref(),
+    )
+}
+
+fn openai_reachability_mode_from_auth(
+    requires_openai_auth: bool,
+    env_var_present: impl Fn(&str) -> bool,
+    stored_auth: Option<&AuthDotJson>,
+) -> OpenAiReachabilityMode {
+    if !requires_openai_auth {
+        return OpenAiReachabilityMode::NotRequired;
+    }
+    if env_var_present(OPENAI_API_KEY_ENV_VAR) || env_var_present(CODEX_API_KEY_ENV_VAR) {
+        return OpenAiReachabilityMode::ApiKey;
+    }
+    if env_var_present(CODEX_ACCESS_TOKEN_ENV_VAR) {
+        return OpenAiReachabilityMode::Chatgpt;
+    }
+    match stored_auth.map(stored_auth_mode_value) {
+        Some(codex_app_server_protocol::AuthMode::ApiKey) => OpenAiReachabilityMode::ApiKey,
+        Some(
+            codex_app_server_protocol::AuthMode::Chatgpt
+            | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
+            | codex_app_server_protocol::AuthMode::AgentIdentity,
+        )
+        | None => OpenAiReachabilityMode::Chatgpt,
+    }
+}
+
+async fn openai_reachability_check(mode: OpenAiReachabilityMode) -> DoctorCheck {
+    let endpoints = match mode {
+        OpenAiReachabilityMode::ApiKey => vec![("https://api.openai.com/", true)],
+        OpenAiReachabilityMode::Chatgpt => vec![
+            ("https://api.openai.com/", true),
+            ("https://chatgpt.com/", true),
+        ],
+        OpenAiReachabilityMode::NotRequired => vec![
+            ("https://api.openai.com/", false),
+            ("https://chatgpt.com/", false),
+        ],
+    };
+    let mut details = vec![format!("reachability mode: {}", mode.description())];
     let mut failures = Vec::new();
-    for url in endpoints {
+    let mut optional_failures = Vec::new();
+    for (url, required) in endpoints {
         match http_probe_url(url).await {
             Ok(status) => details.push(format!("{url}: reachable ({status})")),
             Err(err) => {
-                details.push(format!("{url}: {err}"));
-                failures.push(url);
+                let requirement = if required { "required" } else { "optional" };
+                details.push(format!("{url}: {err} ({requirement})"));
+                if required {
+                    failures.push(url);
+                } else {
+                    optional_failures.push(url);
+                }
             }
         }
     }
 
-    let (status, summary) = openai_reachability_outcome(failures.is_empty(), required);
+    let (status, summary) = openai_reachability_outcome(failures.len(), optional_failures.len());
     let mut check = DoctorCheck::new(
         "network.openai_reachability",
         "reachability",
@@ -1142,24 +1303,45 @@ async fn openai_reachability_check(required: bool) -> DoctorCheck {
     check
 }
 
-fn openai_reachability_outcome(all_reachable: bool, required: bool) -> (CheckStatus, &'static str) {
-    match (all_reachable, required) {
-        (true, _) => (CheckStatus::Ok, "OpenAI endpoints are reachable over HTTP"),
-        (false, true) => (
-            CheckStatus::Fail,
-            "one or more required OpenAI endpoints are unreachable over HTTP",
-        ),
-        (false, false) => (
+fn openai_reachability_outcome(
+    required_failures: usize,
+    optional_failures: usize,
+) -> (CheckStatus, &'static str) {
+    match (required_failures, optional_failures) {
+        (0, 0) => (CheckStatus::Ok, "OpenAI endpoints are reachable over HTTP"),
+        (0, _) => (
             CheckStatus::Warning,
             "OpenAI endpoints are unreachable but not required by the active provider",
+        ),
+        (_, _) => (
+            CheckStatus::Fail,
+            "one or more required OpenAI endpoints are unreachable over HTTP",
         ),
     }
 }
 
 async fn http_probe_url(url: &str) -> Result<String, String> {
+    http_probe_url_with_timeout(url, Duration::from_secs(3)).await
+}
+
+async fn mcp_http_probe_url(url: &str) -> Result<String, String> {
+    mcp_http_probe_url_with_timeout(url, Duration::from_secs(3)).await
+}
+
+async fn mcp_http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
+    match http_probe_url_with_timeout(url, timeout).await {
+        Ok(status) => Ok(status),
+        Err(head_err) => match http_get_probe_url_with_timeout(url, timeout).await {
+            Ok(status) => Ok(status),
+            Err(get_err) => Err(format!("HEAD {head_err}; GET {get_err}")),
+        },
+    }
+}
+
+async fn http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
     let response = build_reqwest_client()
         .head(url)
-        .timeout(Duration::from_secs(3))
+        .timeout(timeout)
         .send()
         .await
         .map_err(|err| {
@@ -1174,6 +1356,79 @@ async fn http_probe_url(url: &str) -> Result<String, String> {
             }
         })?;
     Ok(format!("HTTP {}", response.status().as_u16()))
+}
+
+async fn http_get_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
+    let response = build_reqwest_client()
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|err| {
+            if err.is_timeout() {
+                "request timed out".to_string()
+            } else if err.is_connect() {
+                "connect failed".to_string()
+            } else if err.is_builder() {
+                "request could not be built".to_string()
+            } else {
+                err.to_string()
+            }
+        })?;
+    Ok(format!("HTTP {}", response.status().as_u16()))
+}
+
+fn stdio_command_resolves(
+    command: &str,
+    cwd: Option<&Path>,
+    server_env: Option<&HashMap<String, String>>,
+) -> Result<(), String> {
+    let command_path = Path::new(command);
+    if command_path.is_absolute() {
+        return executable_path_exists(command_path);
+    }
+
+    if command_path.components().count() > 1 {
+        let base = cwd
+            .map(Path::to_path_buf)
+            .or_else(|| env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        return executable_path_exists(&base.join(command_path));
+    }
+
+    let Some(path_env) = server_env
+        .and_then(|env| env.get("PATH").map(String::as_str))
+        .map(std::ffi::OsString::from)
+        .or_else(|| env::var_os("PATH"))
+    else {
+        return Err("PATH is not set".to_string());
+    };
+
+    for dir in env::split_paths(&path_env) {
+        let candidate = dir.join(command);
+        if executable_path_exists(&candidate).is_ok() {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        {
+            let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+            for extension in pathext.split(';').filter(|extension| !extension.is_empty()) {
+                let candidate = dir.join(format!("{command}{extension}"));
+                if executable_path_exists(&candidate).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err("not found on PATH".to_string())
+}
+
+fn executable_path_exists(path: &Path) -> Result<(), String> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err("path is not a file".to_string()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 fn path_readiness(details: &mut Vec<String>, label: &str, path: &Path) {
@@ -1479,16 +1734,80 @@ mod tests {
     }
 
     #[test]
+    fn stored_auth_validation_rejects_missing_api_key() {
+        let auth = AuthDotJson {
+            auth_mode: Some(codex_app_server_protocol::AuthMode::ApiKey),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        };
+
+        assert_eq!(
+            stored_auth_issues(&auth, |_| false),
+            vec!["API key auth is missing an API key"]
+        );
+        assert!(stored_auth_issues(&auth, |name| name == OPENAI_API_KEY_ENV_VAR).is_empty());
+    }
+
+    #[test]
+    fn stored_auth_validation_rejects_missing_chatgpt_tokens() {
+        let auth = AuthDotJson {
+            auth_mode: None,
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        };
+
+        assert_eq!(
+            stored_auth_issues(&auth, |_| false),
+            vec![
+                "ChatGPT auth is missing token data",
+                "ChatGPT auth is missing refresh metadata",
+            ]
+        );
+    }
+
+    #[test]
+    fn openai_reachability_mode_uses_api_key_auth() {
+        let api_key_auth = AuthDotJson {
+            auth_mode: Some(codex_app_server_protocol::AuthMode::ApiKey),
+            openai_api_key: Some("sk-test".to_string()),
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        };
+
+        assert_eq!(
+            openai_reachability_mode_from_auth(
+                /*requires_openai_auth*/ true,
+                |_| false,
+                Some(&api_key_auth),
+            ),
+            OpenAiReachabilityMode::ApiKey
+        );
+        assert_eq!(
+            openai_reachability_mode_from_auth(
+                /*requires_openai_auth*/ true,
+                |name| name == OPENAI_API_KEY_ENV_VAR,
+                /*stored_auth*/ None,
+            ),
+            OpenAiReachabilityMode::ApiKey
+        );
+    }
+
+    #[test]
     fn openai_reachability_warns_when_openai_is_not_required() {
         assert_eq!(
-            openai_reachability_outcome(/*all_reachable*/ false, /*required*/ false,),
+            openai_reachability_outcome(/*required_failures*/ 0, /*optional_failures*/ 1,),
             (
                 CheckStatus::Warning,
                 "OpenAI endpoints are unreachable but not required by the active provider",
             )
         );
         assert_eq!(
-            openai_reachability_outcome(/*all_reachable*/ false, /*required*/ true,),
+            openai_reachability_outcome(/*required_failures*/ 1, /*optional_failures*/ 0,),
             (
                 CheckStatus::Fail,
                 "one or more required OpenAI endpoints are unreachable over HTTP",
@@ -1515,6 +1834,64 @@ mod tests {
         server.join().expect("probe server thread should finish");
 
         assert_eq!(status, Ok("HTTP 405".to_string()));
+    }
+
+    #[tokio::test]
+    async fn mcp_http_probe_falls_back_to_get_when_head_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (mut head_stream, _) = listener.accept().expect("accept HEAD probe request");
+            let head = std::thread::spawn(move || {
+                let mut request = [0; 1024];
+                let _ = head_stream.read(&mut request);
+                std::thread::sleep(Duration::from_millis(50));
+            });
+
+            let (mut get_stream, _) = listener.accept().expect("accept GET probe request");
+            let mut request = [0; 1024];
+            let _ = get_stream.read(&mut request);
+            get_stream
+                .write_all(
+                    b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write response");
+            head.join().expect("HEAD holder should finish");
+        });
+
+        let status = mcp_http_probe_url_with_timeout(
+            &format!("http://{addr}/mcp"),
+            Duration::from_millis(10),
+        )
+        .await;
+        server.join().expect("probe server thread should finish");
+
+        assert_eq!(status, Ok("HTTP 405".to_string()));
+    }
+
+    #[tokio::test]
+    async fn mcp_check_fails_required_missing_stdio_command() {
+        let required_server: McpServerConfig = toml::from_str(
+            r#"
+                command = "definitely-missing-codex-doctor-mcp"
+                required = true
+            "#,
+        )
+        .expect("should deserialize required MCP config");
+        let servers = HashMap::from([("required".to_string(), required_server)]);
+
+        let check = mcp_check_from_servers(&servers).await;
+
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert_eq!(
+            check.summary,
+            "MCP configuration has failing required inputs or reachability"
+        );
+        assert!(check.details.iter().any(|detail| {
+            detail.contains(
+                "required: stdio command \"definitely-missing-codex-doctor-mcp\" is not resolvable",
+            )
+        }));
     }
 
     #[test]
