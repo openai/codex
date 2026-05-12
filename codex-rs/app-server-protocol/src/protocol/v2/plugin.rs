@@ -540,6 +540,9 @@ pub struct PluginSummary {
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
+    /// Version of the locally materialized plugin package when available.
+    #[serde(default)]
+    pub local_version: Option<String>,
     pub name: String,
     /// Remote sharing context associated with this plugin when available.
     pub share_context: Option<PluginShareContext>,
@@ -561,6 +564,9 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    /// Version of the remote shared plugin release when available.
+    #[serde(default)]
+    pub remote_version: Option<String>,
     pub discoverability: Option<PluginShareDiscoverability>,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,

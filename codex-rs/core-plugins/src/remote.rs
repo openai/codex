@@ -102,6 +102,7 @@ pub struct RemotePluginSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareContext {
     pub remote_plugin_id: String,
+    pub remote_version: Option<String>,
     pub discoverability: RemotePluginShareDiscoverability,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
@@ -897,6 +898,7 @@ fn remote_plugin_share_context(
             let discoverability = workspace_plugin_discoverability(plugin)?;
             Ok(Some(RemotePluginShareContext {
                 remote_plugin_id: plugin.id.clone(),
+                remote_version: plugin.release.version.clone(),
                 discoverability,
                 share_url: plugin.share_url.clone(),
                 creator_account_user_id: plugin.creator_account_user_id.clone(),

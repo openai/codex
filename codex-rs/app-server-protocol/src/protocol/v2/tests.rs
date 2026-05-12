@@ -3007,6 +3007,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     ),
+                    local_version: None,
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3027,6 +3028,7 @@ fn plugin_share_list_response_serializes_share_items() {
                 "plugin": {
                     "id": "gmail@chatgpt-global",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                    "localVersion": null,
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
@@ -3059,6 +3061,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
 }
 
