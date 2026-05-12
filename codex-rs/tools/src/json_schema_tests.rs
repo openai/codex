@@ -34,7 +34,8 @@ fn parse_tool_input_schema_infers_object_shape_and_defaults_properties() {
     //
     // Expected normalization behavior:
     // - `properties` implies an object schema when `type` is omitted.
-    // - The child property keeps its description and defaults to an open object.
+    // - The child property has no recognized schema hints, so it is coerced to
+    //   an empty permissive schema.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "properties": {
             "query": {"description": "search query"}
@@ -45,20 +46,31 @@ fn parse_tool_input_schema_infers_object_shape_and_defaults_properties() {
     assert_eq!(
         schema,
         JsonSchema::object(
-            BTreeMap::from([(
-                "query".to_string(),
-                JsonSchema {
-                    schema_type: Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object)),
-                    description: Some("search query".to_string()),
-                    properties: Some(BTreeMap::new()),
-                    additional_properties: Some(true.into()),
-                    ..Default::default()
-                },
-            )]),
+            BTreeMap::from([("query".to_string(), JsonSchema::default())]),
             /*required*/ None,
             /*additional_properties*/ None
         )
     );
+}
+
+#[test]
+fn parse_tool_input_schema_coerces_unrecognized_object_schema_to_empty_schema() {
+    // Example schema shape:
+    // {
+    //   "description": "Ticket identifier",
+    //   "title": "Ticket ID"
+    // }
+    //
+    // Expected normalization behavior:
+    // - Object schemas with no recognized schema hints are treated as
+    //   malformed and coerced to the empty permissive schema.
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "description": "Ticket identifier",
+        "title": "Ticket ID"
+    }))
+    .expect("parse schema");
+
+    assert_eq!(schema, JsonSchema::default());
 }
 
 #[test]
@@ -256,23 +268,20 @@ fn parse_tool_input_schema_infers_string_from_enum_const_and_format_keywords() {
 }
 
 #[test]
-fn parse_tool_input_schema_defaults_empty_schema_to_open_object() {
+fn parse_tool_input_schema_preserves_empty_schema() {
     // Example schema shape:
     // {}
     //
     // Expected normalization behavior:
-    // - With no structural hints at all, the normalizer falls back to a
-    //   permissive object schema.
+    // - An empty JSON Schema is already a valid permissive schema, so it stays
+    //   empty rather than being rewritten as an object schema.
     let schema = parse_tool_input_schema(&serde_json::json!({})).expect("parse schema");
 
-    assert_eq!(
-        schema,
-        JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(true.into()))
-    );
+    assert_eq!(schema, JsonSchema::default());
 }
 
 #[test]
-fn parse_tool_input_schema_defaults_nested_empty_schema_to_open_object() {
+fn parse_tool_input_schema_preserves_nested_empty_schema() {
     // Example schema shape:
     // {
     //   "type": "object",
@@ -287,8 +296,7 @@ fn parse_tool_input_schema_defaults_nested_empty_schema_to_open_object() {
     //
     // Expected normalization behavior:
     // - The sanitizer recurses through nested object properties.
-    // - The innermost `extra` field has no hints, so it falls back to an open
-    //   object.
+    // - The innermost `extra` field is an empty JSON Schema and stays empty.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "properties": {
@@ -307,14 +315,7 @@ fn parse_tool_input_schema_defaults_nested_empty_schema_to_open_object() {
             BTreeMap::from([(
                 "metadata".to_string(),
                 JsonSchema::object(
-                    BTreeMap::from([(
-                        "extra".to_string(),
-                        JsonSchema::object(
-                            BTreeMap::new(),
-                            /*required*/ None,
-                            Some(true.into()),
-                        ),
-                    )]),
+                    BTreeMap::from([("extra".to_string(), JsonSchema::default())]),
                     /*required*/ None,
                     /*additional_properties*/ None,
                 )
