@@ -395,7 +395,13 @@ impl Session {
                 resumed_history
                     .history
                     .iter()
-                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+                    .filter(|item| {
+                        matches!(
+                            item,
+                            RolloutItem::Compacted(_)
+                                | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))
+                        )
+                    })
                     .count(),
             )
             .unwrap_or(u64::MAX),
