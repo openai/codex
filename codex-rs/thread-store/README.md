@@ -11,7 +11,9 @@ implementations may live outside this repository.
 - `ThreadStore::update_thread_metadata` is the only thread metadata write API.
   It accepts a single literal metadata patch shape, regardless of whether the
   caller is applying a user/API mutation or facts derived above the store from
-  appended history.
+  appended history. `ThreadMetadataPatch::name` is the canonical display name;
+  new stores should persist and return it directly. Local storage keeps
+  compatibility handling for old SQLite/title and JSONL name-index data.
 - `LiveThread` is the preferred API for active session persistence. It owns a
   per-thread metadata sync helper, applies the rollout persistence policy,
   appends canonical history, and then sends metadata patches through

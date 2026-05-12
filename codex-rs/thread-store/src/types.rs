@@ -193,7 +193,7 @@ pub struct ListThreadsParams {
     pub cwd_filters: Option<Vec<PathBuf>>,
     /// Whether archived threads should be listed instead of active threads.
     pub archived: bool,
-    /// Optional substring/full-text search term for thread title/preview.
+    /// Optional substring/full-text search term for thread display name/preview.
     pub search_term: Option<String>,
     /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
     pub use_state_db_only: bool,
@@ -330,7 +330,7 @@ pub struct StoredThread {
     pub forked_from_id: Option<ThreadId>,
     /// Best available user-facing preview, usually the first user message.
     pub preview: String,
-    /// Optional user-facing thread name/title.
+    /// Optional canonical user-facing thread display name.
     pub name: Option<String>,
     /// Model provider id associated with the thread.
     pub model_provider: String,
@@ -391,9 +391,17 @@ pub struct GitInfoPatch {
 /// Every field is literal: `None` leaves that field unchanged, while `Some`
 /// applies the supplied value. Fields whose value may itself be cleared use an
 /// inner `Option`, where `Some(None)` clears the field.
+///
+/// Stores should treat `name` as the canonical display name. `title` is a separate
+/// query/search field. New stores should persist and return `name` directly; the local store keeps
+/// limited compatibility logic for its historical SQLite `title` column.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ThreadMetadataPatch {
-    /// Replacement user-facing thread name.
+    /// Replacement canonical user-facing thread display name.
+    ///
+    /// `Some(Some(value))` sets the display name, `Some(None)` clears it, and `None` leaves it
+    /// unchanged. Clearing leaves the display name empty; the live metadata sync does not re-reveal
+    /// a previously derived name in the same live thread.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -404,7 +412,7 @@ pub struct ThreadMetadataPatch {
     pub rollout_path: Option<PathBuf>,
     /// Best available preview text for discovery/listing.
     pub preview: Option<String>,
-    /// Best-effort title derived from history.
+    /// Best-effort title derived from history for query/search metadata.
     pub title: Option<String>,
     /// Model provider associated with the thread.
     pub model_provider: Option<String>,

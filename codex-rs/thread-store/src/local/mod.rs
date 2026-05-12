@@ -47,8 +47,11 @@ use crate::UpdateThreadMetadataParams;
 /// Live appends still write canonical JSONL history, but append-derived
 /// metadata is observed above the store and applied through
 /// [`ThreadStore::update_thread_metadata`]. This implementation applies that
-/// patch literally to SQLite while keeping the JSONL/name-index compatibility
-/// behavior needed for SQLite-less reads, repair, and old local rollout files.
+/// patch to SQLite while keeping local compatibility with the historical
+/// `threads.title` column and JSONL name index. New stores can persist
+/// `ThreadMetadataPatch::name` directly; local read/list keeps the old title/name
+/// interpretation so existing SQLite-less and pre-refactor local threads keep
+/// the same presentation behavior.
 #[derive(Clone)]
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
@@ -418,6 +421,13 @@ mod tests {
         );
         assert_eq!(metadata.preview.as_deref(), Some("observed append"));
         assert_eq!(metadata.title, "observed append");
+        let thread = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect("read live thread");
+        assert_eq!(thread.name, None);
     }
 
     #[tokio::test]

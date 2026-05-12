@@ -34,8 +34,11 @@ pub(crate) struct ThreadMetadataSync {
     thread_id: ThreadId,
     cwd_seen: bool,
     preview_seen: bool,
+    preview: Option<String>,
     first_user_message_seen: bool,
+    first_user_message: Option<String>,
     title_seen: bool,
+    display_name_seen: bool,
     pending_update: Option<ThreadMetadataPatch>,
     pending_update_generation: u64,
     last_touch_persisted_at: Option<Instant>,
@@ -83,8 +86,11 @@ impl ThreadMetadataSync {
             thread_id: params.thread_id,
             cwd_seen: !cwd.as_os_str().is_empty(),
             preview_seen: false,
+            preview: None,
             first_user_message_seen: false,
+            first_user_message: None,
             title_seen: false,
+            display_name_seen: false,
             pending_update: Some(update),
             pending_update_generation: 1,
             last_touch_persisted_at: None,
@@ -102,8 +108,11 @@ impl ThreadMetadataSync {
                 .as_ref()
                 .is_some_and(|cwd| !cwd.as_os_str().is_empty()),
             preview_seen: false,
+            preview: None,
             first_user_message_seen: false,
+            first_user_message: None,
             title_seen: false,
+            display_name_seen: false,
             pending_update: None,
             pending_update_generation: 0,
             last_touch_persisted_at: None,
@@ -145,6 +154,12 @@ impl ThreadMetadataSync {
         }
         if update.patch.updated_at.is_some() {
             self.last_touch_persisted_at = Some(Instant::now());
+        }
+    }
+
+    pub(crate) fn observe_metadata_patch(&mut self, patch: &ThreadMetadataPatch) {
+        if patch.name.is_some() {
+            self.display_name_seen = true;
         }
     }
 
@@ -246,10 +261,12 @@ impl ThreadMetadataSync {
                     if let Some(preview) = user_message_preview(user) {
                         if !self.first_user_message_seen {
                             self.first_user_message_seen = true;
+                            self.first_user_message = Some(preview.clone());
                             update.first_user_message = Some(preview.clone());
                         }
                         if !self.preview_seen {
                             self.preview_seen = true;
+                            self.preview = Some(preview.clone());
                             update.preview = Some(preview);
                         }
                     }
@@ -258,6 +275,20 @@ impl ThreadMetadataSync {
                         if !title.is_empty() {
                             self.title_seen = true;
                             update.title = Some(title.to_string());
+                            if !self.display_name_seen
+                                && derived_display_name(
+                                    title,
+                                    update.preview.as_deref().or(self.preview.as_deref()),
+                                    update
+                                        .first_user_message
+                                        .as_deref()
+                                        .or(self.first_user_message.as_deref()),
+                                )
+                                .is_some()
+                            {
+                                self.display_name_seen = true;
+                                update.name = Some(Some(title.to_string()));
+                            }
                         }
                     }
                 }
@@ -271,6 +302,7 @@ impl ThreadMetadataSync {
                         let objective = event.goal.objective.trim();
                         if !objective.is_empty() {
                             self.preview_seen = true;
+                            self.preview = Some(objective.to_string());
                             update.preview = Some(objective.to_string());
                         }
                     }
@@ -337,6 +369,21 @@ fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
     None
 }
 
+fn derived_display_name<'a>(
+    title: &'a str,
+    preview: Option<&str>,
+    first_user_message: Option<&str>,
+) -> Option<&'a str> {
+    let title = title.trim();
+    if title.is_empty() || preview.map(str::trim) == Some(title) {
+        return None;
+    }
+    if first_user_message.map(str::trim) == Some(title) {
+        return None;
+    }
+    Some(title)
+}
+
 fn thread_updated_at_touch() -> ThreadMetadataPatch {
     ThreadMetadataPatch {
         updated_at: Some(Utc::now()),
@@ -345,7 +392,8 @@ fn thread_updated_at_touch() -> ThreadMetadataPatch {
 }
 
 fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
-    update.rollout_path.is_some()
+    update.name.is_some()
+        || update.rollout_path.is_some()
         || update.preview.is_some()
         || update.title.is_some()
         || update.model_provider.is_some()
@@ -369,6 +417,9 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
 }
 
 fn merge_metadata_update(current: &mut ThreadMetadataPatch, next: ThreadMetadataPatch) {
+    if next.name.is_some() {
+        current.name = next.name;
+    }
     if next.rollout_path.is_some() {
         current.rollout_path = next.rollout_path;
     }
@@ -483,6 +534,7 @@ mod tests {
         );
         assert_eq!(update.patch.preview.as_deref(), Some("hello metadata"));
         assert_eq!(update.patch.title.as_deref(), Some("hello metadata"));
+        assert_eq!(update.patch.name, None);
         assert_eq!(
             update.patch.first_user_message.as_deref(),
             Some("hello metadata")
@@ -518,6 +570,7 @@ mod tests {
             Some("first user text")
         );
         assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(update.patch.name, None);
     }
 
     #[test]
@@ -540,8 +593,71 @@ mod tests {
 
         assert_eq!(update.patch.preview, None);
         assert_eq!(update.patch.title, None);
+        assert_eq!(update.patch.name, None);
         assert_eq!(update.patch.first_user_message, None);
         assert!(update.patch.updated_at.is_some());
+    }
+
+    #[test]
+    fn text_after_image_only_message_emits_derived_display_name() {
+        let thread_id = ThreadId::new();
+        let sync = ThreadMetadataSync::for_resume(&resume_params(
+            thread_id,
+            vec![
+                RolloutItem::EventMsg(EventMsg::UserMessage(image_only_user_message())),
+                RolloutItem::EventMsg(EventMsg::UserMessage(user_message("first text"))),
+            ],
+        ));
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+
+        assert_eq!(update.patch.preview.as_deref(), Some("[Image]"));
+        assert_eq!(update.patch.first_user_message.as_deref(), Some("[Image]"));
+        assert_eq!(update.patch.title.as_deref(), Some("first text"));
+        assert_eq!(
+            update.patch.name.as_ref().and_then(|name| name.as_deref()),
+            Some("first text")
+        );
+    }
+
+    #[test]
+    fn explicit_name_patch_prevents_later_derived_display_name() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+        sync.observe_metadata_patch(&ThreadMetadataPatch {
+            name: Some(Some("User name".to_string())),
+            ..Default::default()
+        });
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
+                "first user text",
+            )))])
+            .expect("metadata update");
+
+        assert_eq!(update.patch.name, None);
+        assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(update.patch.preview.as_deref(), Some("first user text"));
+    }
+
+    #[test]
+    fn cleared_name_patch_prevents_later_derived_display_name() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+        sync.observe_metadata_patch(&ThreadMetadataPatch {
+            name: Some(None),
+            ..Default::default()
+        });
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
+                "first user text",
+            )))])
+            .expect("metadata update");
+
+        assert_eq!(update.patch.name, None);
+        assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(update.patch.preview.as_deref(), Some("first user text"));
     }
 
     #[test]
@@ -613,6 +729,15 @@ mod tests {
         UserMessageEvent {
             message: message.to_string(),
             images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }
+    }
+
+    fn image_only_user_message() -> UserMessageEvent {
+        UserMessageEvent {
+            message: String::new(),
+            images: Some(vec!["data:image/png;base64,abc".to_string()]),
             local_images: Vec::new(),
             text_elements: Vec::new(),
         }

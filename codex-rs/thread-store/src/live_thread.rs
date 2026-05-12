@@ -240,13 +240,19 @@ impl LiveThread {
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
         self.flush_pending_metadata_update().await?;
-        self.thread_store
+        let thread = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
-                patch,
+                patch: patch.clone(),
                 include_archived,
             })
+            .await?;
+        self.metadata_sync
+            .lock()
             .await
+            .observe_metadata_patch(&patch);
+        Ok(thread)
     }
 
     /// Returns the live local rollout path for legacy local-only callers.

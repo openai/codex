@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metadata_patch_applies_title_over_existing_name() {
+    async fn metadata_patch_preview_does_not_change_name() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let runtime = codex_state::StateRuntime::init(
@@ -1167,7 +1167,6 @@ mod tests {
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
                 patch: ThreadMetadataPatch {
-                    title: Some("Derived first message".to_string()),
                     preview: Some("Derived first message".to_string()),
                     ..Default::default()
                 },
@@ -1176,7 +1175,51 @@ mod tests {
             .await
             .expect("apply observed metadata");
 
-        assert_eq!(thread.name.as_deref(), Some("Derived first message"));
+        assert_eq!(thread.name.as_deref(), Some("User chosen name"));
+    }
+
+    #[tokio::test]
+    async fn metadata_patch_clears_name_without_revealing_preview() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime));
+        let uuid = Uuid::from_u128(317);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T20-30-00", uuid).expect("session file");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some(Some("User chosen name".to_string())),
+                    preview: Some("Derived first message".to_string()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set explicit name");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some(None),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("clear explicit name");
+
+        assert_eq!(thread.name, None);
+        assert_eq!(thread.preview, "Hello from user");
     }
 
     #[tokio::test]
