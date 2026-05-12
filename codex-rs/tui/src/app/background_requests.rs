@@ -376,7 +376,7 @@ impl App {
                     });
                 }
                 Err(err) => {
-                    tracing::warn!(error = %err, "plugin/list failed while refreshing mentions");
+                    tracing::warn!(error = %err, "plugin/list failed while refreshing plugin mention candidates");
                 }
             }
         });
