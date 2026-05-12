@@ -59,6 +59,24 @@ pub(crate) struct LegacySessionSecurity {
     pub(crate) cap_sid_str: String,
 }
 
+fn allow_psids_for_path<'a>(
+    policy: &SandboxPolicy,
+    path: &Path,
+    canonical_cwd: &Path,
+    psid_generic: &'a LocalSid,
+    psid_workspace: Option<&'a LocalSid>,
+) -> Vec<&'a LocalSid> {
+    if !matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
+        return vec![psid_generic];
+    }
+
+    match psid_workspace {
+        Some(workspace_sid) if is_command_cwd_root(path, canonical_cwd) => vec![workspace_sid],
+        Some(workspace_sid) => vec![psid_generic, workspace_sid],
+        None => vec![psid_generic],
+    }
+}
+
 /// Owns a SID allocated by `ConvertStringSidToSidW` and releases it with `LocalFree`.
 pub struct LocalSid {
     psid: *mut c_void,
@@ -243,22 +261,28 @@ pub(crate) fn apply_legacy_session_acl_rules(
             deny.insert(path.clone());
         }
         for p in &allow {
-            let psid = if matches!(policy, SandboxPolicy::WorkspaceWrite { .. })
-                && is_command_cwd_root(p, &canonical_cwd)
+            let mut added_any = false;
+            for sid in allow_psids_for_path(policy, p, &canonical_cwd, psid_generic, psid_workspace)
             {
-                psid_workspace.unwrap_or(psid_generic).as_ptr()
-            } else {
-                psid_generic.as_ptr()
-            };
-            if matches!(add_allow_ace(p, psid), Ok(true)) && !persist_aces {
+                if matches!(add_allow_ace(p, sid.as_ptr()), Ok(true)) {
+                    added_any = true;
+                }
+            }
+            if added_any && !persist_aces {
                 guards.push(p.clone());
             }
         }
         for p in &deny {
-            if let Ok(added) = add_deny_write_ace(p, psid_generic.as_ptr())
-                && added
-                && !persist_aces
+            let mut added_any = false;
+            for sid in allow_psids_for_path(policy, p, &canonical_cwd, psid_generic, psid_workspace)
             {
+                if let Ok(added) = add_deny_write_ace(p, sid.as_ptr())
+                    && added
+                {
+                    added_any = true;
+                }
+            }
+            if added_any && !persist_aces {
                 guards.push(p.clone());
             }
         }

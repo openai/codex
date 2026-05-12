@@ -76,6 +76,32 @@ use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
 use sandbox_users::sid_bytes_to_psid;
 
+fn write_capability_labels_and_psids_for_root(
+    root: &Path,
+    canonical_command_cwd: &Path,
+    cap_psid: *mut c_void,
+    workspace_psid: *mut c_void,
+) -> Vec<(&'static str, *mut c_void)> {
+    if is_command_cwd_root(root, canonical_command_cwd) {
+        vec![("workspace_cap", workspace_psid)]
+    } else {
+        vec![("cap", cap_psid), ("workspace_cap", workspace_psid)]
+    }
+}
+
+fn write_capability_sid_strings_for_root(
+    root: &Path,
+    canonical_command_cwd: &Path,
+    cap_sid_str: &str,
+    workspace_sid_str: &str,
+) -> Vec<String> {
+    if is_command_cwd_root(root, canonical_command_cwd) {
+        vec![workspace_sid_str.to_string()]
+    } else {
+        vec![cap_sid_str.to_string(), workspace_sid_str.to_string()]
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
     version: u32,
@@ -702,21 +728,15 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             continue;
         }
         let mut need_grant = false;
-        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
-        let cap_label = if is_command_cwd {
-            "workspace_cap"
-        } else {
-            "cap"
-        };
-        let cap_psid_for_root = if is_command_cwd {
-            workspace_psid
-        } else {
-            cap_psid
-        };
-        for (label, psid) in [
-            ("sandbox_group", sandbox_group_psid),
-            (cap_label, cap_psid_for_root),
-        ] {
+        for (label, psid) in [("sandbox_group", sandbox_group_psid)].into_iter().chain(
+            write_capability_labels_and_psids_for_root(
+                root,
+                &canonical_command_cwd,
+                cap_psid,
+                workspace_psid,
+            )
+            .into_iter(),
+        ) {
             let has =
                 match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
                     Ok(h) => h,
@@ -745,7 +765,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             log_line(
                 log,
                 &format!(
-                    "granting write ACE to {} for sandbox group and capability SID",
+                    "granting write ACE to {} for sandbox group and capability SID set",
                     root.display()
                 ),
             )?;
@@ -756,12 +776,17 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
-            let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
-            let sid_strings = if is_command_cwd {
-                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
-            } else {
-                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
-            };
+            let sid_strings = std::iter::once(sandbox_group_sid_str.clone())
+                .chain(
+                    write_capability_sid_strings_for_root(
+                        &root,
+                        &canonical_command_cwd,
+                        &cap_sid_str,
+                        &workspace_sid_str,
+                    )
+                    .into_iter(),
+                )
+                .collect::<Vec<_>>();
             let tx = tx.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
@@ -824,27 +849,33 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
 
         let canonical_path = canonicalize_path(path);
-        let deny_psid = if canonical_path.starts_with(&canonical_command_cwd) {
-            workspace_psid
+        let deny_psids = if canonical_path.starts_with(&canonical_command_cwd) {
+            vec![workspace_psid]
         } else {
-            cap_psid
+            vec![cap_psid, workspace_psid]
         };
 
-        match unsafe { add_deny_write_ace(path, deny_psid) } {
-            Ok(true) => {
-                log_line(
-                    log,
-                    &format!("applied deny ACE to protect {}", path.display()),
-                )?;
+        let mut applied = false;
+        for deny_psid in deny_psids {
+            match unsafe { add_deny_write_ace(path, deny_psid) } {
+                Ok(true) => {
+                    applied = true;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    refresh_errors.push(format!("deny ACE failed on {}: {err}", path.display()));
+                    log_line(
+                        log,
+                        &format!("deny ACE failed on {}: {err}", path.display()),
+                    )?;
+                }
             }
-            Ok(false) => {}
-            Err(err) => {
-                refresh_errors.push(format!("deny ACE failed on {}: {err}", path.display()));
-                log_line(
-                    log,
-                    &format!("deny ACE failed on {}: {err}", path.display()),
-                )?;
-            }
+        }
+        if applied {
+            log_line(
+                log,
+                &format!("applied deny ACE to protect {}", path.display()),
+            )?;
         }
     }
 
