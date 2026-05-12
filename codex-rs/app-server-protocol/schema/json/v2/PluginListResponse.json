@@ -452,6 +452,13 @@
         "name": {
           "type": "string"
         },
+        "remotePluginId": {
+          "description": "Backend remote plugin identifier when available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "shareContext": {
           "anyOf": [
             {

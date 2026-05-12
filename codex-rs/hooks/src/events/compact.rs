@@ -299,6 +299,7 @@ fn parse_pre_completed(
             should_stop,
             stop_reason,
         },
+        completion_order: 0,
     }
 }
 
@@ -401,6 +402,7 @@ fn parse_completed(
             should_stop,
             stop_reason,
         },
+        completion_order: 0,
     }
 }
 

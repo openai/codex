@@ -25,6 +25,8 @@ use crate::model::datetime_to_epoch_millis;
 use crate::model::datetime_to_epoch_seconds;
 use crate::model::epoch_millis_to_datetime;
 use crate::paths::file_modified_time_utc;
+use crate::telemetry::DbKind;
+use crate::telemetry::DbTelemetry;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -50,6 +52,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::warn;
 
 mod agent_jobs;
@@ -93,29 +96,72 @@ impl StateRuntime {
     /// keeping logs in a dedicated file to reduce lock contention with the
     /// rest of the state store.
     pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
+        Self::init_inner(
+            codex_home,
+            default_provider,
+            /*telemetry_override*/ None,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn init_with_telemetry_for_tests(
+        codex_home: PathBuf,
+        default_provider: String,
+        telemetry_override: &dyn DbTelemetry,
+    ) -> anyhow::Result<Arc<Self>> {
+        Self::init_inner(codex_home, default_provider, Some(telemetry_override)).await
+    }
+
+    async fn init_inner(
+        codex_home: PathBuf,
+        default_provider: String,
+        telemetry_override: Option<&dyn DbTelemetry>,
+    ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let state_migrator = runtime_state_migrator();
         let logs_migrator = runtime_logs_migrator();
         let state_path = state_db_path(codex_home.as_path());
         let logs_path = logs_db_path(codex_home.as_path());
-        let pool = match open_state_sqlite(&state_path, &state_migrator).await {
+        let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
                 return Err(err);
             }
         };
-        let logs_pool = match open_logs_sqlite(&logs_path, &logs_migrator).await {
+        let logs_pool = match open_logs_sqlite(&logs_path, &logs_migrator, telemetry_override).await
+        {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open logs db at {}: {err}", logs_path.display());
                 return Err(err);
             }
         };
-        let thread_updated_at_millis: Option<i64> =
+        let started = Instant::now();
+        let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
+        crate::telemetry::record_init_result(
+            telemetry_override,
+            DbKind::State,
+            "ensure_backfill_state",
+            started.elapsed(),
+            &backfill_state_result,
+        );
+        backfill_state_result?;
+        let started = Instant::now();
+        let thread_updated_at_millis_result: anyhow::Result<Option<i64>> =
             sqlx::query_scalar("SELECT MAX(threads.updated_at_ms) FROM threads")
                 .fetch_one(pool.as_ref())
-                .await?;
+                .await
+                .map_err(anyhow::Error::from);
+        crate::telemetry::record_init_result(
+            telemetry_override,
+            DbKind::State,
+            "post_init_query",
+            started.elapsed(),
+            &thread_updated_at_millis_result,
+        );
+        let thread_updated_at_millis = thread_updated_at_millis_result?;
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);
         let runtime = Arc::new(Self {
             pool,
@@ -149,27 +195,93 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
         .log_statements(LevelFilter::Off)
 }
 
-async fn open_state_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<SqlitePool> {
+async fn open_state_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
     // New state DBs should use incremental auto-vacuum, but retrofitting an
     // existing DB requires a full VACUUM. Do not attempt that during process
     // startup: it is maintenance work that can contend with foreground writers.
+    open_sqlite(
+        path,
+        migrator,
+        DbKind::State,
+        "open_state",
+        "migrate_state",
+        telemetry_override,
+    )
+    .await
+}
+
+async fn open_logs_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
+    open_sqlite(
+        path,
+        migrator,
+        DbKind::Logs,
+        "open_logs",
+        "migrate_logs",
+        telemetry_override,
+    )
+    .await
+}
+
+async fn open_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    db: DbKind,
+    open_phase: &'static str,
+    migrate_phase: &'static str,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
-    let pool = SqlitePoolOptions::new()
+    let started = Instant::now();
+    let pool_result = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
-        .await?;
-    migrator.run(&pool).await?;
+        .await
+        .map_err(anyhow::Error::from);
+    crate::telemetry::record_init_result(
+        telemetry_override,
+        db,
+        open_phase,
+        started.elapsed(),
+        &pool_result,
+    );
+    let pool = pool_result?;
+    let started = Instant::now();
+    let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
+    crate::telemetry::record_init_result(
+        telemetry_override,
+        db,
+        migrate_phase,
+        started.elapsed(),
+        &migrate_result,
+    );
+    migrate_result?;
     Ok(pool)
 }
 
-async fn open_logs_sqlite(path: &Path, migrator: &Migrator) -> anyhow::Result<SqlitePool> {
-    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await?;
-    migrator.run(&pool).await?;
-    Ok(pool)
+pub(super) async fn ensure_backfill_state_row_in_pool(
+    pool: &sqlx::SqlitePool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
+VALUES (?, ?, NULL, NULL, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+    )
+    .bind(1_i64)
+    .bind(crate::BackfillStatus::Pending.as_str())
+    .bind(Utc::now().timestamp())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub fn state_db_filename() -> String {
@@ -190,15 +302,73 @@ pub fn logs_db_path(codex_home: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::StateRuntime;
     use super::open_state_sqlite;
     use super::runtime_state_migrator;
     use super::state_db_path;
     use super::test_support::unique_temp_dir;
+    use crate::DB_INIT_METRIC;
+    use crate::DbTelemetry;
     use crate::migrations::STATE_MIGRATOR;
+    use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
     use sqlx::sqlite::SqliteConnectOptions;
+    use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use std::path::Path;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestTelemetry {
+        counters: Mutex<Vec<MetricEvent>>,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct MetricEvent {
+        name: String,
+        tags: BTreeMap<String, String>,
+    }
+
+    impl TestTelemetry {
+        fn counters(&self) -> Vec<MetricEvent> {
+            self.counters
+                .lock()
+                .expect("telemetry lock")
+                .iter()
+                .map(|event| MetricEvent {
+                    name: event.name.clone(),
+                    tags: event.tags.clone(),
+                })
+                .collect()
+        }
+    }
+
+    impl DbTelemetry for TestTelemetry {
+        fn counter(&self, name: &str, _inc: i64, tags: &[(&str, &str)]) {
+            self.counters
+                .lock()
+                .expect("telemetry lock")
+                .push(MetricEvent {
+                    name: name.to_string(),
+                    tags: tags_to_map(tags),
+                });
+        }
+
+        fn record_duration(
+            &self,
+            _name: &str,
+            _duration: std::time::Duration,
+            _tags: &[(&str, &str)],
+        ) {
+        }
+    }
+
+    fn tags_to_map(tags: &[(&str, &str)]) -> BTreeMap<String, String> {
+        tags.iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
 
     async fn open_db_pool(path: &Path) -> SqlitePool {
         SqlitePool::connect_with(
@@ -250,11 +420,53 @@ mod tests {
         strict_pool.close().await;
 
         let tolerant_migrator = runtime_state_migrator();
-        let tolerant_pool = open_state_sqlite(state_path.as_path(), &tolerant_migrator)
-            .await
-            .expect("runtime migrator should tolerate newer applied migrations");
+        let tolerant_pool = open_state_sqlite(
+            state_path.as_path(),
+            &tolerant_migrator,
+            /*telemetry_override*/ None,
+        )
+        .await
+        .expect("runtime migrator should tolerate newer applied migrations");
         tolerant_pool.close().await;
 
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn init_records_successful_sqlite_init_phases_to_explicit_telemetry() {
+        let codex_home = unique_temp_dir();
+        let telemetry = TestTelemetry::default();
+
+        let runtime = StateRuntime::init_with_telemetry_for_tests(
+            codex_home.clone(),
+            "test-provider".to_string(),
+            &telemetry,
+        )
+        .await
+        .expect("state runtime should initialize");
+
+        let phases = telemetry
+            .counters()
+            .into_iter()
+            .filter(|event| event.name == DB_INIT_METRIC)
+            .filter(|event| event.tags.get("status").map(String::as_str) == Some("success"))
+            .filter_map(|event| event.tags.get("phase").cloned())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "open_state",
+            "migrate_state",
+            "open_logs",
+            "migrate_logs",
+            "ensure_backfill_state",
+            "post_init_query",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+        assert_eq!(phases, expected);
+
+        runtime.pool.close().await;
+        runtime.logs_pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 }

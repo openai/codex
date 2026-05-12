@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewDecision;
@@ -18,6 +16,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -164,11 +163,12 @@ fn track_guardian_review(
     session: &Session,
     tracking: &GuardianReviewTrackContext,
     result: GuardianReviewAnalyticsResult,
+    completed_at_ms: u64,
 ) {
     session
         .services
         .analytics_events_client
-        .track_guardian_review(tracking, result);
+        .track_guardian_review(tracking, result, completed_at_ms);
 }
 
 async fn record_guardian_non_denial(session: &Arc<Session>, turn_id: &str) {
@@ -277,6 +277,7 @@ async fn run_guardian_review(
         .as_ref()
         .is_some_and(CancellationToken::is_cancelled)
     {
+        let completed_at_ms = now_unix_timestamp_ms();
         track_guardian_review(
             session.as_ref(),
             &review_tracking,
@@ -286,6 +287,7 @@ async fn run_guardian_review(
                 failure_reason: Some(GuardianReviewFailureReason::Cancelled),
                 ..GuardianReviewAnalyticsResult::without_session()
             },
+            completed_at_ms.try_into().unwrap_or_default(),
         );
         session
             .send_event(
@@ -295,7 +297,7 @@ async fn run_guardian_review(
                     target_item_id,
                     turn_id: assessment_turn_id.clone(),
                     started_at_ms,
-                    completed_at_ms: Some(now_unix_timestamp_ms()),
+                    completed_at_ms: Some(completed_at_ms),
                     status: GuardianAssessmentStatus::Aborted,
                     risk_level: None,
                     user_authorization: None,
@@ -321,6 +323,7 @@ async fn run_guardian_review(
     ))
     .await;
 
+    let completed_at_ms = now_unix_timestamp_ms();
     let (assessment, count_denial_for_circuit_breaker) = match outcome {
         GuardianReviewOutcome::Completed(assessment) => {
             let approved = matches!(assessment.outcome, GuardianAssessmentOutcome::Allow);
@@ -344,6 +347,7 @@ async fn run_guardian_review(
                     outcome: Some(assessment.outcome),
                     ..analytics_result
                 },
+                completed_at_ms.try_into().unwrap_or_default(),
             );
             let count_denial_for_circuit_breaker =
                 matches!(assessment.outcome, GuardianAssessmentOutcome::Deny);
@@ -363,6 +367,7 @@ async fn run_guardian_review(
                         failure_reason: Some(error.failure_reason()),
                         ..analytics_result
                     },
+                    completed_at_ms.try_into().unwrap_or_default(),
                 );
                 session
                     .send_event(
@@ -380,7 +385,7 @@ async fn run_guardian_review(
                             target_item_id,
                             turn_id: assessment_turn_id.clone(),
                             started_at_ms,
-                            completed_at_ms: Some(now_unix_timestamp_ms()),
+                            completed_at_ms: Some(completed_at_ms),
                             status: GuardianAssessmentStatus::TimedOut,
                             risk_level: None,
                             user_authorization: None,
@@ -403,6 +408,7 @@ async fn run_guardian_review(
                         failure_reason: Some(error.failure_reason()),
                         ..analytics_result
                     },
+                    completed_at_ms.try_into().unwrap_or_default(),
                 );
                 session
                     .send_event(
@@ -412,7 +418,7 @@ async fn run_guardian_review(
                             target_item_id,
                             turn_id: assessment_turn_id.clone(),
                             started_at_ms,
-                            completed_at_ms: Some(now_unix_timestamp_ms()),
+                            completed_at_ms: Some(completed_at_ms),
                             status: GuardianAssessmentStatus::Aborted,
                             risk_level: None,
                             user_authorization: None,
@@ -446,6 +452,7 @@ async fn run_guardian_review(
                         failure_reason: Some(error.failure_reason()),
                         ..analytics_result
                     },
+                    completed_at_ms.try_into().unwrap_or_default(),
                 );
                 (
                     GuardianAssessment {
@@ -507,7 +514,7 @@ async fn run_guardian_review(
                 target_item_id,
                 turn_id: assessment_turn_id.clone(),
                 started_at_ms,
-                completed_at_ms: Some(now_unix_timestamp_ms()),
+                completed_at_ms: Some(completed_at_ms),
                 status,
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),

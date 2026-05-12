@@ -8,7 +8,11 @@ import type { PluginInterface } from "./PluginInterface";
 import type { PluginShareContext } from "./PluginShareContext";
 import type { PluginSource } from "./PluginSource";
 
-export type PluginSummary = { id: string, name: string,
+export type PluginSummary = { id: string,
+/**
+ * Backend remote plugin identifier when available.
+ */
+remotePluginId: string | null, name: string,
 /**
  * Remote sharing context associated with this plugin when available.
  */

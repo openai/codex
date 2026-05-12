@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
@@ -65,7 +66,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -298,22 +298,24 @@ impl MessageProcessor {
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
-        let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager.clone(),
-            session_source,
-            environment_manager,
-            thread_extensions(),
-            Some(analytics_events_client.clone()),
-            Arc::clone(&thread_store),
-            state_db.clone(),
-            installation_id,
-            Some(app_server_attestation_provider(
-                outgoing.clone(),
-                thread_state_manager.clone(),
-            )),
-        ));
+        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let thread_manager = Arc::new_cyclic(|thread_manager| {
+            ThreadManager::new(
+                config.as_ref(),
+                auth_manager.clone(),
+                session_source,
+                environment_manager,
+                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
+                Some(analytics_events_client.clone()),
+                Arc::clone(&thread_store),
+                state_db.clone(),
+                installation_id,
+                Some(app_server_attestation_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
+            )
+        });
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());

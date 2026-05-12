@@ -51,6 +51,7 @@ use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::TuiPetAnchor;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginsConfigInput;
@@ -64,6 +65,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
@@ -98,6 +100,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
+use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -109,6 +114,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
+use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
 use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::default_builtin_permission_profile_name;
@@ -543,6 +549,12 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Pet id preselected by the terminal pet picker.
+    pub tui_pet: Option<String>,
+
+    /// Vertical anchor used by terminal pet rendering.
+    pub tui_pet_anchor: TuiPetAnchor,
 
     /// Preferred layout for resume/fork session picker results.
     pub tui_session_picker_view: SessionPickerViewMode,
@@ -1122,6 +1134,16 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
+            client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
+                ElicitationCapability {
+                    form: Some(FormElicitationCapability::default()),
+                    url: Some(UrlElicitationCapability::default()),
+                }
+            } else {
+                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                // indicates this should be an empty object.
+                ElicitationCapability::default()
+            },
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
@@ -2013,6 +2035,13 @@ fn apps_mcp_path_override_toml_config(
     }
 }
 
+fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&NetworkProxyConfigToml> {
+    match features?.network_proxy.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
@@ -2203,6 +2232,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
@@ -2286,7 +2316,7 @@ impl Config {
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
         let (
-            configured_network_proxy_config,
+            mut configured_network_proxy_config,
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
@@ -2499,6 +2529,22 @@ impl Config {
                 None,
             )
         };
+        if enable_network_proxy && permission_profile.network_sandbox_policy().is_enabled() {
+            if let Some(network_proxy) = network_proxy_toml_config(cfg.features.as_ref()) {
+                apply_network_proxy_feature_config(
+                    &mut configured_network_proxy_config,
+                    network_proxy,
+                );
+            }
+            if let Some(network_proxy) = network_proxy_toml_config(config_profile.features.as_ref())
+            {
+                apply_network_proxy_feature_config(
+                    &mut configured_network_proxy_config,
+                    network_proxy,
+                );
+            }
+            configured_network_proxy_config.network.enabled = true;
+        }
         let approval_policy_was_explicit = approval_policy_override.is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some();
@@ -2866,12 +2912,6 @@ impl Config {
                     }
                 })
                 .map_err(std::io::Error::from)?;
-
-            if cfg!(target_os = "windows") {
-                startup_warnings.push(format!(
-                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
-                ));
-            }
         }
         apply_requirement_constrained_value(
             "approvals_reviewer",
@@ -3172,6 +3212,12 @@ impl Config {
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),
+            tui_pet_anchor: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.pet_anchor)
+                .unwrap_or_default(),
             tui_session_picker_view: config_profile
                 .tui
                 .as_ref()

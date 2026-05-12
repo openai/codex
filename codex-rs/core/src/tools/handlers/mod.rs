@@ -37,6 +37,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
@@ -76,12 +77,53 @@ pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 
-fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
+pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
+    })
+}
+
+fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
+    updated_input
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "hook returned updatedInput without string field `command`".to_string(),
+            )
+        })
+}
+
+fn rewrite_function_arguments(
+    arguments: &str,
+    tool_name: &str,
+    rewrite: impl FnOnce(&mut Map<String, Value>),
+) -> Result<String, FunctionCallError> {
+    let mut arguments: Value = parse_arguments(arguments)?;
+    let Value::Object(arguments) = &mut arguments else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool_name} arguments must be an object"
+        )));
+    };
+    rewrite(arguments);
+    serde_json::to_string(&arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {tool_name} arguments: {err}"
+        ))
+    })
+}
+
+fn rewrite_function_string_argument(
+    arguments: &str,
+    tool_name: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<String, FunctionCallError> {
+    rewrite_function_arguments(arguments, tool_name, |arguments| {
+        arguments.insert(field_name.to_string(), Value::String(value.to_string()));
     })
 }
 
