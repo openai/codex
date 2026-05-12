@@ -869,7 +869,8 @@ pub enum ResponseItem {
     //   "type":"image_generation_call",
     //   "status":"completed",
     //   "revised_prompt":"A gray tabby cat hugging an otter...",
-    //   "result":"..."
+    //   "result":"...",
+    //   "output_hint":"Generated images are saved to ..."
     // }
     ImageGenerationCall {
         id: String,
@@ -878,6 +879,9 @@ pub enum ResponseItem {
         #[ts(optional)]
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output_hint: Option<String>,
     },
     #[serde(alias = "compaction_summary")]
     Compaction { encrypted_content: String },
@@ -1741,6 +1745,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A small blue square".to_string()),
                 result: "Zm9v".to_string(),
+                output_hint: None,
             }
         );
     }
@@ -1762,6 +1767,33 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
+                output_hint: None,
+            }
+        );
+    }
+
+    #[test]
+    fn response_item_parses_image_generation_call_with_output_hint() {
+        let item = serde_json::from_value::<ResponseItem>(serde_json::json!({
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "completed",
+            "result": "Zm9v",
+            "output_hint": "Generated images are saved to /tmp/generated_images/session as /tmp/generated_images/session/ig_123.png by default.",
+        }))
+        .expect("image generation item should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: None,
+                result: "Zm9v".to_string(),
+                output_hint: Some(
+                    "Generated images are saved to /tmp/generated_images/session as /tmp/generated_images/session/ig_123.png by default."
+                        .to_string(),
+                ),
             }
         );
     }

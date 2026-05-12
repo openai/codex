@@ -594,11 +594,17 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         "expected the original generated image payload to be preserved"
     );
     assert!(
+        image_generation_calls[0]["output_hint"]
+            .as_str()
+            .is_some_and(|text| text.contains("Generated images are saved to")),
+        "second request should keep the saved-path note on the image_generation_call"
+    );
+    assert!(
         second_request
             .message_input_texts("developer")
             .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
+            .all(|text| !text.contains("Generated images are saved to")),
+        "second request should not include a separate developer saved-path note"
     );
     let _ = std::fs::remove_file(&saved_path);
 
@@ -711,6 +717,12 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
         "second request should strip generated image bytes for text-only models"
     );
     assert!(
+        image_generation_calls[0]["output_hint"]
+            .as_str()
+            .is_some_and(|text| text.contains("Generated images are saved to")),
+        "second request should preserve the saved-path note on the image_generation_call"
+    );
+    assert!(
         second_request
             .message_input_texts("user")
             .iter()
@@ -721,8 +733,8 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
         second_request
             .message_input_texts("developer")
             .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
+            .all(|text| !text.contains("Generated images are saved to")),
+        "second request should not include a separate developer saved-path note"
     );
     let _ = std::fs::remove_file(&saved_path);
 

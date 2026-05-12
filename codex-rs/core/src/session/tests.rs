@@ -6333,6 +6333,10 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
+                output_hint: Some(
+                    "Generated images are saved to /tmp as /tmp/ig-test.png by default."
+                        .to_string(),
+                ),
             }],
             /*reference_context_item*/ None,
         )
@@ -6569,7 +6573,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
 }
 
 #[tokio::test]
-async fn handle_output_item_done_records_image_save_history_message() {
+async fn handle_output_item_done_records_image_save_history_hint() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -6585,6 +6589,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
+        output_hint: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -6598,21 +6603,20 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        &turn_context.config.codex_home,
-        &session.conversation_id.to_string(),
-        "<image_id>",
-    );
-    let image_output_dir = image_output_path
+    let image_output_dir = expected_saved_path
         .parent()
         .expect("generated image path should have a parent");
-    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
-        crate::context::ImageGenerationInstructions::new(
-            image_output_dir.display(),
-            image_output_path.display(),
-        ),
-    );
-    assert_eq!(history.raw_items(), &[image_message, item]);
+    let mut expected_item = item.clone();
+    if let ResponseItem::ImageGenerationCall { output_hint, .. } = &mut expected_item {
+        *output_hint = Some(
+            crate::context::ImageGenerationInstructions::new(
+                image_output_dir.display(),
+                expected_saved_path.display(),
+            )
+            .body(),
+        );
+    }
+    assert_eq!(history.raw_items(), &[expected_item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -6637,6 +6641,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
+        output_hint: None,
     };
 
     let mut ctx = HandleOutputCtx {

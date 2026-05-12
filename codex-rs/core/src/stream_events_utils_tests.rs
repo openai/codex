@@ -117,10 +117,11 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
     );
 
-    let turn_item =
+    let (turn_item, item_for_history) =
         handle_non_tool_response_item(&session, &turn_context, &item, /*plan_mode*/ false)
             .await
             .expect("assistant message should parse");
+    assert_eq!(item_for_history, item);
 
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
@@ -201,6 +202,7 @@ fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
         status: "completed".to_string(),
         revised_prompt: None,
         result: "Zm9v".to_string(),
+        output_hint: None,
     };
 
     assert!(completed_item_defers_mailbox_delivery_to_next_turn(

@@ -1771,7 +1771,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) =
+        if let Some((turn_item, _item_for_history)) =
             handle_non_tool_response_item(sess, turn_context, item, /*plan_mode*/ true).await
         {
             emit_turn_item_in_plan_mode(
@@ -2015,7 +2015,7 @@ async fn try_run_sampling_request(
                 } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
                     active_tool_argument_diff_consumer = None;
                 }
-                if let Some(turn_item) = handle_non_tool_response_item(
+                if let Some((turn_item, _item_for_history)) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     &item,
