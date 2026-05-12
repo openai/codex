@@ -23,6 +23,13 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::SessionSource;
+use codex_rollout_trace::ThreadStartedTraceMetadata;
+use codex_rollout_trace::ToolDispatchInvocation;
+use codex_rollout_trace::ToolDispatchPayload;
+use codex_rollout_trace::ToolDispatchRequester;
+use codex_rollout_trace::replay_bundle;
 use core_test_support::PathExt;
 use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
@@ -34,6 +41,9 @@ use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tracing::Instrument;
@@ -114,6 +124,60 @@ fn prompt_options(
         allow_session_remember,
         allow_persistent_approval,
     }
+}
+
+#[tokio::test]
+async fn execute_mcp_tool_call_records_replayable_correlation() -> anyhow::Result<()> {
+    let temp = tempdir()?;
+    let (mut session, turn_context) = make_session_and_context().await;
+    attach_trace_bundle(&mut session, &turn_context, temp.path())?;
+
+    let dispatch_trace = session
+        .services
+        .rollout_thread_trace
+        .start_tool_dispatch_trace(|| {
+            Some(ToolDispatchInvocation {
+                thread_id: session.conversation_id.to_string(),
+                codex_turn_id: turn_context.sub_id.clone(),
+                tool_call_id: "mcp-call".to_string(),
+                tool_name: "search".to_string(),
+                tool_namespace: Some("mcp__docs__".to_string()),
+                requester: ToolDispatchRequester::Model {
+                    model_visible_call_id: "mcp-call".to_string(),
+                },
+                payload: ToolDispatchPayload::Function {
+                    arguments: r#"{"query":"trace"}"#.to_string(),
+                },
+            })
+        });
+    assert!(dispatch_trace.is_enabled());
+
+    let result = execute_mcp_tool_call(
+        &session,
+        &turn_context,
+        "mcp-call",
+        &McpInvocation {
+            server: "docs".to_string(),
+            tool: "search".to_string(),
+            arguments: Some(serde_json::json!({ "query": "trace" })),
+        },
+        /*rewritten_arguments*/ None,
+        /*metadata*/ None,
+        /*request_meta*/ None,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "the synthetic backend is absent; only trace emission matters",
+    );
+
+    let replayed = replay_bundle(single_bundle_dir(temp.path())?)?;
+    assert!(
+        replayed.tool_calls["mcp-call"].mcp_call_id.is_some(),
+        "the real MCP execution path should emit a reducer-visible correlation ID",
+    );
+
+    Ok(())
 }
 
 fn install_mcp_permission_request_hook(
@@ -203,6 +267,45 @@ print({hook_output:?})
         })));
 
     log_path.to_path_buf()
+}
+
+/// Attaches a replayable rollout bundle to one synthetic session under test.
+fn attach_trace_bundle(
+    session: &mut Session,
+    turn_context: &TurnContext,
+    root: &Path,
+) -> anyhow::Result<()> {
+    let rollout_thread_trace =
+        codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
+            root,
+            ThreadStartedTraceMetadata {
+                thread_id: session.conversation_id.to_string(),
+                agent_path: "/root".to_string(),
+                task_name: None,
+                nickname: None,
+                agent_role: None,
+                session_source: SessionSource::Exec,
+                cwd: PathBuf::from("/workspace"),
+                rollout_path: None,
+                model: "gpt-test".to_string(),
+                provider_name: "test-provider".to_string(),
+                approval_policy: "never".to_string(),
+                sandbox_policy: "danger-full-access".to_string(),
+            },
+        )?;
+    rollout_thread_trace.record_codex_turn_started(turn_context.sub_id.as_str());
+    session.services.rollout_thread_trace = rollout_thread_trace;
+    Ok(())
+}
+
+/// Returns the sole bundle emitted under a temporary rollout trace root.
+fn single_bundle_dir(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut entries = fs::read_dir(root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort();
+    assert_eq!(entries.len(), 1);
+    Ok(entries.remove(0))
 }
 
 #[test]

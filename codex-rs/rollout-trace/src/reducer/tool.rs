@@ -515,7 +515,3 @@ fn push_unique(items: &mut Vec<String>, item_id: &str) {
         items.push(item_id.to_string());
     }
 }
-
-#[cfg(test)]
-#[path = "tool_tests.rs"]
-mod tests;
