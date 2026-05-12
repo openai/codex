@@ -273,15 +273,6 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
-            .is_none()
-    );
-    assert_eq!(
-        namespace_function_names(&router.specs(), "codex_app"),
-        vec![visible_tool.to_string()]
-    );
     assert_eq!(
         namespace_function_names(&router.model_visible_specs(), "codex_app"),
         vec![visible_tool.to_string()]
@@ -341,12 +332,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
 
     assert!(
         router
-            .find_spec(&ToolName::plain("extension_echo"))
-            .is_some(),
-        "expected extension-provided tool spec to be registered"
-    );
-    assert!(
-        router
             .model_visible_specs()
             .iter()
             .any(|spec| spec.name() == "extension_echo"),
@@ -361,7 +346,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
-
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),

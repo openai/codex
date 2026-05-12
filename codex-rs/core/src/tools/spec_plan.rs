@@ -81,6 +81,7 @@ pub fn build_tool_registry_builder(
                 .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone())),
         )
         .collect::<HashSet<_>>();
+    let handlers = collect_handler_tools(config, params);
 
     if config.code_mode_enabled {
         let namespace_descriptions = params
@@ -97,16 +98,12 @@ pub fn build_tool_registry_builder(
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let nested_config = config.for_code_mode_nested_tools();
-        let nested_builder = build_tool_registry_builder(
-            &nested_config,
-            ToolRegistryBuildParams {
-                discoverable_tools: None,
-                ..params
-            },
-        );
+        let code_mode_nested_tool_specs = handlers
+            .iter()
+            .filter_map(|handler| handler.spec())
+            .collect::<Vec<_>>();
         let mut enabled_tools =
-            collect_code_mode_exec_prompt_tool_definitions(nested_builder.specs().iter());
+            collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
         enabled_tools
             .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
         builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
@@ -116,11 +113,11 @@ pub fn build_tool_registry_builder(
                 config.code_mode_only_enabled,
                 config.search_tool && !all_deferred_tools.is_empty(),
             ),
+            code_mode_nested_tool_specs,
         )));
         builder.register_handler(Arc::new(CodeModeWaitHandler));
     }
 
-    let handlers = collect_handler_tools(config, params);
     let mut non_deferred_specs = Vec::new();
     for handler in &handlers {
         let tool_name = handler.tool_name();
