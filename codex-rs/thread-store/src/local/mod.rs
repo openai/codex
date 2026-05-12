@@ -457,6 +457,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_thread_shutdown_with_buffered_items_materializes_before_metadata_read() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+
+        live_thread
+            .append_items(&[RolloutItem::EventMsg(EventMsg::TokenCount(
+                codex_protocol::protocol::TokenCountEvent {
+                    info: None,
+                    rate_limits: None,
+                },
+            ))])
+            .await
+            .expect("append metadata-only item");
+        live_thread.shutdown().await.expect("shutdown thread");
+
+        assert!(
+            tokio::fs::try_exists(rollout_path.as_path())
+                .await
+                .expect("rollout path should be checkable")
+        );
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(metadata.rollout_path, rollout_path);
+    }
+
+    #[tokio::test]
     async fn live_thread_resume_loads_history_before_observing_metadata() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
