@@ -181,7 +181,11 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-trait AnyToolHandler: Send + Sync {
+pub(crate) trait AnyToolHandler: Send + Sync {
+    fn tool_name(&self) -> ToolName;
+
+    fn spec(&self) -> Option<ToolSpec>;
+
     fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
@@ -212,6 +216,14 @@ impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
 {
+    fn tool_name(&self) -> ToolName {
+        ToolHandler::tool_name(self)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        ToolHandler::spec(self)
+    }
+
     fn supports_parallel_tool_calls(&self) -> bool {
         ToolHandler::supports_parallel_tool_calls(self)
     }
@@ -581,18 +593,33 @@ impl ToolRegistryBuilder {
     where
         H: ToolHandler + 'static,
     {
+        self.register_any_handler(handler);
+    }
+
+    pub(crate) fn register_any_handler(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ true);
+    }
+
+    pub(crate) fn register_any_handler_without_spec(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ false);
+    }
+
+    fn register_any_handler_internal(
+        &mut self,
+        handler: Arc<dyn AnyToolHandler>,
+        include_spec: bool,
+    ) {
         let name = handler.tool_name();
         if self.handlers.contains_key(&name) {
             error_or_panic(format!("handler for tool {name} already registered"));
             return;
         }
 
-        if let Some(spec) = handler.spec() {
+        if include_spec && let Some(spec) = handler.spec() {
             let supports_parallel_tool_calls = handler.supports_parallel_tool_calls();
             self.push_spec(spec, supports_parallel_tool_calls);
         }
 
-        let handler: Arc<dyn AnyToolHandler> = handler;
         self.handlers.insert(name, handler);
     }
 

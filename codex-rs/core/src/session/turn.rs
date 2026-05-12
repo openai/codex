@@ -1243,7 +1243,7 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
     let unavailable_called_tools = if turn_context
         .config
@@ -1252,8 +1252,13 @@ pub(crate) async fn built_tools(
     {
         let exposed_tool_names = mcp_tools
             .iter()
-            .chain(deferred_mcp_tools.iter())
             .flat_map(|tools| tools.iter().map(codex_mcp::ToolInfo::canonical_tool_name))
+            .chain(
+                deferred_mcp_tools
+                    .iter()
+                    .flatten()
+                    .map(codex_mcp::ToolInfo::canonical_tool_name),
+            )
             .collect::<HashSet<_>>();
         collect_unavailable_called_tools(input, &exposed_tool_names)
     } else {

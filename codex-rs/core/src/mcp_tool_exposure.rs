@@ -11,7 +11,7 @@ use crate::connectors;
 pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 pub(crate) struct McpToolExposure {
-    pub(crate) direct_tools: Vec<McpToolInfo>,
+    pub(crate) tools: Vec<McpToolInfo>,
     pub(crate) deferred_tools: Option<Vec<McpToolInfo>>,
 }
 
@@ -39,7 +39,7 @@ pub(crate) fn build_mcp_tool_exposure(
 
     if !should_defer {
         return McpToolExposure {
-            direct_tools: deferred_tools,
+            tools: deferred_tools,
             deferred_tools: None,
         };
     }
@@ -53,7 +53,11 @@ pub(crate) fn build_mcp_tool_exposure(
     deferred_tools.retain(|tool| !direct_tool_names.contains(&tool.canonical_tool_name()));
 
     McpToolExposure {
-        direct_tools,
+        tools: direct_tools
+            .iter()
+            .cloned()
+            .chain(deferred_tools.iter().cloned())
+            .collect(),
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }

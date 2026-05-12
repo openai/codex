@@ -128,7 +128,7 @@ async fn directly_exposes_small_effective_tool_sets() {
         &tools_config,
     );
 
-    assert_eq!(tool_names(&exposure.direct_tools), tool_names(&mcp_tools));
+    assert_eq!(tool_names(&exposure.tools), tool_names(&mcp_tools));
     assert!(exposure.deferred_tools.is_none());
 }
 
@@ -146,11 +146,11 @@ async fn searches_large_effective_tool_sets() {
         &tools_config,
     );
 
-    assert!(exposure.direct_tools.is_empty());
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
+    assert_eq!(tool_names(&exposure.tools), tool_names(&mcp_tools));
     assert_eq!(tool_names(deferred_tools), tool_names(&mcp_tools));
 }
 
@@ -177,7 +177,11 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
         &tools_config,
     );
 
-    let direct_tool_names = tool_names(&exposure.direct_tools);
+    let direct_tool_names = HashSet::from([ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )]);
+    let all_tool_names = tool_names(&exposure.tools);
     assert_eq!(
         direct_tool_names,
         HashSet::from([ToolName::namespaced(
@@ -185,6 +189,11 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
             "_create_event"
         )])
     );
+    assert!(all_tool_names.contains(&ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )));
+    assert!(all_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool_0")));
     assert_eq!(
         exposure.deferred_tools.as_ref().map(Vec::len),
         Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
@@ -241,7 +250,11 @@ async fn always_defer_feature_preserves_explicit_apps() {
         &tools_config,
     );
 
-    let direct_tool_names = tool_names(&exposure.direct_tools);
+    let direct_tool_names = HashSet::from([ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )]);
+    let all_tool_names = tool_names(&exposure.tools);
     assert_eq!(
         direct_tool_names,
         HashSet::from([ToolName::namespaced(
@@ -249,6 +262,11 @@ async fn always_defer_feature_preserves_explicit_apps() {
             "_create_event"
         )])
     );
+    assert!(all_tool_names.contains(&ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )));
+    assert!(all_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool")));
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()

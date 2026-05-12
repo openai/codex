@@ -65,7 +65,6 @@ pub(crate) fn build_tool_search_entries_for_config(
     };
     let dynamic_tools = dynamic_tools
         .iter()
-        .filter(|tool| config.namespace_tools || tool.namespace.is_none())
         .cloned()
         .collect::<Vec<_>>();
     build_tool_search_entries(mcp_tools, &dynamic_tools)
