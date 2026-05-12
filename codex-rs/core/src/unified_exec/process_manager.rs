@@ -398,14 +398,13 @@ impl UnifiedExecProcessManager {
             }
             Err(err) => {
                 let failure = match &err {
-                    UnifiedExecError::MissingCommandLine => ToolEventFailure::Rejected {
-                        message: "missing command line for unified exec request".to_string(),
-                        applied_patch_delta: None,
-                    },
                     UnifiedExecError::Rejected { message } => ToolEventFailure::Rejected {
                         message: message.clone(),
                         applied_patch_delta: None,
                     },
+                    UnifiedExecError::SandboxDenied { output, .. } => {
+                        ToolEventFailure::Output(output.clone())
+                    }
                     _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
                 };
                 emitter

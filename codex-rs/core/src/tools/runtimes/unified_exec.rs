@@ -280,7 +280,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                    .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+                    .map_err(|_| ToolError::Codex(CodexErr::InvalidRequest("missing command line for PTY".into())))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
@@ -319,7 +319,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                                     network_policy_decision: None,
                                 }))
                             }
-                            other => ToolError::Rejected(other.to_string()),
+                            other => ToolError::Codex(CodexErr::Fatal(other.to_string())),
                         });
                 }
                 None => {
@@ -331,7 +331,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         }
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+                .map_err(|_| ToolError::Codex(CodexErr::InvalidRequest("missing command line for PTY".into())))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
@@ -353,7 +353,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                         network_policy_decision: None,
                     }))
                 }
-                other => ToolError::Rejected(other.to_string()),
+                other => ToolError::Codex(CodexErr::Fatal(other.to_string())),
             })
     }
 }
