@@ -15,7 +15,6 @@ use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
-use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
@@ -66,6 +65,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const WORKSPACE_PROTECTED_DIRS: [&str; 3] = [".git", ".codex", ".agents"];
 
 mod sandbox_users;
 mod setup_runtime_bin;
@@ -249,6 +249,112 @@ fn read_mask_allows_or_log(
             Ok(false)
         }
     }
+}
+
+fn should_skip_workspace_descendant(path: &Path, command_cwd: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(command_cwd) else {
+        return false;
+    };
+    let Some(first) = relative.iter().next() else {
+        return false;
+    };
+    WORKSPACE_PROTECTED_DIRS
+        .iter()
+        .any(|protected| first.to_string_lossy().eq_ignore_ascii_case(protected))
+}
+
+fn collect_existing_write_descendants(
+    root: &Path,
+    command_cwd: &Path,
+    log: &mut File,
+    refresh_errors: &mut Vec<String>,
+) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut descendants = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "enumerate write descendants failed on {}: {}",
+                    dir.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "enumerate write descendants failed on {}: {}; continuing",
+                        dir.display(),
+                        err
+                    ),
+                )?;
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "enumerate write descendants entry failed under {}: {}",
+                        dir.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "enumerate write descendants entry failed under {}: {}; continuing",
+                            dir.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            if should_skip_workspace_descendant(&path, command_cwd) {
+                continue;
+            }
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "inspect write descendant type failed on {}: {}",
+                        path.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "inspect write descendant type failed on {}: {}; continuing",
+                            path.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            descendants.push(path.clone());
+            if file_type.is_dir() {
+                dirs.push(path);
+            }
+        }
+    }
+
+    Ok(descendants)
 }
 
 fn lock_sandbox_dir(
@@ -685,6 +791,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
+    let mut seen_grant_paths: HashSet<PathBuf> = HashSet::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
@@ -749,7 +856,17 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     root.display()
                 ),
             )?;
-            grant_tasks.push(root.clone());
+            if seen_grant_paths.insert(root.clone()) {
+                grant_tasks.push(root.clone());
+            }
+        }
+
+        for descendant in
+            collect_existing_write_descendants(root, &canonical_command_cwd, log, refresh_errors)?
+        {
+            if seen_grant_paths.insert(descendant.clone()) {
+                grant_tasks.push(descendant);
+            }
         }
     }
 
@@ -775,7 +892,23 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let inheritance = match std::fs::metadata(&root) {
+                    Ok(metadata) if metadata.is_dir() => {
+                        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE
+                    }
+                    Ok(_) => 0,
+                    Err(err) => {
+                        let _ = tx.send((
+                            root.clone(),
+                            Err(anyhow::anyhow!("metadata lookup failed: {err}")),
+                        ));
+                        return;
+                    }
+                };
+
+                let res = unsafe {
+                    ensure_allow_mask_aces_with_inheritance(&root, &psids, write_mask, inheritance)
+                };
 
                 for psid in psids {
                     unsafe {
@@ -944,11 +1077,15 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use super::collect_existing_write_descendants;
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::should_skip_workspace_descendant;
     use codex_otel::StatsigMetricsSettings;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::Path;
+    use tempfile::NamedTempFile;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -985,5 +1122,45 @@ mod tests {
                 environment: "prod".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn skips_legacy_workspace_protected_dirs() {
+        let cwd = Path::new("/workspace");
+
+        assert!(should_skip_workspace_descendant(
+            &cwd.join(".git").join("config"),
+            cwd
+        ));
+        assert!(should_skip_workspace_descendant(
+            &cwd.join(".codex").join("memories"),
+            cwd
+        ));
+        assert!(should_skip_workspace_descendant(
+            &cwd.join(".agents").join("foo"),
+            cwd
+        ));
+        assert!(!should_skip_workspace_descendant(
+            &cwd.join("src").join("main.rs"),
+            cwd
+        ));
+    }
+
+    #[test]
+    fn file_write_roots_do_not_attempt_descendant_walks() {
+        let file = NamedTempFile::new().expect("temp file");
+        let mut log = tempfile::tempfile().expect("temp log");
+        let mut refresh_errors = Vec::new();
+
+        let descendants = collect_existing_write_descendants(
+            file.path(),
+            file.path(),
+            &mut log,
+            &mut refresh_errors,
+        )
+        .expect("collect descendants");
+
+        assert!(descendants.is_empty());
+        assert!(refresh_errors.is_empty());
     }
 }
