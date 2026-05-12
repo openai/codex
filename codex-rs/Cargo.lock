@@ -2740,6 +2740,7 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "pretty_assertions",
+ "prost 0.14.3",
  "reqwest",
  "serde",
  "serde_json",

@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
-use serde::Deserialize;
-use serde::Serialize;
+use prost::Message as ProstMessage;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
@@ -22,12 +19,16 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::relay_proto::RelayData;
+use crate::relay_proto::RelayMessageFrame;
+use crate::relay_proto::RelayResume;
+use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum RelayMessageFrameKind {
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum RelayFrameBodyKind {
     Data,
     Ack,
     Resume,
@@ -35,39 +36,19 @@ enum RelayMessageFrameKind {
     Heartbeat,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RelayMessageFrame {
-    version: u32,
-    stream_id: String,
-    kind: RelayMessageFrameKind,
-    ack: u32,
-    ack_bits: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    seq: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    segment_index: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    segment_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    payload_base64: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-}
-
 impl RelayMessageFrame {
     fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            kind: RelayMessageFrameKind::Data,
             ack: 0,
             ack_bits: 0,
-            seq: Some(seq),
-            segment_index: Some(0),
-            segment_count: Some(1),
-            payload_base64: Some(BASE64_STANDARD.encode(payload)),
-            reason: None,
+            body: Some(relay_message_frame::Body::Data(RelayData {
+                seq,
+                segment_index: 0,
+                segment_count: 1,
+                payload,
+            })),
         }
     }
 
@@ -75,18 +56,15 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            kind: RelayMessageFrameKind::Resume,
             ack: 0,
             ack_bits: 0,
-            seq: None,
-            segment_index: None,
-            segment_count: None,
-            payload_base64: None,
-            reason: None,
+            body: Some(relay_message_frame::Body::Resume(RelayResume {
+                next_seq: 0,
+            })),
         }
     }
 
-    fn validate(&self) -> Result<(), ExecServerError> {
+    fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
         if self.version != RELAY_MESSAGE_FRAME_VERSION {
             return Err(ExecServerError::Protocol(format!(
                 "unsupported relay message frame version {}",
@@ -95,43 +73,66 @@ impl RelayMessageFrame {
         }
         if self.stream_id.trim().is_empty() {
             return Err(ExecServerError::Protocol(
-                "relay message frame is missing streamId".to_string(),
+                "relay message frame is missing stream_id".to_string(),
             ));
         }
-        if self.kind == RelayMessageFrameKind::Data
-            && (self.seq.is_none()
-                || self.segment_index != Some(0)
-                || self.segment_count != Some(1)
-                || self.payload_base64.is_none())
-        {
-            return Err(ExecServerError::Protocol(
-                "relay data message frame is missing required fields".to_string(),
-            ));
+        match self.body.as_ref() {
+            Some(relay_message_frame::Body::Data(data)) => {
+                if data.segment_index != 0 || data.segment_count != 1 || data.payload.is_empty() {
+                    return Err(ExecServerError::Protocol(
+                        "relay data message frame is missing required fields".to_string(),
+                    ));
+                }
+                Ok(RelayFrameBodyKind::Data)
+            }
+            Some(relay_message_frame::Body::AckFrame(_)) => Ok(RelayFrameBodyKind::Ack),
+            Some(relay_message_frame::Body::Resume(_)) => Ok(RelayFrameBodyKind::Resume),
+            Some(relay_message_frame::Body::Reset(reset)) => {
+                if reset.reason.is_empty() {
+                    return Err(ExecServerError::Protocol(
+                        "relay reset message frame is missing reason".to_string(),
+                    ));
+                }
+                Ok(RelayFrameBodyKind::Reset)
+            }
+            Some(relay_message_frame::Body::Heartbeat(_)) => Ok(RelayFrameBodyKind::Heartbeat),
+            None => Err(ExecServerError::Protocol(
+                "relay message frame is missing body".to_string(),
+            )),
         }
-        if self.kind == RelayMessageFrameKind::Reset && self.reason.is_none() {
-            return Err(ExecServerError::Protocol(
-                "relay reset message frame is missing reason".to_string(),
-            ));
-        }
-        Ok(())
     }
 
     fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
-        self.validate()?;
-        if self.kind != RelayMessageFrameKind::Data {
+        let kind = self.validate()?;
+        if kind != RelayFrameBodyKind::Data {
             return Err(ExecServerError::Protocol(
                 "expected relay data message frame".to_string(),
             ));
         }
-        let payload = BASE64_STANDARD
-            .decode(self.payload_base64.unwrap_or_default())
-            .map_err(|err| ExecServerError::Protocol(format!("invalid payloadBase64: {err}")))?;
+        let payload = match self.body {
+            Some(relay_message_frame::Body::Data(data)) => data.payload,
+            _ => Vec::new(),
+        };
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
+    }
+
+    fn into_reset_reason(self) -> Option<String> {
+        match self.body {
+            Some(relay_message_frame::Body::Reset(reset)) if !reset.reason.is_empty() => {
+                Some(reset.reason)
+            }
+            _ => None,
+        }
     }
 }
 
-fn serialize_relay_message_frame(frame: &RelayMessageFrame) -> Result<String, ExecServerError> {
-    serde_json::to_string(frame).map_err(ExecServerError::Json)
+fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
+    frame.encode_to_vec()
+}
+
+fn decode_relay_message_frame(payload: &[u8]) -> Result<RelayMessageFrame, ExecServerError> {
+    RelayMessageFrame::decode(payload)
+        .map_err(|err| ExecServerError::Protocol(format!("invalid relay message frame: {err}")))
 }
 
 fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
@@ -158,8 +159,8 @@ where
     let reader_task = tokio::spawn(async move {
         loop {
             match websocket_reader.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let frame = match serde_json::from_str::<RelayMessageFrame>(text.as_ref()) {
+                Some(Ok(Message::Binary(payload))) => {
+                    let frame = match decode_relay_message_frame(payload.as_ref()) {
                         Ok(frame) => frame,
                         Err(err) => {
                             let _ = incoming_tx_for_reader
@@ -175,8 +176,19 @@ where
                     if frame.stream_id != reader_stream_id {
                         continue;
                     }
-                    match frame.kind {
-                        RelayMessageFrameKind::Data => match frame.into_jsonrpc_message() {
+                    let kind = match frame.validate() {
+                        Ok(kind) => kind,
+                        Err(err) => {
+                            let _ = incoming_tx_for_reader
+                                .send(JsonRpcConnectionEvent::MalformedMessage {
+                                    reason: err.to_string(),
+                                })
+                                .await;
+                            continue;
+                        }
+                    };
+                    match kind {
+                        RelayFrameBodyKind::Data => match frame.into_jsonrpc_message() {
                             Ok(message) => {
                                 if incoming_tx_for_reader
                                     .send(JsonRpcConnectionEvent::Message(message))
@@ -194,18 +206,18 @@ where
                                     .await;
                             }
                         },
-                        RelayMessageFrameKind::Reset => {
+                        RelayFrameBodyKind::Reset => {
                             let _ = disconnected_tx_for_reader.send(true);
                             let _ = incoming_tx_for_reader
                                 .send(JsonRpcConnectionEvent::Disconnected {
-                                    reason: frame.reason,
+                                    reason: frame.into_reset_reason(),
                                 })
                                 .await;
                             break;
                         }
-                        RelayMessageFrameKind::Ack
-                        | RelayMessageFrameKind::Resume
-                        | RelayMessageFrameKind::Heartbeat => {}
+                        RelayFrameBodyKind::Ack
+                        | RelayFrameBodyKind::Resume
+                        | RelayFrameBodyKind::Heartbeat => {}
                     }
                 }
                 Some(Ok(Message::Close(_))) | None => {
@@ -216,10 +228,10 @@ where
                     break;
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
-                Some(Ok(Message::Binary(_))) => {
+                Some(Ok(Message::Text(_))) => {
                     let _ = incoming_tx_for_reader
                         .send(JsonRpcConnectionEvent::MalformedMessage {
-                            reason: "relay exec-server transport expects JSON text frames"
+                            reason: "relay exec-server transport expects binary protobuf frames"
                                 .to_string(),
                         })
                         .await;
@@ -241,22 +253,13 @@ where
 
     let writer_task = tokio::spawn(async move {
         let resume = RelayMessageFrame::resume(stream_id.clone());
-        match serialize_relay_message_frame(&resume) {
-            Ok(encoded) => {
-                if websocket_writer
-                    .send(Message::Text(encoded.into()))
-                    .await
-                    .is_err()
-                {
-                    let _ = disconnected_tx.send(true);
-                    return;
-                }
-            }
-            Err(err) => {
-                warn!("failed to serialize relay resume frame: {err}");
-                let _ = disconnected_tx.send(true);
-                return;
-            }
+        if websocket_writer
+            .send(Message::Binary(encode_relay_message_frame(&resume).into()))
+            .await
+            .is_err()
+        {
+            let _ = disconnected_tx.send(true);
+            return;
         }
 
         let mut next_seq = 0u32;
@@ -270,22 +273,13 @@ where
             };
             let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload);
             next_seq = next_seq.wrapping_add(1);
-            match serialize_relay_message_frame(&frame) {
-                Ok(encoded) => {
-                    if websocket_writer
-                        .send(Message::Text(encoded.into()))
-                        .await
-                        .is_err()
-                    {
-                        let _ = disconnected_tx.send(true);
-                        break;
-                    }
-                }
-                Err(err) => {
-                    warn!("failed to serialize relay data message frame: {err}");
-                    let _ = disconnected_tx.send(true);
-                    break;
-                }
+            if websocket_writer
+                .send(Message::Binary(encode_relay_message_frame(&frame).into()))
+                .await
+                .is_err()
+            {
+                let _ = disconnected_tx.send(true);
+                break;
             }
         }
     });
@@ -307,11 +301,11 @@ pub(crate) async fn run_multiplexed_executor<S>(
 {
     let (mut websocket_writer, mut websocket_reader) = stream.split();
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
-        mpsc::channel::<String>(CHANNEL_CAPACITY);
+        mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let writer_task = tokio::spawn(async move {
         while let Some(encoded) = physical_outgoing_rx.recv().await {
             if websocket_writer
-                .send(Message::Text(encoded.into()))
+                .send(Message::Binary(encoded.into()))
                 .await
                 .is_err()
             {
@@ -323,8 +317,8 @@ pub(crate) async fn run_multiplexed_executor<S>(
     let mut streams: HashMap<String, VirtualStream> = HashMap::new();
     loop {
         let frame = match websocket_reader.next().await {
-            Some(Ok(Message::Text(text))) => {
-                match serde_json::from_str::<RelayMessageFrame>(text.as_ref()) {
+            Some(Ok(Message::Binary(payload))) => {
+                match decode_relay_message_frame(payload.as_ref()) {
                     Ok(frame) => frame,
                     Err(err) => {
                         warn!("dropping malformed relay message frame from harness: {err}");
@@ -334,8 +328,8 @@ pub(crate) async fn run_multiplexed_executor<S>(
             }
             Some(Ok(Message::Close(_))) | None => break,
             Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
-            Some(Ok(Message::Binary(_))) => {
-                warn!("dropping non-text relay message frame from harness");
+            Some(Ok(Message::Text(_))) => {
+                warn!("dropping non-binary relay message frame from harness");
                 continue;
             }
             Some(Err(err)) => {
@@ -344,13 +338,16 @@ pub(crate) async fn run_multiplexed_executor<S>(
             }
         };
 
-        if let Err(err) = frame.validate() {
-            warn!("dropping invalid relay message frame: {err}");
-            continue;
-        }
+        let kind = match frame.validate() {
+            Ok(kind) => kind,
+            Err(err) => {
+                warn!("dropping invalid relay message frame: {err}");
+                continue;
+            }
+        };
 
-        match frame.kind {
-            RelayMessageFrameKind::Data => {
+        match kind {
+            RelayFrameBodyKind::Data => {
                 let stream_id = frame.stream_id.clone();
                 let message = match frame.into_jsonrpc_message() {
                     Ok(message) => message,
@@ -375,14 +372,14 @@ pub(crate) async fn run_multiplexed_executor<S>(
                     streams.remove(&stream_id);
                 }
             }
-            RelayMessageFrameKind::Reset => {
+            RelayFrameBodyKind::Reset => {
                 if let Some(stream) = streams.remove(&frame.stream_id) {
-                    stream.disconnect(frame.reason).await;
+                    stream.disconnect(frame.into_reset_reason()).await;
                 }
             }
-            RelayMessageFrameKind::Ack
-            | RelayMessageFrameKind::Resume
-            | RelayMessageFrameKind::Heartbeat => {}
+            RelayFrameBodyKind::Ack
+            | RelayFrameBodyKind::Resume
+            | RelayFrameBodyKind::Heartbeat => {}
         }
     }
 
@@ -411,7 +408,7 @@ impl VirtualStream {
 fn spawn_virtual_stream(
     stream_id: String,
     processor: ConnectionProcessor,
-    physical_outgoing_tx: mpsc::Sender<String>,
+    physical_outgoing_tx: mpsc::Sender<Vec<u8>>,
 ) -> VirtualStream {
     let (json_outgoing_tx, mut json_outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -430,16 +427,12 @@ fn spawn_virtual_stream(
             };
             let frame = RelayMessageFrame::data(writer_stream_id.clone(), next_seq, payload);
             next_seq = next_seq.wrapping_add(1);
-            match serialize_relay_message_frame(&frame) {
-                Ok(encoded) => {
-                    if physical_outgoing_tx.send(encoded).await.is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    warn!("failed to serialize virtual stream relay message frame: {err}");
-                    break;
-                }
+            if physical_outgoing_tx
+                .send(encode_relay_message_frame(&frame))
+                .await
+                .is_err()
+            {
+                break;
             }
         }
     });
