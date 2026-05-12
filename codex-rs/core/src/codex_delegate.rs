@@ -4,7 +4,9 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_async_utils::OrCancelExt;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -321,6 +323,19 @@ async fn forward_events(
                             &parent_session,
                             &parent_ctx,
                             &pending_mcp_invocations,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
+                        msg: EventMsg::ElicitationRequest(event),
+                        ..
+                    } => {
+                        handle_mcp_elicitation(
+                            &codex,
+                            &parent_session,
+                            &parent_ctx,
                             event,
                             &cancel_token,
                         )
@@ -650,6 +665,99 @@ async fn handle_request_user_input(
     )
     .await;
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn handle_mcp_elicitation(
+    codex: &Codex,
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
+    event: ElicitationRequestEvent,
+    cancel_token: &CancellationToken,
+) {
+    let ElicitationRequestEvent {
+        server_name,
+        id,
+        request,
+        ..
+    } = event;
+    let request = match request.try_into() {
+        Ok(request) => request,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                server_name,
+                request_id = ?id,
+                "failed to parse delegated MCP elicitation request"
+            );
+            let _ = codex
+                .submit(Op::ResolveElicitation {
+                    server_name,
+                    request_id: id,
+                    decision: codex_protocol::approvals::ElicitationAction::Cancel,
+                    content: None,
+                    meta: None,
+                })
+                .await;
+            return;
+        }
+    };
+    let request_id = match &id {
+        codex_protocol::mcp::RequestId::String(value) => {
+            rmcp::model::NumberOrString::String(Arc::from(value.as_str()))
+        }
+        codex_protocol::mcp::RequestId::Integer(value) => {
+            rmcp::model::NumberOrString::Number(*value)
+        }
+    };
+    let response = tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let response = codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            };
+            let _ = parent_session
+                .resolve_elicitation(server_name.clone(), request_id.clone(), response.clone())
+                .await;
+            Some(response)
+        }
+        response = parent_session.request_mcp_server_elicitation(
+            parent_ctx,
+            request_id,
+            McpServerElicitationRequestParams {
+                thread_id: parent_session.conversation_id.to_string(),
+                turn_id: Some(parent_ctx.sub_id.clone()),
+                server_name: server_name.clone(),
+                request,
+            },
+        ) => response,
+    }
+    .unwrap_or(codex_rmcp_client::ElicitationResponse {
+        action: codex_rmcp_client::ElicitationAction::Cancel,
+        content: None,
+        meta: None,
+    });
+    let decision = match response.action {
+        codex_rmcp_client::ElicitationAction::Accept => {
+            codex_protocol::approvals::ElicitationAction::Accept
+        }
+        codex_rmcp_client::ElicitationAction::Decline => {
+            codex_protocol::approvals::ElicitationAction::Decline
+        }
+        codex_rmcp_client::ElicitationAction::Cancel => {
+            codex_protocol::approvals::ElicitationAction::Cancel
+        }
+    };
+    let _ = codex
+        .submit(Op::ResolveElicitation {
+            server_name,
+            request_id: id,
+            decision,
+            content: response.content,
+            meta: response.meta,
+        })
+        .await;
 }
 
 /// Intercepts delegated legacy MCP approval prompts on the RequestUserInput

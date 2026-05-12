@@ -2,6 +2,8 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_protocol::approvals::ElicitationRequest;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
@@ -270,6 +272,97 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         Op::RequestPermissionsResponse {
             id: call_id,
             response: expected_response,
+        }
+    );
+}
+
+#[tokio::test]
+async fn handle_mcp_elicitation_routes_response_back_to_delegate() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let cancel_token = cancel_token.clone();
+        async move {
+            handle_mcp_elicitation(
+                codex.as_ref(),
+                &parent_session,
+                &parent_ctx,
+                ElicitationRequestEvent {
+                    turn_id: Some("child-turn-1".to_string()),
+                    server_name: "maas_confluence".to_string(),
+                    id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
+                    request: ElicitationRequest::Form {
+                        meta: None,
+                        message: "Allow this request?".to_string(),
+                        requested_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {},
+                        }),
+                    },
+                },
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request_event = timeout(Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("elicitation event timed out")
+        .expect("elicitation event missing");
+    let EventMsg::ElicitationRequest(request) = request_event.msg else {
+        panic!("expected ElicitationRequest event");
+    };
+    assert_eq!(request.turn_id, Some(parent_ctx.sub_id.clone()));
+    assert_eq!(request.server_name, "maas_confluence");
+
+    parent_session
+        .resolve_elicitation(
+            "maas_confluence".to_string(),
+            rmcp::model::RequestId::String("request-1".into()),
+            codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: Some(serde_json::json!({ "persist": "session" })),
+            },
+        )
+        .await
+        .expect("resolve elicitation");
+
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("handle_mcp_elicitation hung")
+        .expect("handle_mcp_elicitation join error");
+
+    let submission = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("elicitation response timed out")
+        .expect("elicitation response missing");
+    assert_eq!(
+        submission.op,
+        Op::ResolveElicitation {
+            server_name: "maas_confluence".to_string(),
+            request_id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
+            decision: codex_protocol::approvals::ElicitationAction::Accept,
+            content: Some(serde_json::json!({})),
+            meta: Some(serde_json::json!({ "persist": "session" })),
         }
     );
 }
