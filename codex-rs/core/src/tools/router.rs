@@ -1,6 +1,8 @@
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
@@ -20,6 +22,8 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
@@ -217,10 +221,32 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch(
+    pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
-        invocation: ToolInvocation,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        let ToolCall {
+            tool_name,
+            call_id,
+            payload,
+        } = call;
+
+        let invocation = ToolInvocation {
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call_id,
+            tool_name,
+            source,
+            payload,
+        };
+
         self.registry.dispatch_any(invocation).await
     }
 }

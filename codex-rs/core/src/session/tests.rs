@@ -8625,18 +8625,15 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         .expect("build tool call")
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let invocation = crate::tools::context::ToolInvocation {
-        session: Arc::clone(&session),
-        turn: Arc::clone(&turn_context),
-        cancellation_token: CancellationToken::new(),
-        tracker,
-        call_id: call.call_id.clone(),
-        tool_name: call.tool_name.clone(),
-        source: ToolCallSource::Direct,
-        payload: call.payload.clone(),
-    };
     let err = router
-        .dispatch(invocation)
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            CancellationToken::new(),
+            tracker,
+            call,
+            ToolCallSource::Direct,
+        )
         .await
         .err()
         .expect("expected fatal error");

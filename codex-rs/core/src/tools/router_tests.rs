@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::session::tests::make_session_and_context;
-use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -86,7 +85,6 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 )]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
-    let turn = Arc::new(turn);
     let mcp_tools = session
         .services
         .mcp_connection_manager
@@ -161,7 +159,6 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let turn = Arc::new(turn);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
@@ -211,7 +208,6 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let turn = Arc::new(turn);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
@@ -224,14 +220,13 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
         },
     );
 
-    let call = ToolCall {
+    assert!(!router.tool_supports_parallel(&ToolCall {
         tool_name: ToolName::plain("web_search"),
         call_id: "call-web-search".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-    };
-    assert!(!router.tool_supports_parallel(&call));
+    }));
 
     Ok(())
 }
@@ -366,18 +361,16 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
-    let invocation = ToolInvocation {
-        session: Arc::new(session),
-        turn: Arc::new(turn),
-        cancellation_token: CancellationToken::new(),
-        tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-        call_id: call.call_id.clone(),
-        tool_name: call.tool_name.clone(),
-        source: ToolCallSource::Direct,
-        payload: call.payload.clone(),
-    };
-
-    let result = router.dispatch(invocation).await?;
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            Arc::new(turn),
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await?;
 
     let response = result.into_response();
     match response {

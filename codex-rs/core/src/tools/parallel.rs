@@ -14,7 +14,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -87,6 +86,7 @@ impl ToolCallRuntime {
         source: ToolCallSource,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        let supports_parallel = self.router.tool_supports_parallel(&call);
         let router = Arc::clone(&self.router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&self.turn_context);
@@ -96,7 +96,7 @@ impl ToolCallRuntime {
         let started = Instant::now();
 
         let dispatch_span = trace_span!(
-            "dispatch_tool_call",
+            "dispatch_tool_call_with_code_mode_result",
             otel.name = %call.tool_name,
             tool_name = %call.tool_name,
             call_id = call.call_id.as_str(),
@@ -112,24 +112,23 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
-                        let invocation = ToolInvocation {
-                            session: Arc::clone(&session),
-                            turn: Arc::clone(&turn),
-                            cancellation_token: invocation_cancellation_token.clone(),
-                            tracker: Arc::clone(&tracker),
-                            call_id: call.call_id.clone(),
-                            tool_name: call.tool_name.clone(),
-                            source: source.clone(),
-                            payload: call.payload.clone(),
-                        };
-                        let supports_parallel = router.tool_supports_parallel(&call);
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {
                             Either::Right(lock.write().await)
                         };
 
-                        router.dispatch(invocation).instrument(dispatch_span.clone()).await
+                        router
+                            .dispatch_tool_call_with_code_mode_result(
+                                session,
+                                turn,
+                                invocation_cancellation_token,
+                                tracker,
+                                call.clone(),
+                                source,
+                            )
+                            .instrument(dispatch_span.clone())
+                            .await
                     } => res,
                 }
             }));
