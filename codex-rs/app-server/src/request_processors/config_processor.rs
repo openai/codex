@@ -632,3 +632,21 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
     }));
     error
 }
+
+#[cfg(test)]
+mod tests {
+    use super::map_requirements_toml_to_api;
+    use codex_config::ConfigRequirementsToml;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn requirements_api_includes_allow_managed_hooks_only() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_managed_hooks_only: Some(true),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.hooks, None);
+    }
+}
