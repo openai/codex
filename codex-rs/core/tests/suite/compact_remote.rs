@@ -481,7 +481,7 @@ async fn assert_remote_manual_compact_request_parity(
             responses::sse(vec![
                 responses::ev_shell_command_call(
                     "turn-four-shell-command",
-                    "/bin/echo TURN_FOUR_LOCAL_SHELL",
+                    "echo TURN_FOUR_LOCAL_SHELL",
                 ),
                 responses::ev_completed("turn-four-local-shell-response"),
             ]),
