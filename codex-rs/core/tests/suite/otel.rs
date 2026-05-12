@@ -11,7 +11,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -70,6 +69,19 @@ fn assert_empty_mcp_tool_fields(line: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
+    let args = serde_json::json!({ "command": command }).to_string();
+    ev_function_call(call_id, "shell_command", &args)
+}
+
+fn touch_command(path: &str) -> String {
+    if cfg!(windows) {
+        format!("New-Item -ItemType File -Path {path} -Force | Out-Null")
+    } else {
+        format!("/usr/bin/touch {path}")
+    }
 }
 
 #[test]
@@ -994,16 +1006,15 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     });
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 #[traced_test]
-async fn handle_response_item_records_tool_result_for_local_shell_call() {
+async fn handle_response_item_records_tool_result_for_shell_command_call() {
     let server = start_mock_server().await;
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("shell-call", "completed", vec!["/bin/echo", "shell"]),
+            shell_command_call("shell-call", "echo shell"),
             ev_completed("done"),
         ]),
     )
@@ -1012,7 +1023,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1051,10 +1062,10 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
             .find(|line| line.contains("codex.tool_result") && line.contains("call_id=shell-call"))
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !line.contains("tool_name=shell") {
+        if !line.contains("tool_name=shell_command") {
             return Err("missing tool_name field".to_string());
         }
-        if !line.contains("\"command\":[\"/bin/echo\",\"shell\"]") {
+        if !line.contains("arguments={\"command\":\"echo shell\"}") {
             return Err("missing arguments field".to_string());
         }
         let output_idx = line
@@ -1090,8 +1101,8 @@ fn tool_decision_assertion<'a>(
             .ok_or_else(|| format!("missing codex.tool_decision event for {call_id}"))?;
 
         let lower = line.to_lowercase();
-        if !lower.contains("tool_name=shell") {
-            return Err("missing tool_name for shell".to_string());
+        if !lower.contains("tool_name=shell_command") {
+            return Err("missing tool_name for shell_command".to_string());
         }
         if !lower.contains(&format!("decision={expected_decision}")) {
             return Err(format!("unexpected decision for {call_id}"));
@@ -1106,16 +1117,12 @@ fn tool_decision_assertion<'a>(
 
 #[tokio::test]
 #[traced_test]
-async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
+async fn handle_shell_command_autoapprove_from_config_records_tool_decision() {
     let server = start_mock_server().await;
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "auto_config_call",
-                "completed",
-                vec!["/bin/echo", "local shell"],
-            ),
+            shell_command_call("auto_config_call", "echo local shell"),
             ev_completed("done"),
         ]),
     )
@@ -1124,7 +1131,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1166,16 +1173,13 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_container_exec_user_approved_records_tool_decision() {
+async fn handle_shell_command_user_approved_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("user_approved_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1184,7 +1188,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1238,17 +1242,14 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_container_exec_user_approved_for_session_records_tool_decision() {
+async fn handle_shell_command_user_approved_for_session_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_approved_session_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("user_approved_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1256,7 +1257,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1312,15 +1313,12 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
 #[traced_test]
 async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_retry_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("sandbox_retry_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1328,7 +1326,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1382,17 +1380,14 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_container_exec_user_denies_records_tool_decision() {
+async fn handle_shell_command_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "user_denied_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("user_denied_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1401,7 +1396,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1456,15 +1451,12 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
 #[traced_test]
 async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_session_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("sandbox_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1472,7 +1464,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
@@ -1528,15 +1520,12 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 #[traced_test]
 async fn handle_sandbox_error_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
+    let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call(
-                "sandbox_deny_call",
-                "completed",
-                vec!["/usr/bin/touch", "codex-otel-approval-test"],
-            ),
+            shell_command_call("sandbox_deny_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1545,7 +1534,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-1", "local shell done"),
+            ev_assistant_message("msg-1", "shell command done"),
             ev_completed("done"),
         ]),
     )
