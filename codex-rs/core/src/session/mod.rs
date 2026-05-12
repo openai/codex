@@ -358,7 +358,6 @@ use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_readiness::ReadinessFlag;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
 
@@ -2623,8 +2622,9 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
+        if turn_context.config.include_collaboration_mode_instructions
+            && let Some(collab_instructions) =
+                CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.render());
         }

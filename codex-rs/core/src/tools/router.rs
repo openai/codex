@@ -103,31 +103,6 @@ impl ToolRouter {
         self.model_visible_specs.clone()
     }
 
-    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        self.specs.iter().find_map(|spec| match spec {
-            ToolSpec::Function(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Freeform(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool)
-                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
-                        && tool.name == tool_name.name =>
-                {
-                    Some(ToolSpec::Function(tool.clone()))
-                }
-                _ => None,
-            }),
-            _ => None,
-        })
-    }
-
     pub(crate) fn create_diff_consumer(
         &self,
         tool_name: &ToolName,
