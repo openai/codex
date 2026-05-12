@@ -179,6 +179,7 @@ pub(crate) struct MessageProcessor {
     plugin_processor: PluginRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
+    thread_manager: Arc<ThreadManager>,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
@@ -501,6 +502,7 @@ impl MessageProcessor {
             plugin_processor,
             remote_control_processor,
             search_processor,
+            thread_manager,
             thread_goal_processor,
             thread_processor,
             turn_processor,
@@ -985,10 +987,13 @@ impl MessageProcessor {
                         .default_environment()
                         .unwrap_or_else(|| self.environment_manager.local_environment())
                 };
-                environment
-                    .install_runtime(params)
-                    .await
-                    .map(|response| Some(response.into()))
+                let response = environment.install_runtime(params).await?;
+                let response =
+                    crate::runtime_install::finalize_runtime_install(&environment, response)
+                        .await?;
+                self.thread_manager.plugins_manager().clear_cache();
+                self.thread_manager.skills_manager().clear_cache();
+                Ok(Some(response.into()))
             }
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor

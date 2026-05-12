@@ -95,6 +95,7 @@ mod models;
 mod outgoing_message;
 mod request_processors;
 mod request_serialization;
+mod runtime_install;
 mod server_request_error;
 mod skills_watcher;
 mod thread_state;
