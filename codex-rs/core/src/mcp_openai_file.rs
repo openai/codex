@@ -12,6 +12,8 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -19,6 +21,26 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 
 const CURRENT_ENV_URI_PREFIX: &str = "env://current/";
+
+// rmcp 0.15 does not expose SEP-2356 `Tool.inputFiles` yet. Keep the encoder
+// close to the broker so wiring the field later does not introduce a new path.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sep2356FileInput {
+    pub(crate) data_uri: String,
+    pub(crate) file_name: String,
+    pub(crate) mime_type: String,
+    pub(crate) file_size_bytes: u64,
+}
+
+#[allow(dead_code)]
+pub(crate) async fn build_sep2356_file_input_for_mcp(
+    turn_context: &TurnContext,
+    file_ref: &str,
+) -> Result<Sep2356FileInput, String> {
+    let file_input = FileBrokerInput::from_model_argument(turn_context, file_ref)?;
+    file_input.to_sep2356_file_input().await
+}
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
@@ -203,6 +225,72 @@ impl<'a> FileBrokerInput<'a> {
             resolved_path,
         })
     }
+
+    #[allow(dead_code)]
+    async fn to_sep2356_file_input(&self) -> Result<Sep2356FileInput, String> {
+        let bytes = tokio::fs::read(self.resolved_path.as_path())
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read `{}` for SEP-2356 file input: {error}",
+                    self.original
+                )
+            })?;
+        let file_name = self
+            .resolved_path
+            .as_path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| format!("failed to determine file name for `{}`", self.original))?
+            .to_string();
+        let mime_type = mime_type_for_sep2356_path(self.resolved_path.as_path()).to_string();
+        let encoded_name = percent_encode_rfc2397_parameter(&file_name);
+        let data_uri = format!(
+            "data:{mime_type};name={encoded_name};base64,{}",
+            BASE64_STANDARD.encode(&bytes)
+        );
+        Ok(Sep2356FileInput {
+            data_uri,
+            file_name,
+            mime_type,
+            file_size_bytes: bytes.len() as u64,
+        })
+    }
+}
+
+#[allow(dead_code)]
+fn mime_type_for_sep2356_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("csv") => "text/csv",
+        Some("gif") => "image/gif",
+        Some("htm" | "html") => "text/html",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("json") => "application/json",
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("txt") => "text/plain",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+#[allow(dead_code)]
+fn percent_encode_rfc2397_parameter(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -437,6 +525,42 @@ mod tests {
         )
         .await
         .expect_err("env file refs should not escape cwd");
+
+        assert!(error.contains("escapes the current environment"));
+    }
+
+    #[tokio::test]
+    async fn build_sep2356_file_input_encodes_current_env_file_ref_as_data_uri() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let dir = tempdir().expect("temp dir");
+        tokio::fs::write(dir.path().join("report 1.csv"), b"hello")
+            .await
+            .expect("write sep file");
+        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+
+        let file_input =
+            build_sep2356_file_input_for_mcp(&turn_context, "env://current/report 1.csv")
+                .await
+                .expect("sep file input should be encoded");
+
+        assert_eq!(file_input.file_name, "report 1.csv");
+        assert_eq!(file_input.mime_type, "text/csv");
+        assert_eq!(file_input.file_size_bytes, 5);
+        assert_eq!(
+            file_input.data_uri,
+            "data:text/csv;name=report%201.csv;base64,aGVsbG8="
+        );
+    }
+
+    #[tokio::test]
+    async fn build_sep2356_file_input_rejects_current_env_escape() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let dir = tempdir().expect("temp dir");
+        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+
+        let error = build_sep2356_file_input_for_mcp(&turn_context, "env://current/../outside.csv")
+            .await
+            .expect_err("sep file refs should not escape cwd");
 
         assert!(error.contains("escapes the current environment"));
     }
