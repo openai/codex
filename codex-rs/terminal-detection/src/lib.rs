@@ -204,6 +204,11 @@ impl TerminalInfo {
 
         sanitize_header_value(raw)
     }
+
+    /// Returns whether the active terminal multiplexer is Zellij.
+    pub fn is_zellij(&self) -> bool {
+        matches!(self.multiplexer, Some(Multiplexer::Zellij {}))
+    }
 }
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();
