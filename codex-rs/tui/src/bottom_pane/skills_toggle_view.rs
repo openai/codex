@@ -233,6 +233,8 @@ impl SkillsToggleView {
 
 impl BottomPaneView for SkillsToggleView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Printable characters always feed search. Movement aliases such as
+        // plain j/k only apply through non-text events or modified bindings.
         let allow_plain_char_navigation = !is_plain_text_key_event(key_event);
 
         match key_event {

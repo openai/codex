@@ -4,6 +4,13 @@
 /// - Optional selection (None when list is empty)
 /// - Wrap-around navigation on Up/Down
 /// - Maintaining a scroll window (`scroll_top`) so the selected row stays visible
+///
+/// Callers own the filtered row count and the visible window size. Every
+/// mutation method takes those values instead of caching them here, so list
+/// views can apply filters, pagination, or density changes without this helper
+/// knowing about their data model. Passing a stale length after filtering would
+/// leave selection pointing at the wrong row, so callers should clamp or move
+/// through this type immediately after changing their visible row set.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ScrollState {
     pub selected_idx: Option<usize>,
@@ -63,6 +70,10 @@ impl ScrollState {
     }
 
     /// Move selection up by one visible page, clamping at the first row.
+    ///
+    /// Page movement intentionally does not wrap. It mirrors terminal list
+    /// behavior where repeated page-up/page-down converges at the nearest edge
+    /// while still keeping the selected row visible.
     pub fn page_up_clamped(&mut self, len: usize, visible_rows: usize) {
         if len == 0 {
             self.selected_idx = None;
@@ -76,6 +87,10 @@ impl ScrollState {
     }
 
     /// Move selection down by one visible page, clamping at the last row.
+    ///
+    /// Page movement intentionally does not wrap. It mirrors terminal list
+    /// behavior where repeated page-up/page-down converges at the nearest edge
+    /// while still keeping the selected row visible.
     pub fn page_down_clamped(&mut self, len: usize, visible_rows: usize) {
         if len == 0 {
             self.selected_idx = None;

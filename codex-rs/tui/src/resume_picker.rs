@@ -1039,6 +1039,9 @@ impl PickerState {
         if !self.list_keymap.page_down.is_pressed(key) {
             self.pending_page_down_target = None;
         }
+        // The session picker is always searchable, so plain text belongs to
+        // the query first. Modified list bindings still route through the
+        // runtime keymap below.
         let allow_plain_char_navigation = !is_plain_text_key_event(key);
         match key {
             KeyEvent {

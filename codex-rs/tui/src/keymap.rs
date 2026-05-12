@@ -201,6 +201,14 @@ pub(crate) struct PagerKeymap {
 }
 
 /// Generic list picker keybindings shared across popup list views.
+///
+/// These actions describe list intent rather than a specific widget layout.
+/// Vertical actions move the highlighted row, page and jump actions move within
+/// the current filtered row set, and horizontal actions are available to views
+/// that expose adjacent choices such as tabs, toolbar values, or ordered item
+/// movement. Views that also accept search text are responsible for checking
+/// `is_plain_text_key_event` before dispatching plain-character bindings so a
+/// configured `j`, `k`, `h`, or `l` does not steal query input.
 #[derive(Clone, Debug)]
 pub(crate) struct ListKeymap {
     pub(crate) move_up: Vec<KeyBinding>,

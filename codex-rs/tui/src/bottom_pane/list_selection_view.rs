@@ -867,6 +867,9 @@ impl ListSelectionView {
 
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Searchable lists reserve printable characters for query input. This
+        // keeps vim-style plain j/k/h/l useful in non-search lists without
+        // making those letters impossible to type into a filter.
         let allow_plain_char_navigation =
             !self.is_searchable || !is_plain_text_key_event(key_event);
 

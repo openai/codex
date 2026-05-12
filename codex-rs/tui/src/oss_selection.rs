@@ -81,6 +81,9 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
     ]
 });
 
+// This startup wizard runs before the main TUI runtime keymap is available, so
+// it mirrors the built-in horizontal list defaults instead of reading config.
+// The shared matcher still covers raw C0 Ctrl-H/Ctrl-L terminal reports.
 const MOVE_LEFT_KEYS: [KeyBinding; 2] = [
     key_hint::plain(KeyCode::Left),
     key_hint::ctrl(KeyCode::Char('h')),
