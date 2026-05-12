@@ -30,8 +30,11 @@ pub trait ContextContributor: Send + Sync {
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
     /// Returns the native tools visible for the supplied extension stores.
-    fn tools(&self, session_store: &ExtensionData, thread_store: &ExtensionData)
-    -> Vec<ToolDefinition<Arc<dyn ToolExecutor>>>;
+    fn tools(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+    ) -> Vec<ToolDefinition<Arc<dyn ToolExecutor>>>;
 }
 
 /// Future returned by one ordered turn-item contribution.
