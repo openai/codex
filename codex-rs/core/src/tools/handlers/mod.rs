@@ -70,7 +70,6 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use unavailable_tool::UnavailableToolHandler;
-pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::ExecCommandHandler;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;

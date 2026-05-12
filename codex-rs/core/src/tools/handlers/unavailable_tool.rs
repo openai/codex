@@ -2,8 +2,15 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::flat_tool_name;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
+use codex_tools::AdditionalProperties;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub struct UnavailableToolHandler {
     tool_name: ToolName,
@@ -12,6 +19,26 @@ pub struct UnavailableToolHandler {
 impl UnavailableToolHandler {
     pub fn new(tool_name: ToolName) -> Self {
         Self { tool_name }
+    }
+
+    pub(crate) fn definition(tool_name: ToolName) -> RuntimeToolDefinition {
+        let name = flat_tool_name(&tool_name).into_owned();
+        let spec = ToolSpec::Function(ResponsesApiTool {
+            name: name.clone(),
+            description: unavailable_tool_message(
+                &name,
+                "Calling this placeholder returns an error explaining that the tool is unavailable.",
+            ),
+            strict: false,
+            parameters: JsonSchema::object(
+                Default::default(),
+                /*required*/ None,
+                Some(AdditionalProperties::Boolean(false)),
+            ),
+            output_schema: None,
+            defer_loading: None,
+        });
+        runtime_tool_definition(Self::new(tool_name), spec)
     }
 }
 

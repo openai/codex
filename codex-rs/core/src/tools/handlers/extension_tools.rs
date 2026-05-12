@@ -185,7 +185,7 @@ mod tests {
                     "additionalProperties": false,
                 }),
             },
-            Arc::new(StubExtensionExecutor),
+            Arc::new(StubExtensionExecutor) as Arc<dyn codex_tool_api::ToolExecutor>,
         );
         let handler = ExtensionToolHandler::new(definition);
         let (session, turn) = crate::session::tests::make_session_and_context().await;

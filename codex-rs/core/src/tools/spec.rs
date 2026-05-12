@@ -5,7 +5,6 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
-use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan::build_tool_registry_builder;
 use crate::tools::spec_plan_types::ToolNamespace;
@@ -14,10 +13,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tool_api::ToolDefinition;
 use codex_tool_api::ToolExecutor;
-use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
-use codex_tools::JsonSchema;
-use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
@@ -68,7 +64,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::UnavailableToolHandler;
-    use crate::tools::handlers::unavailable_tool_message;
     let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_deref();
     let default_agent_type_description =
@@ -113,24 +108,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     for unavailable_tool in unavailable_called_tools {
         let tool_name = flat_tool_name(&unavailable_tool).into_owned();
         if existing_spec_names.insert(tool_name.clone()) {
-            let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
-                name: tool_name.clone(),
-                description: unavailable_tool_message(
-                    &tool_name,
-                    "Calling this placeholder returns an error explaining that the tool is unavailable.",
-                ),
-                strict: false,
-                parameters: JsonSchema::object(
-                    Default::default(),
-                    /*required*/ None,
-                    Some(AdditionalProperties::Boolean(false)),
-                ),
-                output_schema: None,
-                defer_loading: None,
-            });
-            let handler = Arc::new(UnavailableToolHandler::new(unavailable_tool.clone()))
-                as Arc<dyn AnyToolHandler>;
-            let definition = ToolDefinition::new(unavailable_tool, spec, handler);
+            let definition = UnavailableToolHandler::definition(unavailable_tool);
             if builder.register_erased_handler(
                 definition.tool_name().clone(),
                 Arc::clone(definition.runtime()),
