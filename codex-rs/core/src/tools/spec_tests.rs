@@ -19,7 +19,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
-use codex_tools::LoadableToolSpec;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -40,7 +39,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
-use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
@@ -998,63 +996,6 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&app_alias));
     assert!(registry.has_handler(&mcp_alias));
-}
-
-#[tokio::test]
-async fn tool_search_entries_skip_mcp_outputs_when_namespace_tools_are_disabled() {
-    let model_info = search_capable_model_info().await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
-    let available_models = Vec::new();
-    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::Disabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    tools_config.namespace_tools = false;
-    let mcp_tools = vec![mcp_tool_info(mcp_tool(
-        "echo",
-        "Echo",
-        serde_json::json!({"type": "object"}),
-    ))];
-    let dynamic_tools = vec![
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: "automation_update".to_string(),
-            description: "Create or update automations.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            defer_loading: true,
-        },
-        DynamicToolSpec {
-            namespace: None,
-            name: "plain_dynamic".to_string(),
-            description: "Plain dynamic tool.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            defer_loading: true,
-        },
-    ];
-
-    let entries =
-        build_tool_search_entries_for_config(&tools_config, Some(&mcp_tools), &dynamic_tools);
-    let outputs = entries
-        .into_iter()
-        .map(|entry| entry.output)
-        .collect::<Vec<_>>();
-
-    assert_eq!(outputs.len(), 2);
-    assert!(outputs.iter().any(|output| match output {
-        LoadableToolSpec::Namespace(namespace) => namespace.name == "codex_app",
-        LoadableToolSpec::Function(_) => false,
-    }));
-    assert!(outputs.iter().any(|output| match output {
-        LoadableToolSpec::Function(tool) => tool.name == "plain_dynamic",
-        LoadableToolSpec::Namespace(_) => false,
-    }));
 }
 
 #[tokio::test]

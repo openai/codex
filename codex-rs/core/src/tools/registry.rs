@@ -21,6 +21,7 @@ use crate::tools::handlers::extension_tools::BundledToolHandler;
 use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
+use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
@@ -40,6 +41,10 @@ pub trait ToolHandler: Send + Sync {
     fn tool_name(&self) -> ToolName;
 
     fn spec(&self) -> Option<ToolSpec> {
+        None
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
         None
     }
 
@@ -173,6 +178,8 @@ pub(crate) trait AnyToolHandler: Send + Sync {
 
     fn spec(&self) -> Option<ToolSpec>;
 
+    fn search_info(&self) -> Option<ToolSearchInfo>;
+
     fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
@@ -207,6 +214,10 @@ where
 
     fn spec(&self) -> Option<ToolSpec> {
         ToolHandler::spec(self)
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        ToolHandler::search_info(self)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

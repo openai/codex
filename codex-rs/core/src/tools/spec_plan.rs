@@ -53,12 +53,9 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
-use codex_tools::ToolSearchSource;
-use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
-use codex_tools::collect_tool_search_source_infos;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -126,11 +123,14 @@ pub fn build_tool_registry_builder(
     }
 
     let mut non_deferred_specs = Vec::new();
+    let mut deferred_search_infos = Vec::new();
     for handler in &handlers {
         let tool_name = handler.tool_name();
-        if !all_deferred_tools.contains(&tool_name)
-            && let Some(spec) = handler.spec()
-        {
+        if all_deferred_tools.contains(&tool_name) {
+            if let Some(search_info) = handler.search_info() {
+                deferred_search_infos.push(search_info);
+            }
+        } else if let Some(spec) = handler.spec() {
             non_deferred_specs.push(spec);
         }
     }
@@ -162,30 +162,16 @@ pub fn build_tool_registry_builder(
         builder.register_any_handler_without_spec(handler);
     }
 
-    if config.search_tool && config.namespace_tools && !all_deferred_tools.is_empty() {
-        let mut search_source_infos = params
-            .deferred_mcp_tools
-            .map(|mcp_tools| {
-                collect_tool_search_source_infos(mcp_tools.iter().map(|tool| ToolSearchSource {
-                    server_name: tool.server_name.as_str(),
-                    connector_name: tool.connector_name.as_deref(),
-                    description: tool.namespace_description.as_deref(),
-                }))
-            })
-            .unwrap_or_default();
-
-        if params.dynamic_tools.iter().any(|tool| {
-            all_deferred_tools.contains(&ToolName::new(tool.namespace.clone(), tool.name.clone()))
-        }) {
-            search_source_infos.push(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            });
-        }
-
+    if config.search_tool && config.namespace_tools && !deferred_search_infos.is_empty() {
         builder.register_handler(Arc::new(ToolSearchHandler::new(
-            params.tool_search_entries.to_vec(),
-            search_source_infos,
+            deferred_search_infos
+                .iter()
+                .map(|search_info| search_info.entry.clone())
+                .collect(),
+            deferred_search_infos
+                .into_iter()
+                .filter_map(|search_info| search_info.source_info)
+                .collect(),
         )));
     }
 

@@ -67,7 +67,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::unavailable_tool_message;
-    use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
     let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let default_agent_type_description =
@@ -82,16 +81,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     };
     let default_wait_timeout_ms =
         DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
-    let deferred_dynamic_tools = dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .cloned()
-        .collect::<Vec<_>>();
-    let tool_search_entries = build_tool_search_entries_for_config(
-        config,
-        deferred_mcp_tools.as_deref(),
-        &deferred_dynamic_tools,
-    );
     let mut builder = build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
@@ -111,7 +100,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 min_timeout_ms: min_wait_timeout_ms,
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
-            tool_search_entries: &tool_search_entries,
         },
     );
     let mut existing_spec_names = builder

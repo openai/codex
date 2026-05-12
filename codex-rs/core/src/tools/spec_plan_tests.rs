@@ -2437,7 +2437,6 @@ fn build_specs_with_optional_tool_namespaces(
             dynamic_tools,
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
-            tool_search_entries: &[],
         },
     );
     builder.build()

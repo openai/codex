@@ -192,7 +192,8 @@ fn default_limit_for_bucket(bucket: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::tool_search_entry::build_tool_search_entries;
+    use crate::tools::handlers::DynamicToolHandler;
+    use crate::tools::handlers::McpHandler;
     use codex_mcp::ToolInfo;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_tools::ResponsesApiNamespace;
@@ -204,7 +205,7 @@ mod tests {
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
-        let dynamic_tools = vec![DynamicToolSpec {
+        let dynamic_tools = [DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
@@ -218,11 +219,27 @@ mod tests {
             }),
             defer_loading: true,
         }];
-        let mcp_tools = vec![
+        let mcp_tools = [
             tool_info("calendar", "create_event", "Create events"),
             tool_info("calendar", "list_events", "List events"),
         ];
-        let handler = handler_from_tools(Some(&mcp_tools), &dynamic_tools);
+        let mut entries = mcp_tools
+            .iter()
+            .map(|tool| {
+                McpHandler::new(tool.clone())
+                    .search_info()
+                    .expect("MCP handler should return search info")
+                    .entry
+            })
+            .collect::<Vec<_>>();
+        entries.extend(dynamic_tools.iter().map(|tool| {
+            DynamicToolHandler::new(tool)
+                .expect("dynamic tool should convert")
+                .search_info()
+                .expect("dynamic handler should return search info")
+                .entry
+        }));
+        let handler = ToolSearchHandler::new(entries, Vec::new());
         let results = [
             &handler.entries[0],
             &handler.entries[2],
@@ -297,7 +314,18 @@ mod tests {
             "computer use",
             /*count*/ 100,
         );
-        let handler = handler_from_tools(Some(&tools), &[]);
+        let handler = ToolSearchHandler::new(
+            tools
+                .iter()
+                .map(|tool| {
+                    McpHandler::new(tool.clone())
+                        .search_info()
+                        .expect("MCP handler should return search info")
+                        .entry
+                })
+                .collect(),
+            Vec::new(),
+        );
 
         let results = handler.search_result_entries(
             "computer use",
@@ -333,7 +361,18 @@ mod tests {
             "calendar",
             /*count*/ 100,
         ));
-        let handler = handler_from_tools(Some(&tools), &[]);
+        let handler = ToolSearchHandler::new(
+            tools
+                .iter()
+                .map(|tool| {
+                    McpHandler::new(tool.clone())
+                        .search_info()
+                        .expect("MCP handler should return search info")
+                        .entry
+                })
+                .collect(),
+            Vec::new(),
+        );
 
         let results = handler.search_result_entries(
             "calendar",
@@ -367,7 +406,18 @@ mod tests {
             "computer use",
             /*count*/ 100,
         ));
-        let handler = handler_from_tools(Some(&tools), &[]);
+        let handler = ToolSearchHandler::new(
+            tools
+                .iter()
+                .map(|tool| {
+                    McpHandler::new(tool.clone())
+                        .search_info()
+                        .expect("MCP handler should return search info")
+                        .entry
+                })
+                .collect(),
+            Vec::new(),
+        );
 
         let results = handler.search_result_entries(
             "computer use",
@@ -425,15 +475,5 @@ mod tests {
             .iter()
             .filter(|entry| entry.limit_bucket.as_deref() == Some(server_name))
             .count()
-    }
-
-    fn handler_from_tools(
-        mcp_tools: Option<&[ToolInfo]>,
-        dynamic_tools: &[DynamicToolSpec],
-    ) -> ToolSearchHandler {
-        ToolSearchHandler::new(
-            build_tool_search_entries(mcp_tools, dynamic_tools),
-            Vec::new(),
-        )
     }
 }
