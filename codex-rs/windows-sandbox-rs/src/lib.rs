@@ -69,6 +69,9 @@ mod sandbox_utils;
 mod setup;
 
 #[cfg(target_os = "windows")]
+mod setup_bazel;
+
+#[cfg(target_os = "windows")]
 mod setup_error;
 
 #[cfg(target_os = "windows")]
