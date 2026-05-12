@@ -361,7 +361,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
-
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
