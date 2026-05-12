@@ -4,9 +4,13 @@ mod response_adapter;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_code_mode::CodeModeIoWrite;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
@@ -157,6 +161,104 @@ impl CodeModeTurnHost for CoreTurnHost {
             .map_err(|_| {
                 format!("failed to inject exec notify message for cell {cell_id}: no active turn")
             })
+    }
+
+    async fn write_file(
+        &self,
+        request: CodeModeIoWrite,
+        _cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        write_code_mode_io_value(self.exec.turn.as_ref(), request).await
+    }
+}
+
+const CURRENT_ENV_URI_PREFIX: &str = "env://current/";
+
+async fn write_code_mode_io_value(
+    turn: &TurnContext,
+    request: CodeModeIoWrite,
+) -> Result<JsonValue, String> {
+    let destination = resolve_code_mode_io_destination(turn, &request.destination)?;
+    let bytes = code_mode_io_value_bytes(&request.value)?;
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent.as_path())
+            .await
+            .map_err(|error| format!("failed to create parent directory for io.write: {error}"))?;
+    }
+    tokio::fs::write(destination.as_path(), &bytes)
+        .await
+        .map_err(|error| format!("failed to write `{}`: {error}", request.destination))?;
+    Ok(serde_json::json!({
+        "uri": request.destination,
+        "path": destination.to_string_lossy(),
+        "bytes_written": bytes.len(),
+    }))
+}
+
+fn resolve_code_mode_io_destination(
+    turn: &TurnContext,
+    destination: &str,
+) -> Result<codex_utils_absolute_path::AbsolutePathBuf, String> {
+    let relative_path = destination
+        .strip_prefix(CURRENT_ENV_URI_PREFIX)
+        .ok_or_else(|| {
+            format!("io.write destination must start with `{CURRENT_ENV_URI_PREFIX}`")
+        })?;
+    if relative_path.trim().is_empty() {
+        return Err("io.write destination path must be non-empty".to_string());
+    }
+    if Path::new(relative_path).is_absolute() {
+        return Err("io.write destination path must be relative".to_string());
+    }
+    let resolved = turn.cwd.join(relative_path);
+    if !resolved.as_path().starts_with(turn.cwd.as_path()) {
+        return Err(format!(
+            "io.write destination `{destination}` escapes the current environment"
+        ));
+    }
+    Ok(resolved)
+}
+
+fn code_mode_io_value_bytes(value: &JsonValue) -> Result<Vec<u8>, String> {
+    match value {
+        JsonValue::String(text) => Ok(text.as_bytes().to_vec()),
+        JsonValue::Array(items) if items.iter().all(JsonValue::is_number) => items
+            .iter()
+            .map(|item| {
+                let Some(byte) = item.as_u64().filter(|byte| *byte <= u8::MAX as u64) else {
+                    return Err(
+                        "io.write byte arrays must contain integers from 0 to 255".to_string()
+                    );
+                };
+                Ok(byte as u8)
+            })
+            .collect(),
+        JsonValue::Object(object) => {
+            if let Some(text) = object.get("text").and_then(JsonValue::as_str) {
+                return Ok(text.as_bytes().to_vec());
+            }
+            if let Some(resource) = object.get("resource") {
+                return code_mode_io_value_bytes(resource);
+            }
+            if let Some(encoded) = object
+                .get("blob")
+                .or_else(|| object.get("data_base64"))
+                .or_else(|| object.get("base64"))
+                .and_then(JsonValue::as_str)
+            {
+                return BASE64_STANDARD
+                    .decode(encoded)
+                    .map_err(|error| format!("io.write received invalid base64 data: {error}"));
+            }
+            Err(
+                "io.write value must be a string, byte array, MCP text block, or base64 blob block"
+                    .to_string(),
+            )
+        }
+        _ => Err(
+            "io.write value must be a string, byte array, MCP text block, or base64 blob block"
+                .to_string(),
+        ),
     }
 }
 

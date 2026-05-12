@@ -2,6 +2,7 @@ use super::RuntimeState;
 use super::callbacks::clear_timeout_callback;
 use super::callbacks::exit_callback;
 use super::callbacks::image_callback;
+use super::callbacks::io_write_callback;
 use super::callbacks::load_callback;
 use super::callbacks::notify_callback;
 use super::callbacks::set_timeout_callback;
@@ -19,6 +20,7 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
 
     let tools = build_tools_object(scope)?;
     let all_tools = build_all_tools_value(scope)?;
+    let io = build_io_object(scope)?;
     let clear_timeout = helper_function(scope, "clearTimeout", clear_timeout_callback)?;
     let set_timeout = helper_function(scope, "setTimeout", set_timeout_callback)?;
     let text = helper_function(scope, "text", text_callback)?;
@@ -30,6 +32,7 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     let exit = helper_function(scope, "exit", exit_callback)?;
 
     set_global(scope, global, "tools", tools.into())?;
+    set_global(scope, global, "io", io.into())?;
     set_global(scope, global, "ALL_TOOLS", all_tools)?;
     set_global(scope, global, "clearTimeout", clear_timeout.into())?;
     set_global(scope, global, "setTimeout", set_timeout.into())?;
@@ -41,6 +44,20 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     set_global(scope, global, "yield_control", yield_control.into())?;
     set_global(scope, global, "exit", exit.into())?;
     Ok(())
+}
+
+fn build_io_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Result<v8::Local<'s, v8::Object>, String> {
+    let io = v8::Object::new(scope);
+    let write_key = v8::String::new(scope, "write")
+        .ok_or_else(|| "failed to allocate io.write key".to_string())?;
+    let write = helper_function(scope, "io.write", io_write_callback)?;
+    if io.set(scope, write_key.into(), write.into()) == Some(true) {
+        Ok(io)
+    } else {
+        Err("failed to set io.write".to_string())
+    }
 }
 
 fn build_tools_object<'s>(

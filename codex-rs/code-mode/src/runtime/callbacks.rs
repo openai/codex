@@ -9,6 +9,7 @@ use super::value::normalize_output_image;
 use super::value::serialize_output_text;
 use super::value::throw_type_error;
 use super::value::v8_value_to_json;
+use serde_json::Value as JsonValue;
 
 pub(super) fn tool_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -70,6 +71,59 @@ pub(super) fn tool_callback(
         id,
         name: tool_name,
         input,
+    });
+    retval.set(promise.into());
+}
+
+pub(super) fn io_write_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    if args.length() < 2 {
+        throw_type_error(scope, "io.write expects a value and destination");
+        return;
+    }
+
+    let value = match v8_value_to_json(scope, args.get(0)) {
+        Ok(Some(value)) => value,
+        Ok(None) => JsonValue::Null,
+        Err(error_text) => {
+            throw_type_error(scope, &error_text);
+            return;
+        }
+    };
+    let destination = match args.get(1).to_string(scope) {
+        Some(destination) => destination.to_rust_string_lossy(scope),
+        None => {
+            throw_type_error(scope, "io.write destination must be a string");
+            return;
+        }
+    };
+    if destination.trim().is_empty() {
+        throw_type_error(scope, "io.write destination must be non-empty");
+        return;
+    }
+
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        throw_type_error(scope, "failed to create io.write promise");
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    let resolver = v8::Global::new(scope, resolver);
+
+    let Some(state) = scope.get_slot_mut::<RuntimeState>() else {
+        throw_type_error(scope, "runtime state unavailable");
+        return;
+    };
+    let id = format!("io-write-{}", state.next_tool_call_id);
+    state.next_tool_call_id = state.next_tool_call_id.saturating_add(1);
+    let event_tx = state.event_tx.clone();
+    state.pending_tool_calls.insert(id.clone(), resolver);
+    let _ = event_tx.send(RuntimeEvent::IoWrite {
+        id,
+        value,
+        destination,
     });
     retval.set(promise.into());
 }

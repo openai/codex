@@ -101,8 +101,17 @@ pub struct CodeModeNestedToolCall {
 }
 
 #[derive(Debug)]
+pub struct CodeModeIoWrite {
+    pub cell_id: String,
+    pub runtime_write_id: String,
+    pub value: JsonValue,
+    pub destination: String,
+}
+
+#[derive(Debug)]
 pub(crate) enum TurnMessage {
     ToolCall(CodeModeNestedToolCall),
+    IoWrite(CodeModeIoWrite),
     Notify {
         cell_id: String,
         call_id: String,
@@ -127,6 +136,11 @@ pub(crate) enum RuntimeEvent {
         id: String,
         name: ToolName,
         input: Option<JsonValue>,
+    },
+    IoWrite {
+        id: String,
+        value: JsonValue,
+        destination: String,
     },
     Notify {
         call_id: String,

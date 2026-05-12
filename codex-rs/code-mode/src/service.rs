@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::FunctionCallOutputContentItem;
+use crate::runtime::CodeModeIoWrite;
 use crate::runtime::CodeModeNestedToolCall;
 use crate::runtime::DEFAULT_EXEC_YIELD_TIME_MS;
 use crate::runtime::ExecuteRequest;
@@ -33,6 +34,12 @@ pub trait CodeModeTurnHost: Send + Sync {
     ) -> Result<JsonValue, String>;
 
     async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String>;
+
+    async fn write_file(
+        &self,
+        request: CodeModeIoWrite,
+        cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String>;
 }
 
 #[derive(Clone)]
@@ -222,6 +229,35 @@ impl CodeModeService {
                             let _ = runtime_tx.send(command);
                         });
                     }
+                    TurnMessage::IoWrite(request) => {
+                        let host = Arc::clone(&host);
+                        let inner = Arc::clone(&inner);
+                        tokio::spawn(async move {
+                            let cell_id = request.cell_id.clone();
+                            let runtime_write_id = request.runtime_write_id.clone();
+                            let response = host.write_file(request, CancellationToken::new()).await;
+                            let runtime_tx = inner
+                                .sessions
+                                .lock()
+                                .await
+                                .get(&cell_id)
+                                .map(|handle| handle.runtime_tx.clone());
+                            let Some(runtime_tx) = runtime_tx else {
+                                return;
+                            };
+                            let command = match response {
+                                Ok(result) => RuntimeCommand::ToolResponse {
+                                    id: runtime_write_id,
+                                    result,
+                                },
+                                Err(error_text) => RuntimeCommand::ToolError {
+                                    id: runtime_write_id,
+                                    error_text,
+                                },
+                            };
+                            let _ = runtime_tx.send(command);
+                        });
+                    }
                 }
             }
         });
@@ -396,6 +432,19 @@ async fn run_session_control(
                             .turn_message_tx
                             .send(TurnMessage::ToolCall(tool_call))
                             .await;
+                    }
+                    RuntimeEvent::IoWrite {
+                        id,
+                        value,
+                        destination,
+                    } => {
+                        let request = CodeModeIoWrite {
+                            cell_id: cell_id.clone(),
+                            runtime_write_id: id,
+                            value,
+                            destination,
+                        };
+                        let _ = inner.turn_message_tx.send(TurnMessage::IoWrite(request)).await;
                     }
                     RuntimeEvent::Result {
                         stored_values,

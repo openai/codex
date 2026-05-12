@@ -2171,6 +2171,43 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_io_write_writes_text_to_current_env() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const result = await io.write("hello from io", "env://current/nested/io-output.txt");
+text(JSON.stringify(result));
+"#;
+
+    let (test, second_mock) =
+        run_code_mode_turn(&server, "use io.write to write a file", code, false).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec io.write failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed.get("uri").and_then(Value::as_str),
+        Some("env://current/nested/io-output.txt")
+    );
+    assert_eq!(
+        parsed.get("bytes_written").and_then(Value::as_u64),
+        Some(13)
+    );
+    assert_eq!(
+        fs::read_to_string(test.cwd_path().join("nested/io-output.txt"))?,
+        "hello from io"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_structured_mcp_tool_result_fields() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
