@@ -6,7 +6,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
@@ -39,10 +38,6 @@ impl ToolHandler for ListMcpResourceTemplatesHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     #[expect(

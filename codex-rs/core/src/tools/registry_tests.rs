@@ -15,10 +15,6 @@ impl ToolHandler for TestHandler {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         Ok(crate::tools::context::FunctionToolOutput::from_text(
             "ok".to_string(),

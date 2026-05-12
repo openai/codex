@@ -26,11 +26,10 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan_types::ToolNamespace;
-use crate::tools::spec_plan_types::ToolRegistryBuildDeferredTool;
-use crate::tools::spec_plan_types::ToolRegistryBuildMcpTool;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_mcp::ToolInfo;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
@@ -190,7 +189,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_write_stdin_tool(),
         create_update_plan_tool(),
         request_user_input_tool_spec(&request_user_input_available_modes(&features)),
-        create_apply_patch_freeform_tool(),
+        create_apply_patch_freeform_tool(/*include_environment_id*/ false),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -299,6 +298,40 @@ fn exec_command_spec_includes_environment_id_only_for_multiple_selected_environm
         "exec_command",
         /*expected_present*/ true,
     );
+}
+
+#[test]
+fn apply_patch_spec_includes_environment_id_only_for_multiple_selected_environments() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_apply_patch_environment_id(&single_environment_tools, /*expected_present*/ false);
+
+    let multi_environment_config =
+        tools_config.with_environment_mode(ToolEnvironmentMode::Multiple);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_apply_patch_environment_id(&multi_environment_tools, /*expected_present*/ true);
 }
 
 #[test]
@@ -2379,10 +2412,10 @@ fn search_capable_model_info() -> ModelInfo {
     }
 }
 
-fn build_specs<'a>(
+fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryBuildDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
     build_specs_with_discoverable_tools(
@@ -2395,10 +2428,10 @@ fn build_specs<'a>(
     )
 }
 
-fn build_specs_with_discoverable_tools<'a>(
+fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryBuildDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
@@ -2414,10 +2447,10 @@ fn build_specs_with_discoverable_tools<'a>(
     )
 }
 
-fn build_specs_with_optional_tool_namespaces<'a>(
+fn build_specs_with_optional_tool_namespaces(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryBuildDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
     tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
@@ -2426,10 +2459,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
-            .map(|(name, tool)| ToolRegistryBuildMcpTool {
-                name: name.clone(),
-                tool,
-            })
+            .map(|(name, tool)| tool_info_from_parts(name, tool.clone()))
             .collect::<Vec<_>>()
     });
     let builder = build_tool_registry_builder(
@@ -2461,6 +2491,33 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         icons: None,
         meta: None,
     }
+}
+
+fn tool_info_from_parts(name: &ToolName, tool: rmcp::model::Tool) -> ToolInfo {
+    ToolInfo {
+        server_name: server_name_from_tool_name(name),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name: name.name.clone(),
+        callable_namespace: name.namespace.clone().unwrap_or_default(),
+        namespace_description: None,
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+    }
+}
+
+fn server_name_from_tool_name(name: &ToolName) -> String {
+    name.namespace
+        .as_deref()
+        .and_then(|namespace| {
+            namespace
+                .strip_prefix("mcp__")
+                .and_then(|suffix| suffix.strip_suffix("__"))
+        })
+        .unwrap_or_else(|| name.namespace.as_deref().unwrap_or("test_server"))
+        .to_string()
 }
 
 #[test]
@@ -2554,18 +2611,28 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
-fn deferred_mcp_tool<'a>(
-    tool_name: &'a str,
-    tool_namespace: &'a str,
-    server_name: &'a str,
-    connector_name: Option<&'a str>,
-    description: Option<&'a str>,
-) -> ToolRegistryBuildDeferredTool<'a> {
-    ToolRegistryBuildDeferredTool {
-        name: ToolName::namespaced(tool_namespace, tool_name),
-        server_name,
-        connector_name,
-        description,
+fn deferred_mcp_tool(
+    tool_name: &str,
+    tool_namespace: &str,
+    server_name: &str,
+    connector_name: Option<&str>,
+    description: Option<&str>,
+) -> ToolInfo {
+    ToolInfo {
+        server_name: server_name.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace.to_string(),
+        namespace_description: description.map(str::to_string),
+        tool: mcp_tool(
+            tool_name,
+            description.unwrap_or("Deferred MCP tool"),
+            json!({}),
+        ),
+        connector_id: None,
+        connector_name: connector_name.map(str::to_string),
+        plugin_display_names: Vec::new(),
     }
 }
 
@@ -2646,6 +2713,18 @@ fn assert_process_tool_environment_id(
         properties.contains_key("environment_id"),
         expected_present,
         "{expected_name} environment_id parameter presence"
+    );
+}
+
+fn assert_apply_patch_environment_id(tools: &[ConfiguredToolSpec], expected_present: bool) {
+    let tool = find_tool(tools, "apply_patch");
+    let ToolSpec::Freeform(FreeformTool { format, .. }) = &tool.spec else {
+        panic!("expected freeform apply_patch tool");
+    };
+    assert_eq!(
+        format.definition.contains("environment_id?"),
+        expected_present,
+        "apply_patch environment_id grammar presence"
     );
 }
 

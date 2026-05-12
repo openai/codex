@@ -60,6 +60,8 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
 fn mcp_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
     ToolInfo {
         server_name: "test_server".to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool.name.to_string(),
         callable_namespace: "mcp__test_server__".to_string(),
         namespace_description: None,
@@ -78,6 +80,8 @@ fn mcp_tool_info_with_display_name(display_name: &str, tool: rmcp::model::Tool) 
 
     ToolInfo {
         server_name: "test_server".to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name,
         callable_namespace,
         namespace_description: None,
@@ -352,7 +356,6 @@ async fn assert_model_tools(
             mcp_tools: None,
             deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: &[],
@@ -895,6 +898,8 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
         /*mcp_tools*/ None,
         Some(vec![ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: "_create_event".to_string(),
             callable_namespace: "mcp__codex_apps__calendar".to_string(),
             namespace_description: None,
@@ -943,6 +948,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
         Some(vec![
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "_create_event".to_string(),
                 callable_namespace: "mcp__codex_apps__calendar".to_string(),
                 namespace_description: None,
@@ -957,6 +964,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
             },
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "_list_events".to_string(),
                 callable_namespace: "mcp__codex_apps__calendar".to_string(),
                 namespace_description: None,
@@ -971,6 +980,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
             },
             ToolInfo {
                 server_name: "rmcp".to_string(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "echo".to_string(),
                 callable_namespace: "mcp__rmcp__".to_string(),
                 namespace_description: None,

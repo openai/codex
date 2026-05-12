@@ -375,6 +375,8 @@ pub(crate) async fn list_tools_for_client_uncached(
             };
             ToolInfo {
                 server_name: server_name.to_owned(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name,
                 callable_namespace,
                 namespace_description,

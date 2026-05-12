@@ -543,7 +543,6 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
             mcp_tools: None,
             deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -8641,7 +8640,6 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -8655,8 +8653,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         input: "{}".to_string(),
     };
 
-    let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
-        .await
+    let call = ToolRouter::build_tool_call(item.clone())
         .expect("build tool call")
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
