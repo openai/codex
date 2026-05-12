@@ -61,10 +61,8 @@ fn mcp_code_mode_result_serializes_full_call_tool_result() {
         })),
     };
 
-    let result = output.code_mode_result(&ToolPayload::Mcp {
-        server: "server".to_string(),
-        tool: "tool".to_string(),
-        raw_arguments: "{}".to_string(),
+    let result = output.code_mode_result(&ToolPayload::Function {
+        arguments: "{}".to_string(),
     });
 
     assert_eq!(
@@ -106,10 +104,8 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 
     let response = output.to_response_item(
         "mcp-call-1",
-        &ToolPayload::Mcp {
-            server: "server".to_string(),
-            tool: "tool".to_string(),
-            raw_arguments: "{}".to_string(),
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
     );
 
@@ -160,10 +156,8 @@ fn mcp_tool_output_response_item_truncates_large_structured_content() {
 
     let response = output.to_response_item(
         "mcp-call-large",
-        &ToolPayload::Mcp {
-            server: "server".to_string(),
-            tool: "tool".to_string(),
-            raw_arguments: "{}".to_string(),
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
     );
 
@@ -205,10 +199,8 @@ fn mcp_tool_output_response_item_preserves_content_items() {
 
     let response = output.to_response_item(
         "mcp-call-2",
-        &ToolPayload::Mcp {
-            server: "server".to_string(),
-            tool: "tool".to_string(),
-            raw_arguments: "{}".to_string(),
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
     );
 
@@ -259,10 +251,8 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
         truncation_policy: TruncationPolicy::Bytes(64),
     };
 
-    let result = output.code_mode_result(&ToolPayload::Mcp {
-        server: "server".to_string(),
-        tool: "tool".to_string(),
-        raw_arguments: "{}".to_string(),
+    let result = output.code_mode_result(&ToolPayload::Function {
+        arguments: "{}".to_string(),
     });
 
     assert_eq!(

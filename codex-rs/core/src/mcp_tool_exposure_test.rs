@@ -49,6 +49,8 @@ fn make_mcp_tool(
 ) -> ToolInfo {
     ToolInfo {
         server_name: server_name.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: callable_name.to_string(),
         callable_namespace: callable_namespace.to_string(),
         namespace_description: None,

@@ -21,7 +21,6 @@ use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -75,10 +74,6 @@ impl ToolHandler for ViewImageHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

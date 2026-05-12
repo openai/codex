@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
@@ -22,6 +23,7 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 serde = { workspace = true, features = ["derive"] }

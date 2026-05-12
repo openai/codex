@@ -58,6 +58,7 @@ use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
+use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
@@ -1566,6 +1567,7 @@ impl ChatWidget {
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
             if let Some(source) = source {
+                let source = parse_assistant_markdown(&source).visible_markdown;
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
@@ -2282,7 +2284,10 @@ impl ChatWidget {
         // source only when no earlier item-level event (AgentMessageItem, plan
         // commit, review output) already recorded markdown for this turn. This
         // prevents the final summary from overwriting a more specific source.
-        if let Some(message) = last_agent_message
+        let sanitized_last_agent_message = last_agent_message
+            .as_deref()
+            .map(|message| parse_assistant_markdown(message).visible_markdown);
+        if let Some(message) = sanitized_last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
             && !self.transcript.saw_copy_source_this_turn
@@ -2291,7 +2296,7 @@ impl ChatWidget {
         }
         // For desktop notifications: prefer the notification payload, fall back to
         // the item-level copy source if present, otherwise send an empty string.
-        let notification_response = last_agent_message
+        let notification_response = sanitized_last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
             .cloned()
@@ -4063,18 +4068,36 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
-    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem, from_replay: bool) {
         let mut message = String::new();
         for content in &item.content {
             match content {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
+        let parsed = parse_assistant_markdown(&message);
         self.finalize_completed_assistant_message(
-            (!message.is_empty()).then_some(message.as_str()),
+            (!parsed.visible_markdown.is_empty()).then_some(parsed.visible_markdown.as_str()),
         );
-        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None) && !message.is_empty() {
-            self.record_agent_markdown(&message);
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
+            && !parsed.visible_markdown.is_empty()
+        {
+            self.record_agent_markdown(&parsed.visible_markdown);
+        }
+        if !from_replay
+            && let Some(cwd) = parsed.last_created_branch_cwd()
+            && let Some(thread_id) = self.thread_id
+            && let Some(runner) = self.workspace_command_runner.clone()
+        {
+            let cwd = PathBuf::from(cwd);
+            let tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                if let Some(branch) =
+                    crate::branch_summary::current_branch_name(runner.as_ref(), &cwd).await
+                {
+                    tx.send(AppEvent::SyncThreadGitBranch { thread_id, branch });
+                }
+            });
         }
         self.status_state.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -5927,28 +5950,31 @@ impl ChatWidget {
                 phase,
                 memory_citation,
             } => {
-                self.on_agent_message_item_completed(AgentMessageItem {
-                    id,
-                    content: vec![AgentMessageContent::Text { text }],
-                    phase,
-                    memory_citation: memory_citation.map(|citation| {
-                        codex_protocol::memory_citation::MemoryCitation {
-                            entries: citation
-                                .entries
-                                .into_iter()
-                                .map(
-                                    |entry| codex_protocol::memory_citation::MemoryCitationEntry {
-                                        path: entry.path,
-                                        line_start: entry.line_start,
-                                        line_end: entry.line_end,
-                                        note: entry.note,
-                                    },
-                                )
-                                .collect(),
-                            rollout_ids: citation.thread_ids,
-                        }
-                    }),
-                });
+                self.on_agent_message_item_completed(
+                    AgentMessageItem {
+                        id,
+                        content: vec![AgentMessageContent::Text { text }],
+                        phase,
+                        memory_citation: memory_citation.map(|citation| {
+                            codex_protocol::memory_citation::MemoryCitation {
+                                entries: citation
+                                    .entries
+                                    .into_iter()
+                                    .map(|entry| {
+                                        codex_protocol::memory_citation::MemoryCitationEntry {
+                                            path: entry.path,
+                                            line_start: entry.line_start,
+                                            line_end: entry.line_end,
+                                            note: entry.note,
+                                        }
+                                    })
+                                    .collect(),
+                                rollout_ids: citation.thread_ids,
+                            }
+                        }),
+                    },
+                    from_replay,
+                );
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
             ThreadItem::Reasoning {

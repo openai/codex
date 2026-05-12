@@ -33,11 +33,7 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ToolKind {
-    Function,
-    Mcp,
-}
+pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
 pub trait ToolHandler: Send + Sync {
     type Output: ToolOutput + 'static;
@@ -53,15 +49,18 @@ pub trait ToolHandler: Send + Sync {
         false
     }
 
-    fn kind(&self) -> ToolKind;
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
-            (self.kind(), payload),
-            (ToolKind::Function, ToolPayload::Function { .. })
-                | (ToolKind::Function, ToolPayload::ToolSearch { .. })
-                | (ToolKind::Mcp, ToolPayload::Mcp { .. })
+            payload,
+            ToolPayload::Function { .. } | ToolPayload::ToolSearch { .. }
         )
+    }
+
+    fn telemetry_tags(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> impl std::future::Future<Output = ToolTelemetryTags> + Send {
+        async { Vec::new() }
     }
 
     /// Returns `true` if the [ToolInvocation] *might* mutate the environment of the
@@ -183,6 +182,8 @@ pub(crate) struct PostToolUsePayload {
 }
 
 trait AnyToolHandler: Send + Sync {
+    fn supports_parallel_tool_calls(&self) -> bool;
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
     fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool>;
@@ -195,6 +196,11 @@ trait AnyToolHandler: Send + Sync {
         updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError>;
 
+    fn telemetry_tags<'a>(
+        &'a self,
+        invocation: &'a ToolInvocation,
+    ) -> BoxFuture<'a, ToolTelemetryTags>;
+
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>>;
     fn handle_any<'a>(
         &'a self,
@@ -206,6 +212,10 @@ impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
 {
+    fn supports_parallel_tool_calls(&self) -> bool {
+        ToolHandler::supports_parallel_tool_calls(self)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         ToolHandler::matches_kind(self, payload)
     }
@@ -224,6 +234,13 @@ where
         updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
         ToolHandler::with_updated_hook_input(self, invocation, updated_input)
+    }
+
+    fn telemetry_tags<'a>(
+        &'a self,
+        invocation: &'a ToolInvocation,
+    ) -> BoxFuture<'a, ToolTelemetryTags> {
+        Box::pin(ToolHandler::telemetry_tags(self, invocation))
     }
 
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
@@ -288,6 +305,10 @@ impl ToolRegistry {
         self.handler(name)?.create_diff_consumer()
     }
 
+    pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
+        Some(self.handler(name)?.supports_parallel_tool_calls())
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "tool dispatch must keep active-turn accounting atomic"
@@ -300,7 +321,7 @@ impl ToolRegistry {
         let tool_name_flat = flat_tool_name(&tool_name);
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
-        let metric_tags = [
+        let base_tool_result_tags = [
             (
                 "sandbox",
                 permission_profile_sandbox_tag(
@@ -317,21 +338,6 @@ impl ToolRegistry {
                 ),
             ),
         ];
-        let (mcp_server, mcp_server_origin) = match &invocation.payload {
-            ToolPayload::Mcp { server, .. } => {
-                let manager = invocation
-                    .session
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await;
-                let origin = manager.server_origin(server).map(str::to_owned);
-                (Some(server.clone()), origin)
-            }
-            _ => (None, None),
-        };
-        let mcp_server_ref = mcp_server.as_deref();
-        let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
         {
             let mut active = invocation.session.active_turn.lock().await;
@@ -342,7 +348,6 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-
         let handler = match self.handler(&tool_name) {
             Some(handler) => handler,
             None => {
@@ -355,15 +360,27 @@ impl ToolRegistry {
                     Duration::ZERO,
                     /*success*/ false,
                     &message,
-                    &metric_tags,
-                    mcp_server_ref,
-                    mcp_server_origin_ref,
+                    &base_tool_result_tags,
+                    /*extra_trace_fields*/ &[],
                 );
                 let err = FunctionCallError::RespondToModel(message);
                 dispatch_trace.record_failed(&err);
                 return Err(err);
             }
         };
+
+        let telemetry_tags = handler.telemetry_tags(&invocation).await;
+        let mut tool_result_tags =
+            Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len());
+        let mut extra_trace_fields = Vec::new();
+        tool_result_tags.extend_from_slice(&base_tool_result_tags);
+        for (key, value) in &telemetry_tags {
+            if matches!(*key, "mcp_server" | "mcp_server_origin") {
+                extra_trace_fields.push((*key, value.as_str()));
+            } else {
+                tool_result_tags.push((*key, value.as_str()));
+            }
+        }
         if !handler.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
             let log_payload = invocation.payload.log_payload();
@@ -374,9 +391,8 @@ impl ToolRegistry {
                 Duration::ZERO,
                 /*success*/ false,
                 &message,
-                &metric_tags,
-                mcp_server_ref,
-                mcp_server_origin_ref,
+                &tool_result_tags,
+                &extra_trace_fields,
             );
             let err = FunctionCallError::Fatal(message);
             dispatch_trace.record_failed(&err);
@@ -419,9 +435,8 @@ impl ToolRegistry {
                 tool_name_flat.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
-                &metric_tags,
-                mcp_server_ref,
-                mcp_server_origin_ref,
+                &tool_result_tags,
+                &extra_trace_fields,
                 || {
                     let handler = handler.clone();
                     let response_cell = &response_cell;
@@ -446,7 +461,7 @@ impl ToolRegistry {
             )
             .await;
         let success = match &result {
-            Ok((_preview, success)) => *success,
+            Ok((_, success)) => *success,
             Err(_) => false,
         };
         emit_metric_for_tool_read(&invocation, success).await;

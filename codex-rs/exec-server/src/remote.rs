@@ -7,6 +7,8 @@ use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tracing::warn;
 
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
@@ -133,6 +135,7 @@ pub async fn run_remote_executor(
     config: RemoteExecutorConfig,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
+    ensure_rustls_crypto_provider();
     let client = ExecutorRegistryClient::new(config.base_url.clone(), config.bearer_token.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
     let mut backoff = Duration::from_secs(1);
