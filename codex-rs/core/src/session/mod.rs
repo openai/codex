@@ -189,7 +189,6 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
 mod handlers;
-mod hook_session_id;
 mod mcp;
 mod multi_agents;
 mod review;
