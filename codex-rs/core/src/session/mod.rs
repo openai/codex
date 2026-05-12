@@ -2436,22 +2436,6 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
-    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        self.services
-            .session_telemetry
-            .counter("codex.model_warning", /*inc*/ 1, &[]);
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("Warning: {}", message.into()),
-            }],
-            phase: None,
-        };
-
-        self.record_conversation_items(ctx, &[item]).await;
-    }
-
     async fn maybe_warn_on_server_model_mismatch(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -2488,8 +2472,6 @@ impl Session {
             }),
         )
         .await;
-        self.record_model_warning(warning_message, turn_context)
-            .await;
         true
     }
 
