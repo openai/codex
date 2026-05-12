@@ -604,11 +604,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         permission_profile,
         active_permission_profile,
         cwd,
+        workspace_roots,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
+    let sandbox =
+        thread_response_sandbox_policy(&permission_profile, &workspace_roots, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
     let session_id = conversation.session_configured().session_id.to_string();
@@ -625,6 +627,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
         permission_profile: Some(permission_profile.into()),
+        workspace_roots,
         active_permission_profile,
         reasoning_effort,
     };

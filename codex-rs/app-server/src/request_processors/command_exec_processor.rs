@@ -200,7 +200,8 @@ impl CommandExecRequestProcessor {
         } else {
             ExecCapturePolicy::ShellTool
         };
-        let sandbox_cwd = if permission_profile.is_some() {
+        let has_request_permission_profile = permission_profile.is_some();
+        let sandbox_cwd = if has_request_permission_profile {
             cwd.clone()
         } else {
             self.config.cwd.clone()
@@ -283,10 +284,16 @@ impl CommandExecRequestProcessor {
             None => None,
         };
 
+        let workspace_roots = if has_request_permission_profile {
+            vec![sandbox_cwd.clone()]
+        } else {
+            self.config.workspace_roots.clone()
+        };
         let exec_request = codex_core::exec::build_exec_request(
             exec_params,
             &effective_permission_profile,
             &sandbox_cwd,
+            &workspace_roots,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
         )
