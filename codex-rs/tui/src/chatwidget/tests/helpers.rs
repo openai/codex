@@ -1314,6 +1314,7 @@ pub(super) fn plugins_test_summary(
 ) -> PluginSummary {
     PluginSummary {
         id: id.to_string(),
+        remote_plugin_id: None,
         name: name.to_string(),
         share_context: None,
         source: PluginSource::Local {

@@ -482,6 +482,7 @@ impl PluginRequestProcessor {
                                     );
                                     PluginSummary {
                                         id: plugin.id,
+                                        remote_plugin_id: None,
                                         installed: plugin.installed,
                                         enabled: plugin.enabled,
                                         name: plugin.name,
@@ -723,6 +724,7 @@ impl PluginRequestProcessor {
                     marketplace_path: outcome.marketplace_path,
                     summary: PluginSummary {
                         id: outcome.plugin.id,
+                        remote_plugin_id: None,
                         name: outcome.plugin.name,
                         share_context,
                         source: marketplace_plugin_source_to_info(outcome.plugin.source),
@@ -1107,7 +1109,6 @@ impl PluginRequestProcessor {
                 )
             })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
-            let remote_plugin_id = &remote_detail.summary.id;
             return Err(invalid_request(format!(
                 "remote plugin {remote_plugin_id} is disabled by admin"
             )));
@@ -1587,6 +1588,7 @@ fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketpla
 fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginSummary {
     PluginSummary {
         id: summary.id,
+        remote_plugin_id: Some(summary.remote_plugin_id),
         name: summary.name,
         share_context: summary
             .share_context

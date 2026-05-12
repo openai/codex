@@ -3003,7 +3003,10 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    id: "gmail@chatgpt-global".to_string(),
+                    remote_plugin_id: Some(
+                        "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    ),
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3022,7 +3025,8 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "id": "gmail@chatgpt-global",
+                    "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
