@@ -661,7 +661,6 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     transcript: TranscriptState,
     config: Config,
-    environment_manager: Arc<EnvironmentManager>,
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<String>,
@@ -4681,7 +4680,7 @@ impl ChatWidget {
     fn new_with_op_target(common: ChatWidgetInit, codex_op_target: CodexOpTarget) -> Self {
         let ChatWidgetInit {
             config,
-            environment_manager,
+            environment_manager: _,
             frame_requester,
             app_event_tx,
             workspace_command_runner,
@@ -4766,7 +4765,6 @@ impl ChatWidget {
             transcript: TranscriptState::new(active_cell),
             raw_output_mode: config.tui_raw_output_mode,
             config,
-            environment_manager,
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,

@@ -2139,7 +2139,7 @@ async fn apps_refresh_uses_enabled_state_from_app_list_unless_local_toggle_races
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
