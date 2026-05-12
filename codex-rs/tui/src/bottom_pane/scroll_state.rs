@@ -33,20 +33,15 @@ impl ScrollState {
 
     /// Clamp selection to be within the [0, len-1] range, or None when empty.
     pub fn clamp_selection(&mut self, len: usize) {
-        self.selected_idx = match len {
-            0 => None,
-            _ => Some(self.selected_idx.unwrap_or(0).min(len - 1)),
-        };
-        if len == 0 {
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
+            return;
         }
+        self.selected_idx = Some(self.selected_idx.unwrap_or(0).min(len - 1));
     }
 
     /// Move selection up by one, wrapping to the bottom when necessary.
     pub fn move_up_wrap(&mut self, len: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         self.selected_idx = Some(match self.selected_idx {
@@ -58,9 +53,7 @@ impl ScrollState {
 
     /// Move selection down by one, wrapping to the top when necessary.
     pub fn move_down_wrap(&mut self, len: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         self.selected_idx = Some(match self.selected_idx {
@@ -75,9 +68,7 @@ impl ScrollState {
     /// behavior where repeated page-up/page-down converges at the nearest edge
     /// while still keeping the selected row visible.
     pub fn page_up_clamped(&mut self, len: usize, visible_rows: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         let step = visible_rows.max(1);
@@ -92,9 +83,7 @@ impl ScrollState {
     /// behavior where repeated page-up/page-down converges at the nearest edge
     /// while still keeping the selected row visible.
     pub fn page_down_clamped(&mut self, len: usize, visible_rows: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         let step = visible_rows.max(1);
@@ -105,9 +94,7 @@ impl ScrollState {
 
     /// Jump selection to the first row.
     pub fn jump_top(&mut self, len: usize, visible_rows: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         self.selected_idx = Some(0);
@@ -116,13 +103,20 @@ impl ScrollState {
 
     /// Jump selection to the last row.
     pub fn jump_bottom(&mut self, len: usize, visible_rows: usize) {
-        if len == 0 {
-            self.selected_idx = None;
-            self.scroll_top = 0;
+        if self.clear_if_empty(len) {
             return;
         }
         self.selected_idx = Some(len - 1);
         self.ensure_visible(len, visible_rows);
+    }
+
+    fn clear_if_empty(&mut self, len: usize) -> bool {
+        if len != 0 {
+            return false;
+        }
+        self.selected_idx = None;
+        self.scroll_top = 0;
+        true
     }
 
     /// Adjust `scroll_top` so that the current `selected_idx` is visible within
