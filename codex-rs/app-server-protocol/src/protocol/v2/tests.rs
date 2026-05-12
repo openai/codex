@@ -2019,17 +2019,16 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 #[test]
 fn sandbox_policy_round_trips_workspace_write_access() {
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        legacy_writable_roots: Vec::new(),
     };
 
     let core_policy = v2_policy.to_core();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -2060,10 +2059,9 @@ fn sandbox_policy_deserializes_legacy_read_only_full_access_field() {
 
 #[test]
 fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
-    let writable_root = absolute_path("/workspace");
     let policy = serde_json::from_value::<SandboxPolicy>(json!({
         "type": "workspaceWrite",
-        "writableRoots": [writable_root],
+        "writableRoots": [],
         "readOnlyAccess": {
             "type": "fullAccess"
         },
@@ -2075,11 +2073,35 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
     assert_eq!(
         policy,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![absolute_path("/workspace")],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            legacy_writable_roots: Vec::new(),
         }
+    );
+}
+
+#[test]
+fn sandbox_policy_deserializes_legacy_workspace_write_writable_roots_field() {
+    let writable_root = absolute_path("/workspace");
+    let policy = serde_json::from_value::<SandboxPolicy>(json!({
+        "type": "workspaceWrite",
+        "writableRoots": [writable_root],
+        "networkAccess": false,
+        "excludeTmpdirEnvVar": false,
+        "excludeSlashTmp": false
+    }))
+    .expect("workspace-write policy should accept legacy writableRoots field");
+    assert_eq!(policy.legacy_writable_roots(), &[writable_root]);
+
+    assert_eq!(
+        serde_json::to_value(policy).expect("policy should serialize"),
+        json!({
+            "type": "workspaceWrite",
+            "networkAccess": false,
+            "excludeTmpdirEnvVar": false,
+            "excludeSlashTmp": false
+        })
     );
 }
 
@@ -3385,9 +3407,6 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
-    assert_eq!(start.permission_profile, None);
-    assert_eq!(resume.permission_profile, None);
-    assert_eq!(fork.permission_profile, None);
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
     assert_eq!(fork.active_permission_profile, None);
@@ -3415,6 +3434,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         responsesapi_client_metadata: None,
         environments: None,
         cwd: None,
+        workspace_roots: None,
         approval_policy: None,
         approvals_reviewer: None,
         sandbox_policy: None,
@@ -3430,6 +3450,20 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn turn_start_permissions_uses_profile_id_string_shape() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "input": [],
+        "permissions": ":workspace"
+    }))
+    .expect("turn start params should deserialize");
+    assert_eq!(params.permissions, Some(":workspace".to_string()));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(serialized["permissions"], json!(":workspace"));
 }
 
 #[test]

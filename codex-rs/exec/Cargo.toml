@@ -39,6 +39,7 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-oss = { workspace = true }
+codex-utils-sandbox-summary = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
