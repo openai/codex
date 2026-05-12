@@ -287,9 +287,7 @@ impl ToolRegistry {
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
-        let Some(handler) = self.handler(name) else {
-            return None;
-        };
+        let handler = self.handler(name)?;
         Some(handler.supports_parallel_tool_calls())
     }
 
