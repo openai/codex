@@ -177,12 +177,23 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
-        anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
-            exe.display()
-        )
-    })
+    if let Some(source) = source_path_for_exe(&exe, kind.file_name()) {
+        return Ok(source);
+    }
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for path_entry in std::env::split_paths(&path) {
+            let candidate = path_entry.join(kind.file_name());
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "helper not found next to current executable, under {RESOURCES_DIRNAME}, or on PATH: {}",
+        exe.display()
+    ))
 }
 
 fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
