@@ -2,6 +2,7 @@ use std::future::Future;
 
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::ReviewDecision;
 use codex_tool_api::ToolBundle;
 
 use crate::ExtensionData;
@@ -39,6 +40,20 @@ pub trait ToolContributor: Send + Sync {
     -> Vec<ToolBundle>;
 }
 
+/// Future returned by one claimed approval-review contribution.
+pub type ApprovalReviewFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = ReviewDecision> + Send + 'a>>;
+
+/// Extension contribution that can claim rendered approval-review prompts.
+pub trait ApprovalReviewContributor: Send + Sync {
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> Option<ApprovalReviewFuture<'a>>;
+}
+
 /// Future returned by one ordered turn-item contribution.
 pub type TurnItemContributionFuture<'a> =
     std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
@@ -55,16 +70,4 @@ pub trait TurnItemContributor: Send + Sync {
         turn_store: &'a ExtensionData,
         item: &'a mut TurnItem,
     ) -> TurnItemContributionFuture<'a>;
-}
-
-// TODO: WIP (do not consider)
-/// Extension contribution that can claim approval requests for a runtime context.
-/// (ideally we can replace it by a session lifecycle thing or a request contributor?)
-pub trait ApprovalInterceptorContributor: Send + Sync {
-    /// Returns whether this contributor should intercept approvals in `context`.
-    fn intercepts_approvals(
-        &self,
-        thread_store: &ExtensionData,
-        turn_store: &ExtensionData,
-    ) -> bool;
 }
