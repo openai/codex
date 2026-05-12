@@ -1,10 +1,12 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
+use codex_tool_api::ToolDefinition;
 use codex_tool_api::ToolError as ExtensionToolError;
+use codex_tool_api::ToolExecutor;
 use codex_tools::ToolName;
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -16,11 +18,11 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 
-pub(crate) struct BundledToolOutput {
+pub(crate) struct ExtensionToolOutput {
     value: Value,
 }
 
-impl ToolOutput for BundledToolOutput {
+impl ToolOutput for ExtensionToolOutput {
     fn log_preview(&self) -> String {
         self.value.to_string()
     }
@@ -48,13 +50,13 @@ impl ToolOutput for BundledToolOutput {
     }
 }
 
-pub(crate) struct BundledToolHandler {
-    bundle: ExtensionToolBundle,
+pub(crate) struct ExtensionToolHandler {
+    definition: ToolDefinition<Arc<dyn ToolExecutor>>,
 }
 
-impl BundledToolHandler {
-    pub(crate) fn new(bundle: ExtensionToolBundle) -> Self {
-        Self { bundle }
+impl ExtensionToolHandler {
+    pub(crate) fn new(definition: ToolDefinition<Arc<dyn ToolExecutor>>) -> Self {
+        Self { definition }
     }
 
     fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
@@ -65,11 +67,11 @@ impl BundledToolHandler {
     }
 }
 
-impl ToolHandler for BundledToolHandler {
-    type Output = BundledToolOutput;
+impl ToolHandler for ExtensionToolHandler {
+    type Output = ExtensionToolOutput;
 
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(self.bundle.tool_name())
+        self.definition.tool_name().clone()
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -109,20 +111,20 @@ impl ToolHandler for BundledToolHandler {
             .ok_or_else(|| {
                 FunctionCallError::Fatal(format!(
                     "tool {} invoked with incompatible payload",
-                    self.bundle.tool_name()
+                    self.definition.tool_name()
                 ))
             })?
             .to_string();
         let value = self
-            .bundle
-            .executor()
+            .definition
+            .runtime()
             .execute(codex_tool_api::ToolCall {
                 call_id: invocation.call_id,
                 arguments,
             })
             .await
             .map_err(map_extension_tool_error)?;
-        Ok(BundledToolOutput { value })
+        Ok(ExtensionToolOutput { value })
     }
 }
 
@@ -148,8 +150,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    use super::BundledToolHandler;
-    use super::BundledToolOutput;
+    use super::ExtensionToolHandler;
+    use super::ExtensionToolOutput;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
@@ -169,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn exposes_generic_hook_payloads_and_is_conservatively_mutating() {
-        let bundle = codex_tool_api::ToolBundle::new(
+        let definition = codex_tool_api::ToolDefinition::from_function_spec(
             codex_tool_api::FunctionToolSpec {
                 name: "extension_echo".to_string(),
                 description: "Echoes arguments.".to_string(),
@@ -185,7 +187,7 @@ mod tests {
             },
             Arc::new(StubExtensionExecutor),
         );
-        let handler = BundledToolHandler::new(bundle);
+        let handler = ExtensionToolHandler::new(definition);
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let invocation = ToolInvocation {
             session: session.into(),
@@ -199,7 +201,7 @@ mod tests {
                 arguments: json!({ "message": "hello" }).to_string(),
             },
         };
-        let output = BundledToolOutput {
+        let output = ExtensionToolOutput {
             value: json!({ "ok": true }),
         };
 

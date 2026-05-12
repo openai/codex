@@ -4,12 +4,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
 use crate::tools::registry::ToolHandler;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 
 use rmcp::model::PaginatedRequestParams;
 
@@ -30,10 +28,6 @@ impl ToolHandler for ListMcpResourcesHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_mcp_resources")
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_mcp_resources_tool())
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

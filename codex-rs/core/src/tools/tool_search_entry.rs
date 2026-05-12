@@ -1,11 +1,9 @@
 use crate::tools::flat_tool_name;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tool_api::ToolDefinition;
 use codex_tools::LoadableToolSpec;
-use codex_tools::ToolSearchResultSource;
-use codex_tools::ToolsConfig;
-use codex_tools::dynamic_tool_to_loadable_tool_spec;
-use codex_tools::tool_search_result_source_to_loadable_tool_spec;
+use codex_tools::tool_definition_to_loadable_tool_spec;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
@@ -14,6 +12,7 @@ pub(crate) struct ToolSearchEntry {
     pub(crate) limit_bucket: Option<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn build_tool_search_entries(
     mcp_tools: Option<&[ToolInfo]>,
     dynamic_tools: &[DynamicToolSpec],
@@ -25,7 +24,9 @@ pub(crate) fn build_tool_search_entries(
         .unwrap_or_default();
     mcp_tools.sort_by_key(|info| info.canonical_tool_name());
     for info in mcp_tools {
-        match mcp_tool_search_entry(info) {
+        let definition =
+            codex_tools::mcp_tool_definition(info.canonical_tool_name(), &info.tool).deferred();
+        match mcp_tool_search_entry(info, &definition) {
             Ok(entry) => entries.push(entry),
             Err(error) => {
                 let tool_name = info.canonical_tool_name();
@@ -39,7 +40,8 @@ pub(crate) fn build_tool_search_entries(
     let mut dynamic_tools = dynamic_tools.iter().collect::<Vec<_>>();
     dynamic_tools.sort_by(|a, b| a.namespace.cmp(&b.namespace).then(a.name.cmp(&b.name)));
     for tool in dynamic_tools {
-        match dynamic_tool_search_entry(tool) {
+        let definition = codex_tools::parse_dynamic_tool(tool);
+        match dynamic_tool_search_entry(tool, &definition) {
             Ok(entry) => entries.push(entry),
             Err(error) => {
                 tracing::error!(
@@ -53,45 +55,46 @@ pub(crate) fn build_tool_search_entries(
     entries
 }
 
-pub(crate) fn build_tool_search_entries_for_config(
-    config: &ToolsConfig,
-    mcp_tools: Option<&[ToolInfo]>,
-    dynamic_tools: &[DynamicToolSpec],
-) -> Vec<ToolSearchEntry> {
-    let mcp_tools = if config.namespace_tools {
-        mcp_tools
-    } else {
-        None
-    };
-    let dynamic_tools = dynamic_tools
-        .iter()
-        .filter(|tool| config.namespace_tools || tool.namespace.is_none())
-        .cloned()
-        .collect::<Vec<_>>();
-    build_tool_search_entries(mcp_tools, &dynamic_tools)
-}
-
-fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
+pub(crate) fn mcp_tool_search_entry<R>(
+    info: &ToolInfo,
+    definition: &ToolDefinition<R>,
+) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
-        output: tool_search_result_source_to_loadable_tool_spec(ToolSearchResultSource {
-            server_name: info.server_name.as_str(),
-            tool_namespace: info.callable_namespace.as_str(),
-            tool_name: info.callable_name.as_str(),
-            tool: &info.tool,
-            connector_name: info.connector_name.as_deref(),
-            description: info.namespace_description.as_deref(),
-        })?,
+        output: tool_definition_to_loadable_tool_spec(
+            definition,
+            mcp_tool_search_namespace_description(info),
+        )?,
         limit_bucket: Some(info.server_name.clone()),
     })
 }
 
-fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, serde_json::Error> {
+pub(crate) fn dynamic_tool_search_entry<R>(
+    tool: &DynamicToolSpec,
+    definition: &ToolDefinition<R>,
+) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
-        output: dynamic_tool_to_loadable_tool_spec(tool)?,
+        output: tool_definition_to_loadable_tool_spec(
+            definition, /*namespace_description*/ None,
+        )?,
         limit_bucket: None,
     })
+}
+
+fn mcp_tool_search_namespace_description(info: &ToolInfo) -> Option<String> {
+    info.namespace_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            info.connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
 }
 
 fn build_mcp_search_text(info: &ToolInfo) -> String {

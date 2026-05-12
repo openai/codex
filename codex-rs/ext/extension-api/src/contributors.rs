@@ -1,7 +1,9 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use codex_protocol::items::TurnItem;
-use codex_tool_api::ToolBundle;
+use codex_tool_api::ToolDefinition;
+use codex_tool_api::ToolExecutor;
 
 use crate::ExtensionData;
 
@@ -29,7 +31,7 @@ pub trait ContextContributor: Send + Sync {
 pub trait ToolContributor: Send + Sync {
     /// Returns the native tools visible for the supplied extension stores.
     fn tools(&self, session_store: &ExtensionData, thread_store: &ExtensionData)
-    -> Vec<ToolBundle>;
+    -> Vec<ToolDefinition<Arc<dyn ToolExecutor>>>;
 }
 
 /// Future returned by one ordered turn-item contribution.

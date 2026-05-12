@@ -63,9 +63,10 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[test]
-fn register_handler_adds_handler_and_augments_specs_for_code_mode() {
+fn handlers_and_specs_are_registered_explicitly() {
     let mut builder = ToolRegistryBuilder::new(/*code_mode_enabled*/ true);
     builder.register_handler(Arc::new(GetGoalHandler));
+    builder.push_spec(create_get_goal_tool());
 
     let (specs, registry) = builder.build();
 

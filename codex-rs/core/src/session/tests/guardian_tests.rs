@@ -498,7 +498,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = ExecCommandHandler::default();
+    let handler = ExecCommandHandler;
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

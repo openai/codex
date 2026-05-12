@@ -6,9 +6,9 @@ use crate::FunctionToolSpec;
 /// One callable function tool, its exposure mode, and the runtime object that
 /// executes it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolDefinition<R> {
+pub struct ToolDefinition<R, S = FunctionToolSpec> {
     tool_name: ToolName,
-    spec: FunctionToolSpec,
+    spec: S,
     output_schema: Option<Value>,
     exposure: ToolExposure,
     runtime: R,
@@ -22,13 +22,9 @@ pub enum ToolExposure {
     Deferred,
 }
 
-impl<R> ToolDefinition<R> {
-    /// Creates one immediately-published function tool definition.
-    pub fn new(tool_name: ToolName, spec: FunctionToolSpec, runtime: R) -> Self {
-        debug_assert_eq!(
-            tool_name.name, spec.name,
-            "tool definition name must match its function spec name"
-        );
+impl<R, S> ToolDefinition<R, S> {
+    /// Creates one immediately-published tool definition.
+    pub fn new(tool_name: ToolName, spec: S, runtime: R) -> Self {
         Self {
             tool_name,
             spec,
@@ -43,8 +39,8 @@ impl<R> ToolDefinition<R> {
         &self.tool_name
     }
 
-    /// Returns the function-tool metadata exposed to the model.
-    pub fn spec(&self) -> &FunctionToolSpec {
+    /// Returns the model-visible metadata bound to this definition.
+    pub fn spec(&self) -> &S {
         &self.spec
     }
 
@@ -64,7 +60,7 @@ impl<R> ToolDefinition<R> {
     }
 
     /// Rebinds the same tool definition to a different runtime object.
-    pub fn with_runtime<S>(self, runtime: S) -> ToolDefinition<S> {
+    pub fn with_runtime<T>(self, runtime: T) -> ToolDefinition<T, S> {
         ToolDefinition {
             tool_name: self.tool_name,
             spec: self.spec,
@@ -74,17 +70,26 @@ impl<R> ToolDefinition<R> {
         }
     }
 
-    /// Attaches a tool-output schema.
-    pub fn with_output_schema(mut self, output_schema: Value) -> Self {
-        self.output_schema = Some(output_schema);
-        self
-    }
-
     /// Marks this tool as deferred. Deferred tools intentionally omit output
     /// schema metadata until they are loaded.
     pub fn deferred(mut self) -> Self {
         self.exposure = ToolExposure::Deferred;
         self.output_schema = None;
+        self
+    }
+}
+
+impl<R> ToolDefinition<R> {
+    /// Creates one immediately-published flat function-tool definition and
+    /// derives its callable name from the function spec.
+    pub fn from_function_spec(spec: FunctionToolSpec, runtime: R) -> Self {
+        let tool_name = ToolName::plain(spec.name.clone());
+        Self::new(tool_name, spec, runtime)
+    }
+
+    /// Attaches a tool-output schema to an ordinary function definition.
+    pub fn with_output_schema(mut self, output_schema: Value) -> Self {
+        self.output_schema = Some(output_schema);
         self
     }
 }
@@ -130,5 +135,20 @@ mod tests {
             &ToolName::namespaced("mcp__calendar", "create_event")
         );
         assert_eq!(definition.runtime(), &"handler");
+    }
+
+    #[test]
+    fn flat_function_definitions_derive_their_tool_name_from_the_spec() {
+        let definition = ToolDefinition::from_function_spec(
+            FunctionToolSpec {
+                name: "echo".to_string(),
+                description: "Echo arguments.".to_string(),
+                strict: false,
+                parameters: json!({ "type": "object" }),
+            },
+            (),
+        );
+
+        assert_eq!(definition.tool_name(), &ToolName::plain("echo"));
     }
 }

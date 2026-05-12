@@ -2,10 +2,8 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::agent_jobs_spec::create_report_agent_job_result_tool;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 
 use super::*;
 
@@ -16,10 +14,6 @@ impl ToolHandler for ReportAgentJobResultHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("report_agent_job_result")
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_report_agent_job_result_tool())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

@@ -1,6 +1,10 @@
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
+use super::RunExecLikeArgs;
+use super::local_shell_payload_command;
+use super::run_exec_like;
+use super::shell_handler::ShellHandler;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -12,22 +16,17 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
-use codex_tools::ToolSpec;
-
-use super::super::shell_spec::create_local_shell_tool;
-use super::RunExecLikeArgs;
-use super::local_shell_payload_command;
-use super::run_exec_like;
-use super::shell_handler::ShellHandler;
 
 #[derive(Default)]
 pub struct LocalShellHandler {
-    include_spec: bool,
+    supports_parallel_tool_calls: bool,
 }
 
 impl LocalShellHandler {
     pub(crate) fn new() -> Self {
-        Self { include_spec: true }
+        Self {
+            supports_parallel_tool_calls: true,
+        }
     }
 }
 
@@ -38,12 +37,8 @@ impl ToolHandler for LocalShellHandler {
         ToolName::plain("local_shell")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        self.include_spec.then(create_local_shell_tool)
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.include_spec
+        self.supports_parallel_tool_calls
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

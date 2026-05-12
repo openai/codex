@@ -5,13 +5,15 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
+use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan::build_tool_registry_builder;
 use crate::tools::spec_plan_types::ToolNamespace;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
+use codex_tool_api::ToolDefinition;
+use codex_tool_api::ToolExecutor;
 use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
@@ -62,13 +64,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
-    extension_tool_bundles: &[ExtensionToolBundle],
+    extension_tool_definitions: &[ToolDefinition<Arc<dyn ToolExecutor>>],
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::unavailable_tool_message;
-    use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
-
     let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_deref();
     let default_agent_type_description =
@@ -83,16 +83,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     };
     let default_wait_timeout_ms =
         DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
-    let deferred_dynamic_tools = dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let tool_search_entries = build_tool_search_entries_for_config(
-        config,
-        deferred_mcp_tool_sources,
-        &deferred_dynamic_tools,
-    );
     let mut builder = build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
@@ -104,7 +94,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 .as_ref()
                 .map(|inputs| &inputs.tool_namespaces),
             discoverable_tools: discoverable_tools.as_deref(),
-            extension_tool_bundles,
+            extension_tool_definitions,
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: WaitAgentTimeoutOptions {
@@ -112,7 +102,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 min_timeout_ms: min_wait_timeout_ms,
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
-            tool_search_entries: &tool_search_entries,
         },
     );
     let mut existing_spec_names = builder
@@ -139,14 +128,17 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 output_schema: None,
                 defer_loading: None,
             });
-            builder.register_handler(Arc::new(UnavailableToolHandler::new(
-                unavailable_tool,
-                spec,
-            )));
+            let handler = Arc::new(UnavailableToolHandler::new(unavailable_tool.clone()))
+                as Arc<dyn AnyToolHandler>;
+            let definition = ToolDefinition::new(unavailable_tool, spec, handler);
+            if builder.register_erased_handler(
+                definition.tool_name().clone(),
+                Arc::clone(definition.runtime()),
+            ) {
+                builder.push_spec(definition.spec().clone());
+            }
         } else {
-            builder.register_handler(Arc::new(UnavailableToolHandler::without_spec(
-                unavailable_tool,
-            )));
+            builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
         }
     }
     builder

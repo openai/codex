@@ -1,9 +1,3 @@
-use crate::LoadableToolSpec;
-use crate::ResponsesApiNamespace;
-use crate::ResponsesApiNamespaceTool;
-use crate::ToolName;
-use crate::default_namespace_description;
-use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,16 +16,6 @@ pub struct ToolSearchSourceInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ToolSearchSource<'a> {
     pub server_name: &'a str,
-    pub connector_name: Option<&'a str>,
-    pub description: Option<&'a str>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ToolSearchResultSource<'a> {
-    pub server_name: &'a str,
-    pub tool_namespace: &'a str,
-    pub tool_name: &'a str,
-    pub tool: &'a rmcp::model::Tool,
     pub connector_name: Option<&'a str>,
     pub description: Option<&'a str>,
 }
@@ -131,40 +115,6 @@ pub struct RequestPluginInstallEntry {
     pub has_skills: bool,
     pub mcp_server_names: Vec<String>,
     pub app_connector_ids: Vec<String>,
-}
-
-pub fn tool_search_result_source_to_loadable_tool_spec(
-    source: ToolSearchResultSource<'_>,
-) -> Result<LoadableToolSpec, serde_json::Error> {
-    Ok(LoadableToolSpec::Namespace(ResponsesApiNamespace {
-        name: source.tool_namespace.to_string(),
-        description: tool_search_result_source_namespace_description(source),
-        tools: vec![tool_search_result_source_to_namespace_tool(source)?],
-    }))
-}
-
-fn tool_search_result_source_namespace_description(source: ToolSearchResultSource<'_>) -> String {
-    source
-        .description
-        .map(str::trim)
-        .filter(|description| !description.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            source
-                .connector_name
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-                .map(|connector_name| format!("Tools for working with {connector_name}."))
-        })
-        .unwrap_or_else(|| default_namespace_description(source.tool_namespace))
-}
-
-fn tool_search_result_source_to_namespace_tool(
-    source: ToolSearchResultSource<'_>,
-) -> Result<ResponsesApiNamespaceTool, serde_json::Error> {
-    let tool_name = ToolName::namespaced(source.tool_namespace, source.tool_name);
-    mcp_tool_to_deferred_responses_api_tool(&tool_name, source.tool)
-        .map(ResponsesApiNamespaceTool::Function)
 }
 
 pub fn collect_tool_search_source_infos<'a>(

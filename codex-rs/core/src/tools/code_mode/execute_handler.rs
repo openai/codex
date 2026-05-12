@@ -4,7 +4,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -12,15 +11,9 @@ use super::build_enabled_tools;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 
-pub struct CodeModeExecuteHandler {
-    spec: ToolSpec,
-}
+pub struct CodeModeExecuteHandler;
 
 impl CodeModeExecuteHandler {
-    pub(crate) fn new(spec: ToolSpec) -> Self {
-        Self { spec }
-    }
-
     async fn execute(
         &self,
         session: std::sync::Arc<crate::session::session::Session>,
@@ -87,10 +80,6 @@ impl ToolHandler for CodeModeExecuteHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain(PUBLIC_TOOL_NAME)
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

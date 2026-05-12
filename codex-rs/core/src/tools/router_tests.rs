@@ -8,7 +8,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionToolSpec;
-use codex_extension_api::ToolBundle;
+use codex_extension_api::ToolDefinition;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFuture;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -27,7 +27,7 @@ use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
-use super::extension_tool_bundles;
+use super::extension_tool_definitions;
 
 struct ExtensionEchoContributor;
 
@@ -36,8 +36,8 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<ToolBundle> {
-        vec![ToolBundle::new(
+    ) -> Vec<ToolDefinition<Arc<dyn ToolExecutor>>> {
+        vec![ToolDefinition::from_function_spec(
             FunctionToolSpec {
                 name: "extension_echo".to_string(),
                 description: "Echoes arguments through an extension tool.".to_string(),
@@ -99,7 +99,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
@@ -179,7 +179,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             ]),
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
@@ -215,7 +215,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
@@ -268,7 +268,7 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
     );
@@ -323,7 +323,7 @@ fn mcp_tool_info(
 }
 
 #[tokio::test]
-async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
+async fn extension_tool_definitions_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
 
@@ -334,7 +334,7 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(&session),
+            extension_tool_definitions: extension_tool_definitions(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );

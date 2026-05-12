@@ -124,6 +124,11 @@ pub fn tool_definition_to_responses_api_tool<R>(
     tool_definition: &ToolDefinition<R>,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     let spec = tool_definition.spec();
+    debug_assert_eq!(
+        tool_definition.tool_name().name,
+        spec.name,
+        "tool definition name must match its function spec name"
+    );
     Ok(ResponsesApiTool {
         name: tool_definition.tool_name().name.clone(),
         description: spec.description.clone(),

@@ -544,7 +544,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
             deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     ));
@@ -8613,7 +8613,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             mcp_tools: Some(tools),
             unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_definitions: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     );
@@ -9118,7 +9118,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = ExecCommandHandler::default();
+    let handler = ExecCommandHandler;
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

@@ -4,6 +4,9 @@ use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
 
+use super::RunExecLikeArgs;
+use super::run_exec_like;
+use super::shell_command_payload_command;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
@@ -24,13 +27,6 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
-use codex_tools::ToolSpec;
-
-use super::super::shell_spec::CommandToolOptions;
-use super::super::shell_spec::create_shell_command_tool;
-use super::RunExecLikeArgs;
-use super::run_exec_like;
-use super::shell_command_payload_command;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellCommandBackend {
@@ -40,21 +36,14 @@ enum ShellCommandBackend {
 
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
-    options: Option<ShellCommandHandlerOptions>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ShellCommandHandlerOptions {
-    pub(crate) backend_config: ShellCommandBackendConfig,
-    pub(crate) allow_login_shell: bool,
-    pub(crate) exec_permission_approvals_enabled: bool,
+    supports_parallel_tool_calls: bool,
 }
 
 impl ShellCommandHandler {
-    pub(crate) fn new(options: ShellCommandHandlerOptions) -> Self {
+    pub(crate) fn new(backend_config: ShellCommandBackendConfig) -> Self {
         Self {
-            options: Some(options),
-            ..Self::from(options.backend_config)
+            supports_parallel_tool_calls: true,
+            ..Self::from(backend_config)
         }
     }
 
@@ -120,7 +109,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
         };
         Self {
             backend,
-            options: None,
+            supports_parallel_tool_calls: false,
         }
     }
 }
@@ -132,17 +121,8 @@ impl ToolHandler for ShellCommandHandler {
         ToolName::plain("shell_command")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        self.options.map(|options| {
-            create_shell_command_tool(CommandToolOptions {
-                allow_login_shell: options.allow_login_shell,
-                exec_permission_approvals_enabled: options.exec_permission_approvals_enabled,
-            })
-        })
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
+        self.supports_parallel_tool_calls
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

@@ -3,6 +3,11 @@ use codex_protocol::models::ShellToolCallParams;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
+use super::RunExecLikeArgs;
+use super::rewrite_shell_function_updated_hook_input;
+use super::run_exec_like;
+use super::shell_function_post_tool_use_payload;
+use super::shell_function_pre_tool_use_payload;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
@@ -17,25 +22,16 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
-use codex_tools::ToolSpec;
-
-use super::super::shell_spec::ShellToolOptions;
-use super::super::shell_spec::create_shell_tool;
-use super::RunExecLikeArgs;
-use super::rewrite_shell_function_updated_hook_input;
-use super::run_exec_like;
-use super::shell_function_post_tool_use_payload;
-use super::shell_function_pre_tool_use_payload;
 
 #[derive(Default)]
 pub struct ShellHandler {
-    options: Option<ShellToolOptions>,
+    supports_parallel_tool_calls: bool,
 }
 
 impl ShellHandler {
-    pub(crate) fn new(options: ShellToolOptions) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            options: Some(options),
+            supports_parallel_tool_calls: true,
         }
     }
 
@@ -70,12 +66,8 @@ impl ToolHandler for ShellHandler {
         ToolName::plain("shell")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        self.options.map(create_shell_tool)
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
+        self.supports_parallel_tool_calls
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

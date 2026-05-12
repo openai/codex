@@ -37,10 +37,6 @@ pub trait ToolHandler: Send + Sync {
     /// The concrete tool name handled by this handler instance.
     fn tool_name(&self) -> ToolName;
 
-    fn spec(&self) -> Option<ToolSpec> {
-        None
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
         false
     }
@@ -580,10 +576,6 @@ impl ToolRegistryBuilder {
         if self.handlers.contains_key(&name) {
             error_or_panic(format!("handler for tool {name} already registered"));
             return;
-        }
-
-        if let Some(spec) = handler.spec() {
-            self.push_spec(spec);
         }
 
         let handler: Arc<dyn AnyToolHandler> = handler;

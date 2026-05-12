@@ -22,7 +22,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
-use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
@@ -49,7 +48,6 @@ use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
@@ -301,10 +299,6 @@ impl ToolHandler for ApplyPatchHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("apply_patch")
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_apply_patch_freeform_tool(self.multi_environment))
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

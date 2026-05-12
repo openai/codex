@@ -18,32 +18,11 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
-use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
-use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 
-pub struct ViewImageHandler {
-    options: ViewImageToolOptions,
-}
-
-impl Default for ViewImageHandler {
-    fn default() -> Self {
-        Self {
-            options: ViewImageToolOptions {
-                can_request_original_image_detail: false,
-                include_environment_id: false,
-            },
-        }
-    }
-}
-
-impl ViewImageHandler {
-    pub(crate) fn new(options: ViewImageToolOptions) -> Self {
-        Self { options }
-    }
-}
+#[derive(Default)]
+pub struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -66,10 +45,6 @@ impl ToolHandler for ViewImageHandler {
 
     fn tool_name(&self) -> ToolName {
         ToolName::plain("view_image")
-    }
-
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_view_image_tool(self.options))
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -280,7 +255,7 @@ mod tests {
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::read_only();
 
-        let result = ViewImageHandler::default()
+        let result = ViewImageHandler
             .handle(ToolInvocation {
                 session: Arc::new(session),
                 turn: Arc::new(turn),
