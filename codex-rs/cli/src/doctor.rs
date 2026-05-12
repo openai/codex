@@ -37,6 +37,7 @@ use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::default_client::build_reqwest_client;
 use codex_login::load_auth_dot_json;
+use codex_protocol::protocol::AskForApproval;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
@@ -53,6 +54,7 @@ mod updates;
 
 use background::background_server_check;
 use output::HumanOutputOptions;
+use output::redact_detail;
 use output::render_human_report;
 use runtime::runtime_check;
 use runtime::search_check;
@@ -95,7 +97,7 @@ enum CheckStatus {
 /// The schema is intentionally flat: each check carries its own category,
 /// status, details, remediation, and duration so support tooling can filter or
 /// redact individual rows without understanding the renderer's section layout.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorReport {
     schema_version: u32,
@@ -110,7 +112,7 @@ struct DoctorReport {
 /// Summaries are safe for the default human view. Details may include local
 /// paths or command output and are therefore shown only with --verbose in
 /// human mode, while JSON consumers receive the full redacted report.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorCheck {
     id: String,
@@ -170,7 +172,10 @@ pub async fn run_doctor(
     let report = build_report(&command, root_config_overrides, interactive, arg0_paths).await;
 
     if command.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&redacted_report(&report))?
+        );
     } else {
         print!(
             "{}",
@@ -259,16 +264,59 @@ async fn load_config(
     }
 
     let overrides = ConfigOverrides {
-        config_profile: interactive.config_profile.clone(),
-        codex_self_exe: arg0_paths.codex_self_exe.clone(),
-        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
-        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
-        ..Default::default()
+        ephemeral: Some(true),
+        ..config_overrides_from_interactive(interactive, arg0_paths)
     };
 
     Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides)
         .await
         .context("failed to load Codex config")
+}
+
+fn config_overrides_from_interactive(
+    interactive: &TuiCli,
+    arg0_paths: &Arg0DispatchPaths,
+) -> ConfigOverrides {
+    let approval_policy = if interactive.dangerously_bypass_approvals_and_sandbox {
+        Some(AskForApproval::Never)
+    } else {
+        interactive.approval_policy.map(Into::into)
+    };
+    let sandbox_mode = if interactive.dangerously_bypass_approvals_and_sandbox {
+        Some(codex_protocol::config_types::SandboxMode::DangerFullAccess)
+    } else {
+        interactive.sandbox_mode.map(Into::into)
+    };
+    ConfigOverrides {
+        model: interactive.model.clone(),
+        config_profile: interactive.config_profile.clone(),
+        approval_policy,
+        sandbox_mode,
+        cwd: interactive.cwd.clone(),
+        model_provider: interactive
+            .oss
+            .then(|| interactive.oss_provider.clone())
+            .flatten(),
+        codex_self_exe: arg0_paths.codex_self_exe.clone(),
+        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+        show_raw_agent_reasoning: interactive.oss.then_some(true),
+        additional_writable_roots: interactive.add_dir.clone(),
+        ..Default::default()
+    }
+}
+
+fn redacted_report(report: &DoctorReport) -> DoctorReport {
+    let mut redacted = report.clone();
+    for check in &mut redacted.checks {
+        check.details = check
+            .details
+            .iter()
+            .map(|detail| redact_detail(detail))
+            .collect();
+        check.remediation = check.remediation.as_deref().map(redact_detail);
+    }
+    redacted
 }
 
 fn timed_check(f: impl FnOnce() -> DoctorCheck) -> DoctorCheck {
@@ -1218,6 +1266,8 @@ mod tests {
     use std::io::Write;
     use std::net::TcpListener;
 
+    use clap::Parser;
+    use codex_protocol::config_types::SandboxMode;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -1254,6 +1304,84 @@ mod tests {
                 npm_package_root: npm_root.join("@openai").join("codex"),
             }
         );
+    }
+
+    #[test]
+    fn config_overrides_from_interactive_preserves_global_options() {
+        let interactive = TuiCli::parse_from([
+            "codex",
+            "--oss",
+            "--local-provider",
+            "ollama",
+            "--model",
+            "llama3.2",
+            "--cd",
+            "/tmp",
+            "--sandbox",
+            "danger-full-access",
+            "--ask-for-approval",
+            "never",
+            "--add-dir",
+            "/var/tmp",
+        ]);
+        let arg0_paths = Arg0DispatchPaths {
+            codex_self_exe: Some(PathBuf::from("/bin/codex")),
+            codex_linux_sandbox_exe: Some(PathBuf::from("/bin/codex-linux-sandbox")),
+            main_execve_wrapper_exe: Some(PathBuf::from("/bin/codex-execve-wrapper")),
+        };
+
+        let overrides = config_overrides_from_interactive(&interactive, &arg0_paths);
+
+        assert_eq!(overrides.model.as_deref(), Some("llama3.2"));
+        assert_eq!(overrides.model_provider.as_deref(), Some("ollama"));
+        assert_eq!(overrides.cwd.as_deref(), Some(Path::new("/tmp")));
+        assert_eq!(overrides.approval_policy, Some(AskForApproval::Never));
+        assert_eq!(overrides.sandbox_mode, Some(SandboxMode::DangerFullAccess));
+        assert_eq!(overrides.show_raw_agent_reasoning, Some(true));
+        assert_eq!(
+            overrides.additional_writable_roots,
+            vec![PathBuf::from("/var/tmp")]
+        );
+        assert_eq!(overrides.codex_self_exe, arg0_paths.codex_self_exe);
+        assert_eq!(
+            overrides.codex_linux_sandbox_exe,
+            arg0_paths.codex_linux_sandbox_exe
+        );
+        assert_eq!(
+            overrides.main_execve_wrapper_exe,
+            arg0_paths.main_execve_wrapper_exe
+        );
+    }
+
+    #[test]
+    fn redacted_report_sanitizes_json_details() {
+        let report = DoctorReport {
+            schema_version: 1,
+            generated_at: "0s since unix epoch".to_string(),
+            overall_status: CheckStatus::Warning,
+            codex_version: "0.0.0".to_string(),
+            checks: vec![
+                DoctorCheck::new(
+                    "mcp.config",
+                    "mcp",
+                    CheckStatus::Warning,
+                    "MCP configuration has optional issues",
+                )
+                .detail(
+                    "optional reachability failed: remote: https://user:pass@example.com/mcp?x=abc (connect failed)",
+                )
+                .detail("OPENAI_API_KEY: sk-live-secret")
+                .remediation("Open https://user:pass@example.com/help?x=abc."),
+            ],
+        };
+
+        let redacted = serde_json::to_string(&redacted_report(&report)).expect("serialize report");
+
+        assert!(!redacted.contains("user:pass"));
+        assert!(!redacted.contains("x=abc"));
+        assert!(!redacted.contains("sk-live-secret"));
+        assert!(redacted.contains("https://example.com/mcp"));
+        assert!(redacted.contains("OPENAI_API_KEY: <redacted>"));
     }
 
     #[tokio::test]

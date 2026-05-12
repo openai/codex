@@ -124,10 +124,7 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
             let _ = writeln!(
                 out,
                 "    - {}",
-                dim(
-                    &highlight_actions(&redact_for_display(detail), options),
-                    options
-                )
+                dim(&highlight_actions(&redact_detail(detail), options), options)
             );
         }
     }
@@ -294,7 +291,7 @@ fn highlight_flags(text: &str, options: HumanOutputOptions) -> String {
         .collect()
 }
 
-fn redact_for_display(detail: &str) -> String {
+pub(super) fn redact_detail(detail: &str) -> String {
     let lower = detail.to_ascii_lowercase();
     let secret_keys = [
         "openai_api_key",
@@ -309,8 +306,54 @@ fn redact_for_display(detail: &str) -> String {
         let name = detail.split(':').next().unwrap_or(detail);
         format!("{name}: <redacted>")
     } else {
-        detail.to_string()
+        redact_urls(detail)
     }
+}
+
+fn redact_urls(detail: &str) -> String {
+    detail
+        .split_inclusive(char::is_whitespace)
+        .map(redact_url_token)
+        .collect()
+}
+
+fn redact_url_token(token: &str) -> String {
+    let Some(scheme_end) = token.find("://") else {
+        return token.to_string();
+    };
+    let mut suffix_start = token.len();
+    while suffix_start > scheme_end + 3
+        && matches!(
+            token.as_bytes()[suffix_start - 1],
+            b' ' | b'\t' | b'\n' | b'\r' | b'.' | b',' | b';' | b':' | b')' | b']'
+        )
+    {
+        suffix_start -= 1;
+    }
+
+    let (body, suffix) = token.split_at(suffix_start);
+    let scheme_prefix_end = scheme_end + 3;
+    let rest = &body[scheme_prefix_end..];
+    let authority_end = rest
+        .find(['/', '?', '#'])
+        .map(|index| scheme_prefix_end + index)
+        .unwrap_or(body.len());
+    let authority = &body[scheme_prefix_end..authority_end];
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let path = &body[authority_end..];
+    let path = path
+        .find(['?', '#'])
+        .map(|index| &path[..index])
+        .unwrap_or(path);
+    format!(
+        "{}{}{}{}",
+        &body[..scheme_prefix_end],
+        authority,
+        path,
+        suffix
+    )
 }
 
 #[derive(Default)]
@@ -561,6 +604,18 @@ Still having issues? Run codex doctor --verbose for more details.
             },
         );
         assert!(rendered.contains("    - OPENAI_API_KEY: <redacted>"));
+    }
+
+    #[test]
+    fn redact_detail_sanitizes_urls() {
+        let redacted = redact_detail(
+            "reachability failed: https://user:pass@example.com/mcp?x=abc#frag (connect failed)",
+        );
+
+        assert_eq!(
+            redacted,
+            "reachability failed: https://example.com/mcp (connect failed)"
+        );
     }
 
     #[test]
