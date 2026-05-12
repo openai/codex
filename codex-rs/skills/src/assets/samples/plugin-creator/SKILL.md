@@ -151,7 +151,8 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin \
 - Add `policy.products` only when the user explicitly asks for that override.
 - Keep marketplace `source.path` relative to the selected marketplace root as `./plugins/<plugin-name>`.
 - When the workflow created or updated a marketplace-backed plugin, end the final user-facing
-  response with these two Markdown links, in this order, and do not add any text after them:
+  response with this Codex app handoff block, in this order, and do not add any text after the links.
+  First write the standalone line `To view this in the Codex app:`. Then write:
   - `[View <normalized plugin name>](codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>)`
   - `[Share <normalized plugin name>](codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>&mode=share)`
 - Replace the normalized plugin-name placeholder in both the Markdown label and the deeplink path
