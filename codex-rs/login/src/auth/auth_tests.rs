@@ -895,6 +895,67 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
+async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismatch() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let record = agent_identity_record("org_another_org");
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/agent-identities/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/v1/agent/agent-runtime-id/task/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
+    save_auth(
+        codex_home.path(),
+        &AuthDotJson {
+            auth_mode: Some(ApiAuthMode::AgentIdentity),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: Some(agent_identity),
+        },
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("seed agent identity auth");
+
+    let config = AuthConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        forced_login_method: None,
+        forced_chatgpt_workspace_id: Some(vec!["org_mine".to_string()]),
+        chatgpt_base_url: Some(chatgpt_base_url),
+    };
+
+    let err = super::enforce_login_restrictions(&config)
+        .await
+        .expect_err("expected workspace mismatch to error");
+    assert!(
+        err.to_string()
+            .contains("current credentials belong to org_another_org")
+    );
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should be removed on mismatch"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
  {
     let codex_home = tempdir().unwrap();

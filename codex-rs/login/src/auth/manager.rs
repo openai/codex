@@ -654,25 +654,28 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
     }
 
     if let Some(expected_account_ids) = config.forced_chatgpt_workspace_id.as_deref() {
-        if !auth.is_chatgpt_auth() {
-            return Ok(());
-        }
-
-        let token_data = match auth.get_token_data() {
-            Ok(data) => data,
-            Err(err) => {
-                return logout_with_message(
-                    &config.codex_home,
-                    format!(
-                        "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
-                    ),
-                    config.auth_credentials_store_mode,
-                );
+        let chatgpt_account_id = match &auth {
+            CodexAuth::ApiKey(_) => return Ok(()),
+            CodexAuth::AgentIdentity(_) => auth.get_account_id(),
+            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+                let token_data = match auth.get_token_data() {
+                    Ok(data) => data,
+                    Err(err) => {
+                        return logout_with_message(
+                            &config.codex_home,
+                            format!(
+                                "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
+                            ),
+                            config.auth_credentials_store_mode,
+                        );
+                    }
+                };
+                token_data.id_token.chatgpt_account_id
             }
         };
 
         // workspace is the external identifier for account id.
-        let chatgpt_account_id = token_data.id_token.chatgpt_account_id.as_deref();
+        let chatgpt_account_id = chatgpt_account_id.as_deref();
         if !chatgpt_account_id.is_some_and(|actual| {
             expected_account_ids
                 .iter()
