@@ -97,12 +97,8 @@ pub fn build_tool_registry_builder(
                 ..params
             },
         );
-        let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
-            nested_builder
-                .specs()
-                .iter()
-                .map(|configured_tool| &configured_tool.spec),
-        );
+        let mut enabled_tools =
+            collect_code_mode_exec_prompt_tool_definitions(nested_builder.specs().iter());
         enabled_tools
             .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
         builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
@@ -277,14 +273,11 @@ pub fn build_tool_registry_builder(
         web_search_config: config.web_search_config.as_ref(),
         web_search_tool_type: config.web_search_tool_type,
     }) {
-        builder.push_spec(web_search_tool, /*supports_parallel_tool_calls*/ false);
+        builder.push_spec(web_search_tool);
     }
 
     if config.image_gen_tool {
-        builder.push_spec(
-            create_image_generation_tool("png"),
-            /*supports_parallel_tool_calls*/ false,
-        );
+        builder.push_spec(create_image_generation_tool("png"));
     }
 
     if config.environment_mode.has_environment() {
@@ -391,14 +384,11 @@ pub fn build_tool_registry_builder(
             }
 
             if config.namespace_tools && !tools.is_empty() {
-                builder.push_spec(
-                    ToolSpec::Namespace(ResponsesApiNamespace {
-                        name: namespace,
-                        description,
-                        tools,
-                    }),
-                    /*supports_parallel_tool_calls*/ false,
-                );
+                builder.push_spec(ToolSpec::Namespace(ResponsesApiNamespace {
+                    name: namespace,
+                    description,
+                    tools,
+                }));
             }
         }
     }
@@ -422,7 +412,7 @@ pub fn build_tool_registry_builder(
     for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
         let spec = spec.into();
         if config.namespace_tools || !matches!(spec, ToolSpec::Namespace(_)) {
-            builder.push_spec(spec, /*supports_parallel_tool_calls*/ false);
+            builder.push_spec(spec);
         }
     }
 
