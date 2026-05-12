@@ -718,6 +718,7 @@ impl ProjectTrustContext {
     fn root_checkout_hooks_folder_for_dir(&self, dir: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
         let checkout_root = self.checkout_root.as_ref()?;
         let repo_root = self.repo_root.as_ref()?;
+        // Regular checkouts resolve both paths to the same root; linked worktrees do not.
         if checkout_root == repo_root {
             return None;
         }
