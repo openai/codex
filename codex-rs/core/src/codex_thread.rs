@@ -6,6 +6,7 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -123,6 +124,11 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    /// Returns the session telemetry handle for thread-scoped production instrumentation.
+    pub fn session_telemetry(&self) -> SessionTelemetry {
+        self.codex.session.services.session_telemetry.clone()
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {

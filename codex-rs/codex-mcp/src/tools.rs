@@ -29,6 +29,12 @@ pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
 pub struct ToolInfo {
     /// Raw MCP server name used for routing the tool call.
     pub server_name: String,
+    /// Whether calls routed to this server may run in parallel.
+    #[serde(default)]
+    pub supports_parallel_tool_calls: bool,
+    /// MCP server origin used for telemetry and diagnostics, when known.
+    #[serde(default)]
+    pub server_origin: Option<String>,
     /// Model-visible tool name used in Responses API tool declarations.
     #[serde(rename = "tool_name", alias = "callable_name")]
     pub callable_name: String,

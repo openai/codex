@@ -1161,7 +1161,6 @@ pub(crate) async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
-    let parallel_mcp_server_names = mcp_connection_manager.parallel_tool_call_server_names();
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1267,7 +1266,6 @@ pub(crate) async fn built_tools(
             mcp_tools,
             deferred_mcp_tools,
             unavailable_called_tools,
-            parallel_mcp_server_names,
             discoverable_tools,
             extension_tool_bundles: extension_tool_bundles(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

@@ -263,19 +263,6 @@ impl Session {
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP tool metadata reads through the session-owned manager guard"
-    )]
-    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .resolve_tool_info(tool_name)
-            .await
-    }
-
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,

@@ -16,7 +16,6 @@ use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -76,10 +75,6 @@ impl ToolHandler for ShellHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         self.options.is_some()
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

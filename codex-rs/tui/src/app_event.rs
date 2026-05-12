@@ -164,6 +164,12 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Persist a branch discovered from an App git-action directive into thread metadata.
+    SyncThreadGitBranch {
+        thread_id: ThreadId,
+        branch: String,
+    },
+
     /// Fetch a persistent cross-session message history entry by offset.
     LookupMessageHistoryEntry {
         thread_id: ThreadId,

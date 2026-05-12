@@ -3,7 +3,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -46,10 +45,6 @@ impl ToolHandler for UnavailableToolHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         self.spec.clone()
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

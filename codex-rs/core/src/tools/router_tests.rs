@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -99,7 +98,6 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -132,21 +130,15 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
 
 #[tokio::test]
 async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
-    let (session, _) = make_session_and_context().await;
-    let session = Arc::new(session);
     let tool_name = "create_event".to_string();
 
-    let call = ToolRouter::build_tool_call(
-        &session,
-        ResponseItem::FunctionCall {
-            id: None,
-            name: tool_name.clone(),
-            namespace: Some("mcp__codex_apps__calendar".to_string()),
-            arguments: "{}".to_string(),
-            call_id: "call-namespace".to_string(),
-        },
-    )
-    .await?
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: tool_name.clone(),
+        namespace: Some("mcp__codex_apps__calendar".to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-namespace".to_string(),
+    })?
     .expect("function_call should produce a tool call");
 
     assert_eq!(
@@ -171,9 +163,21 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
         &turn.tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
-            mcp_tools: None,
+            mcp_tools: Some(vec![
+                mcp_tool_info(
+                    "echo",
+                    /*supports_parallel_tool_calls*/ true,
+                    "mcp__echo__",
+                    "query_with_delay",
+                ),
+                mcp_tool_info(
+                    "hello_echo",
+                    /*supports_parallel_tool_calls*/ false,
+                    "mcp__hello_echo__",
+                    "query_with_delay",
+                ),
+            ]),
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -183,10 +187,8 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
     let deferred_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__echo__", "query_with_delay"),
         call_id: "call-deferred".to_string(),
-        payload: ToolPayload::Mcp {
-            server: "echo".to_string(),
-            tool: "query_with_delay".to_string(),
-            raw_arguments: "{}".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
     };
     assert!(router.tool_supports_parallel(&deferred_call));
@@ -194,10 +196,8 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
         call_id: "call-other-server".to_string(),
-        payload: ToolPayload::Mcp {
-            server: "hello_echo".to_string(),
-            tool: "query_with_delay".to_string(),
-            raw_arguments: "{}".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
     };
     assert!(!router.tool_supports_parallel(&different_server_call));
@@ -241,7 +241,6 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
             deferred_mcp_tools: None,
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: &dynamic_tools,
@@ -265,6 +264,38 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
     Ok(())
 }
 
+fn mcp_tool_info(
+    server_name: &str,
+    supports_parallel_tool_calls: bool,
+    callable_namespace: &str,
+    tool_name: &str,
+) -> codex_mcp::ToolInfo {
+    codex_mcp::ToolInfo {
+        server_name: server_name.to_string(),
+        supports_parallel_tool_calls,
+        server_origin: None,
+        callable_name: tool_name.to_string(),
+        callable_namespace: callable_namespace.to_string(),
+        namespace_description: None,
+        tool: rmcp::model::Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: Some("Test MCP tool".to_string().into()),
+            input_schema: Arc::new(rmcp::model::object(json!({
+                "type": "object",
+            }))),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        },
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
@@ -276,7 +307,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
             deferred_mcp_tools: None,
             mcp_tools: None,
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             extension_tool_bundles: extension_tool_bundles(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -297,17 +327,13 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = ToolRouter::build_tool_call(
-        &session,
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "extension_echo".to_string(),
-            namespace: None,
-            arguments: json!({ "message": "hello" }).to_string(),
-            call_id: "call-extension".to_string(),
-        },
-    )
-    .await?
+    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        id: None,
+        name: "extension_echo".to_string(),
+        namespace: None,
+        arguments: json!({ "message": "hello" }).to_string(),
+        call_id: "call-extension".to_string(),
+    })?
     .expect("function_call should produce a tool call");
 
     let result = router

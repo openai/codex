@@ -5,7 +5,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -40,10 +39,6 @@ impl ToolHandler for WriteStdinHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_write_stdin_tool())
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

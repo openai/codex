@@ -93,11 +93,6 @@ pub enum ToolDispatchPayload {
         additional_permissions: Option<AdditionalPermissionProfile>,
         justification: Option<String>,
     },
-    Mcp {
-        server: String,
-        tool: String,
-        raw_arguments: String,
-    },
 }
 
 /// Result data returned from a dispatch-level tool call.
@@ -263,14 +258,7 @@ fn requester_fields(
     }
 }
 
-fn dispatched_tool_kind(tool_name: &str, payload: &ToolDispatchPayload) -> ToolCallKind {
-    if let ToolDispatchPayload::Mcp { server, tool, .. } = payload {
-        return ToolCallKind::Mcp {
-            server: server.clone(),
-            tool: tool.clone(),
-        };
-    }
-
+fn dispatched_tool_kind(tool_name: &str, _payload: &ToolDispatchPayload) -> ToolCallKind {
     match tool_name {
         "exec_command" | "local_shell" | "shell" | "shell_command" => ToolCallKind::ExecCommand,
         "write_stdin" => ToolCallKind::WriteStdin,
@@ -291,12 +279,8 @@ fn dispatched_tool_kind(tool_name: &str, payload: &ToolDispatchPayload) -> ToolC
 fn dispatched_tool_label(
     tool_name: &str,
     tool_namespace: Option<&str>,
-    payload: &ToolDispatchPayload,
+    _payload: &ToolDispatchPayload,
 ) -> String {
-    if let ToolDispatchPayload::Mcp { server, tool, .. } = payload {
-        return format!("mcp:{server}:{tool}");
-    }
-
     match tool_namespace {
         Some(namespace) => format!("{namespace}.{tool_name}"),
         None => tool_name.to_string(),
@@ -310,7 +294,6 @@ impl ToolDispatchPayload {
             ToolDispatchPayload::ToolSearch { arguments } => truncate_preview(&arguments.query),
             ToolDispatchPayload::Custom { input } => truncate_preview(input),
             ToolDispatchPayload::LocalShell { command, .. } => truncate_preview(&command.join(" ")),
-            ToolDispatchPayload::Mcp { raw_arguments, .. } => truncate_preview(raw_arguments),
         }
     }
 
@@ -345,16 +328,6 @@ impl ToolDispatchPayload {
                 "prefix_rule": prefix_rule,
                 "additional_permissions": additional_permissions,
                 "justification": justification,
-            }),
-            ToolDispatchPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            } => json!({
-                "type": "mcp",
-                "server": server,
-                "tool": tool,
-                "raw_arguments": raw_arguments,
             }),
         }
     }

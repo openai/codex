@@ -17,7 +17,6 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 
 pub(crate) struct BundledToolOutput {
     value: Value,
@@ -78,10 +77,6 @@ impl ToolHandler for BundledToolHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(self.spec.clone())
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

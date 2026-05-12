@@ -16,7 +16,6 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -86,10 +85,6 @@ impl ToolHandler for ExecCommandHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -273,6 +268,7 @@ impl ToolHandler for ExecCommandHandler {
             &command,
             &cwd,
             fs.as_ref(),
+            turn_environment.clone(),
             context.session.clone(),
             context.turn.clone(),
             Some(&tracker),
