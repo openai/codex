@@ -200,7 +200,8 @@ impl CommandExecRequestProcessor {
         } else {
             ExecCapturePolicy::ShellTool
         };
-        let sandbox_cwd = if permission_profile.is_some() {
+        let has_request_permission_profile = permission_profile.is_some();
+        let sandbox_cwd = if has_request_permission_profile {
             cwd.clone()
         } else {
             self.config.cwd.clone()
@@ -247,21 +248,13 @@ impl CommandExecRequestProcessor {
                 .can_set(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
-        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+        } else if let Some(policy) = sandbox_policy {
+            let legacy_policy = policy.to_core();
             self.config
                 .permissions
-                .can_set_legacy_sandbox_policy(&policy, &sandbox_cwd)
+                .can_set_legacy_sandbox_policy(&legacy_policy, &sandbox_cwd)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
-            let file_system_sandbox_policy =
-                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
-            let network_sandbox_policy =
-                codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
-            let permission_profile =
-                codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
-                    codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(&policy),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
+            let permission_profile = policy.to_permission_profile_for_cwd(&sandbox_cwd);
             self.config
                 .permissions
                 .permission_profile
@@ -283,10 +276,16 @@ impl CommandExecRequestProcessor {
             None => None,
         };
 
+        let workspace_roots = if has_request_permission_profile {
+            vec![sandbox_cwd.clone()]
+        } else {
+            self.config.workspace_roots.clone()
+        };
         let exec_request = codex_core::exec::build_exec_request(
             exec_params,
             &effective_permission_profile,
             &sandbox_cwd,
+            &workspace_roots,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
         )
