@@ -645,14 +645,37 @@ pub(super) async fn run_guardian_review_session(
         .models_manager
         .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
         .await;
-    let model_selection = turn.provider.approval_review_model_selection(
-        &available_models,
-        &turn.model_info,
-        turn.reasoning_effort,
-        super::GUARDIAN_PREFERRED_MODEL,
-    );
-    let guardian_model = model_selection.model;
-    let guardian_reasoning_effort = model_selection.reasoning_effort;
+    let preferred_reasoning_effort = |supports_low: bool, fallback| {
+        if supports_low {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            fallback
+        }
+    };
+    let preferred_model_id = turn.provider.approval_review_preferred_model();
+    let preferred_model = available_models
+        .iter()
+        .find(|preset| preset.model == preferred_model_id);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
+        let reasoning_effort = preferred_reasoning_effort(
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            Some(preset.default_reasoning_effort),
+        );
+        (preferred_model_id.to_string(), reasoning_effort)
+    } else {
+        let reasoning_effort = preferred_reasoning_effort(
+            turn.model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            turn.reasoning_effort
+                .or(turn.model_info.default_reasoning_level),
+        );
+        (turn.model_info.slug.clone(), reasoning_effort)
+    };
     let guardian_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config.clone(),

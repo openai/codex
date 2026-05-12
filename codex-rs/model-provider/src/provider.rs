@@ -11,10 +11,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
@@ -73,12 +70,9 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
-/// Model and reasoning effort selected for provider-backed approval review.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalReviewModelSelection {
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-}
+/// Default model used for automatic approval review when a provider does not
+/// require a backend-specific model ID.
+pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
 
 /// Runtime provider abstraction used by model execution.
 ///
@@ -95,36 +89,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderCapabilities::default()
     }
 
-    /// Selects the model used for automatic approval review.
+    /// Returns the preferred model used for automatic approval review.
     ///
-    /// Providers that require backend-specific model IDs should override this
-    /// method. The default behavior prefers a caller-provided reviewer model
-    /// when it is available, then falls back to the active turn model.
-    fn approval_review_model_selection(
-        &self,
-        available_models: &[ModelPreset],
-        active_model_info: &ModelInfo,
-        active_reasoning_effort: Option<ReasoningEffort>,
-        preferred_model: &str,
-    ) -> ApprovalReviewModelSelection {
-        let preferred_model = available_models
-            .iter()
-            .find(|preset| preset.model == preferred_model);
-        if let Some(preset) = preferred_model {
-            approval_review_selection_from_preset(preset)
-        } else {
-            let reasoning_effort = preferred_reasoning_effort(
-                active_model_info
-                    .supported_reasoning_levels
-                    .iter()
-                    .any(|preset| preset.effort == ReasoningEffort::Low),
-                active_reasoning_effort.or(active_model_info.default_reasoning_level),
-            );
-            ApprovalReviewModelSelection {
-                model: active_model_info.slug.clone(),
-                reasoning_effort,
-            }
-        }
+    /// Providers that require backend-specific model IDs should override this.
+    fn approval_review_preferred_model(&self) -> &'static str {
+        DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -170,33 +139,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
-}
-
-pub(crate) fn approval_review_selection_from_preset(
-    preset: &ModelPreset,
-) -> ApprovalReviewModelSelection {
-    let reasoning_effort = preferred_reasoning_effort(
-        preset
-            .supported_reasoning_efforts
-            .iter()
-            .any(|effort| effort.effort == ReasoningEffort::Low),
-        Some(preset.default_reasoning_effort),
-    );
-    ApprovalReviewModelSelection {
-        model: preset.model.clone(),
-        reasoning_effort,
-    }
-}
-
-pub(crate) fn preferred_reasoning_effort(
-    supports_low: bool,
-    fallback: Option<ReasoningEffort>,
-) -> Option<ReasoningEffort> {
-    if supports_low {
-        Some(ReasoningEffort::Low)
-    } else {
-        fallback
-    }
 }
 
 /// Shared runtime model provider handle.
@@ -327,10 +269,7 @@ mod tests {
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
-    use codex_protocol::openai_models::ModelPreset;
     use codex_protocol::openai_models::ModelsResponse;
-    use codex_protocol::openai_models::ReasoningEffort;
-    use codex_protocol::openai_models::ReasoningEffortPreset;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
@@ -412,31 +351,6 @@ mod tests {
         .expect("valid model")
     }
 
-    fn model_info_fixture(
-        model: &str,
-        default_reasoning_level: ReasoningEffort,
-        supported_reasoning_levels: Vec<ReasoningEffort>,
-    ) -> ModelInfo {
-        let mut model_info = codex_models_manager::model_info::model_info_from_slug(model);
-        model_info.default_reasoning_level = Some(default_reasoning_level);
-        model_info.supported_reasoning_levels = supported_reasoning_levels
-            .into_iter()
-            .map(|effort| ReasoningEffortPreset {
-                effort,
-                description: effort.to_string(),
-            })
-            .collect();
-        model_info
-    }
-
-    fn model_preset_fixture(
-        model: &str,
-        default_reasoning_effort: ReasoningEffort,
-        supported_reasoning_efforts: Vec<ReasoningEffort>,
-    ) -> ModelPreset {
-        model_info_fixture(model, default_reasoning_effort, supported_reasoning_efforts).into()
-    }
-
     #[test]
     fn configured_provider_uses_default_capabilities() {
         let provider = create_model_provider(
@@ -448,63 +362,15 @@ mod tests {
     }
 
     #[test]
-    fn default_approval_review_selection_prefers_available_requested_model() {
+    fn configured_provider_uses_default_approval_review_preferred_model() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
         );
-        let active_model_info = model_info_fixture(
-            "gpt-5.4",
-            ReasoningEffort::High,
-            vec![ReasoningEffort::High],
-        );
-        let available_models = vec![model_preset_fixture(
-            "codex-auto-review",
-            ReasoningEffort::Medium,
-            vec![ReasoningEffort::Medium],
-        )];
-
-        let selection = provider.approval_review_model_selection(
-            &available_models,
-            &active_model_info,
-            Some(ReasoningEffort::High),
-            "codex-auto-review",
-        );
 
         assert_eq!(
-            selection,
-            ApprovalReviewModelSelection {
-                model: "codex-auto-review".to_string(),
-                reasoning_effort: Some(ReasoningEffort::Medium),
-            }
-        );
-    }
-
-    #[test]
-    fn default_approval_review_selection_falls_back_to_active_model() {
-        let provider = create_model_provider(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            /*auth_manager*/ None,
-        );
-        let active_model_info = model_info_fixture(
-            "gpt-5.4",
-            ReasoningEffort::High,
-            vec![ReasoningEffort::Low, ReasoningEffort::High],
-        );
-
-        let selection = provider.approval_review_model_selection(
-            &[],
-            &active_model_info,
-            Some(ReasoningEffort::High),
-            "codex-auto-review",
-        );
-
-        assert_eq!(
-            selection,
-            ApprovalReviewModelSelection {
-                model: "gpt-5.4".to_string(),
-                reasoning_effort: Some(ReasoningEffort::Low),
-            }
+            provider.approval_review_preferred_model(),
+            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
         );
     }
 
