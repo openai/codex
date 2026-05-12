@@ -1,3 +1,11 @@
+use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::extract::State;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::routing::get;
 use std::io::Result as IoResult;
 use std::io::Write as _;
 use std::net::SocketAddr;
@@ -5,9 +13,7 @@ use tokio::io;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
-use tokio_tungstenite::accept_async;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::info;
 use tracing::warn;
 
@@ -132,57 +138,71 @@ async fn run_websocket_listener(
     std::io::stdout().flush()?;
 
     let shutdown_token = CancellationToken::new();
-    let connection_tasks = TaskTracker::new();
-    let shutdown_signal = shutdown_signal();
-    tokio::pin!(shutdown_signal);
-    loop {
-        let accepted = tokio::select! {
-            accepted = listener.accept() => accepted?,
-            shutdown_result = &mut shutdown_signal => {
-                if let Err(err) = shutdown_result {
-                    warn!("failed to listen for exec-server shutdown signal: {err}");
-                }
-                info!("received SIGTERM; shutting down codex-exec-server");
-                break;
-            }
-        };
-        let (stream, peer_addr) = accepted;
-        let processor = processor.clone();
-        let connection_shutdown_token = shutdown_token.clone();
-        connection_tasks.spawn(async move {
-            let websocket = tokio::select! {
-                websocket = accept_async(stream) => websocket,
-                _ = connection_shutdown_token.cancelled() => {
-                    return;
-                }
-            };
-            match websocket {
-                Ok(websocket) => {
-                    processor
-                        .run_connection(
-                            JsonRpcConnection::from_websocket(
-                                websocket,
-                                format!("exec-server websocket {peer_addr}"),
-                            ),
-                            connection_shutdown_token,
-                        )
-                        .await;
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to accept exec-server websocket connection from {peer_addr}: {err}"
-                    );
-                }
-            }
+    let router = Router::new()
+        .route("/", any(websocket_upgrade_handler))
+        .route("/readyz", get(readiness_handler))
+        .route("/healthz", get(health_check_handler))
+        .with_state(ExecServerWebSocketState {
+            processor: processor.clone(),
+            shutdown_token: shutdown_token.clone(),
         });
-    }
+    let graceful_shutdown_token = shutdown_token.clone();
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        if let Err(err) = shutdown_signal().await {
+            warn!("failed to listen for exec-server shutdown signal: {err}");
+        }
+        info!("received SIGTERM; shutting down codex-exec-server");
+        graceful_shutdown_token.cancel();
+    });
+    let server_result = server.await;
 
     shutdown_token.cancel();
-    connection_tasks.close();
-    connection_tasks.wait().await;
     processor.shutdown().await;
     info!("codex-exec-server shutdown complete");
+    server_result?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct ExecServerWebSocketState {
+    processor: ConnectionProcessor,
+    shutdown_token: CancellationToken,
+}
+
+async fn readiness_handler(State(state): State<ExecServerWebSocketState>) -> StatusCode {
+    if state.shutdown_token.is_cancelled() {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    }
+}
+
+async fn health_check_handler() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn websocket_upgrade_handler(
+    websocket: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    State(state): State<ExecServerWebSocketState>,
+) -> impl IntoResponse {
+    info!(%peer_addr, "exec-server websocket client connected");
+    websocket.on_upgrade(move |stream| async move {
+        state
+            .processor
+            .run_connection(
+                JsonRpcConnection::from_axum_websocket(
+                    stream,
+                    format!("exec-server websocket {peer_addr}"),
+                ),
+                state.shutdown_token,
+            )
+            .await;
+    })
 }
 
 async fn shutdown_signal() -> IoResult<()> {

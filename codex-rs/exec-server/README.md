@@ -24,6 +24,13 @@ The CLI entrypoint supports:
 - `ws://IP:PORT` (default)
 - `--remote URL --executor-id ID [--name NAME]`
 
+When running with `--listen ws://IP:PORT`, the same listener also serves basic
+HTTP probes:
+
+- `GET /readyz` returns `200 OK` while the listener is accepting new websocket
+  connections, then `503 Service Unavailable` once graceful shutdown begins.
+- `GET /healthz` returns `200 OK` while the listener is still able to serve HTTP.
+
 Remote mode registers the local exec-server with the executor registry,
 then reconnects to the service-provided rendezvous websocket as the executor.
 It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.

@@ -60,3 +60,39 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
     server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_accepts_binary_websocket_json() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let initialize_id = codex_app_server_protocol::RequestId::Integer(1);
+    let initialize = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
+        id: initialize_id.clone(),
+        method: "initialize".to_string(),
+        params: Some(serde_json::to_value(InitializeParams {
+            client_name: "exec-server-binary-test".to_string(),
+            resume_session_id: None,
+        })?),
+        trace: None,
+    });
+    server
+        .send_raw_binary(serde_json::to_vec(&initialize)?)
+        .await?;
+
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected initialize response for binary input");
+    };
+    assert_eq!(id, initialize_id);
+    let initialize_response: InitializeResponse = serde_json::from_value(result)?;
+    Uuid::parse_str(&initialize_response.session_id)?;
+
+    server.shutdown().await?;
+    Ok(())
+}
