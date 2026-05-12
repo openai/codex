@@ -327,7 +327,10 @@ mod tests {
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelInfo;
+    use codex_protocol::openai_models::ModelPreset;
     use codex_protocol::openai_models::ModelsResponse;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
@@ -409,6 +412,31 @@ mod tests {
         .expect("valid model")
     }
 
+    fn model_info_fixture(
+        model: &str,
+        default_reasoning_level: ReasoningEffort,
+        supported_reasoning_levels: Vec<ReasoningEffort>,
+    ) -> ModelInfo {
+        let mut model_info = codex_models_manager::model_info::model_info_from_slug(model);
+        model_info.default_reasoning_level = Some(default_reasoning_level);
+        model_info.supported_reasoning_levels = supported_reasoning_levels
+            .into_iter()
+            .map(|effort| ReasoningEffortPreset {
+                effort,
+                description: effort.to_string(),
+            })
+            .collect();
+        model_info
+    }
+
+    fn model_preset_fixture(
+        model: &str,
+        default_reasoning_effort: ReasoningEffort,
+        supported_reasoning_efforts: Vec<ReasoningEffort>,
+    ) -> ModelPreset {
+        model_info_fixture(model, default_reasoning_effort, supported_reasoning_efforts).into()
+    }
+
     #[test]
     fn configured_provider_uses_default_capabilities() {
         let provider = create_model_provider(
@@ -417,6 +445,67 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn default_approval_review_selection_prefers_available_requested_model() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+        let active_model_info = model_info_fixture(
+            "gpt-5.4",
+            ReasoningEffort::High,
+            vec![ReasoningEffort::High],
+        );
+        let available_models = vec![model_preset_fixture(
+            "codex-auto-review",
+            ReasoningEffort::Medium,
+            vec![ReasoningEffort::Medium],
+        )];
+
+        let selection = provider.approval_review_model_selection(
+            &available_models,
+            &active_model_info,
+            Some(ReasoningEffort::High),
+            "codex-auto-review",
+        );
+
+        assert_eq!(
+            selection,
+            ApprovalReviewModelSelection {
+                model: "codex-auto-review".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            }
+        );
+    }
+
+    #[test]
+    fn default_approval_review_selection_falls_back_to_active_model() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+        let active_model_info = model_info_fixture(
+            "gpt-5.4",
+            ReasoningEffort::High,
+            vec![ReasoningEffort::Low, ReasoningEffort::High],
+        );
+
+        let selection = provider.approval_review_model_selection(
+            &[],
+            &active_model_info,
+            Some(ReasoningEffort::High),
+            "codex-auto-review",
+        );
+
+        assert_eq!(
+            selection,
+            ApprovalReviewModelSelection {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+            }
+        );
     }
 
     #[tokio::test]
