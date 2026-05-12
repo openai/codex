@@ -35,7 +35,7 @@ impl ToolHandler for McpHandler {
         self.tool_info.canonical_tool_name()
     }
 
-    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self) -> bool {
         self.tool_info.supports_parallel_tool_calls
     }
 

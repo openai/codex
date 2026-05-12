@@ -122,7 +122,7 @@ impl ToolCallRuntime {
                             source: source.clone(),
                             payload: call.payload.clone(),
                         };
-                        let supports_parallel = router.tool_supports_parallel(&invocation);
+                        let supports_parallel = router.tool_supports_parallel(&call);
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {

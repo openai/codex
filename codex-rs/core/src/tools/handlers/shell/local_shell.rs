@@ -1,4 +1,3 @@
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
 use crate::function_tool::FunctionCallError;
@@ -46,15 +45,8 @@ impl ToolHandler for LocalShellHandler {
         matches!(payload, ToolPayload::LocalShell { .. })
     }
 
-    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
-        if !self.include_spec {
-            return false;
-        }
-        let ToolPayload::LocalShell { params } = &invocation.payload else {
-            return false;
-        };
-
-        is_known_safe_command(&params.command)
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.include_spec
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

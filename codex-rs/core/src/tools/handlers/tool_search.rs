@@ -63,7 +63,7 @@ impl ToolHandler for ToolSearchHandler {
         ))
     }
 
-    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 

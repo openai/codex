@@ -131,8 +131,10 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
-    pub fn tool_supports_parallel(&self, invocation: &ToolInvocation) -> bool {
-        self.registry.supports_parallel_tool_calls(invocation)
+    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
+        self.registry
+            .supports_parallel_tool_calls(&call.tool_name)
+            .unwrap_or(false)
     }
 
     #[instrument(level = "trace", skip_all, err)]

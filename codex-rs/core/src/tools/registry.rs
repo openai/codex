@@ -43,7 +43,7 @@ pub trait ToolHandler: Send + Sync {
         None
     }
 
-    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self) -> bool {
         false
     }
 
@@ -169,7 +169,7 @@ pub(crate) struct PostToolUsePayload {
 }
 
 trait AnyToolHandler: Send + Sync {
-    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool;
+    fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
@@ -197,8 +197,8 @@ impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
 {
-    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
-        ToolHandler::supports_parallel_tool_calls(self, invocation)
+    fn supports_parallel_tool_calls(&self) -> bool {
+        ToolHandler::supports_parallel_tool_calls(self)
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -286,11 +286,11 @@ impl ToolRegistry {
         self.handler(name)?.create_diff_consumer()
     }
 
-    pub(crate) fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
-        let Some(handler) = self.handler(&invocation.tool_name) else {
-            return false;
+    pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
+        let Some(handler) = self.handler(name) else {
+            return None;
         };
-        handler.supports_parallel_tool_calls(invocation)
+        Some(handler.supports_parallel_tool_calls())
     }
 
     #[expect(
