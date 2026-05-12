@@ -114,6 +114,44 @@ pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &s
     }
 }
 
+pub fn materialize_setup_dependencies(
+    codex_home: &Path,
+    log_dir: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    let mut materialized = Vec::new();
+
+    let source = std::env::current_exe().context("resolve current executable for setup copy")?;
+    let file_name = source.file_name().ok_or_else(|| {
+        anyhow!(
+            "current executable has no file name for setup copy: {}",
+            source.display()
+        )
+    })?;
+    let destination = helper_bin_dir(codex_home).join(file_name);
+    let outcome = copy_from_source_if_needed(&source, &destination)?;
+    let action = match outcome {
+        CopyOutcome::Reused => "reused",
+        CopyOutcome::ReCopied => "recopied",
+    };
+    log_note(
+        &format!(
+            "helper copy: {action} setup-helper source={} destination={}",
+            source.display(),
+            destination.display()
+        ),
+        log_dir,
+    );
+    materialized.push(destination);
+
+    materialized.push(copy_helper_if_needed(
+        HelperExecutable::CommandRunner,
+        codex_home,
+        log_dir,
+    )?);
+
+    Ok(materialized)
+}
+
 pub(crate) fn copy_helper_if_needed(
     kind: HelperExecutable,
     codex_home: &Path,

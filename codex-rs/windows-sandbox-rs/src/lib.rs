@@ -131,6 +131,8 @@ pub use elevated_impl::ElevatedSandboxCaptureRequest;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
+pub use helper_materialization::materialize_setup_dependencies;
+#[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
