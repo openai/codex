@@ -1427,6 +1427,205 @@ async fn apply_patch_manual_approval_adjusts_header() {
 }
 
 #[tokio::test]
+async fn apply_patch_streaming_updates_render_live_state_until_apply_begins() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let mut first_changes = HashMap::new();
+    first_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", first_changes);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "streaming patch previews should stay transient"
+    );
+    let first_live = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("live patch transcript lines");
+    assert_chatwidget_snapshot!(
+        "apply_patch_streaming_live_single_file",
+        lines_to_single_string(&first_live)
+    );
+
+    let mut second_changes = HashMap::new();
+    second_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    second_changes.insert(
+        PathBuf::from("bar.rs"),
+        FileChange::Update {
+            unified_diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            move_path: None,
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", second_changes.clone());
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "streaming patch updates should mutate the existing active cell"
+    );
+    let second_live = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("updated live patch transcript lines");
+    let second_blob = lines_to_single_string(&second_live);
+    assert_chatwidget_snapshot!("apply_patch_streaming_live_multi_file", second_blob);
+
+    handle_patch_apply_begin(&mut chat, "c1", "turn-c1", second_changes);
+    assert!(
+        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
+        "the provisional live preview should clear when the real patch item starts"
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected only the durable patch summary");
+    let durable_blob = lines_to_single_string(&cells[0]);
+    assert!(durable_blob.contains("Edited 2 files"), "{durable_blob:?}");
+}
+
+#[tokio::test]
+async fn apply_patch_streaming_updates_render_rename_targets() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("old.rs"),
+        FileChange::Update {
+            unified_diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            move_path: Some(PathBuf::from("new.rs")),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", changes.clone());
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "streaming rename previews should stay transient"
+    );
+    let single_live = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("live rename patch transcript lines");
+    let single_blob = lines_to_single_string(&single_live);
+    assert!(
+        single_blob.contains("Editing old.rs → new.rs"),
+        "{single_blob:?}"
+    );
+    assert_chatwidget_snapshot!("apply_patch_streaming_live_rename", single_blob);
+
+    changes.insert(
+        PathBuf::from("added.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", changes);
+    let multi_live = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("live multi-file rename patch transcript lines");
+    let multi_blob = lines_to_single_string(&multi_live);
+    assert!(multi_blob.contains("old.rs → new.rs"), "{multi_blob:?}");
+    assert_chatwidget_snapshot!("apply_patch_streaming_live_rename_multi_file", multi_blob);
+}
+
+#[tokio::test]
+async fn apply_patch_interleaved_streaming_previews_stay_transient() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let mut first_changes = HashMap::new();
+    first_changes.insert(
+        PathBuf::from("first.txt"),
+        FileChange::Add {
+            content: "first\n".to_string(),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", first_changes.clone());
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "first streaming patch preview should stay transient"
+    );
+
+    let mut second_changes = HashMap::new();
+    second_changes.insert(
+        PathBuf::from("second.txt"),
+        FileChange::Add {
+            content: "second\n".to_string(),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c2", "turn-c2", second_changes.clone());
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "replacing a streaming patch preview should not commit the stale preview"
+    );
+
+    let active_blob = lines_to_single_string(
+        &chat
+            .active_cell_transcript_lines(/*width*/ 80)
+            .expect("second live patch transcript lines"),
+    );
+    assert!(active_blob.contains("second.txt"), "{active_blob:?}");
+    assert!(!active_blob.contains("first.txt"), "{active_blob:?}");
+
+    handle_patch_apply_begin(&mut chat, "c1", "turn-c1", first_changes);
+    let first_durable = drain_insert_history(&mut rx);
+    assert_eq!(first_durable.len(), 1);
+    let first_durable_blob = lines_to_single_string(&first_durable[0]);
+    assert!(
+        first_durable_blob.contains("Added first.txt"),
+        "{first_durable_blob:?}"
+    );
+    assert!(
+        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
+        "the second preview should be dropped before the first durable row is inserted"
+    );
+
+    handle_patch_apply_begin(&mut chat, "c2", "turn-c2", second_changes);
+    assert!(
+        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
+        "the matching second preview should clear when its durable patch item starts"
+    );
+    let second_durable = drain_insert_history(&mut rx);
+    assert_eq!(second_durable.len(), 1);
+    let second_durable_blob = lines_to_single_string(&second_durable[0]);
+    assert!(
+        second_durable_blob.contains("Added second.txt"),
+        "{second_durable_blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_streaming_preview_is_dropped_before_unrelated_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("preview.txt"),
+        FileChange::Add {
+            content: "preview\n".to_string(),
+        },
+    );
+    handle_patch_apply_updated(&mut chat, "c1", "turn-c1", changes);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "streaming patch preview should stay transient"
+    );
+
+    chat.add_to_history(crate::history_cell::PlainHistoryCell::new(vec![
+        "unrelated history".into(),
+    ]));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(blob.contains("unrelated history"), "{blob:?}");
+    assert!(!blob.contains("preview.txt"), "{blob:?}");
+    assert!(
+        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
+        "generic active-cell flush should drop the preview"
+    );
+}
+
+#[tokio::test]
 async fn apply_patch_manual_flow_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

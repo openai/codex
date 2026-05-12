@@ -762,6 +762,25 @@ fn file_update_changes_from_tui(changes: HashMap<PathBuf, FileChange>) -> Vec<Fi
         .collect()
 }
 
+pub(super) fn handle_patch_apply_updated(
+    chat: &mut ChatWidget,
+    call_id: impl Into<String>,
+    turn_id: impl Into<String>,
+    changes: HashMap<PathBuf, FileChange>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::FileChangePatchUpdated(
+            codex_app_server_protocol::FileChangePatchUpdatedNotification {
+                thread_id: thread_id(chat),
+                turn_id: turn_id.into(),
+                item_id: call_id.into(),
+                changes: file_update_changes_from_tui(changes),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+}
+
 pub(super) fn handle_patch_apply_begin(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,

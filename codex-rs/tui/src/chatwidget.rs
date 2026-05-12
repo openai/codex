@@ -69,6 +69,7 @@ use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::multi_agents::AgentMetadata;
+use crate::patch_progress_animation::PATCH_PROGRESS_FRAME_MS;
 use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::RateLimitWindowDisplay;
@@ -3804,6 +3805,55 @@ impl ChatWidget {
         }
     }
 
+    /// Renders or updates the transient live preview for a streaming patch snapshot.
+    ///
+    /// Patch updates are complete snapshots from the app-server, so a matching
+    /// active preview is mutated in place and a mismatched preview is dropped
+    /// before the new one starts. Replay events are filtered before this method
+    /// is called; feeding replay snapshots here would create transient rows
+    /// while restoring historical turns.
+    fn on_patch_apply_updated(&mut self, call_id: String, changes: HashMap<PathBuf, FileChange>) {
+        if changes.is_empty() {
+            return;
+        }
+
+        self.flush_answer_stream_with_separator();
+        if self
+            .active_cell
+            .as_ref()
+            .and_then(|cell| {
+                cell.as_any()
+                    .downcast_ref::<history_cell::StreamingPatchHistoryCell>()
+            })
+            .is_some_and(|cell| cell.call_id() == call_id)
+            && let Some(cell) = self.active_cell.as_mut().and_then(|cell| {
+                cell.as_any_mut()
+                    .downcast_mut::<history_cell::StreamingPatchHistoryCell>()
+            })
+        {
+            cell.update(changes);
+            self.bump_active_cell_revision();
+            self.request_redraw();
+            return;
+        }
+
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_patch_event(
+            call_id,
+            changes,
+            &self.config.cwd,
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    /// Appends the durable patch history cell after patch execution starts.
+    ///
+    /// The item-started notification is the point where the patch has moved
+    /// from preview streaming to execution. If a live patch preview is still
+    /// active, the generic active-cell flush path drops it before inserting the
+    /// durable summary.
     fn on_patch_apply_begin(&mut self, changes: HashMap<PathBuf, FileChange>) {
         self.add_to_history(history_cell::new_patch_event(changes, &self.config.cwd));
     }
@@ -4193,6 +4243,30 @@ impl ChatWidget {
         self.frame_requester.schedule_frame_in(delay);
     }
 
+    /// Schedules another frame while the active patch preview is animating.
+    ///
+    /// Server notifications update the data model, but drain and fade phases
+    /// also need timer-driven redraws. This intentionally looks only at the
+    /// active cell because streaming patch previews are transient and should
+    /// not keep animating after they are flushed to history.
+    fn schedule_patch_progress_timer_if_needed(&self) {
+        if self.config.animations
+            && self
+                .active_cell
+                .as_ref()
+                .and_then(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<history_cell::StreamingPatchHistoryCell>()
+                })
+                .is_some_and(history_cell::StreamingPatchHistoryCell::has_active_counter_animation)
+        {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(
+                    /*millis*/ PATCH_PROGRESS_FRAME_MS,
+                ));
+        }
+    }
+
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status.header.clone());
@@ -4210,6 +4284,7 @@ impl ChatWidget {
     pub(crate) fn pre_draw_tick(&mut self) {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
+        self.schedule_patch_progress_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         self.refresh_plan_mode_nudge();
         self.refresh_goal_status_indicator_for_time_tick();
@@ -5532,6 +5607,14 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::StreamingPatchHistoryCell>()
+            {
+                self.bump_active_cell_revision();
+                return;
+            }
+
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -6440,7 +6523,6 @@ impl ChatWidget {
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::ProcessOutputDelta(_)
             | ServerNotification::ProcessExited(_)
-            | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
@@ -6454,6 +6536,14 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::FileChangePatchUpdated(notification) => {
+                if !from_replay {
+                    self.on_patch_apply_updated(
+                        notification.item_id,
+                        file_update_changes_to_display(notification.changes),
+                    );
+                }
+            }
             ServerNotification::ContextCompacted(_) => {}
         }
     }
@@ -6780,6 +6870,12 @@ impl ChatWidget {
                 exec.mark_failed();
             } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
                 tool.mark_failed();
+            } else if cell
+                .as_any()
+                .is::<history_cell::StreamingPatchHistoryCell>()
+            {
+                self.bump_active_cell_revision();
+                return;
             }
             self.add_boxed_history(cell);
         }

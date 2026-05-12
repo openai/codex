@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+expression: multi_blob
+---
+                  +1
+• Editing 2 files +1 -1
+  └ added.txt
+  └ old.rs → new.rs

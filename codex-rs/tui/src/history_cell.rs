@@ -11,6 +11,7 @@
 //! rendered transcript output can change.
 
 use crate::diff_model::FileChange;
+use crate::diff_render::calculate_add_remove_from_diff;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -25,6 +26,10 @@ use crate::markdown::append_markdown;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
+use crate::patch_progress_animation::PATCH_PROGRESS_FRAME_MS;
+use crate::patch_progress_animation::PatchCounterAnim;
+use crate::patch_progress_animation::PatchCounterKind;
+use crate::patch_progress_animation::update_counter_anim;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -1260,6 +1265,437 @@ impl HistoryCell for PatchHistoryCell {
             &self.cwd,
             RAW_DIFF_SUMMARY_WIDTH,
         ))
+    }
+}
+
+/// Transient history cell for a patch preview that is still streaming.
+///
+/// The cell is owned by ChatWidget::active_cell and never enters durable
+/// transcript history. It is keyed by the app-server file-change item id so
+/// repeated FileChangePatchUpdated notifications mutate the same live row, and
+/// ItemStarted(FileChange) can clear the preview before adding the real patch
+/// summary cell.
+///
+/// The stored changes map is always the latest complete snapshot from the
+/// app-server. Animation state is derived from differences between consecutive
+/// snapshots and may be absent when animations are disabled, when rendering raw
+/// lines, or when a snapshot decreases a counter.
+#[derive(Debug)]
+pub(crate) struct StreamingPatchHistoryCell {
+    call_id: String,
+    changes: HashMap<PathBuf, FileChange>,
+    cwd: PathBuf,
+    start_time: Instant,
+    animations_enabled: bool,
+    added_anim: Option<PatchCounterAnim>,
+    removed_anim: Option<PatchCounterAnim>,
+}
+
+impl StreamingPatchHistoryCell {
+    /// Returns the app-server file-change item id that owns this preview.
+    ///
+    /// ChatWidget uses this to decide whether an update should mutate the
+    /// current active cell or flush that cell and start a separate preview.
+    /// Treating updates for different ids as the same cell would merge two
+    /// independent patch previews into one transcript row.
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Replaces the preview with a newer complete patch snapshot.
+    ///
+    /// The method compares line totals before replacing self.changes so the
+    /// added and removed counters can animate only the newly observed increase.
+    /// Callers should pass the full snapshot from the notification rather than
+    /// only changed files; passing a partial snapshot would make unchanged
+    /// files disappear from the live preview and could clear animations as a
+    /// false decrease.
+    pub(crate) fn update(&mut self, changes: HashMap<PathBuf, FileChange>) {
+        let had_existing_changes = !self.changes.is_empty();
+        let current_stats = streaming_patch_stats(self.changes.values());
+        let next_stats = streaming_patch_stats(changes.values());
+        let now = Instant::now();
+        update_counter_anim(
+            &mut self.added_anim,
+            PatchCounterKind::Added,
+            current_stats.added,
+            next_stats.added,
+            had_existing_changes,
+            self.animations_enabled,
+            now,
+        );
+        update_counter_anim(
+            &mut self.removed_anim,
+            PatchCounterKind::Removed,
+            current_stats.removed,
+            next_stats.removed,
+            had_existing_changes,
+            self.animations_enabled,
+            now,
+        );
+        self.changes = changes;
+    }
+
+    fn render_lines(
+        &self,
+        bullet: Span<'static>,
+        include_counter_animation: bool,
+    ) -> Vec<Line<'static>> {
+        let mut paths: Vec<_> = self.changes.iter().collect();
+        paths.sort_by_key(|(path, _)| *path);
+
+        let file_count = paths.len();
+        let actual_stats = streaming_patch_stats(paths.iter().map(|(_, change)| *change));
+        let animated = include_counter_animation && self.animations_enabled;
+        let stats_render = patch_stats_render(
+            actual_stats,
+            if animated {
+                self.added_anim.as_ref()
+            } else {
+                None
+            },
+            if animated {
+                self.removed_anim.as_ref()
+            } else {
+                None
+            },
+            Instant::now(),
+        );
+        let mut lines = Vec::new();
+        let (mut header_spans, header_prefix_width) = if let [(path, change)] = paths.as_slice() {
+            let verb = match change {
+                FileChange::Add { .. } => "Creating",
+                FileChange::Delete { .. } => "Deleting",
+                FileChange::Update { .. } => "Editing",
+            };
+            let path_display = streaming_patch_path_display(path, change, &self.cwd);
+            let prefix_width = span_width(&bullet)
+                + 1
+                + UnicodeWidthStr::width(verb)
+                + 1
+                + UnicodeWidthStr::width(path_display.as_str());
+            (
+                vec![
+                    bullet,
+                    " ".into(),
+                    verb.bold(),
+                    " ".into(),
+                    path_display.into(),
+                ],
+                prefix_width,
+            )
+        } else {
+            let noun = if file_count == 1 { "file" } else { "files" };
+            let file_label = format!(" {file_count} {noun}");
+            let prefix_width =
+                span_width(&bullet) + 1 + UnicodeWidthStr::width("Editing") + file_label.len();
+            (
+                vec![bullet, " ".into(), "Editing".bold(), file_label.into()],
+                prefix_width,
+            )
+        };
+
+        let counter_positions =
+            stats_render.push_counter_spans(&mut header_spans, header_prefix_width);
+
+        if let Some(line) =
+            stats_render.floating_line(PatchCounterKind::Added, counter_positions.added_end_col)
+        {
+            lines.push(line);
+        }
+        lines.push(Line::from(header_spans));
+        if let Some(line) =
+            stats_render.floating_line(PatchCounterKind::Removed, counter_positions.removed_end_col)
+        {
+            lines.push(line);
+        }
+
+        if file_count > 1 {
+            for (path, change) in paths {
+                lines.push(Line::from(vec![
+                    "  └ ".dim(),
+                    streaming_patch_path_display(path, change, &self.cwd).into(),
+                ]));
+            }
+        }
+
+        lines
+    }
+
+    /// Returns whether any patch counter still has visible animation work.
+    ///
+    /// ChatWidget calls this during pre_draw_tick to decide whether it must
+    /// schedule another frame even without new server input. When animations are
+    /// disabled, the cell is still renderable but never requests timer-driven
+    /// redraws.
+    pub(crate) fn has_active_counter_animation(&self) -> bool {
+        if !self.animations_enabled {
+            return false;
+        }
+        let now = Instant::now();
+        let is_active = |animation: &Option<PatchCounterAnim>| {
+            animation.as_ref().is_some_and(|anim| anim.is_active(now))
+        };
+        is_active(&self.added_anim) || is_active(&self.removed_anim)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PatchLineStats {
+    added: usize,
+    removed: usize,
+}
+
+#[derive(Clone, Copy)]
+struct CounterPositions {
+    added_end_col: Option<usize>,
+    removed_end_col: Option<usize>,
+}
+
+struct PatchStatsRender {
+    added: Option<CounterRender>,
+    removed: Option<CounterRender>,
+}
+
+struct CounterRender {
+    text: String,
+    slot_width: usize,
+    floating: Option<FloatingCounterRender>,
+}
+
+struct FloatingCounterRender {
+    text: String,
+    style: Style,
+}
+
+fn streaming_patch_stats<'a>(changes: impl IntoIterator<Item = &'a FileChange>) -> PatchLineStats {
+    let (added, removed) = changes
+        .into_iter()
+        .fold((0, 0), |(added, removed), change| {
+            let (change_added, change_removed) = file_change_line_counts(change);
+            (added + change_added, removed + change_removed)
+        });
+    PatchLineStats { added, removed }
+}
+
+fn file_change_line_counts(change: &FileChange) -> (usize, usize) {
+    match change {
+        FileChange::Add { content } => (content.lines().count(), 0),
+        FileChange::Delete { content } => (0, content.lines().count()),
+        FileChange::Update { unified_diff, .. } => update_patch_line_counts(unified_diff),
+    }
+}
+
+#[derive(Default)]
+struct UpdatePatchChunkLines {
+    old: Vec<String>,
+    new: Vec<String>,
+}
+
+fn update_patch_line_counts(diff: &str) -> (usize, usize) {
+    let mut chunks = Vec::new();
+    let mut current: Option<UpdatePatchChunkLines> = None;
+
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            if let Some(chunk) = current.take() {
+                chunks.push(chunk);
+            }
+            current = Some(UpdatePatchChunkLines::default());
+            continue;
+        }
+
+        if line == "*** End of File" || line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+
+        let Some((prefix, text)) = line.split_at_checked(1) else {
+            continue;
+        };
+        let chunk = current.get_or_insert_with(UpdatePatchChunkLines::default);
+        match prefix {
+            "-" => chunk.old.push(text.to_string()),
+            "+" => chunk.new.push(text.to_string()),
+            " " => {
+                chunk.old.push(text.to_string());
+                chunk.new.push(text.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(chunk) = current {
+        chunks.push(chunk);
+    }
+
+    if chunks.is_empty() {
+        return calculate_add_remove_from_diff(diff);
+    }
+
+    let lines_to_text = |lines: &[String]| {
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", lines.join("\n"))
+        }
+    };
+
+    chunks
+        .iter()
+        .map(|chunk| {
+            let old_text = lines_to_text(&chunk.old);
+            let new_text = lines_to_text(&chunk.new);
+            let diff = diffy::create_patch(&old_text, &new_text).to_string();
+            calculate_add_remove_from_diff(&diff)
+        })
+        .fold((0, 0), |(added, removed), (chunk_added, chunk_removed)| {
+            (added + chunk_added, removed + chunk_removed)
+        })
+}
+
+fn streaming_patch_path_display(path: &Path, change: &FileChange, cwd: &Path) -> String {
+    let path_display = display_path_for(path, cwd);
+    if let FileChange::Update {
+        move_path: Some(move_path),
+        ..
+    } = change
+    {
+        format!("{path_display} → {}", display_path_for(move_path, cwd))
+    } else {
+        path_display
+    }
+}
+
+fn patch_stats_render(
+    PatchLineStats { added, removed }: PatchLineStats,
+    added_anim: Option<&PatchCounterAnim>,
+    removed_anim: Option<&PatchCounterAnim>,
+    now: Instant,
+) -> PatchStatsRender {
+    PatchStatsRender {
+        added: counter_render(PatchCounterKind::Added, added, added_anim, now),
+        removed: counter_render(PatchCounterKind::Removed, removed, removed_anim, now),
+    }
+}
+
+fn counter_render(
+    kind: PatchCounterKind,
+    actual_value: usize,
+    animation: Option<&PatchCounterAnim>,
+    now: Instant,
+) -> Option<CounterRender> {
+    let active_animation = animation.filter(|anim| anim.is_active(now));
+    let value = active_animation.map_or(actual_value, |anim| anim.committed(now));
+    let floating = active_animation.and_then(|anim| {
+        let floating_value = anim.floating(now);
+        (floating_value > 0).then(|| FloatingCounterRender {
+            text: counter_text(kind, floating_value),
+            style: anim.floating_style(now),
+        })
+    });
+
+    if value == 0 && floating.is_none() {
+        return None;
+    }
+
+    Some(CounterRender {
+        text: counter_text(kind, value),
+        slot_width: counter_text_width(kind, value.max(actual_value)),
+        floating,
+    })
+}
+
+impl PatchStatsRender {
+    fn counter(&self, kind: PatchCounterKind) -> Option<&CounterRender> {
+        match kind {
+            PatchCounterKind::Added => self.added.as_ref(),
+            PatchCounterKind::Removed => self.removed.as_ref(),
+        }
+    }
+
+    fn push_counter_spans(
+        &self,
+        spans: &mut Vec<Span<'static>>,
+        prefix_width: usize,
+    ) -> CounterPositions {
+        let mut current_col = prefix_width;
+        let mut positions = CounterPositions {
+            added_end_col: None,
+            removed_end_col: None,
+        };
+        for kind in [PatchCounterKind::Added, PatchCounterKind::Removed] {
+            let Some(counter) = self.counter(kind) else {
+                continue;
+            };
+            spans.push(" ".into());
+            current_col += 1;
+
+            let text_width = UnicodeWidthStr::width(counter.text.as_str());
+            let padding = counter.slot_width.saturating_sub(text_width);
+            spans.push(Span::styled(
+                format!("{}{}", " ".repeat(padding), counter.text),
+                kind.normal_style(),
+            ));
+            current_col += counter.slot_width;
+
+            match kind {
+                PatchCounterKind::Added => positions.added_end_col = Some(current_col),
+                PatchCounterKind::Removed => positions.removed_end_col = Some(current_col),
+            }
+        }
+        positions
+    }
+
+    fn floating_line(
+        &self,
+        kind: PatchCounterKind,
+        end_col: Option<usize>,
+    ) -> Option<Line<'static>> {
+        let counter = self.counter(kind)?;
+        let floating = counter.floating.as_ref()?;
+        let end_col = end_col?;
+        let width = UnicodeWidthStr::width(floating.text.as_str());
+        let pad = end_col.saturating_sub(width);
+        Some(Line::from(vec![
+            Span::from(" ".repeat(pad)),
+            Span::styled(floating.text.clone(), floating.style),
+        ]))
+    }
+}
+
+fn counter_text(kind: PatchCounterKind, value: usize) -> String {
+    format!("{}{value}", kind.sigil())
+}
+
+fn counter_text_width(kind: PatchCounterKind, value: usize) -> usize {
+    UnicodeWidthStr::width(counter_text(kind, value).as_str())
+}
+
+fn span_width(span: &Span<'_>) -> usize {
+    UnicodeWidthStr::width(span.content.as_ref())
+}
+
+impl HistoryCell for StreamingPatchHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let bullet = activity_indicator(
+            Some(self.start_time),
+            MotionMode::from_animations_enabled(self.animations_enabled),
+            ReducedMotionIndicator::StaticBullet,
+        )
+        .unwrap_or_else(|| "•".dim());
+
+        self.render_lines(bullet, /*include_counter_animation*/ true)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.render_lines("•".into(), /*include_counter_animation*/ false))
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.has_active_counter_animation() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / u128::from(PATCH_PROGRESS_FRAME_MS)) as u64)
     }
 }
 
@@ -3143,6 +3579,29 @@ pub(crate) fn new_patch_event(
     }
 }
 
+/// Creates the transient live patch preview for a streaming patch update.
+///
+/// The returned cell starts with no counter animation because the initial
+/// snapshot is the visual baseline. Subsequent calls to
+/// StreamingPatchHistoryCell::update may animate increases relative to this
+/// baseline until the durable patch item starts.
+pub(crate) fn new_active_patch_event(
+    call_id: String,
+    changes: HashMap<PathBuf, FileChange>,
+    cwd: &Path,
+    animations_enabled: bool,
+) -> StreamingPatchHistoryCell {
+    StreamingPatchHistoryCell {
+        call_id,
+        changes,
+        cwd: cwd.to_path_buf(),
+        start_time: Instant::now(),
+        animations_enabled,
+        added_anim: None,
+        removed_anim: None,
+    }
+}
+
 pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -3474,6 +3933,39 @@ mod tests {
         // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
         // Windows-specific root semantics into the fixtures.
         std::env::temp_dir()
+    }
+
+    #[test]
+    fn update_patch_line_counts_ignore_duplicated_progress_context() {
+        let change = FileChange::Update {
+            unified_diff:
+                "@@\n-context before\n-old\n-context after\n+context before\n+new\n+context after\n"
+                    .to_string(),
+            move_path: None,
+        };
+
+        assert_eq!(file_change_line_counts(&change), (1, 1));
+    }
+
+    #[test]
+    fn update_patch_line_counts_ignore_context_for_insertions() {
+        let change = FileChange::Update {
+            unified_diff: "@@\n-context\n+context\n+added\n".to_string(),
+            move_path: None,
+        };
+
+        assert_eq!(file_change_line_counts(&change), (1, 0));
+    }
+
+    #[test]
+    fn update_patch_line_counts_handle_standard_unified_context() {
+        let change = FileChange::Update {
+            unified_diff: "@@ -1,3 +1,3 @@\n context before\n-old\n+new\n context after\n"
+                .to_string(),
+            move_path: None,
+        };
+
+        assert_eq!(file_change_line_counts(&change), (1, 1));
     }
 
     fn stdio_server_config(

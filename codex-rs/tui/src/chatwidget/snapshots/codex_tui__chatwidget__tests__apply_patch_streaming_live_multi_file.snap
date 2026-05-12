@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+expression: second_blob
+---
+                  +1
+• Editing 2 files +1 -0
+                     -1
+  └ bar.rs
+  └ foo.txt
