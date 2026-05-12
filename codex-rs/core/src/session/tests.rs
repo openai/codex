@@ -2837,10 +2837,6 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
-    assert!(!Arc::ptr_eq(
-        &updated.tool_call_gate,
-        &turn_context.tool_call_gate
-    ));
 }
 
 #[test]

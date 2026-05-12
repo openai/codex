@@ -26,7 +26,6 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -85,36 +84,12 @@ impl ToolHandler for ExecCommandHandler {
         ))
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        true
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            tracing::error!(
-                "This should never happen, invocation payload is wrong: {:?}",
-                invocation.payload
-            );
-            return true;
-        };
-
-        let Ok(params) = parse_arguments::<ExecCommandArgs>(arguments) else {
-            return true;
-        };
-        let command = match get_command(
-            &params,
-            invocation.session.user_shell(),
-            &invocation.turn.tools_config.unified_exec_shell_mode,
-            invocation.turn.tools_config.allow_login_shell,
-        ) {
-            Ok(command) => command,
-            Err(_) => return true,
-        };
-        !is_known_safe_command(&command)
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
