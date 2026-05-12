@@ -52,10 +52,12 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchSource;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
+use codex_tools::collect_tool_search_source_infos;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -140,15 +142,11 @@ pub fn build_tool_registry_builder(
         let mut search_source_infos = params
             .deferred_mcp_tools
             .map(|mcp_tools| {
-                collect_tool_search_source_infos(
-                    mcp_tools
-                        .iter()
-                        .map(|tool| ToolSearchSource {
-                            server_name: tool.server_name.as_str(),
-                            connector_name: tool.connector_name.as_deref(),
-                            description: tool.namespace_description.as_deref(),
-                        }),
-                )
+                collect_tool_search_source_infos(mcp_tools.iter().map(|tool| ToolSearchSource {
+                    server_name: tool.server_name.as_str(),
+                    connector_name: tool.connector_name.as_deref(),
+                    description: tool.namespace_description.as_deref(),
+                }))
             })
             .unwrap_or_default();
 

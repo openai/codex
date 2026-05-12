@@ -63,10 +63,7 @@ pub(crate) fn build_tool_search_entries_for_config(
     } else {
         None
     };
-    let dynamic_tools = dynamic_tools
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
+    let dynamic_tools = dynamic_tools.to_vec();
     build_tool_search_entries(mcp_tools, &dynamic_tools)
 }
 
