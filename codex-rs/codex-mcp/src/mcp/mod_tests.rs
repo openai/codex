@@ -1,5 +1,7 @@
 use super::*;
 use codex_config::Constrained;
+use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -7,6 +9,7 @@ use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,6 +27,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        client_elicitation_capability: ElicitationCapability::default(),
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
@@ -45,6 +49,7 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
         },
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(mcp_permission_prompt_is_auto_approved(
         AskForApproval::Never,
@@ -52,16 +57,66 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Restricted,
         },
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(!mcp_permission_prompt_is_auto_approved(
         AskForApproval::Never,
         &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(!mcp_permission_prompt_is_auto_approved(
         AskForApproval::OnRequest,
         &PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
+        },
+        McpPermissionPromptAutoApproveContext::default(),
+    ));
+}
+
+#[test]
+fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
+    for approval_policy in [
+        AskForApproval::UnlessTrusted,
+        AskForApproval::OnFailure,
+        AskForApproval::OnRequest,
+        AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        AskForApproval::Never,
+    ] {
+        assert!(mcp_permission_prompt_is_auto_approved(
+            approval_policy,
+            &PermissionProfile::read_only(),
+            McpPermissionPromptAutoApproveContext {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                tool_approval_mode: Some(AppToolApproval::Approve),
+            },
+        ));
+    }
+
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            tool_approval_mode: Some(AppToolApproval::Auto),
+        },
+    ));
+}
+
+#[test]
+fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            tool_approval_mode: Some(AppToolApproval::Auto),
         },
     ));
 }
@@ -163,7 +218,10 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
-    let url = match &server.transport {
+    let config = server
+        .configured_config()
+        .expect("codex apps should use configured transport");
+    let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
         _ => panic!("expected streamable http transport for codex apps"),
     };
@@ -182,7 +240,10 @@ fn codex_apps_server_config_uses_configured_apps_mcp_path_override() {
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
-    let url = match &server.transport {
+    let config = server
+        .configured_config()
+        .expect("codex apps should use configured transport");
+    let url = match &config.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url,
         _ => panic!("expected streamable http transport for codex apps"),
     };
@@ -255,6 +316,16 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
     let codex_apps = effective
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps server should exist");
+
+    let sample = sample
+        .configured_config()
+        .expect("configured server should retain transport");
+    let docs = docs
+        .configured_config()
+        .expect("configured server should retain transport");
+    let codex_apps = codex_apps
+        .configured_config()
+        .expect("codex apps should use configured transport");
 
     match &sample.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => {

@@ -17,6 +17,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::app_server_rate_limit_snapshots;
+use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -39,15 +40,14 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::hooks_rpc::HookTrustUpdate;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
-use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::legacy_core::lookup_message_history_entry;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
@@ -76,6 +76,8 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use crate::workspace_command::AppServerWorkspaceCommandRunner;
+use crate::workspace_command::WorkspaceCommandRunner;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
@@ -90,8 +92,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::HooksListParams;
-use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 #[cfg(test)]
@@ -144,6 +145,7 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -153,6 +155,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -178,6 +181,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
+mod agent_message_consolidation;
 mod agent_navigation;
 mod app_server_event_targets;
 mod app_server_events;
@@ -189,6 +193,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod pets;
 mod platform_actions;
 mod replay_filter;
 mod resize_reflow;
@@ -216,6 +221,7 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
+    AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
 }
@@ -241,6 +247,26 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
             _ => None,
         },
         _ => None,
+    }
+}
+
+fn collab_receiver_is_not_found(
+    notification: &ServerNotification,
+    receiver_thread_id: &str,
+) -> bool {
+    match notification {
+        ServerNotification::ItemCompleted(notification) => match &notification.item {
+            ThreadItem::CollabAgentToolCall { agents_states, .. } => {
+                agents_states.get(receiver_thread_id).is_some_and(|state| {
+                    matches!(
+                        &state.status,
+                        codex_app_server_protocol::CollabAgentStatus::NotFound
+                    )
+                })
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -302,8 +328,8 @@ struct AutoReviewMode {
 }
 
 /// Enabling the Auto-review experiment in the TUI should also switch the
-/// current `/approvals` settings to the matching Auto-review mode. Users
-/// can still change `/approvals` afterward; this just assumes that opting into
+/// current `/permissions` settings to the matching Auto-review mode. Users
+/// can still change `/permissions` afterward; this just assumes that opting into
 /// the experiment means they want Auto-review enabled immediately.
 fn auto_review_mode() -> AutoReviewMode {
     AutoReviewMode {
@@ -423,6 +449,7 @@ struct SessionSummary {
 #[derive(Debug, Default)]
 struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<Line<'static>>,
+    render_from_transcript_tail: bool,
 }
 
 pub(crate) struct App {
@@ -430,8 +457,10 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
@@ -569,8 +598,10 @@ impl App {
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            environment_manager: self.environment_manager.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
+            workspace_command_runner: self.workspace_command_runner.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
@@ -608,7 +639,9 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
+        state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        startup_hooks_browser: Option<HooksListEntry>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -708,12 +741,21 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
+            AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
+        );
         let runtime_model_provider_base_url =
             resolve_runtime_model_provider_base_url(&config.model_provider).await;
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let should_prompt_for_paused_goal_after_startup_resume =
+            Self::should_prompt_for_paused_goal_after_startup_resume(
+                &session_selection,
+                &initial_prompt,
+                &initial_images,
+            );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&config).await?;
@@ -722,8 +764,10 @@ impl App {
                         .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -757,8 +801,10 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -797,8 +843,10 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    environment_manager: environment_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -846,7 +894,9 @@ See the Codex keymap documentation for supported actions and examples."
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
+            workspace_command_runner: Some(workspace_command_runner),
             config,
+            state_db,
             active_profile,
             cli_kv_overrides,
             harness_overrides,
@@ -888,9 +938,17 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
+        if let Some(entry) = startup_hooks_browser {
+            app.chat_widget.open_hooks_browser(entry);
+        }
         if let Some(started) = initial_started_thread {
+            let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+            if should_prompt_for_paused_goal_after_startup_resume {
+                app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
+                    .await;
+            }
         }
 
         // On startup, if a managed filesystem sandbox is active, warn about
@@ -1024,13 +1082,18 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
+        let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
+                clear_pet_result?;
                 clear_result?;
                 exit_reason
             }
             Err(err) => {
+                if let Err(clear_pet_err) = clear_pet_result {
+                    tracing::warn!(error = %clear_pet_err, "failed to clear ambient pet image");
+                }
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
                 }
@@ -1098,20 +1161,51 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    let mut rendered_area = Rect::default();
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            let area = frame.area();
+                            rendered_area = area;
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
                     } else {
                         tui.draw(desired_height, |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            let area = frame.area();
+                            rendered_area = area;
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
+                    }
+                    if self.chat_widget.ambient_pet_image_enabled() {
+                        let terminal_size = tui.terminal.size()?;
+                        let ambient_pet_area = Rect::new(
+                            /*x*/ 0,
+                            /*y*/ 0,
+                            terminal_size.width,
+                            terminal_size.height,
+                        );
+                        if let Err(err) = tui.draw_ambient_pet_image(
+                            self.chat_widget
+                                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
+                        ) {
+                            self.handle_ambient_pet_image_render_error(tui, err)?;
+                        }
+                    }
+                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
+                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                            self.handle_pet_picker_preview_image_render_error(tui, err)?;
+                        }
+                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
+                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
+                    {
+                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
                     }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget

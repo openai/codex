@@ -242,31 +242,42 @@ fn copy_binary_to_remote_env(
     Ok(remote_path)
 }
 
-async fn wait_for_mcp_tool(fixture: &TestCodex, tool_name: &str) -> anyhow::Result<()> {
-    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        fixture.codex.submit(Op::ListMcpTools).await?;
-        let list_event = wait_for_event_with_timeout(
-            &fixture.codex,
-            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
-            Duration::from_secs(10),
-        )
-        .await;
-        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
-            unreachable!("event guard guarantees McpListToolsResponse");
-        };
-        if tool_list.tools.contains_key(tool_name) {
-            return Ok(());
-        }
-
-        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
-        if Instant::now() >= tools_ready_deadline {
-            panic!(
-                "timed out waiting for MCP tool {tool_name} to become available; discovered tools: {available_tools:?}"
-            );
-        }
-        sleep(Duration::from_millis(200)).await;
+async fn wait_for_mcp_server(fixture: &TestCodex, server_name: &str) -> anyhow::Result<()> {
+    let startup_event = wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| match ev {
+            EventMsg::McpStartupComplete(summary) => {
+                summary.ready.iter().any(|server| server == server_name)
+                    || summary
+                        .failed
+                        .iter()
+                        .any(|failure| failure.server == server_name)
+                    || summary.cancelled.iter().any(|server| server == server_name)
+            }
+            _ => false,
+        },
+        Duration::from_secs(70),
+    )
+    .await;
+    let EventMsg::McpStartupComplete(summary) = startup_event else {
+        unreachable!("event guard guarantees McpStartupComplete");
+    };
+    if let Some(failure) = summary
+        .failed
+        .iter()
+        .find(|failure| failure.server == server_name)
+    {
+        let error = &failure.error;
+        anyhow::bail!("MCP server {server_name} failed to start: {error}");
     }
+    if summary.cancelled.iter().any(|server| server == server_name) {
+        anyhow::bail!("MCP server {server_name} startup was cancelled");
+    }
+    ensure!(
+        summary.ready.iter().any(|server| server == server_name),
+        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
+    );
+    Ok(())
 }
 
 #[derive(Default)]
@@ -731,7 +742,6 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let call_id = "sandbox-meta-call";
     let server_name = "rmcp";
     let namespace = format!("mcp__{server_name}__");
-    let tool_name = format!("{namespace}sandbox_meta");
 
     let call_mock = mount_sse_once(
         &server,
@@ -767,30 +777,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
         .build_remote_aware(&server)
         .await?;
 
-    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        fixture.codex.submit(Op::ListMcpTools).await?;
-        let list_event = wait_for_event_with_timeout(
-            &fixture.codex,
-            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
-            Duration::from_secs(10),
-        )
-        .await;
-        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
-            unreachable!("event guard guarantees McpListToolsResponse");
-        };
-        if tool_list.tools.contains_key(&tool_name) {
-            break;
-        }
-
-        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
-        if Instant::now() >= tools_ready_deadline {
-            panic!(
-                "timed out waiting for MCP tool {tool_name} to become available; discovered tools: {available_tools:?}"
-            );
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
+    wait_for_mcp_server(&fixture, server_name).await?;
 
     fixture
         .submit_turn_with_permission_profile(
@@ -1039,7 +1026,6 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 
     let call_id = "img-1";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__image");
     let namespace = format!("mcp__{server_name}__");
 
     // First stream: model decides to call the image tool.
@@ -1086,7 +1072,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         })
         .build_remote_aware(&server)
         .await?;
-    wait_for_mcp_tool(&fixture, &tool_name).await?;
+    wait_for_mcp_server(&fixture, server_name).await?;
 
     fixture
         .codex
@@ -1176,7 +1162,6 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
 
     let call_id = "img-original-detail-1";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__image_scenario");
     let namespace = format!("mcp__{server_name}__");
 
     mount_sse_once(
@@ -1219,7 +1204,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
         })
         .build_remote_aware(&server)
         .await?;
-    wait_for_mcp_tool(&fixture, &tool_name).await?;
+    wait_for_mcp_server(&fixture, server_name).await?;
 
     fixture
         .codex
@@ -1283,6 +1268,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 supported_in_api: true,
                 priority: 1,
                 additional_speed_tiers: Vec::new(),
+                service_tiers: Vec::new(),
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,
@@ -1954,7 +1940,6 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 
     let call_id = "call-789";
     let server_name = "rmcp_http_oauth";
-    let tool_name = format!("mcp__{server_name}__echo");
     let namespace = format!("mcp__{server_name}__");
 
     mount_sse_once(
@@ -2035,9 +2020,9 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         })
         .build_remote_aware(&server)
         .await?;
-    // Phase 5: wait for MCP discovery to publish the expected tool before the
-    // turn is submitted, which keeps failures tied to server startup/discovery.
-    wait_for_mcp_tool(&fixture, &tool_name).await?;
+    // Phase 5: wait for MCP startup before the turn is submitted, which keeps
+    // failures tied to server startup/discovery.
+    wait_for_mcp_server(&fixture, server_name).await?;
 
     // Phase 6: submit the user turn that should invoke the OAuth-backed tool.
     fixture

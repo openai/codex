@@ -371,6 +371,29 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .to_string(),
     )
     .context("write hooks.json")?;
+    let config_toml_path = turn_context
+        .config
+        .codex_home
+        .join(codex_config::CONFIG_TOML_FILE);
+    let hook_list = codex_hooks::list_hooks(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+    assert_eq!(hook_list.hooks.len(), 1);
+    let trusted_config_layer_stack = turn_context.config.config_layer_stack.with_user_config(
+        &config_toml_path,
+        serde_json::from_value(serde_json::json!({
+            "hooks": {
+                "state": {
+                    hook_list.hooks[0].key.clone(): {
+                        "trusted_hash": hook_list.hooks[0].current_hash.clone(),
+                    },
+                },
+            },
+        }))
+        .context("build trusted hook state")?,
+    );
 
     let mut hook_shell_argv = session
         .user_shell()
@@ -382,7 +405,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .hooks
         .store(Arc::new(Hooks::new(HooksConfig {
             feature_enabled: true,
-            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+            config_layer_stack: Some(trusted_config_layer_stack),
             shell_program: Some(hook_shell_program),
             shell_args: hook_shell_argv,
             ..HooksConfig::default()

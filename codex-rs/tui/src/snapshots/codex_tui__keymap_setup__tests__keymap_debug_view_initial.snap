@@ -1,0 +1,9 @@
+---
+source: tui/src/keymap_setup.rs
+expression: "render_debug(&view, 80)"
+---
+Keypress Inspector
+Press any key to see what Codex receives. Esc is inspected; Ctrl+C closes.
+Tip: Codex can only inspect keys your terminal sends.
+
+Waiting for a keypress...

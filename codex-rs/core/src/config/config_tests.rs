@@ -6,6 +6,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerEntry;
 use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -43,13 +44,18 @@ use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
+use codex_config::types::OtelConfig;
+use codex_config::types::OtelConfigToml;
+use codex_config::types::OtelExporterKind;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::TuiPetAnchor;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
@@ -60,6 +66,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ManagedFileSystemPermissions;
@@ -83,6 +90,9 @@ use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
+use rmcp::model::UrlElicitationCapability;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -193,12 +203,13 @@ async fn load_config_loads_global_agents_instructions() -> std::io::Result<()> {
         "\n  global instructions  \n",
     )?;
 
-    let config = Config::load_from_base_config_with_overrides(
+    let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
+    let _ = config.features.enable(Feature::MemoryTool);
 
     assert_eq!(
         config.user_instructions.as_deref(),
@@ -549,10 +560,16 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -562,6 +579,37 @@ fn config_toml_deserializes_model_availability_nux() {
             },
             terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[test]
+fn config_toml_status_line_use_colors_defaults_to_enabled() {
+    let toml = r#"
+[tui]
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_status_line_use_colors_disabled() {
+    let toml = r#"
+[tui]
+status_line_use_colors = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        !cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
     );
 }
 
@@ -596,6 +644,82 @@ async fn runtime_config_defaults_model_availability_nux() {
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
     );
+}
+
+#[test]
+fn test_tui_vim_mode_default_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_true() {
+    let toml = r#"
+        [tui]
+        vim_mode_default = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize vim_mode_default=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_true() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_uses_tui_raw_output_mode() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let cfg_toml: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(cfg.tui_raw_output_mode);
 }
 
 #[test]
@@ -671,55 +795,8 @@ allow_upstream_proxy = false
 }
 
 #[tokio::test]
-async fn permissions_profiles_network_enabled_allows_runtime_network_without_proxy()
+async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_without_feature()
 -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            glob_scan_max_depth: None,
-                            entries: BTreeMap::from([(
-                                ":minimal".to_string(),
-                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
-                            )]),
-                        }),
-                        network: Some(NetworkToml {
-                            enabled: Some(true),
-                            ..Default::default()
-                        }),
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert_eq!(
-        config.permissions.network_sandbox_policy(),
-        NetworkSandboxPolicy::Enabled
-    );
-    assert!(
-        config.permissions.network.is_none(),
-        "bare profile network.enabled should not start the managed network proxy"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -760,15 +837,412 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Enabled
     );
+    assert!(
+        config.permissions.network.is_none(),
+        "profile proxy policy should not start the managed network proxy without the feature"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_is_no_op_without_sandbox_network() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    assert!(
+        config.permissions.network.is_none(),
+        "network_proxy should not start the managed network proxy while network access is off"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> std::io::Result<()> {
+    #[derive(Clone, Copy)]
+    enum Surface {
+        PermissionProfile,
+        LegacyWorkspaceWrite,
+    }
+
+    struct Case {
+        name: &'static str,
+        surface: Surface,
+        network_enabled: bool,
+        proxy_enabled: bool,
+        expected_network_policy: NetworkSandboxPolicy,
+    }
+
+    let cases = [
+        Case {
+            name: "permission profile network disabled without proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: false,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "permission profile network disabled with proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: false,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "permission profile network enabled without proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: true,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "permission profile network enabled with proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: true,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "legacy workspace write network disabled without proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: false,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "legacy workspace write network disabled with proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: false,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "legacy workspace write network enabled without proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: true,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "legacy workspace write network enabled with proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: true,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+    ];
+
+    for case in cases {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+        std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+        let features = case
+            .proxy_enabled
+            .then(|| toml::from_str("network_proxy = true").expect("valid features"));
+        let base_config = match case.surface {
+            Surface::PermissionProfile => ConfigToml {
+                default_permissions: Some("workspace".to_string()),
+                permissions: Some(PermissionsToml {
+                    entries: BTreeMap::from([(
+                        "workspace".to_string(),
+                        PermissionProfileToml {
+                            filesystem: Some(FilesystemPermissionsToml {
+                                glob_scan_max_depth: None,
+                                entries: BTreeMap::from([(
+                                    ":minimal".to_string(),
+                                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                                )]),
+                            }),
+                            network: Some(NetworkToml {
+                                enabled: Some(case.network_enabled),
+                                ..Default::default()
+                            }),
+                        },
+                    )]),
+                }),
+                features,
+                ..Default::default()
+            },
+            Surface::LegacyWorkspaceWrite => ConfigToml {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                    network_access: case.network_enabled,
+                    ..Default::default()
+                }),
+                windows: Some(WindowsToml {
+                    sandbox: Some(WindowsSandboxModeToml::Elevated),
+                    sandbox_private_desktop: None,
+                }),
+                features,
+                ..Default::default()
+            },
+        };
+        let config = Config::load_from_base_config_with_overrides(
+            base_config,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.network_sandbox_policy(),
+            case.expected_network_policy,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            config.permissions.network.is_some(),
+            case.network_enabled && case.proxy_enabled,
+            "{}",
+            case.name
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_cli_overrides_merge_toggle_with_proxy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[windows]
+sandbox = "elevated"
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.network_proxy.enabled".to_string(),
+                toml::Value::Boolean(true),
+            ),
+            (
+                "features.network_proxy.enable_socks5".to_string(),
+                toml::Value::Boolean(false),
+            ),
+        ])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
     let network = config
         .permissions
         .network
         .as_ref()
-        .expect("profile proxy policy should start the managed network proxy");
-    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:3128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                network: Some(codex_config::NetworkRequirementsToml {
+                    enabled: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.managed_network_requirements_enabled());
     assert!(
-        !network.socks_enabled(),
-        "profile proxy policy should preserve SOCKS config"
+        config
+            .permissions
+            .network
+            .as_ref()
+            .expect("experimental_network should configure the managed proxy")
+            .enabled()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_network_proxy_disable_ignores_base_feature_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+[network_proxy]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+"#,
+                )
+                .expect("valid base features"),
+            ),
+            profiles: HashMap::from([(
+                "no_proxy".to_string(),
+                ConfigProfile {
+                    features: Some(
+                        toml::from_str("network_proxy = false").expect("valid profile features"),
+                    ),
+                    ..Default::default()
+                },
+            )]),
+            profile: Some("no_proxy".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.permissions.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_network_proxy_feature_does_not_start_profile_proxy_policy() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+[network_proxy]
+enabled = false
+"#,
+                )
+                .expect("valid features"),
+            ),
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(
+        config.permissions.network.is_none(),
+        "disabled feature should keep profile proxy policy from starting the managed proxy"
     );
     Ok(())
 }
@@ -2047,6 +2521,94 @@ fn tui_theme_defaults_to_none() {
 }
 
 #[test]
+fn tui_session_picker_view_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+session_picker_view = "dense"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        Some(SessionPickerViewMode::Dense),
+    );
+}
+
+#[test]
+fn tui_pet_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet = "chefito"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.pet.as_deref()),
+        Some("chefito"),
+    );
+}
+
+#[test]
+fn tui_session_picker_view_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        None,
+    );
+}
+
+#[test]
+fn tui_pet_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(parsed.tui.as_ref().and_then(|t| t.pet.as_deref()), None);
+}
+
+#[test]
+fn tui_pet_anchor_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet_anchor = "screen-bottom"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::ScreenBottom),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_defaults_to_composer() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::Composer),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_rejects_unknown_value() {
+    let cfg = r#"
+[tui]
+pet_anchor = "bottom"
+"#;
+    let err = toml::from_str::<ConfigToml>(cfg).expect_err("reject unknown pet anchor");
+    let err = err.to_string();
+    assert!(
+        err.contains("unknown variant `bottom`")
+            && err.contains("composer")
+            && err.contains("screen-bottom"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn tui_config_missing_notifications_field_defaults_to_enabled() {
     let cfg = r#"
 [tui]
@@ -2062,10 +2624,16 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -2128,6 +2696,99 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     assert_eq!(
         cfg.terminal_resize_reflow.max_rows,
         TerminalResizeReflowMaxRows::Disabled
+    );
+}
+
+#[tokio::test]
+async fn legacy_remote_thread_store_endpoint_is_rejected() {
+    let cfg: ConfigToml =
+        toml::from_str(r#"experimental_thread_store_endpoint = "https://example.com""#)
+            .expect("legacy remote thread-store endpoint should still deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect_err("legacy remote thread-store endpoint should be rejected at load time");
+
+    assert!(
+        err.to_string()
+            .contains("experimental_thread_store_endpoint")
+    );
+    assert!(err.to_string().contains("no longer supported"));
+}
+
+#[test]
+fn profile_tui_rejects_unsupported_settings() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[profiles.work.tui]
+theme = "dark"
+"#,
+    )
+    .expect_err("profile TUI config should only accept supported fields");
+
+    assert!(err.to_string().contains("unknown field"));
+    assert!(err.to_string().contains("theme"));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_session_picker_view_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                session_picker_view: Some(SessionPickerViewMode::Comfortable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load root override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg_toml = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[tui]
+session_picker_view = "dense"
+
+[profiles.work.tui]
+session_picker_view = "comfortable"
+"#,
+    )
+    .expect("parse profile scoped tui config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load profile override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
     );
 }
 
@@ -2633,6 +3294,307 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
 }
 
 #[tokio::test]
+async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let project_dot_codex =
+        AbsolutePathBuf::resolve_path_against_base("project/.codex", codex_home.path());
+    let mcp_requirements = BTreeMap::from([
+        (
+            "session_overrides_user".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "session-command".to_string(),
+                },
+            },
+        ),
+        (
+            "managed_overrides_session".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "managed-command".to_string(),
+                },
+            },
+        ),
+        (
+            "fresh_global".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "fresh-global-command".to_string(),
+                },
+            },
+        ),
+        (
+            "fresh_project".to_string(),
+            McpServerRequirement {
+                identity: McpServerIdentity::Command {
+                    command: "fresh-project-command".to_string(),
+                },
+            },
+        ),
+    ]);
+    let requirements_toml = codex_config::ConfigRequirementsToml {
+        mcp_servers: Some(mcp_requirements.clone()),
+        ..Default::default()
+    };
+    let requirements = codex_config::ConfigRequirements {
+        mcp_servers: Some(Sourced::new(mcp_requirements, RequirementSource::Unknown)),
+        ..Default::default()
+    };
+    let refreshed_layer_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "new-user-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "new-user-command"
+                    [mcp_servers.fresh_global]
+                    command = "fresh-global-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.fresh_project]
+                    command = "fresh-project-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                toml::toml! {
+                    [mcp_servers.managed_overrides_session]
+                    command = "managed-command"
+                }
+                .into(),
+            ),
+        ],
+        requirements,
+        requirements_toml,
+    )
+    .map_err(std::io::Error::other)?;
+    let refreshed_toml = refreshed_layer_stack
+        .effective_config()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let refreshed_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        refreshed_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        refreshed_layer_stack,
+    )
+    .await?;
+    let thread_layer_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "old-user-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "old-user-command"
+                    [mcp_servers.fresh_global]
+                    command = "old-global-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex,
+                },
+                toml::toml! {
+                    [mcp_servers.fresh_project]
+                    command = "old-project-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::SessionFlags,
+                toml::toml! {
+                    [mcp_servers.session_overrides_user]
+                    command = "session-command"
+                    [mcp_servers.managed_overrides_session]
+                    command = "session-command"
+                    [mcp_servers.blocked_session]
+                    command = "blocked-session-command"
+                }
+                .into(),
+            ),
+            ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                toml::toml! {
+                    [mcp_servers.managed_overrides_session]
+                    command = "old-managed-command"
+                }
+                .into(),
+            ),
+        ],
+        Default::default(),
+        Default::default(),
+    )
+    .map_err(std::io::Error::other)?;
+    let thread_toml = thread_layer_stack
+        .effective_config()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let thread_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        thread_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        thread_layer_stack,
+    )
+    .await?;
+    let config = thread_config
+        .rebuild_preserving_session_layers(&refreshed_config)
+        .await?;
+
+    assert_eq!(
+        config.mcp_servers.get(),
+        &HashMap::from([
+            (
+                "session_overrides_user".to_string(),
+                stdio_mcp("session-command"),
+            ),
+            (
+                "managed_overrides_session".to_string(),
+                stdio_mcp("managed-command"),
+            ),
+            (
+                "fresh_global".to_string(),
+                stdio_mcp("fresh-global-command"),
+            ),
+            (
+                "fresh_project".to_string(),
+                stdio_mcp("fresh-project-command"),
+            ),
+            (
+                "blocked_session".to_string(),
+                McpServerConfig {
+                    enabled: false,
+                    disabled_reason: Some(McpServerDisabledReason::Requirements {
+                        source: RequirementSource::Unknown,
+                    }),
+                    ..stdio_mcp("blocked-session-command")
+                },
+            ),
+        ])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    )?;
+
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let refreshed_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            toml::toml! {
+                [features]
+                plugins = true
+
+                [plugins."sample@test"]
+                enabled = true
+            }
+            .into(),
+        )],
+        Default::default(),
+        Default::default(),
+    )?;
+    let refreshed_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        refreshed_layer_stack.effective_config().try_into()?,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        refreshed_layer_stack,
+    )
+    .await?;
+    let thread_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User { file: user_file },
+            toml::toml! {
+                [features]
+                plugins = false
+
+                [plugins."sample@test"]
+                enabled = true
+            }
+            .into(),
+        )],
+        Default::default(),
+        Default::default(),
+    )?;
+    let thread_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        thread_layer_stack.effective_config().try_into()?,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        thread_layer_stack,
+    )
+    .await?;
+    let config = thread_config
+        .rebuild_preserving_session_layers(&refreshed_config)
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config.configured_mcp_servers.get("sample"),
+        Some(&http_mcp("https://sample.example/mcp"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_mcp_config_applies_plugin_mcp_cloud_requirements() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
@@ -3127,7 +4089,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+async fn project_profiles_are_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -3154,6 +4116,9 @@ trust_level = "trusted"
         project_config_dir.join(CONFIG_TOML_FILE),
         r#"
 profile = "project"
+
+[profiles.project]
+model = "gpt-project-local"
 "#,
     )?;
 
@@ -3166,8 +4131,19 @@ profile = "project"
         .build()
         .await?;
 
-    assert_eq!(config.active_profile.as_deref(), Some("project"));
-    assert_eq!(config.model.as_deref(), Some("gpt-project"));
+    assert_eq!(config.active_profile.as_deref(), Some("global"));
+    assert_eq!(config.model.as_deref(), Some("gpt-global"));
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("profile")
+                && warning.contains("profiles")
+                && warning.contains(
+                    "If you want these settings to apply, manually set them in your user-level config.toml."
+                )
+        }),
+        "expected warning for ignored project-local profile keys: {:?}",
+        config.startup_warnings
+    );
 
     Ok(())
 }
@@ -3633,6 +4609,36 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     let _ = config.features.enable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert_eq!(
+        mcp_config.client_elicitation_capability,
+        ElicitationCapability::default()
+    );
+
+    let _ = config.features.enable(Feature::AuthElicitation);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert_eq!(
+        mcp_config.client_elicitation_capability,
+        ElicitationCapability {
+            form: Some(FormElicitationCapability::default()),
+            url: Some(UrlElicitationCapability::default()),
+        }
+    );
 
     Ok(())
 }
@@ -6309,6 +7315,10 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
+            config_lock_export_dir: None,
+            config_lock_allow_codex_version_mismatch: false,
+            config_lock_save_fields_resolved_from_model_catalog: true,
+            config_lock_toml: None,
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
@@ -6343,13 +7353,14 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_collaboration_mode_instructions: true,
             include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: false,
+            include_apply_patch_tool: true,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -6367,6 +7378,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
+            tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
@@ -6374,9 +7388,12 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
-            tui_keymap: TuiKeymap::default(),
+            tui_pet: None,
+            tui_pet_anchor: TuiPetAnchor::Composer,
+            tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6403,6 +7420,152 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+    let mut cfg = fixture.cfg.clone();
+    cfg.otel = Some(OtelConfigToml {
+        exporter: Some(OtelExporterKind::OtlpHttp {
+            endpoint: "http://localhost:14318/v1/logs".to_string(),
+            headers: HashMap::new(),
+            protocol: codex_config::types::OtelHttpProtocol::Binary,
+            tls: None,
+        }),
+        metrics_exporter: Some(OtelExporterKind::None),
+        ..Default::default()
+    });
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert!(matches!(
+        config.otel.exporter,
+        OtelExporterKind::OtlpHttp { .. }
+    ));
+    assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg = toml::from_str(
+        r#"
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
+    );
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([
+                ("alpha".to_string(), "one".to_string()),
+                ("beta".to_string(), "two".to_string()),
+            ]),
+        )])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_drops_invalid_otel_trace_metadata_entries() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg = toml::from_str(
+        r#"
+[otel]
+environment = "test"
+
+[otel.span_attributes]
+"" = "missing-key"
+"example.trace_attr" = "enabled"
+
+[otel.tracestate.example]
+alpha = "one"
+beta = "two\ntoo"
+
+[otel.tracestate.bad]
+alpha = "one\ntwo"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.otel.environment, "test");
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
+    );
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([("alpha".to_string(), "one".to_string())]),
+        )])
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.span_attributes` config")
+                && warning.contains("configured span attribute key must not be empty")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.tracestate` config")
+                && warning.contains("invalid configured tracestate value for example.beta")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.tracestate` config")
+                && warning.contains("invalid configured tracestate value for bad.alpha")
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
@@ -6419,6 +7582,100 @@ async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std:
 
     assert_eq!(config.service_tier, None);
     assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_fast_service_tier_override_uses_priority_request_value() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(Some("fast".to_string())),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_priority_service_tier_uses_priority_request_value() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_service_tier_accepts_arbitrary_string() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("experimental-tier-id".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some("experimental-tier-id".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_toml_legacy_fast_service_tier_uses_priority_request_value() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.service_tier = Some("fast".to_string());
+    let cwd = fixture.cwd_path();
+    let codex_home = fixture.codex_home();
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg,
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home,
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
     Ok(())
 }
 
@@ -6505,6 +7762,10 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6539,13 +7800,14 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -6563,6 +7825,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6570,9 +7835,12 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6655,6 +7923,10 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6689,13 +7961,14 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -6713,6 +7986,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
@@ -6720,9 +7996,12 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6790,6 +8069,10 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6824,13 +8107,14 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
+        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -6848,6 +8132,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6855,9 +8142,12 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -7919,6 +9209,77 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn debug_config_lockfile_export_settings_load_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[debug.config_lockfile]
+export_dir = "locks"
+allow_codex_version_mismatch = true
+save_fields_resolved_from_model_catalog = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.config_lock_export_dir,
+        Some(AbsolutePathBuf::resolve_path_against_base(
+            "locks",
+            codex_home.path()
+        ))
+    );
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn debug_config_lockfile_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let lock_path = codex_home.path().join("session.config.lock.toml");
+    std::fs::write(
+        &lock_path,
+        format!(
+            r#"version = {}
+codex_version = "older-version"
+
+[config]
+"#,
+            crate::config_lock::CONFIG_LOCK_VERSION
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[debug.config_lockfile]
+load_path = '{}'
+allow_codex_version_mismatch = true
+save_fields_resolved_from_model_catalog = false
+"#,
+            lock_path.display()
+        ),
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.config_lock_toml.is_some());
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -7984,6 +9345,7 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config_and_profiles() ->
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"include_permissions_instructions = false
 include_apps_instructions = false
+include_collaboration_mode_instructions = false
 include_environment_context = false
 profile = "chatty"
 
@@ -7992,6 +9354,7 @@ include_instructions = false
 
 [profiles.chatty]
 include_permissions_instructions = true
+include_collaboration_mode_instructions = true
 include_environment_context = true
 "#,
     )?;
@@ -8004,6 +9367,7 @@ include_environment_context = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
     Ok(())

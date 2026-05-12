@@ -50,6 +50,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
             source: SessionSource::Cli,
+            thread_source: None,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,
@@ -87,7 +88,7 @@ async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
     write_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -103,7 +104,7 @@ async fn applies_when_only_archived_sessions_exist_and_no_personality() -> io::R
     write_archived_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -119,7 +120,7 @@ async fn skips_when_marker_exists() -> io::Result<()> {
     create_marker(&temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedMarker);
     assert!(!temp.path().join("config.toml").exists());
@@ -136,7 +137,7 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
         .map_err(|err| io::Error::other(format!("failed to write config: {err}")))?;
 
     let config_toml = read_config_toml(temp.path()).await?;
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(
         status,
@@ -153,7 +154,7 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
 async fn skips_when_no_sessions() -> io::Result<()> {
     let temp = TempDir::new()?;
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedNoSessions);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());

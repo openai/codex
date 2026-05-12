@@ -6,6 +6,7 @@ use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
 use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
@@ -54,6 +55,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
+use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -61,8 +63,10 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -222,13 +226,21 @@ pub struct PluginDetail {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +263,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -387,8 +400,6 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
-    // TODO(remote plugins): reset this cache when ChatGPT auth/account state changes so stale
-    // remote installed state cannot remain effective for a different account.
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
@@ -542,10 +553,10 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         config: &PluginsConfigInput,
-    ) -> Vec<AbsolutePathBuf> {
+    ) -> Vec<PluginSkillRoot> {
         self.plugins_for_layer_stack(config_layer_stack, config, config.plugin_hooks_enabled)
             .await
-            .effective_skill_roots()
+            .effective_plugin_skill_roots()
     }
 
     fn cached_enabled_outcome(
@@ -668,6 +679,35 @@ impl PluginsManager {
         );
     }
 
+    fn maybe_start_remote_installed_plugin_bundle_sync(
+        self: &Arc<Self>,
+        config: &PluginsConfigInput,
+        auth: Option<CodexAuth>,
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) {
+        if !config.plugins_enabled || !config.remote_plugin_enabled {
+            return;
+        }
+
+        let manager = Arc::clone(self);
+        let config_for_refresh = config.clone();
+        let auth_for_refresh = auth.clone();
+        let on_local_cache_changed = Arc::new(move || {
+            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config_for_refresh,
+                auth_for_refresh.clone(),
+                on_effective_plugins_changed.clone(),
+            );
+        });
+
+        crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
+            self.codex_home.clone(),
+            remote_plugin_service_config(config),
+            auth,
+            Some(on_local_cache_changed),
+        );
+    }
+
     pub fn maybe_start_plugin_list_background_tasks_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
@@ -677,6 +717,11 @@ impl PluginsManager {
     ) {
         self.maybe_start_non_curated_plugin_cache_refresh(roots);
         self.maybe_start_remote_installed_plugins_cache_refresh(
+            config,
+            auth.clone(),
+            on_effective_plugins_changed.clone(),
+        );
+        self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
             on_effective_plugins_changed,
@@ -1151,18 +1196,37 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let installed = installed_plugins.contains(&plugin_key);
+                        let enabled = enabled_plugins.contains(&plugin_key);
+                        let mut interface = plugin.interface;
+                        if installed
+                            && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
+                            && let Ok(plugin_id) =
+                                PluginId::new(plugin.name.clone(), marketplace_name.clone())
+                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
+                        {
+                            let marketplace_category = interface
+                                .as_ref()
+                                .and_then(|interface| interface.category.clone());
+                            interface = plugin_interface_with_marketplace_category(
+                                manifest.interface,
+                                marketplace_category,
+                            );
+                        }
 
                         Some(ConfiguredMarketplacePlugin {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
-                            id: plugin_key.clone(),
-                            installed: installed_plugins.contains(&plugin_key),
-                            enabled: enabled_plugins.contains(&plugin_key),
+                            id: plugin_key,
+                            installed,
+                            enabled,
                             name: plugin.name,
                             source: plugin.source,
                             policy: plugin.policy,
-                            interface: plugin.interface,
+                            keywords: plugin.keywords,
+                            interface,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1212,6 +1276,11 @@ impl PluginsManager {
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
+                    keywords: plugin
+                        .manifest
+                        .as_ref()
+                        .map(|manifest| manifest.keywords.clone())
+                        .unwrap_or_default(),
                     installed: installed_plugins.contains(&plugin_key),
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
@@ -1254,10 +1323,12 @@ impl PluginsManager {
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
+                keywords: plugin.keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 skills: Vec::new(),
                 disabled_skill_paths: HashSet::new(),
+                hooks: Vec::new(),
                 apps: Vec::new(),
                 mcp_server_names: Vec::new(),
                 details_unavailable_reason: Some(
@@ -1307,6 +1378,7 @@ impl PluginsManager {
         );
         let resolved_skills = load_plugin_skills(
             &source_path,
+            &plugin_id,
             &manifest.paths,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
@@ -1314,6 +1386,20 @@ impl PluginsManager {
             ),
         )
         .await;
+        let hooks = if config.plugin_hooks_enabled {
+            let plugin_data_root = self.store.plugin_data_root(&plugin_id);
+            let (hook_sources, _hook_load_warnings) =
+                load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
+            plugin_hook_declarations(&hook_sources)
+                .into_iter()
+                .map(|hook| PluginHookSummary {
+                    key: hook.key,
+                    event_name: hook.event_name,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let apps = load_plugin_apps(source_path.as_path()).await;
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
@@ -1329,10 +1415,12 @@ impl PluginsManager {
             source: plugin.source,
             policy: plugin.policy,
             interface,
+            keywords: manifest.keywords,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            hooks,
             apps,
             mcp_server_names,
             details_unavailable_reason: None,
@@ -1413,6 +1501,11 @@ impl PluginsManager {
                 tokio::spawn(async move {
                     let auth = auth_manager.auth().await;
                     manager.maybe_start_remote_installed_plugins_cache_refresh(
+                        &config,
+                        auth.clone(),
+                        on_effective_plugins_changed.clone(),
+                    );
+                    manager.maybe_start_remote_installed_plugin_bundle_sync(
                         &config,
                         auth,
                         on_effective_plugins_changed,

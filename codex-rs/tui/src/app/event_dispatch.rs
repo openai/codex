@@ -35,6 +35,9 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::RawOutputModeChanged { enabled } => {
+                self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -61,6 +64,7 @@ impl App {
                         },
                         None => crate::AppServerTarget::Embedded,
                     },
+                    self.state_db.clone(),
                     self.environment_manager.clone(),
                 )
                 .await
@@ -73,7 +77,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
                 };
-                match crate::resume_picker::run_resume_picker_with_app_server(
+                match crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                     tui,
                     &self.config,
                     /*show_all*/ false,
@@ -93,9 +97,13 @@ impl App {
                             }
                         }
                     }
-                    SessionSelection::Exit
-                    | SessionSelection::StartFresh
-                    | SessionSelection::Fork(_) => {}
+                    SessionSelection::Exit | SessionSelection::StartFresh => {
+                        self.refresh_in_memory_config_from_disk_best_effort(
+                            "closing the session picker",
+                        )
+                        .await;
+                    }
+                    SessionSelection::Fork(_) => {}
                 }
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
@@ -182,6 +190,9 @@ impl App {
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();
             }
+            AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
+                self.begin_thread_switch_history_replay_buffer();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -193,42 +204,34 @@ impl App {
                     self.insert_history_cell_lines_with_initial_replay_buffer(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 } else {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 }
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
-            AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
-                let end = self.transcript_cells.len();
-                let start =
-                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-                if start < end {
-                    let consolidated: Arc<dyn HistoryCell> =
-                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
-                    self.transcript_cells
-                        .splice(start..end, std::iter::once(consolidated.clone()));
-
-                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.consolidate_cells(start..end, consolidated.clone());
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    self.maybe_finish_stream_reflow(tui)?;
-                } else {
-                    self.maybe_finish_stream_reflow(tui)?;
-                }
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                scrollback_reflow,
+                deferred_history_cell,
+            } => {
+                self.handle_consolidate_agent_message(
+                    tui,
+                    source,
+                    cwd,
+                    scrollback_reflow,
+                    deferred_history_cell,
+                )?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
@@ -261,7 +264,8 @@ impl App {
                     self.insert_history_cell_lines(
                         tui,
                         consolidated.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
 
                     self.maybe_finish_stream_reflow(tui)?;
@@ -314,6 +318,25 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op).await?;
+            }
+            AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
+                self.append_message_history_entry(thread_id, text);
+            }
+            AppEvent::SyncThreadGitBranch { thread_id, branch } => {
+                if let Err(err) = app_server
+                    .thread_metadata_update_branch(thread_id, branch)
+                    .await
+                {
+                    tracing::warn!("failed to sync thread git branch from directive: {err}");
+                }
+            }
+            AppEvent::LookupMessageHistoryEntry {
+                thread_id,
+                offset,
+                log_id,
+            } => {
+                self.lookup_message_history_entry(thread_id, offset, log_id)
+                    .await?;
             }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
@@ -369,6 +392,30 @@ impl App {
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
             }
+            AppEvent::PetSelected { pet_id } => {
+                self.handle_pet_selected(tui, pet_id);
+            }
+            AppEvent::PetDisabled => {
+                self.handle_pet_disabled(tui).await;
+            }
+            AppEvent::PetPreviewRequested { pet_id } => {
+                self.chat_widget.start_pet_picker_preview(pet_id);
+            }
+            AppEvent::PetPreviewLoaded { request_id, result } => {
+                self.handle_pet_preview_loaded(tui, request_id, result);
+            }
+            AppEvent::PetSelectionLoaded {
+                request_id,
+                pet_id,
+                result,
+            } => {
+                return self
+                    .handle_pet_selection_loaded(tui, request_id, pet_id, result)
+                    .await;
+            }
+            AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+                self.handle_configured_pet_loaded(tui, pet_id, result);
+            }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
@@ -408,6 +455,10 @@ impl App {
                 self.chat_widget
                     .open_marketplace_remove_loading_popup(&marketplace_display_name);
             }
+            AppEvent::OpenMarketplaceUpgradeLoading { marketplace_name } => {
+                self.chat_widget
+                    .open_marketplace_upgrade_loading_popup(marketplace_name.as_deref());
+            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -435,6 +486,12 @@ impl App {
             AppEvent::FetchMarketplaceAdd { cwd, source } => {
                 self.fetch_marketplace_add(app_server, cwd, source);
             }
+            AppEvent::FetchMarketplaceUpgrade {
+                cwd,
+                marketplace_name,
+            } => {
+                self.fetch_marketplace_upgrade(app_server, cwd, marketplace_name);
+            }
             AppEvent::MarketplaceAddLoaded {
                 cwd,
                 source,
@@ -447,6 +504,25 @@ impl App {
                     if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                         tracing::warn!(error = %err, "failed to refresh config after marketplace add");
                     }
+                    self.fetch_plugins_list(app_server, cwd);
+                }
+            }
+            AppEvent::MarketplaceUpgradeLoaded { cwd, result } => {
+                let marketplace_contents_changed =
+                    matches!(&result, Ok(response) if !response.upgraded_roots.is_empty());
+                if marketplace_contents_changed {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after marketplace upgrade"
+                        );
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                self.chat_widget
+                    .on_marketplace_upgrade_loaded(cwd.clone(), result);
+                if self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -620,6 +696,9 @@ impl App {
             }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
+            }
+            AppEvent::OpenThreadGoalEditor { thread_id } => {
+                self.open_thread_goal_editor(app_server, thread_id).await;
             }
             AppEvent::SetThreadGoalObjective {
                 thread_id,
@@ -1223,25 +1302,21 @@ impl App {
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
-                self.config.service_tier = service_tier;
+                self.config.service_tier = service_tier.clone();
                 let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_service_tier(service_tier);
+                    .set_service_tier(service_tier.clone());
                 if service_tier.is_none() {
                     self.config.notices.fast_default_opt_out = Some(true);
                     edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
                 }
                 match edits.apply().await {
                     Ok(()) => {
-                        let status = if matches!(
-                            service_tier,
-                            Some(codex_protocol::config_types::ServiceTier::Fast)
-                        ) {
-                            "on"
+                        let mut message = if let Some(service_tier) = service_tier {
+                            format!("Service tier set to {service_tier}")
                         } else {
-                            "off"
+                            "Service tier cleared".to_string()
                         };
-                        let mut message = format!("Fast mode set to {status}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");
                             message.push_str(profile);
@@ -1250,14 +1325,14 @@ impl App {
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "failed to persist fast mode selection");
+                        tracing::error!(error = %err, "failed to persist service tier selection");
                         if let Some(profile) = profile {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save Fast mode for profile `{profile}`: {err}"
+                                "Failed to save service tier for profile `{profile}`: {err}"
                             ));
                         } else {
                             self.chat_widget.add_error_message(format!(
-                                "Failed to save default Fast mode: {err}"
+                                "Failed to save default service tier: {err}"
                             ));
                         }
                     }
@@ -1663,6 +1738,12 @@ impl App {
             AppEvent::SetHookEnabled { key, enabled } => {
                 self.set_hook_enabled(app_server, key, enabled);
             }
+            AppEvent::TrustHook { key, current_hash } => {
+                self.trust_hook(app_server, key, current_hash);
+            }
+            AppEvent::TrustHooks { updates } => {
+                self.trust_hooks(app_server, updates);
+            }
             AppEvent::HookEnabledSet {
                 key,
                 enabled,
@@ -1685,6 +1766,11 @@ impl App {
                     if let Err(err) = result {
                         self.chat_widget.add_error_message(err);
                     }
+                }
+            }
+            AppEvent::HookTrusted { result } => {
+                if let Err(err) = result {
+                    self.chat_widget.add_error_message(err);
                 }
             }
             AppEvent::OpenPermissionsPopup => {
@@ -1785,27 +1871,38 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
-            AppEvent::StatusLineSetup { items } => {
+            AppEvent::StatusLineSetup {
+                items,
+                use_theme_colors,
+            } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
+                let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
+                let colors_edit =
+                    crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
+                    .with_edits([items_edit, colors_edit])
                     .apply()
                     .await;
                 match apply_result {
                     Ok(()) => {
                         self.config.tui_status_line = Some(ids.clone());
-                        self.chat_widget.setup_status_line(items);
+                        self.config.tui_status_line_use_colors = use_theme_colors;
+                        self.chat_widget.setup_status_line(items, use_theme_colors);
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
-                        self.chat_widget
-                            .add_error_message(format!("Failed to save status line items: {err}"));
+                        tracing::error!(error = %err, "failed to persist status line settings; keeping previous selection");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save status line settings: {err}"
+                        ));
                     }
                 }
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {
                 self.chat_widget.set_status_line_branch(cwd, branch);
+                self.refresh_status_line();
+            }
+            AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
+                self.chat_widget.set_status_line_git_summary(cwd, summary);
                 self.refresh_status_line();
             }
             AppEvent::StatusLineSetupCancelled => {
@@ -1857,14 +1954,19 @@ impl App {
                             crate::render::highlight::set_syntax_theme(theme);
                         }
                         self.sync_tui_theme_selection(name);
+                        self.refresh_status_line();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
+                        self.refresh_status_line();
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.chat_widget
                             .add_error_message(format!("Failed to save theme: {err}"));
                     }
                 }
+            }
+            AppEvent::SyntaxThemePreviewed => {
+                self.refresh_status_line();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
                 self.chat_widget
@@ -1881,6 +1983,9 @@ impl App {
             } => {
                 self.chat_widget
                     .open_keymap_capture(context, action, intent, &self.keymap);
+            }
+            AppEvent::OpenKeymapDebug => {
+                self.chat_widget.open_keymap_debug(&self.keymap);
             }
             AppEvent::KeymapCaptured {
                 context,

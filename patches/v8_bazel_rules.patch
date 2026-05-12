@@ -65,10 +65,19 @@ index 9648e4a..88efd41 100644
              ":should_add_rdynamic": ["-rdynamic"],
              "//conditions:default": [],
 diff --git a/orig/v8-14.6.202.11/BUILD.bazel b/mod/v8-14.6.202.11/BUILD.bazel
-index 85f31b7..7314584 100644
+index 85f31b7..bbc351b 100644
 --- a/orig/v8-14.6.202.11/BUILD.bazel
 +++ b/mod/v8-14.6.202.11/BUILD.bazel
-@@ -303,7 +303,7 @@ v8_int(
+@@ -148,6 +148,8 @@ v8_flag(name = "v8_enable_trace_maps")
+ 
+ v8_flag(name = "v8_enable_v8_checks")
+ 
++v8_flag(name = "v8_enable_sandbox")
++
+ v8_flag(name = "v8_enable_verify_csa")
+ 
+ v8_flag(name = "v8_enable_verify_heap")
+@@ -303,7 +305,7 @@ v8_int(
  # If no explicit value for v8_enable_pointer_compression, we set it to 'none'.
  v8_string(
      name = "v8_enable_pointer_compression",
@@ -77,7 +86,15 @@ index 85f31b7..7314584 100644
  )
  
  # Default setting for v8_enable_pointer_compression.
-@@ -4077,28 +4077,14 @@ filegroup(
+@@ -503,6 +505,7 @@ v8_config(
+         "v8_enable_slow_dchecks": "ENABLE_SLOW_DCHECKS",
+         "v8_enable_runtime_call_stats": "V8_RUNTIME_CALL_STATS",
+         "v8_enable_snapshot_native_code_counters": "V8_SNAPSHOT_NATIVE_CODE_COUNTERS",
++        "v8_enable_sandbox": "V8_ENABLE_SANDBOX",
+         "v8_enable_trace_maps": "V8_TRACE_MAPS",
+         "v8_enable_turbofan": "V8_ENABLE_TURBOFAN",
+         "v8_enable_v8_checks": "V8_ENABLE_CHECKS",
+@@ -4077,28 +4080,14 @@ filegroup(
      }),
  )
  
@@ -112,7 +129,7 @@ index 85f31b7..7314584 100644
  )
  
  filegroup(
-@@ -4405,6 +4391,20 @@ genrule(
+@@ -4405,6 +4394,20 @@ genrule(
      srcs = [
          "include/js_protocol.pdl",
          "src/inspector/inspector_protocol_config.json",
@@ -133,7 +150,7 @@ index 85f31b7..7314584 100644
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4426,15 +4426,18 @@ genrule(
+@@ -4426,15 +4429,19 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
@@ -145,6 +162,7 @@ index 85f31b7..7314584 100644
 +           --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \
             --config $(location :src/inspector/inspector_protocol_config.json) \
             --config_value protocol.path=$(location :include/js_protocol.pdl) \
++           --config_value crdtp.dir=third_party/inspector_protocol/crdtp \
             --output_base $(@D)/src/inspector",
 -    local = 1,
      message = "Generating inspector files",
@@ -156,7 +174,7 @@ index 85f31b7..7314584 100644
      ],
  )
  
-@@ -4448,6 +4451,15 @@ filegroup(
+@@ -4448,6 +4455,15 @@ filegroup(
      ],
  )
  
@@ -172,7 +190,7 @@ index 85f31b7..7314584 100644
  filegroup(
      name = "d8_files",
      srcs = [
-@@ -4567,16 +4579,9 @@ cc_library(
+@@ -4567,16 +4583,9 @@ cc_library(
      ],
  )
  
@@ -191,7 +209,8 @@ index 85f31b7..7314584 100644
 +    actual = "@simdutf//:simdutf",
  )
  
-@@ -4593,7 +4598,7 @@ v8_library(
+ v8_library(
+@@ -4593,7 +4602,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [
          ":icu/generated_torque_definitions_headers",
@@ -200,7 +219,7 @@ index 85f31b7..7314584 100644
      ],
      icu_srcs = [
          ":generated_regexp_special_case",
-@@ -4608,7 +4613,7 @@ v8_library(
+@@ -4608,7 +4617,7 @@ v8_library(
      ],
      deps = [
          ":lib_dragonbox",
@@ -209,7 +228,7 @@ index 85f31b7..7314584 100644
          ":lib_fp16",
          ":simdutf",
          ":v8_libbase",
-@@ -4664,6 +4669,7 @@ alias(
+@@ -4664,6 +4673,7 @@ alias(
  alias(
      name = "core_lib_icu",
      actual = "icu/v8",
@@ -217,7 +236,7 @@ index 85f31b7..7314584 100644
  )
  
  v8_library(
-@@ -4715,7 +4721,7 @@ v8_binary(
+@@ -4715,7 +4725,7 @@ v8_binary(
      ],
      deps = [
          ":v8_libbase",

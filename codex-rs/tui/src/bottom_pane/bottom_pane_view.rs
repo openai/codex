@@ -130,4 +130,9 @@ pub(crate) trait BottomPaneView: Renderable {
     fn terminal_title_requires_action(&self) -> bool {
         false
     }
+
+    /// Return the next time-based redraw this view needs while it is active.
+    fn next_frame_delay(&self) -> Option<std::time::Duration> {
+        None
+    }
 }

@@ -30,9 +30,10 @@ impl ChatWidget {
     pub(crate) fn open_keymap_picker(&mut self) {
         match RuntimeKeymap::from_config(&self.config.tui_keymap) {
             Ok(runtime_keymap) => {
-                let params = keymap_setup::build_keymap_picker_params(
+                let params = keymap_setup::build_keymap_picker_params_with_filter(
                     &runtime_keymap,
                     &self.config.tui_keymap,
+                    self.keymap_action_filter(),
                 );
                 self.bottom_pane.show_selection_view(params);
             }
@@ -85,6 +86,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Opens the keypress inspector with the current runtime bindings.
+    pub(crate) fn open_keymap_debug(&mut self, runtime_keymap: &RuntimeKeymap) {
+        let view = keymap_setup::build_keymap_debug_view(runtime_keymap, &self.config.tui_keymap);
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
     /// Opens the menu that lets the user choose which existing binding to replace.
     ///
     /// This is only used for actions with multiple effective bindings. The chosen binding is
@@ -113,9 +121,10 @@ impl ChatWidget {
         action: &str,
         runtime_keymap: &RuntimeKeymap,
     ) {
-        let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+        let params = keymap_setup::build_keymap_picker_params_for_selected_action_with_filter(
             runtime_keymap,
             &self.config.tui_keymap,
+            self.keymap_action_filter(),
             context,
             action,
         );
@@ -128,15 +137,22 @@ impl ChatWidget {
             params,
         );
         if !replaced {
-            let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+            let params = keymap_setup::build_keymap_picker_params_for_selected_action_with_filter(
                 runtime_keymap,
                 &self.config.tui_keymap,
+                self.keymap_action_filter(),
                 context,
                 action,
             );
             self.bottom_pane.show_selection_view(params);
         }
         self.request_redraw();
+    }
+
+    fn keymap_action_filter(&self) -> keymap_setup::KeymapActionFilter {
+        keymap_setup::KeymapActionFilter {
+            fast_mode_enabled: self.fast_mode_enabled(),
+        }
     }
 
     /// Applies a committed keymap edit to the live chat widget.

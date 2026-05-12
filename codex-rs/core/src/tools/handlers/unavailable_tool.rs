@@ -3,9 +3,29 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
-pub struct UnavailableToolHandler;
+pub struct UnavailableToolHandler {
+    tool_name: ToolName,
+    spec: Option<ToolSpec>,
+}
+
+impl UnavailableToolHandler {
+    pub fn new(tool_name: ToolName, spec: ToolSpec) -> Self {
+        Self {
+            tool_name,
+            spec: Some(spec),
+        }
+    }
+
+    pub fn without_spec(tool_name: ToolName) -> Self {
+        Self {
+            tool_name,
+            spec: None,
+        }
+    }
+}
 
 pub(crate) fn unavailable_tool_message(
     tool_name: impl std::fmt::Display,
@@ -19,19 +39,21 @@ pub(crate) fn unavailable_tool_message(
 impl ToolHandler for UnavailableToolHandler {
     type Output = FunctionToolOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        self.spec.clone()
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            tool_name, payload, ..
-        } = invocation;
+        let ToolInvocation { payload, .. } = invocation;
 
         match payload {
             ToolPayload::Function { .. } => Ok(FunctionToolOutput::from_text(
                 unavailable_tool_message(
-                    tool_name.display(),
+                    &self.tool_name,
                     "Retry after the tool becomes available or ask the user to re-enable it.",
                 ),
                 Some(false),

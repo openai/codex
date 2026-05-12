@@ -262,31 +262,47 @@ impl App {
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
+                if let Some(params) = AppLinkViewParams::from_url_app_server_request(
                     thread_id,
+                    &params.server_name,
                     request_id.clone(),
-                    params.clone(),
+                    &params.request,
                 ) {
+                    Some(ThreadInteractiveRequest::AppLink(params))
+                } else if let Some(request) =
+                    McpServerElicitationFormRequest::from_app_server_request(
+                        thread_id,
+                        request_id.clone(),
+                        params.clone(),
+                    )
+                {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))
                 } else {
-                    Some(ThreadInteractiveRequest::Approval(
-                        ApprovalRequest::McpElicitation {
-                            thread_id,
-                            thread_label,
-                            server_name: params.server_name.clone(),
-                            request_id: request_id.clone(),
-                            message: match &params.request {
-                                codex_app_server_protocol::McpServerElicitationRequest::Form {
-                                    message,
-                                    ..
-                                }
-                                | codex_app_server_protocol::McpServerElicitationRequest::Url {
-                                    message,
-                                    ..
-                                } => message.clone(),
+                    match &params.request {
+                        codex_app_server_protocol::McpServerElicitationRequest::Form {
+                            message,
+                            ..
+                        } => Some(ThreadInteractiveRequest::Approval(
+                            ApprovalRequest::McpElicitation {
+                                thread_id,
+                                thread_label,
+                                server_name: params.server_name.clone(),
+                                request_id: request_id.clone(),
+                                message: message.clone(),
                             },
-                        },
-                    ))
+                        )),
+                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                            self.app_event_tx.resolve_elicitation(
+                                thread_id,
+                                params.server_name.clone(),
+                                request_id.clone(),
+                                codex_app_server_protocol::McpServerElicitationAction::Decline,
+                                /*content*/ None,
+                                /*meta*/ None,
+                            );
+                            None
+                        }
+                    }
                 }
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => Some(
@@ -304,6 +320,9 @@ impl App {
 
     pub(super) fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
         match request {
+            ThreadInteractiveRequest::AppLink(params) => {
+                self.chat_widget.open_app_link_view(params);
+            }
             ThreadInteractiveRequest::Approval(request) => {
                 self.render_inactive_patch_preview(&request);
                 self.chat_widget.push_approval_request(request);
@@ -394,10 +413,6 @@ impl App {
     ) -> Result<()> {
         crate::session_log::log_outbound_op(&op);
 
-        if self.try_handle_local_history_op(thread_id, &op).await? {
-            return Ok(());
-        }
-
         if self
             .try_resolve_app_server_request(app_server, thread_id, &op)
             .await?
@@ -422,70 +437,57 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task that fetches MCP server status from the app-server
-    /// via paginated RPCs, then delivers the result back through
-    /// `AppEvent::McpInventoryLoaded`.
-    ///
-    /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
-    /// result may arrive after the user has moved on. We currently accept that
-    /// tradeoff because the effect is limited to stale inventory output in history,
-    /// while request-token invalidation would add cross-cutting async state for a
-    /// low-severity path.
-    pub(super) async fn try_handle_local_history_op(
+    /// Persist prompt text in the local cross-session message history.
+    pub(super) fn append_message_history_entry(&self, thread_id: ThreadId, text: String) {
+        let history_config = codex_message_history::HistoryConfig::new(
+            self.chat_widget.config_ref().codex_home.clone(),
+            &self.chat_widget.config_ref().history,
+        );
+        tokio::spawn(async move {
+            if let Err(err) =
+                codex_message_history::append_entry(&text, thread_id, &history_config).await
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to append to message history"
+                );
+            }
+        });
+    }
+
+    /// Fetch one local cross-session message history entry for the requesting thread.
+    pub(super) async fn lookup_message_history_entry(
         &mut self,
         thread_id: ThreadId,
-        op: &AppCommand,
-    ) -> Result<bool> {
-        match op {
-            AppCommand::AddToHistory { text } => {
-                let text = text.to_string();
-                let config = self.chat_widget.config_ref().clone();
-                tokio::spawn(async move {
-                    if let Err(err) = append_message_history_entry(&text, &thread_id, &config).await
-                    {
-                        tracing::warn!(
-                            thread_id = %thread_id,
-                            error = %err,
-                            "failed to append to message history"
-                        );
-                    }
-                });
-                Ok(true)
-            }
-            AppCommand::GetHistoryEntryRequest { offset, log_id } => {
-                let config = self.chat_widget.config_ref().clone();
-                let app_event_tx = self.app_event_tx.clone();
-                let offset = *offset;
-                let log_id = *log_id;
-                tokio::spawn(async move {
-                    let entry_opt = tokio::task::spawn_blocking(move || {
-                        lookup_message_history_entry(log_id, offset, &config)
-                    })
-                    .await
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(error = %err, "history lookup task failed");
-                        None
-                    });
+        offset: usize,
+        log_id: u64,
+    ) -> Result<()> {
+        let history_config = codex_message_history::HistoryConfig::new(
+            self.chat_widget.config_ref().codex_home.clone(),
+            &self.chat_widget.config_ref().history,
+        );
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let entry_opt = tokio::task::spawn_blocking(move || {
+                codex_message_history::lookup(log_id, offset, &history_config)
+            })
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "history lookup task failed");
+                None
+            });
 
-                    app_event_tx.send(AppEvent::ThreadHistoryEntryResponse {
-                        thread_id,
-                        event: HistoryLookupResponse {
-                            offset,
-                            log_id,
-                            entry: entry_opt.map(|entry| {
-                                codex_protocol::message_history::HistoryEntry {
-                                    conversation_id: entry.session_id,
-                                    ts: entry.ts,
-                                    text: entry.text,
-                                }
-                            }),
-                        },
-                    });
-                });
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+            app_event_tx.send(AppEvent::ThreadHistoryEntryResponse {
+                thread_id,
+                event: HistoryLookupResponse {
+                    offset,
+                    log_id,
+                    entry: entry_opt.map(|entry| entry.text),
+                },
+            });
+        });
+        Ok(())
     }
 
     pub(super) async fn try_submit_active_thread_op_via_app_server(
@@ -604,7 +606,7 @@ impl App {
                             model.to_string(),
                             *effort,
                             *summary,
-                            *service_tier,
+                            service_tier.clone(),
                             collaboration_mode.clone(),
                             *personality,
                             final_output_json_schema.clone(),
@@ -619,7 +621,6 @@ impl App {
                         .skills_list(codex_app_server_protocol::SkillsListParams {
                             cwds: cwds.clone(),
                             force_reload: *force_reload,
-                            per_cwd_extra_user_roots: None,
                         })
                         .await,
                     "failed to refresh skills",
@@ -841,20 +842,14 @@ impl App {
         Ok(())
     }
 
-    /// Eagerly fetches nickname and role for receiver threads referenced by a collab notification.
+    /// Locally remembers receiver threads referenced by a collab notification.
     ///
-    /// This runs on every buffered thread notification before it reaches rendering. For each
-    /// receiver thread id that the navigation cache does not yet have metadata for, it issues a
-    /// `thread/read` RPC and registers the result in both `AgentNavigationState` and the
-    /// `ChatWidget` metadata map. Threads that already have a nickname or role cached are skipped,
-    /// so the cost is at most one RPC per thread over the lifetime of a session.
-    ///
-    /// Failures are logged and silently ignored -- the worst outcome is that a rendered item shows
-    /// a thread id instead of a human-readable name, which is the same behavior the TUI had before
-    /// this change.
-    pub(super) async fn hydrate_collab_agent_metadata_for_notification(
+    /// This intentionally avoids app-server reads on the active-thread rendering path. During large
+    /// fan-outs the app-server can be saturated with spawn work, and blocking here would freeze the
+    /// TUI event loop. Metadata from `ThreadStarted` or explicit picker refreshes still fills in
+    /// names and roles later; until then, rendering falls back to the thread id.
+    pub(super) fn cache_collab_receiver_threads_for_notification(
         &mut self,
-        app_server: &mut AppServerSession,
         notification: &ServerNotification,
     ) {
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
@@ -862,42 +857,26 @@ impl App {
         };
 
         for receiver_thread_id in receiver_thread_ids {
+            if collab_receiver_is_not_found(notification, receiver_thread_id) {
+                continue;
+            }
+
             let Ok(thread_id) = ThreadId::from_string(receiver_thread_id) else {
                 tracing::warn!(
                     thread_id = receiver_thread_id,
-                    "ignoring collab receiver with invalid thread id during metadata hydration"
+                    "ignoring collab receiver with invalid thread id during local caching"
                 );
                 continue;
             };
 
-            if self
-                .agent_navigation
-                .get(&thread_id)
-                .is_some_and(|entry| entry.agent_nickname.is_some() || entry.agent_role.is_some())
-            {
+            if self.agent_navigation.get(&thread_id).is_some() {
                 continue;
             }
 
-            match app_server
-                .thread_read(thread_id, /*include_turns*/ false)
-                .await
-            {
-                Ok(thread) => {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        thread.agent_nickname,
-                        thread.agent_role,
-                        /*is_closed*/ false,
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        thread_id = %thread_id,
-                        error = %err,
-                        "failed to hydrate collab receiver thread metadata"
-                    );
-                }
-            }
+            self.upsert_agent_picker_thread(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ false,
+            );
         }
     }
 
@@ -916,14 +895,13 @@ impl App {
         session.cwd = notification.thread.cwd.clone();
         let rollout_path = notification.thread.path.clone();
         if let Some(model) =
-            read_session_model(&self.config, thread_id, rollout_path.as_deref()).await
+            read_session_model(self.state_db.as_deref(), thread_id, rollout_path.as_deref()).await
         {
             session.model = model;
         } else if rollout_path.is_some() {
             session.model.clear();
         }
-        session.history_log_id = 0;
-        session.history_entry_count = 0;
+        session.message_history = None;
         session.rollout_path = rollout_path;
         self.upsert_agent_picker_thread(
             thread_id,
@@ -1238,6 +1216,12 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let should_buffer_replay = self.terminal_resize_reflow_enabled()
+            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
+        if should_buffer_replay {
+            self.app_event_tx
+                .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
+        }
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
@@ -1263,6 +1247,10 @@ impl App {
             }
             self.handle_thread_event_replay(event);
         }
+        if should_buffer_replay {
+            self.app_event_tx
+                .send(AppEvent::EndInitialHistoryReplayBuffer);
+        }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget
@@ -1279,6 +1267,16 @@ impl App {
             session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         )
+    }
+
+    pub(super) fn should_prompt_for_paused_goal_after_startup_resume(
+        session_selection: &SessionSelection,
+        initial_prompt: &Option<String>,
+        initial_images: &[PathBuf],
+    ) -> bool {
+        matches!(session_selection, SessionSelection::Resume(_))
+            && initial_prompt.is_none()
+            && initial_images.is_empty()
     }
 
     pub(super) fn should_handle_active_thread_events(
@@ -1345,6 +1343,7 @@ impl App {
         );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
+                self.cache_collab_receiver_threads_for_notification(&notification);
                 self.chat_widget
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
@@ -1447,11 +1446,6 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        if let ThreadBufferedEvent::Notification(notification) = &event {
-            self.hydrate_collab_agent_metadata_for_notification(app_server, notification)
-                .await;
-        }
-
         self.handle_thread_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();

@@ -131,10 +131,11 @@
       ],
       "type": "string"
     },
-    "ServiceTier": {
+    "ThreadSource": {
       "enum": [
-        "fast",
-        "flex"
+        "user",
+        "subagent",
+        "memory_consolidation"
       ],
       "type": "string"
     }
@@ -190,10 +191,6 @@
     "ephemeral": {
       "type": "boolean"
     },
-    "excludeTurns": {
-      "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
-      "type": "boolean"
-    },
     "model": {
       "description": "Configuration overrides for the forked thread, if any.",
       "type": [
@@ -218,24 +215,24 @@
       ]
     },
     "serviceTier": {
-      "anyOf": [
-        {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "threadId": {
       "type": "string"
+    },
+    "threadSource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional client-supplied analytics source classification for this forked thread."
     }
   },
   "required": [

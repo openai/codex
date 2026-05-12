@@ -13,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
 
@@ -49,6 +50,13 @@ pub(super) fn scoped_rollout_path(
             ),
         })
     }
+}
+
+pub(super) fn rollout_path_is_archived(codex_home: &Path, path: &Path) -> bool {
+    path.starts_with(codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
+        || path
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new(ARCHIVED_SESSIONS_SUBDIR))
 }
 
 pub(super) fn matching_rollout_file_name(
@@ -102,7 +110,11 @@ pub(super) fn stored_thread_from_rollout_item(
         item.git_origin_url.clone(),
     );
     let source = item.source.unwrap_or(SessionSource::Unknown);
-    let preview = item.first_user_message.clone().unwrap_or_default();
+    let preview = item
+        .preview
+        .clone()
+        .or_else(|| item.first_user_message.clone())
+        .unwrap_or_default();
 
     Some(StoredThread {
         thread_id,
@@ -122,6 +134,7 @@ pub(super) fn stored_thread_from_rollout_item(
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),
         source,
+        thread_source: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         agent_path: None,

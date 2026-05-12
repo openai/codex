@@ -8,6 +8,7 @@ description = "Codex exec policy: prefix-based Starlark rules for command decisi
 [lib]
 name = "codex_execpolicy"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "codex-execpolicy"

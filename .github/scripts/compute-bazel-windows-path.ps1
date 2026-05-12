@@ -5,9 +5,9 @@ tool entries, such as Maven, that can change independently of this repo and
 cause avoidable cache misses.
 
 This script derives a smaller, cache-stable PATH that keeps the Windows
-toolchain entries Bazel-backed CI tasks need: MSVC and Windows SDK paths, Git,
-PowerShell, Node, Python, DotSlash, and the standard Windows system
-directories.
+toolchain entries Bazel-backed CI tasks need: MSVC and Windows SDK paths,
+MinGW runtime DLL paths for gnullvm-built tests, Git, PowerShell, Node, Python,
+DotSlash, and the standard Windows system directories.
 `setup-bazel-ci` runs this after exporting the MSVC environment, and the script
 publishes the result via `GITHUB_ENV` as `CODEX_BAZEL_WINDOWS_PATH` so later
 steps can pass that explicit PATH to Bazel.
@@ -49,6 +49,8 @@ foreach ($pathEntry in ($env:PATH -split ';')) {
     $pathEntry -like '*Microsoft Visual Studio*' -or
     $pathEntry -like '*Windows Kits*' -or
     $pathEntry -like '*Microsoft SDKs*' -or
+    $pathEntry -eq 'C:\mingw64\bin' -or
+    $pathEntry -like 'C:\msys64\*\bin' -or
     $pathEntry -like 'C:\Program Files\Git\*' -or
     $pathEntry -like 'C:\Program Files\PowerShell\*' -or
     $pathEntry -like 'C:\hostedtoolcache\windows\node\*' -or
@@ -83,6 +85,12 @@ if ($pythonCommand) {
 $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($pwshCommand) {
   Add-StablePathEntry (Split-Path $pwshCommand.Source -Parent)
+}
+
+foreach ($mingwPath in @('C:\mingw64\bin', 'C:\msys64\mingw64\bin', 'C:\msys64\ucrt64\bin')) {
+  if (Test-Path $mingwPath) {
+    Add-StablePathEntry $mingwPath
+  }
 }
 
 if ($windowsAppsPath) {

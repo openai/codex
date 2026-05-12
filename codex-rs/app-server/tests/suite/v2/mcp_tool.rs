@@ -13,10 +13,16 @@ use axum::Router;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpElicitationSchema;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -27,12 +33,17 @@ use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::BooleanSchema;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
+use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::ElicitationAction;
+use rmcp::model::ElicitationSchema;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Meta;
+use rmcp::model::PrimitiveSchema;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
@@ -52,6 +63,11 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_SERVER_NAME: &str = "tool_server";
 const TEST_TOOL_NAME: &str = "echo_tool";
 const LARGE_RESPONSE_MESSAGE: &str = "large";
+const ELICITATION_TRIGGER_MESSAGE: &str = "confirm";
+const ELICITATION_MESSAGE: &str = "Allow this request?";
+const URL_ELICITATION_TRIGGER_MESSAGE: &str = "auth";
+const URL_ELICITATION_MESSAGE: &str = "Sign in to GitHub to continue.";
+const URL_ELICITATION_URL: &str = "https://github.example/login/device";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
@@ -167,6 +183,219 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
         error.error.message.contains("thread not found"),
         "expected thread-not-found error, got: {error:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_server_tool_call_round_trips_elicitation() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.{TEST_SERVER_NAME}]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+
+    let tool_call_request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread.id.clone(),
+            server: TEST_SERVER_NAME.to_string(),
+            tool: TEST_TOOL_NAME.to_string(),
+            arguments: Some(json!({
+                "message": ELICITATION_TRIGGER_MESSAGE,
+            })),
+            meta: None,
+        })
+        .await?;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::McpServerElicitationRequest { request_id, params } = server_req else {
+        panic!("expected McpServerElicitationRequest request, got: {server_req:?}");
+    };
+    let requested_schema: McpElicitationSchema = serde_json::from_value(serde_json::to_value(
+        ElicitationSchema::builder()
+            .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+            .build()
+            .map_err(anyhow::Error::msg)?,
+    )?)?;
+    assert_eq!(
+        params,
+        McpServerElicitationRequestParams {
+            thread_id: thread.id,
+            turn_id: None,
+            server_name: TEST_SERVER_NAME.to_string(),
+            request: McpServerElicitationRequest::Form {
+                meta: None,
+                message: ELICITATION_MESSAGE.to_string(),
+                requested_schema,
+            },
+        }
+    );
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({
+                "confirmed": true,
+            })),
+            meta: None,
+        })?,
+    )
+    .await?;
+
+    let tool_call_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
+    assert_eq!(response.content.len(), 1);
+    assert_eq!(response.content[0].get("type"), Some(&json!("text")));
+    assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_server_tool_call_forwards_url_elicitation() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.{TEST_SERVER_NAME}]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+
+    let tool_call_request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread.id.clone(),
+            server: TEST_SERVER_NAME.to_string(),
+            tool: TEST_TOOL_NAME.to_string(),
+            arguments: Some(json!({
+                "message": URL_ELICITATION_TRIGGER_MESSAGE,
+            })),
+            meta: None,
+        })
+        .await?;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::McpServerElicitationRequest { request_id, params } = server_req else {
+        panic!("expected McpServerElicitationRequest request, got: {server_req:?}");
+    };
+    assert_eq!(
+        params,
+        McpServerElicitationRequestParams {
+            thread_id: thread.id,
+            turn_id: None,
+            server_name: TEST_SERVER_NAME.to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: URL_ELICITATION_MESSAGE.to_string(),
+                url: URL_ELICITATION_URL.to_string(),
+                elicitation_id: "github-auth-123".to_string(),
+            },
+        }
+    );
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: None,
+            meta: None,
+        })?,
+    )
+    .await?;
+
+    let tool_call_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
+    assert_eq!(response.content.len(), 1);
+    assert_eq!(response.content[0].get("type"), Some(&json!("text")));
+    assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
 
     Ok(())
 }
@@ -373,6 +602,58 @@ impl ServerHandler for ToolAppsMcpServer {
             result.content = vec![Content::text(large_text)];
             result.meta = Some(meta);
             return Ok(result);
+        }
+
+        if message == ELICITATION_TRIGGER_MESSAGE {
+            let requested_schema = ElicitationSchema::builder()
+                .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                .build()
+                .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+            let result = context
+                .peer
+                .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: ELICITATION_MESSAGE.to_string(),
+                    requested_schema,
+                })
+                .await
+                .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+            let output = match result.action {
+                ElicitationAction::Accept => {
+                    assert_eq!(
+                        result.content,
+                        Some(json!({
+                            "confirmed": true,
+                        }))
+                    );
+                    "accepted"
+                }
+                ElicitationAction::Decline => "declined",
+                ElicitationAction::Cancel => "cancelled",
+            };
+            return Ok(CallToolResult::success(vec![Content::text(output)]));
+        }
+
+        if message == URL_ELICITATION_TRIGGER_MESSAGE {
+            let result = context
+                .peer
+                .create_elicitation(CreateElicitationRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: URL_ELICITATION_MESSAGE.to_string(),
+                    url: URL_ELICITATION_URL.to_string(),
+                    elicitation_id: "github-auth-123".to_string(),
+                })
+                .await
+                .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+            let output = match result.action {
+                ElicitationAction::Accept => {
+                    assert_eq!(result.content, Some(json!({})));
+                    "accepted"
+                }
+                ElicitationAction::Decline => "declined",
+                ElicitationAction::Cancel => "cancelled",
+            };
+            return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
         let mut result = CallToolResult::structured(json!({

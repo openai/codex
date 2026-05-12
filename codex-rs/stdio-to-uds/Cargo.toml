@@ -11,6 +11,8 @@ path = "src/main.rs"
 [lib]
 name = "codex_stdio_to_uds"
 path = "src/lib.rs"
+test = false
+doctest = false
 
 [lints]
 workspace = true

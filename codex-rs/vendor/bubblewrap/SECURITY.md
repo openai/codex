@@ -15,6 +15,13 @@ between the user and the OS, because anything bubblewrap could do, a
 malicious user could equally well do by writing their own tool equivalent
 to bubblewrap.
 
+Since 0.11.2, unless compiled with the `-Dsupport_setuid=true` option,
+setuid root support is disabled. In this mode bubblewrap will refuse
+to operate if the binary has been made setuid. For binaries built like
+this it is safe to ignore any bubblewrap CVEs that are described as
+affecting setuid mode only. This is the recommended way to package
+bubblewrap.
+
 ### Sandbox security
 
 bubblewrap is a toolkit for constructing sandbox environments.
