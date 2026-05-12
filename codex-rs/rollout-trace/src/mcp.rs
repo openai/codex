@@ -55,7 +55,10 @@ impl McpCallTraceContext {
                 );
                 Some(JsonValue::Object(map))
             }
-            Some(_) => unreachable!("MCP request metadata is always a JSON object"),
+            // This should never happen but if it does then we'll fallback to
+            // a noop rather than any breaking behavior. The tracing is best
+            // effort after all.
+            Some(_) => meta,
         }
     }
 }
