@@ -120,7 +120,8 @@ impl<'de> Deserialize<'de> for ForcedChatgptWorkspaceIds {
             Repr::Single(value) if value.contains(',') => Err(D::Error::custom(
                 "forced_chatgpt_workspace_id must be a single workspace ID string or a TOML list \
 of strings; comma-separated strings are not supported. Use \
-`forced_chatgpt_workspace_id = [\"workspace-a\", \"workspace-b\"]` instead.",
+`forced_chatgpt_workspace_id = [\"123e4567-e89b-42d3-a456-426614174000\", \
+\"123e4567-e89b-42d3-a456-426614174001\"]` instead.",
             )),
             Repr::Single(value) => Ok(Self::Single(value)),
             Repr::Multiple(values) => Ok(Self::Multiple(values)),
@@ -1009,40 +1010,46 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {
-        let config: ConfigToml = toml::from_str(r#"forced_chatgpt_workspace_id = "workspace-a""#)
-            .expect("single workspace id should deserialize");
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A}""#
+        ))
+        .expect("single workspace id should deserialize");
 
         assert_eq!(
             config
                 .forced_chatgpt_workspace_id
                 .expect("workspace id should be set")
                 .into_vec(),
-            vec!["workspace-a".to_string()]
+            vec![WORKSPACE_ID_A.to_string()]
         );
     }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_string_list() {
-        let config: ConfigToml =
-            toml::from_str(r#"forced_chatgpt_workspace_id = ["workspace-a", "workspace-b"]"#)
-                .expect("workspace id list should deserialize");
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]"#
+        ))
+        .expect("workspace id list should deserialize");
 
         assert_eq!(
             config
                 .forced_chatgpt_workspace_id
                 .expect("workspace ids should be set")
                 .into_vec(),
-            vec!["workspace-a".to_string(), "workspace-b".to_string()]
+            vec![WORKSPACE_ID_A.to_string(), WORKSPACE_ID_B.to_string()]
         );
     }
 
     #[test]
     fn forced_chatgpt_workspace_id_rejects_comma_separated_string() {
-        let err = toml::from_str::<ConfigToml>(
-            r#"forced_chatgpt_workspace_id = "workspace-a,workspace-b""#,
-        )
+        let err = toml::from_str::<ConfigToml>(&format!(
+            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A},{WORKSPACE_ID_B}""#
+        ))
         .expect_err("comma-separated string should be rejected");
 
         let message = err.to_string();

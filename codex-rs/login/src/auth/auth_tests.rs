@@ -22,6 +22,10 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
+const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
+const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
+
 #[tokio::test]
 async fn refresh_without_id_token() {
     let codex_home = tempdir().unwrap();
@@ -87,7 +91,7 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 async fn login_with_access_token_writes_only_token() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
     let server = MockServer::start().await;
@@ -145,7 +149,7 @@ async fn login_with_access_token_rejects_invalid_jwt() {
 #[tokio::test]
 async fn login_with_access_token_rejects_unsigned_jwt() {
     let dir = tempdir().unwrap();
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -329,7 +333,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_mine".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -712,7 +716,7 @@ fn remove_access_token_env_var() -> EnvVarGuard {
 #[serial(codex_auth_env)]
 async fn load_auth_reads_access_token_from_env() {
     let codex_home = tempdir().unwrap();
-    let expected_record = agent_identity_record("account-123");
+    let expected_record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&expected_record, json!(expected_record.plan_type))
             .expect("signed agent identity");
@@ -762,7 +766,7 @@ async fn load_auth_reads_access_token_from_env() {
 #[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
-    let record = agent_identity_record("account-123");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
     let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
     let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
@@ -814,7 +818,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_another_org".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_DISALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -823,14 +827,17 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some(vec!["org_mine".to_string()]),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 
     let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
-    assert!(err.to_string().contains("workspace(s) org_mine"));
+    assert!(
+        err.to_string()
+            .contains(&format!("workspace(s) {WORKSPACE_ID_ALLOWED}"))
+    );
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
@@ -846,7 +853,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_mine".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -855,7 +862,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some(vec!["org_mine".to_string()]),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 
@@ -876,7 +883,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
         AuthFileParams {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
-            chatgpt_account_id: Some("org_mine".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
         },
         codex_home.path(),
     )
@@ -885,7 +892,10 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some(vec!["org_other".to_string(), "org_mine".to_string()]),
+        Some(vec![
+            WORKSPACE_ID_SECOND_ALLOWED.to_string(),
+            WORKSPACE_ID_ALLOWED.to_string(),
+        ]),
     )
     .await;
 
@@ -899,7 +909,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
 async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismatch() {
     let codex_home = tempdir().unwrap();
     let _access_token_guard = remove_access_token_env_var();
-    let record = agent_identity_record("org_another_org");
+    let record = agent_identity_record(WORKSPACE_ID_DISALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
     let server = MockServer::start().await;
@@ -937,17 +947,16 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
         codex_home: codex_home.path().to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method: None,
-        forced_chatgpt_workspace_id: Some(vec!["org_mine".to_string()]),
+        forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         chatgpt_base_url: Some(chatgpt_base_url),
     };
 
     let err = super::enforce_login_restrictions(&config)
         .await
         .expect_err("expected workspace mismatch to error");
-    assert!(
-        err.to_string()
-            .contains("current credentials belong to org_another_org")
-    );
+    assert!(err.to_string().contains(&format!(
+        "current credentials belong to {WORKSPACE_ID_DISALLOWED}"
+    )));
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
@@ -966,7 +975,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some(vec!["org_mine".to_string()]),
+        Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
     )
     .await;
 

@@ -18,6 +18,9 @@ use url::Url;
 
 const DEFAULT_LOGIN_PORT: u16 = 1455;
 const FALLBACK_LOGIN_PORT: u16 = 1457;
+const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
+const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
+const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
 // See spawn.rs for details
 
@@ -167,7 +170,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 async fn creates_missing_codex_home_dir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -210,7 +213,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -226,8 +229,8 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(vec![
-            "org-required-a".to_string(),
-            "org-required-b".to_string(),
+            WORKSPACE_ID_ALLOWED.to_string(),
+            WORKSPACE_ID_SECOND_ALLOWED.to_string(),
         ]),
         codex_streamlined_login: false,
     };
@@ -239,7 +242,9 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         .collect::<Vec<_>>();
     assert_eq!(
         allowed_workspace_ids,
-        vec!["org-required-a,org-required-b".to_string()]
+        vec![format!(
+            "{WORKSPACE_ID_ALLOWED},{WORKSPACE_ID_SECOND_ALLOWED}"
+        )]
     );
 
     Ok(())
@@ -249,7 +254,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
 async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-actual");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_DISALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -264,14 +269,14 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state.clone()),
-        forced_chatgpt_workspace_id: Some(vec!["org-required".to_string()]),
+        forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     assert!(
         server
             .auth_url
-            .contains("allowed_workspace_id=org-required"),
+            .contains(&format!("allowed_workspace_id={WORKSPACE_ID_ALLOWED}")),
         "auth URL should include forced workspace parameter"
     );
     let login_port = server.actual_port;
@@ -282,7 +287,9 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     assert!(resp.status().is_success());
     let body = resp.text().await?;
     assert!(
-        body.contains("Login is restricted to workspace id(s) org-required"),
+        body.contains(&format!(
+            "Login is restricted to workspace id(s) {WORKSPACE_ID_ALLOWED}"
+        )),
         "error body should mention workspace restriction"
     );
 
@@ -307,7 +314,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
 async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -375,7 +382,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
 async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -483,7 +490,7 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
         })
     };
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
     let tmp = tempdir()?;
 
@@ -521,7 +528,7 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
 async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let first_tmp = tempdir()?;
