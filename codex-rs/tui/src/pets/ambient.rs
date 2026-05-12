@@ -312,9 +312,7 @@ impl AmbientPet {
                 }
             })
             .unwrap_or(0);
-        self.frames
-            .get(sprite_index.min(self.frames.len().saturating_sub(1)))
-            .cloned()
+        self.frame_path_for_sprite_index(sprite_index)
     }
 
     fn first_idle_frame_path(&self) -> Option<PathBuf> {
@@ -324,6 +322,10 @@ impl AmbientPet {
             .get("idle")
             .and_then(|animation| animation.frames.first())
             .map_or(0, |frame| frame.sprite_index);
+        self.frame_path_for_sprite_index(sprite_index)
+    }
+
+    fn frame_path_for_sprite_index(&self, sprite_index: usize) -> Option<PathBuf> {
         self.frames
             .get(sprite_index.min(self.frames.len().saturating_sub(1)))
             .cloned()

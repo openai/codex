@@ -428,7 +428,7 @@ fn load_animations(
             .then_some(/*loop_start*/ 0);
 
         animations.insert(
-            name.clone(),
+            name,
             Animation {
                 frames: spec
                     .frames

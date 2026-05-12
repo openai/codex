@@ -52,7 +52,7 @@ fn write_pixels(
     for band_index in 0..band_count {
         let band_top = band_index * SIXEL_BAND_HEIGHT;
         let colors = active_colors_for_band(rgba, width, height, band_top, palette)?;
-        for (color_index_index, color_index) in colors.iter().enumerate() {
+        for (position, color_index) in colors.iter().enumerate() {
             output.extend_from_slice(format!("#{color_index}").as_bytes());
             let mut run_char = None;
             let mut run_len = 0usize;
@@ -61,7 +61,7 @@ fn write_pixels(
                 push_run(&mut run_char, &mut run_len, output, data);
             }
             flush_run(&mut run_char, &mut run_len, output);
-            if color_index_index + 1 < colors.len() {
+            if position + 1 < colors.len() {
                 output.push(b'$');
             }
         }

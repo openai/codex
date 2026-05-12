@@ -79,15 +79,17 @@ impl ChatWidget {
         area: Rect,
         composer_bottom_y: u16,
     ) -> Option<crate::pets::AmbientPetDraw> {
-        self.bottom_pane.no_modal_or_popup_active().then(|| {
-            let anchor_bottom_y = match self.config.tui_pet_anchor {
-                TuiPetAnchor::Composer => composer_bottom_y,
-                TuiPetAnchor::ScreenBottom => area.bottom(),
-            };
-            self.ambient_pet
-                .as_ref()?
-                .draw_request(area, anchor_bottom_y)
-        })?
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return None;
+        }
+
+        let anchor_bottom_y = match self.config.tui_pet_anchor {
+            TuiPetAnchor::Composer => composer_bottom_y,
+            TuiPetAnchor::ScreenBottom => area.bottom(),
+        };
+        self.ambient_pet
+            .as_ref()?
+            .draw_request(area, anchor_bottom_y)
     }
 
     pub(super) fn ambient_pet_wrap_reserved_cols(&self) -> u16 {
@@ -145,8 +147,9 @@ impl ChatWidget {
         let initial_pet_id = self
             .config
             .tui_pet
-            .clone()
-            .unwrap_or_else(|| crate::pets::DEFAULT_PET_ID.to_string());
+            .as_deref()
+            .unwrap_or(crate::pets::DEFAULT_PET_ID)
+            .to_string();
         self.start_pet_picker_preview(initial_pet_id);
     }
 
@@ -187,12 +190,7 @@ impl ChatWidget {
     pub(crate) fn set_tui_pet(&mut self, pet: Option<String>) {
         self.config.tui_pet = pet;
         self.ambient_pet = load_ambient_pet(&self.config, self.frame_requester.clone());
-        #[cfg(test)]
-        if let Some(support) = self.pet_image_support_override
-            && let Some(pet) = self.ambient_pet.as_mut()
-        {
-            pet.set_image_support_for_tests(support);
-        }
+        self.apply_ambient_pet_image_support_override_for_tests();
         self.request_redraw();
     }
 
@@ -203,14 +201,21 @@ impl ChatWidget {
     ) {
         self.config.tui_pet = pet;
         self.ambient_pet = ambient_pet;
-        #[cfg(test)]
+        self.apply_ambient_pet_image_support_override_for_tests();
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn apply_ambient_pet_image_support_override_for_tests(&mut self) {
         if let Some(support) = self.pet_image_support_override
             && let Some(pet) = self.ambient_pet.as_mut()
         {
             pet.set_image_support_for_tests(support);
         }
-        self.request_redraw();
     }
+
+    #[cfg(not(test))]
+    fn apply_ambient_pet_image_support_override_for_tests(&mut self) {}
 
     pub(crate) fn start_pet_picker_preview(&mut self, pet_id: String) {
         self.pet_picker_preview_request_id =
@@ -306,9 +311,7 @@ impl ChatWidget {
         support: crate::pets::PetImageSupport,
     ) {
         self.pet_image_support_override = Some(support);
-        if let Some(pet) = self.ambient_pet.as_mut() {
-            pet.set_image_support_for_tests(support);
-        }
+        self.apply_ambient_pet_image_support_override_for_tests();
     }
 
     #[cfg(test)]

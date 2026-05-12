@@ -201,19 +201,14 @@ pub fn kitty_transmit_png_with_id(
     for (index, chunk) in chunks.iter().enumerate() {
         let chunk = std::str::from_utf8(chunk).context("base64 payload is not valid UTF-8")?;
         let has_more = index + 1 < chunks.len();
+        let more_flag = u8::from(has_more);
         if index == 0 {
-            let image_id = image_id
-                .map(|image_id| format!(",i={image_id}"))
-                .unwrap_or_default();
+            let image_id = kitty_image_id_arg(image_id);
             command.push_str(&format!(
-                "{ESC}_Ga=T,t=d,f=100,c={columns},r={rows},q=2{image_id},m={};{chunk}{ST}",
-                if has_more { 1 } else { 0 },
+                "{ESC}_Ga=T,t=d,f=100,c={columns},r={rows},q=2{image_id},m={more_flag};{chunk}{ST}",
             ));
         } else {
-            command.push_str(&format!(
-                "{ESC}_Gm={};{chunk}{ST}",
-                if has_more { 1 } else { 0 },
-            ));
+            command.push_str(&format!("{ESC}_Gm={more_flag};{chunk}{ST}"));
         }
     }
 
@@ -230,12 +225,16 @@ pub fn kitty_transmit_png_file_with_id(
         .canonicalize()
         .with_context(|| format!("canonicalize {}", path.display()))?;
     let payload = general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
-    let image_id = image_id
-        .map(|image_id| format!(",i={image_id}"))
-        .unwrap_or_default();
+    let image_id = kitty_image_id_arg(image_id);
     let command = format!("{ESC}_Ga=T,t=f,f=100,c={columns},r={rows},q=2{image_id};{payload}{ST}");
 
     Ok(wrap_for_tmux_if_needed(&command))
+}
+
+fn kitty_image_id_arg(image_id: Option<u32>) -> String {
+    image_id
+        .map(|image_id| format!(",i={image_id}"))
+        .unwrap_or_default()
 }
 
 fn wrap_for_tmux_if_needed(command: &str) -> String {
