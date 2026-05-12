@@ -3,6 +3,12 @@ use crate::turn_timing::now_unix_timestamp_ms;
 
 pub(crate) struct Handler;
 
+impl Handler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_close_agent_tool_v1())
+    }
+}
+
 impl ToolHandler for Handler {
     type Output = CloseAgentResult;
 

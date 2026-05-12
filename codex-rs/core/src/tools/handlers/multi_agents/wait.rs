@@ -16,6 +16,12 @@ use tokio::time::timeout_at;
 #[derive(Default)]
 pub(crate) struct Handler;
 
+impl Handler {
+    pub(crate) fn definition(options: WaitAgentTimeoutOptions) -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_wait_agent_tool_v1(options))
+    }
+}
+
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
 

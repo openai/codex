@@ -18,6 +18,8 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -35,9 +37,23 @@ use super::ExecCommandEnvironmentArgs;
 use super::effective_max_output_tokens;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
+use crate::tools::handlers::shell_spec::CommandToolOptions;
+use crate::tools::handlers::shell_spec::create_exec_command_tool_with_environment_id;
 
 #[derive(Default)]
 pub struct ExecCommandHandler;
+
+impl ExecCommandHandler {
+    pub(crate) fn definition(
+        options: CommandToolOptions,
+        include_environment_id: bool,
+    ) -> RuntimeToolDefinition {
+        runtime_tool_definition(
+            Self,
+            create_exec_command_tool_with_environment_id(options, include_environment_id),
+        )
+    }
+}
 
 impl ToolHandler for ExecCommandHandler {
     type Output = ExecCommandToolOutput;

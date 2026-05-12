@@ -13,10 +13,19 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::test_sync_spec::create_test_sync_tool;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_tools::ToolName;
 
 pub struct TestSyncHandler;
+
+impl TestSyncHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_test_sync_tool())
+    }
+}
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
 

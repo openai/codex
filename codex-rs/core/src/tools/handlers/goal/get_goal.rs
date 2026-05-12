@@ -2,8 +2,11 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_tools::ToolName;
 
 use super::CompletionBudgetReport;
@@ -11,6 +14,12 @@ use super::format_goal_error;
 use super::goal_response;
 
 pub struct GetGoalHandler;
+
+impl GetGoalHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_get_goal_tool())
+    }
+}
 
 impl ToolHandler for GetGoalHandler {
     type Output = FunctionToolOutput;

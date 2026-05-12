@@ -2,7 +2,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::plan_spec::create_update_plan_tool;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -12,6 +15,12 @@ use codex_tools::ToolName;
 use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
+
+impl PlanHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_update_plan_tool())
+    }
+}
 
 pub struct PlanToolOutput;
 

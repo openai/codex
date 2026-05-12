@@ -4,9 +4,12 @@ use crate::goals::SetGoalRequest;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::goal_spec::create_update_goal_tool;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::ToolName;
 
@@ -16,6 +19,12 @@ use super::format_goal_error;
 use super::goal_response;
 
 pub struct UpdateGoalHandler;
+
+impl UpdateGoalHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_update_goal_tool())
+    }
+}
 
 impl ToolHandler for UpdateGoalHandler {
     type Output = FunctionToolOutput;

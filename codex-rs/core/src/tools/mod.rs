@@ -9,6 +9,7 @@ pub(crate) mod orchestrator;
 pub(crate) mod parallel;
 pub(crate) mod registry;
 pub(crate) mod router;
+pub(crate) mod runtime_definition;
 pub(crate) mod runtimes;
 pub(crate) mod sandboxing;
 pub(crate) mod spec;

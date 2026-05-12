@@ -13,6 +13,12 @@ use codex_protocol::protocol::Op;
 #[derive(Default)]
 pub(crate) struct Handler;
 
+impl Handler {
+    pub(crate) fn definition(options: SpawnAgentToolOptions) -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_spawn_agent_tool_v2(options))
+    }
+}
+
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
 

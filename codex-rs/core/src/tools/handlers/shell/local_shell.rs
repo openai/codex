@@ -15,7 +15,10 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
+use crate::tools::handlers::shell_spec::create_local_shell_tool;
 
 #[derive(Default)]
 pub struct LocalShellHandler {
@@ -27,6 +30,10 @@ impl LocalShellHandler {
         Self {
             supports_parallel_tool_calls: true,
         }
+    }
+
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self::new(), create_local_shell_tool())
     }
 }
 

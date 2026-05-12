@@ -1,5 +1,3 @@
-use crate::tools::code_mode::execute_spec::create_code_mode_tool;
-use crate::tools::code_mode::wait_spec::create_wait_tool;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
@@ -26,62 +24,28 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
-use crate::tools::handlers::agent_jobs_spec::create_report_agent_job_result_tool;
-use crate::tools::handlers::agent_jobs_spec::create_spawn_agents_on_csv_tool;
-use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::extension_tools::ExtensionToolHandler;
-use crate::tools::handlers::goal_spec::create_create_goal_tool;
-use crate::tools::handlers::goal_spec::create_get_goal_tool;
-use crate::tools::handlers::goal_spec::create_update_goal_tool;
-use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
-use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
-use crate::tools::handlers::mcp_resource_spec::create_read_mcp_resource_tool;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
 use crate::tools::handlers::multi_agents::SpawnAgentHandler;
 use crate::tools::handlers::multi_agents::WaitAgentHandler;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
-use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
-use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
-use crate::tools::handlers::multi_agents_spec::create_followup_task_tool;
-use crate::tools::handlers::multi_agents_spec::create_list_agents_tool;
-use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
-use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
-use crate::tools::handlers::multi_agents_spec::create_send_message_tool;
-use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
-use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
-use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
-use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-use crate::tools::handlers::plan_spec::create_update_plan_tool;
-use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
-use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
-use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::shell_spec::CommandToolOptions;
 use crate::tools::handlers::shell_spec::ShellToolOptions;
-use crate::tools::handlers::shell_spec::create_exec_command_tool_with_environment_id;
-use crate::tools::handlers::shell_spec::create_local_shell_tool;
-use crate::tools::handlers::shell_spec::create_request_permissions_tool;
-use crate::tools::handlers::shell_spec::create_shell_command_tool;
-use crate::tools::handlers::shell_spec::create_shell_tool;
-use crate::tools::handlers::shell_spec::create_write_stdin_tool;
-use crate::tools::handlers::shell_spec::request_permissions_tool_description;
-use crate::tools::handlers::test_sync_spec::create_test_sync_tool;
-use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
-use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::AnyToolHandler;
-use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
 use crate::tools::spec_plan_types::ToolNamespace;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
@@ -157,20 +121,17 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                CodeModeExecuteHandler,
-                create_code_mode_tool(
-                    &enabled_tools,
-                    &namespace_descriptions,
-                    config.code_mode_only_enabled,
-                    tool_search_plan.deferred_tools_available(),
-                ),
+            CodeModeExecuteHandler::definition(
+                &enabled_tools,
+                &namespace_descriptions,
+                config.code_mode_only_enabled,
+                tool_search_plan.deferred_tools_available(),
             ),
         );
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(CodeModeWaitHandler, create_wait_tool()),
+            CodeModeWaitHandler::definition(),
         );
     }
 
@@ -185,35 +146,32 @@ pub fn build_tool_registry_builder(
                 register_and_publish_tool_definition(
                     &mut builder,
                     config,
-                    runtime_tool_definition(ShellHandler::new(), create_shell_tool(shell_options)),
+                    ShellHandler::definition(shell_options),
                 );
             }
             ConfigShellToolType::Local => {
                 register_and_publish_tool_definition(
                     &mut builder,
                     config,
-                    runtime_tool_definition(LocalShellHandler::new(), create_local_shell_tool()),
+                    LocalShellHandler::definition(),
                 );
             }
             ConfigShellToolType::UnifiedExec => {
                 register_and_publish_tool_definition(
                     &mut builder,
                     config,
-                    runtime_tool_definition(
-                        ExecCommandHandler,
-                        create_exec_command_tool_with_environment_id(
-                            CommandToolOptions {
-                                allow_login_shell: config.allow_login_shell,
-                                exec_permission_approvals_enabled,
-                            },
-                            include_environment_id,
-                        ),
+                    ExecCommandHandler::definition(
+                        CommandToolOptions {
+                            allow_login_shell: config.allow_login_shell,
+                            exec_permission_approvals_enabled,
+                        },
+                        include_environment_id,
                     ),
                 );
                 register_and_publish_tool_definition(
                     &mut builder,
                     config,
-                    runtime_tool_definition(WriteStdinHandler, create_write_stdin_tool()),
+                    WriteStdinHandler::definition(),
                 );
             }
             ConfigShellToolType::Disabled => {}
@@ -225,9 +183,9 @@ pub fn build_tool_registry_builder(
                 register_and_publish_tool_definition(
                     &mut builder,
                     config,
-                    runtime_tool_definition(
-                        ShellCommandHandler::new(config.shell_command_backend),
-                        create_shell_command_tool(shell_command_options),
+                    ShellCommandHandler::definition(
+                        config.shell_command_backend,
+                        shell_command_options,
                     ),
                 );
             }
@@ -273,43 +231,40 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(ListMcpResourcesHandler, create_list_mcp_resources_tool()),
+            ListMcpResourcesHandler::definition(),
         );
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                ListMcpResourceTemplatesHandler,
-                create_list_mcp_resource_templates_tool(),
-            ),
+            ListMcpResourceTemplatesHandler::definition(),
         );
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(ReadMcpResourceHandler, create_read_mcp_resource_tool()),
+            ReadMcpResourceHandler::definition(),
         );
     }
 
     register_and_publish_tool_definition(
         &mut builder,
         config,
-        runtime_tool_definition(PlanHandler, create_update_plan_tool()),
+        PlanHandler::definition(),
     );
     if config.goal_tools {
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(GetGoalHandler, create_get_goal_tool()),
+            GetGoalHandler::definition(),
         );
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(CreateGoalHandler, create_create_goal_tool()),
+            CreateGoalHandler::definition(),
         );
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(UpdateGoalHandler, create_update_goal_tool()),
+            UpdateGoalHandler::definition(),
         );
     }
 
@@ -317,22 +272,14 @@ pub fn build_tool_registry_builder(
     register_and_publish_tool_definition(
         &mut builder,
         config,
-        runtime_tool_definition(
-            RequestUserInputHandler {
-                available_modes: available_modes.clone(),
-            },
-            create_request_user_input_tool(request_user_input_tool_description(&available_modes)),
-        ),
+        RequestUserInputHandler::definition(available_modes),
     );
 
     if config.request_permissions_tool_enabled {
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                RequestPermissionsHandler,
-                create_request_permissions_tool(request_permissions_tool_description()),
-            ),
+            RequestPermissionsHandler::definition(),
         );
     }
 
@@ -345,10 +292,7 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                ToolSearchHandler::new(entries),
-                create_tool_search_tool(&source_infos, codex_tools::TOOL_SEARCH_DEFAULT_LIMIT),
-            ),
+            ToolSearchHandler::definition(entries, source_infos),
         );
     }
 
@@ -360,10 +304,7 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                RequestPluginInstallHandler,
-                create_request_plugin_install_tool(&discoverable_tool_entries),
-            ),
+            RequestPluginInstallHandler::definition(&discoverable_tool_entries),
         );
     }
 
@@ -373,10 +314,7 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(
-                ApplyPatchHandler::new(include_environment_id),
-                create_apply_patch_freeform_tool(include_environment_id),
-            ),
+            ApplyPatchHandler::definition(include_environment_id),
         );
     }
 
@@ -388,7 +326,7 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(TestSyncHandler, create_test_sync_tool()),
+            TestSyncHandler::definition(),
         );
     }
 
@@ -414,7 +352,7 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(ViewImageHandler, create_view_image_tool(view_image_options)),
+            ViewImageHandler::definition(view_image_options),
         );
     }
 
@@ -433,38 +371,32 @@ pub fn build_tool_registry_builder(
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(
-                    SpawnAgentHandlerV2,
-                    create_spawn_agent_tool_v2(spawn_agent_options),
-                ),
+                SpawnAgentHandlerV2::definition(spawn_agent_options),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(SendMessageHandlerV2, create_send_message_tool()),
+                SendMessageHandlerV2::definition(),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(FollowupTaskHandlerV2, create_followup_task_tool()),
+                FollowupTaskHandlerV2::definition(),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(
-                    WaitAgentHandlerV2,
-                    create_wait_agent_tool_v2(params.wait_agent_timeouts),
-                ),
+                WaitAgentHandlerV2::definition(params.wait_agent_timeouts),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(CloseAgentHandlerV2, create_close_agent_tool_v2()),
+                CloseAgentHandlerV2::definition(),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(ListAgentsHandlerV2, create_list_agents_tool()),
+                ListAgentsHandlerV2::definition(),
             );
         } else {
             let agent_type_description =
@@ -480,33 +412,27 @@ pub fn build_tool_registry_builder(
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(
-                    SpawnAgentHandler,
-                    create_spawn_agent_tool_v1(spawn_agent_options),
-                ),
+                SpawnAgentHandler::definition(spawn_agent_options),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(SendInputHandler, create_send_input_tool_v1()),
+                SendInputHandler::definition(),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(ResumeAgentHandler, create_resume_agent_tool()),
+                ResumeAgentHandler::definition(),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(
-                    WaitAgentHandler,
-                    create_wait_agent_tool_v1(params.wait_agent_timeouts),
-                ),
+                WaitAgentHandler::definition(params.wait_agent_timeouts),
             );
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(CloseAgentHandler, create_close_agent_tool_v1()),
+                CloseAgentHandler::definition(),
             );
         }
     }
@@ -515,16 +441,13 @@ pub fn build_tool_registry_builder(
         register_and_publish_tool_definition(
             &mut builder,
             config,
-            runtime_tool_definition(SpawnAgentsOnCsvHandler, create_spawn_agents_on_csv_tool()),
+            SpawnAgentsOnCsvHandler::definition(),
         );
         if config.agent_jobs_worker_tools {
             register_and_publish_tool_definition(
                 &mut builder,
                 config,
-                runtime_tool_definition(
-                    ReportAgentJobResultHandler,
-                    create_report_agent_job_result_tool(),
-                ),
+                ReportAgentJobResultHandler::definition(),
             );
         }
     }
@@ -559,7 +482,6 @@ pub fn build_tool_registry_builder(
 }
 
 type FunctionRuntimeToolDefinition = ToolDefinition<Arc<dyn AnyToolHandler>>;
-type RuntimeToolDefinition = ToolDefinition<Arc<dyn AnyToolHandler>, ToolSpec>;
 
 struct ToolSearchPlan {
     register: bool,
@@ -659,16 +581,6 @@ fn build_tool_search_plan(
         entries,
         source_infos,
     }
-}
-
-fn runtime_tool_definition<H>(handler: H, spec: ToolSpec) -> RuntimeToolDefinition
-where
-    H: ToolHandler + 'static,
-{
-    let handler = Arc::new(handler);
-    let tool_name = handler.tool_name();
-    let runtime: Arc<dyn AnyToolHandler> = handler;
-    ToolDefinition::new(tool_name, spec, runtime)
 }
 
 fn register_and_publish_tool_definition(

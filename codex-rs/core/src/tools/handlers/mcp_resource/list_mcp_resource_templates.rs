@@ -4,7 +4,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
@@ -22,6 +25,12 @@ use super::parse_arguments;
 use super::serialize_function_output;
 
 pub struct ListMcpResourceTemplatesHandler;
+
+impl ListMcpResourceTemplatesHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_list_mcp_resource_templates_tool())
+    }
+}
 
 impl ToolHandler for ListMcpResourceTemplatesHandler {
     type Output = FunctionToolOutput;

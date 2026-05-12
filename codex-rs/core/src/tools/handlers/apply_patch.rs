@@ -22,6 +22,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
+use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
@@ -30,6 +31,8 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
@@ -61,6 +64,13 @@ pub struct ApplyPatchHandler {
 impl ApplyPatchHandler {
     pub(crate) fn new(multi_environment: bool) -> Self {
         Self { multi_environment }
+    }
+
+    pub(crate) fn definition(multi_environment: bool) -> RuntimeToolDefinition {
+        runtime_tool_definition(
+            Self::new(multi_environment),
+            create_apply_patch_freeform_tool(multi_environment),
+        )
     }
 }
 

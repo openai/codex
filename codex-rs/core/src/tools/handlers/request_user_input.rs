@@ -4,15 +4,29 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
 use crate::tools::handlers::request_user_input_spec::normalize_request_user_input_args;
+use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
 
 pub struct RequestUserInputHandler {
     pub available_modes: Vec<ModeKind>,
+}
+
+impl RequestUserInputHandler {
+    pub(crate) fn definition(available_modes: Vec<ModeKind>) -> RuntimeToolDefinition {
+        let description = request_user_input_tool_description(&available_modes);
+        runtime_tool_definition(
+            Self { available_modes },
+            create_request_user_input_tool(description),
+        )
+    }
 }
 
 impl ToolHandler for RequestUserInputHandler {

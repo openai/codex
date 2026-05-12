@@ -6,6 +6,12 @@ use crate::tools::context::FunctionToolOutput;
 
 pub(crate) struct Handler;
 
+impl Handler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_followup_task_tool())
+    }
+}
+
 impl ToolHandler for Handler {
     type Output = FunctionToolOutput;
 

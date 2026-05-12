@@ -11,6 +11,7 @@ use codex_tools::DiscoverableToolType;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
+use codex_tools::RequestPluginInstallEntry;
 use codex_tools::RequestPluginInstallArgs;
 use codex_tools::RequestPluginInstallResult;
 use codex_tools::ToolName;
@@ -30,10 +31,24 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 
 #[derive(Default)]
 pub struct RequestPluginInstallHandler;
+
+impl RequestPluginInstallHandler {
+    pub(crate) fn definition(
+        discoverable_tools: &[RequestPluginInstallEntry],
+    ) -> RuntimeToolDefinition {
+        runtime_tool_definition(
+            Self,
+            create_request_plugin_install_tool(discoverable_tools),
+        )
+    }
+}
 
 impl ToolHandler for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;

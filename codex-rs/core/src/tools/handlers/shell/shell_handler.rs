@@ -21,7 +21,11 @@ use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
+use crate::tools::handlers::shell_spec::ShellToolOptions;
+use crate::tools::handlers::shell_spec::create_shell_tool;
 
 #[derive(Default)]
 pub struct ShellHandler {
@@ -33,6 +37,10 @@ impl ShellHandler {
         Self {
             supports_parallel_tool_calls: true,
         }
+    }
+
+    pub(crate) fn definition(options: ShellToolOptions) -> RuntimeToolDefinition {
+        runtime_tool_definition(Self::new(), create_shell_tool(options))
     }
 
     pub(super) fn to_exec_params(

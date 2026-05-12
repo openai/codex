@@ -18,11 +18,21 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
+use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use codex_tools::ToolName;
 
 #[derive(Default)]
 pub struct ViewImageHandler;
+
+impl ViewImageHandler {
+    pub(crate) fn definition(options: ViewImageToolOptions) -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_view_image_tool(options))
+    }
+}
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";

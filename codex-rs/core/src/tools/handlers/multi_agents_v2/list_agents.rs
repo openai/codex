@@ -3,6 +3,12 @@ use crate::agent::control::ListedAgent;
 
 pub(crate) struct Handler;
 
+impl Handler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_list_agents_tool())
+    }
+}
+
 impl ToolHandler for Handler {
     type Output = ListAgentsResult;
 

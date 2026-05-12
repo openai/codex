@@ -3,8 +3,11 @@ use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::shell_spec::create_write_stdin_tool;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -27,6 +30,12 @@ struct WriteStdinArgs {
 }
 
 pub struct WriteStdinHandler;
+
+impl WriteStdinHandler {
+    pub(crate) fn definition() -> RuntimeToolDefinition {
+        runtime_tool_definition(Self, create_write_stdin_tool())
+    }
+}
 
 impl ToolHandler for WriteStdinHandler {
     type Output = ExecCommandToolOutput;

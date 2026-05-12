@@ -3,17 +3,39 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtime_definition::RuntimeToolDefinition;
+use crate::tools::runtime_definition::runtime_tool_definition;
+use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
 use codex_tools::ToolName;
+use std::collections::BTreeMap;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::build_enabled_tools;
+use super::execute_spec::create_code_mode_tool;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 
 pub struct CodeModeExecuteHandler;
 
 impl CodeModeExecuteHandler {
+    pub(crate) fn definition(
+        enabled_tools: &[CodeModeToolDefinition],
+        namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+        code_mode_only: bool,
+        deferred_tools_available: bool,
+    ) -> RuntimeToolDefinition {
+        runtime_tool_definition(
+            Self,
+            create_code_mode_tool(
+                enabled_tools,
+                namespace_descriptions,
+                code_mode_only,
+                deferred_tools_available,
+            ),
+        )
+    }
+
     async fn execute(
         &self,
         session: std::sync::Arc<crate::session::session::Session>,
