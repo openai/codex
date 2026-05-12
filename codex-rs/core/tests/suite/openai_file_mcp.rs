@@ -190,7 +190,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({
             "type": "string",
-            "description": "Document file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+            "description": "Document file payload. This parameter expects an absolute local file path or an env://current/<relative-path> file reference. If you want to upload a file, provide the path or file reference here."
         }))
     );
 

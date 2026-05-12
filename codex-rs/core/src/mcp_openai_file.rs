@@ -16,6 +16,9 @@ use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
+use std::path::Path;
+
+const CURRENT_ENV_URI_PREFIX: &str = "env://current/";
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
@@ -112,7 +115,7 @@ impl<'a> OpenAiFileBroker<'a> {
         index: Option<usize>,
         file_path: &str,
     ) -> Result<JsonValue, String> {
-        let file_input = FileBrokerInput::local_path(self.turn_context, file_path);
+        let file_input = FileBrokerInput::from_model_argument(self.turn_context, file_path)?;
         let Some(auth) = self.auth else {
             return Err(
                 "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
@@ -162,11 +165,43 @@ struct FileBrokerInput<'a> {
 }
 
 impl<'a> FileBrokerInput<'a> {
-    fn local_path(turn_context: &TurnContext, path: &'a str) -> Self {
-        Self {
-            original: path,
-            resolved_path: turn_context.resolve_path(Some(path.to_string())),
+    fn from_model_argument(turn_context: &TurnContext, value: &'a str) -> Result<Self, String> {
+        if let Some(relative_path) = value.strip_prefix(CURRENT_ENV_URI_PREFIX) {
+            return Self::current_env_path(turn_context, value, relative_path);
         }
+        if value.starts_with("env://") {
+            return Err(format!("unsupported file environment reference `{value}`"));
+        }
+        Ok(Self {
+            original: value,
+            resolved_path: turn_context.resolve_path(Some(value.to_string())),
+        })
+    }
+
+    fn current_env_path(
+        turn_context: &TurnContext,
+        original: &'a str,
+        relative_path: &str,
+    ) -> Result<Self, String> {
+        if relative_path.trim().is_empty() {
+            return Err("file environment reference path must be non-empty".to_string());
+        }
+        if Path::new(relative_path).is_absolute() {
+            return Err("file environment reference path must be relative".to_string());
+        }
+        let resolved_path = turn_context.cwd.join(relative_path);
+        if !resolved_path
+            .as_path()
+            .starts_with(turn_context.cwd.as_path())
+        {
+            return Err(format!(
+                "file environment reference `{original}` escapes the current environment"
+            ));
+        }
+        Ok(Self {
+            original,
+            resolved_path,
+        })
     }
 }
 
@@ -302,6 +337,108 @@ mod tests {
                 "file_size_bytes": 5,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_local_argument_value_uploads_current_env_file_ref() {
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::body_json;
+        use wiremock::matchers::header;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .and(body_json(serde_json::json!({
+                "file_name": "file_report.csv",
+                "file_size": 5,
+                "use_case": "codex",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": "file_123",
+                "upload_url": format!("{}/upload/file_123", server.uri()),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_123"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_123/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_name": "file_report.csv",
+                "mime_type": "text/csv",
+                "file_size_bytes": 5,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        tokio::fs::create_dir_all(dir.path().join("nested"))
+            .await
+            .expect("create nested dir");
+        tokio::fs::write(dir.path().join("nested/file_report.csv"), b"hello")
+            .await
+            .expect("write env file ref target");
+        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+        turn_context.config = Arc::new(config);
+
+        let rewritten = build_uploaded_local_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "env://current/nested/file_report.csv",
+        )
+        .await
+        .expect("rewrite should upload the env file ref");
+
+        assert_eq!(
+            rewritten,
+            serde_json::json!({
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_id": "file_123",
+                "mime_type": "text/csv",
+                "file_name": "file_report.csv",
+                "uri": "sediment://file_123",
+                "file_size_bytes": 5,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_local_argument_value_rejects_current_env_escape() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let dir = tempdir().expect("temp dir");
+        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+
+        let error = build_uploaded_local_argument_value(
+            &turn_context,
+            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+            "file",
+            /*index*/ None,
+            "env://current/../outside.csv",
+        )
+        .await
+        .expect_err("env file refs should not escape cwd");
+
+        assert!(error.contains("escapes the current environment"));
     }
 
     #[tokio::test]
