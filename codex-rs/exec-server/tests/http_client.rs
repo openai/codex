@@ -17,6 +17,7 @@ use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server::RemoteExecServerConnectArgs;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -1013,6 +1014,7 @@ impl JsonRpcPeer {
             request.id,
             InitializeResponse {
                 session_id: "session-1".to_string(),
+                codex_home: AbsolutePathBuf::try_from(std::env::current_dir()?)?,
             },
         )
         .await?;
