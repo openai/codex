@@ -13,6 +13,7 @@ pub(crate) struct TurnRequestProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
+    skills_watcher: Arc<SkillsWatcher>,
 }
 
 impl TurnRequestProcessor {
@@ -29,6 +30,7 @@ impl TurnRequestProcessor {
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
+        skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
         Self {
             auth_manager,
@@ -42,6 +44,7 @@ impl TurnRequestProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
+            skills_watcher,
         }
     }
 
@@ -438,7 +441,7 @@ impl TurnRequestProcessor {
                     model: model.clone(),
                     effort,
                     summary,
-                    service_tier,
+                    service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
                 })
@@ -935,6 +938,7 @@ impl TurnRequestProcessor {
             Ok(stored_thread) => {
                 let (mut thread, _) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                thread.session_id = review_thread.session_configured().session_id.to_string();
                 self.thread_watch_manager
                     .upsert_thread_silently(thread.clone())
                     .await;
@@ -1082,11 +1086,11 @@ impl TurnRequestProcessor {
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            analytics_events_client: self.analytics_events_client.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            skills_watcher: Arc::clone(&self.skills_watcher),
         }
     }
 

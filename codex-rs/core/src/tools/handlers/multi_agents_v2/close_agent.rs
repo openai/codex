@@ -1,5 +1,7 @@
 use super::*;
+use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
@@ -10,8 +12,8 @@ impl ToolHandler for Handler {
         ToolName::plain("close_agent")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_close_agent_tool_v2())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

@@ -11,4 +11,5 @@ mod server;
 
 pub use local::LocalMemoriesBackend;
 pub use server::MemoriesMcpServer;
+pub use server::run_server;
 pub use server::run_stdio_server;

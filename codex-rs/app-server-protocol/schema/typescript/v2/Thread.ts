@@ -10,6 +10,10 @@ import type { Turn } from "./Turn";
 
 export type Thread = { id: string,
 /**
+ * Session id shared by threads that belong to the same session tree.
+ */
+sessionId: string,
+/**
  * Source thread id when this thread was created by forking another thread.
  */
 forkedFromId: string | null,

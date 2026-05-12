@@ -8,7 +8,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
+use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -447,6 +450,11 @@ impl RolloutRecorder {
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
+            codex_state::record_fallback(
+                "list_threads",
+                "db_unavailable",
+                /*telemetry_override*/ None,
+            );
             return Ok(page_from_filesystem_scan(
                 fs_page,
                 sort_direction,
@@ -555,6 +563,11 @@ impl RolloutRecorder {
                     )
                     .await;
                 }
+                codex_state::record_fallback(
+                    "list_threads",
+                    "metadata_filter",
+                    /*telemetry_override*/ None,
+                );
                 let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
                 return Ok(fill_missing_thread_item_metadata_from_state_db(
                     state_db_ctx.as_deref(),
@@ -566,6 +579,11 @@ impl RolloutRecorder {
         }
         if listing_has_metadata_filters {
             let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
+            codex_state::record_fallback(
+                "list_threads",
+                "db_error",
+                /*telemetry_override*/ None,
+            );
             return Ok(fill_missing_thread_item_metadata_from_state_db(
                 state_db_ctx.as_deref(),
                 page,
@@ -575,6 +593,7 @@ impl RolloutRecorder {
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
         tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
+        codex_state::record_fallback("list_threads", "db_error", /*telemetry_override*/ None);
         Ok(page_from_filesystem_scan(
             fs_page,
             sort_direction,
@@ -598,6 +617,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
         let cwd_filter = filter_cwd.map(Path::to_path_buf);
+        let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
@@ -616,6 +636,7 @@ impl RolloutRecorder {
                 )
                 .await
                 else {
+                    fallback_reason = Some("db_error");
                     break;
                 };
                 if let Some(path) =
@@ -625,9 +646,17 @@ impl RolloutRecorder {
                 }
                 db_cursor = db_page.next_anchor.map(Into::into);
                 if db_cursor.is_none() {
+                    fallback_reason = Some("missing_row");
                     break;
                 }
             }
+        }
+        if let Some(reason) = fallback_reason {
+            codex_state::record_fallback(
+                "find_latest_thread_path",
+                reason,
+                /*telemetry_override*/ None,
+            );
         }
 
         let mut cursor = cursor.cloned();
@@ -1062,6 +1091,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         path: _state_path,
         thread_id: _state_thread_id,
         first_user_message,
+        preview,
         cwd,
         git_branch,
         git_sha,
@@ -1077,6 +1107,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
 
     if item.first_user_message.is_none() {
         item.first_user_message = first_user_message;
+    }
+    if item.preview.is_none() {
+        item.preview = preview;
     }
     if item.cwd.is_none() {
         item.cwd = cwd;
@@ -1430,7 +1463,26 @@ struct RolloutWriterState {
     state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
+    thread_updated_at_touch: ThreadUpdatedAtTouch,
     last_logged_error: Option<String>,
+}
+
+#[cfg(not(test))]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct ThreadUpdatedAtTouch {
+    last_persisted_at: Option<Instant>,
+    pending_touch: Option<(ThreadId, DateTime<Utc>)>,
+}
+
+impl ThreadUpdatedAtTouch {
+    fn mark_persisted(&mut self, now: Instant) {
+        self.last_persisted_at = Some(now);
+        self.pending_touch = None;
+    }
 }
 
 impl RolloutWriterState {
@@ -1460,6 +1512,7 @@ impl RolloutWriterState {
             state_builder,
             default_provider,
             generate_memories,
+            thread_updated_at_touch: ThreadUpdatedAtTouch::default(),
             last_logged_error: None,
         }
     }
@@ -1492,7 +1545,19 @@ impl RolloutWriterState {
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
-        self.write_pending_with_recovery("shutdown").await
+        self.write_pending_with_recovery("shutdown").await?;
+        if let Some((thread_id, updated_at)) = self.thread_updated_at_touch.pending_touch.take()
+            && state_db::touch_thread_updated_at(
+                self.state_db_ctx.as_deref(),
+                Some(thread_id),
+                updated_at,
+                "rollout_writer_shutdown",
+            )
+            .await
+        {
+            self.thread_updated_at_touch.mark_persisted(Instant::now());
+        }
+        Ok(())
     }
 
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
@@ -1569,6 +1634,7 @@ impl RolloutWriterState {
             &mut self.state_builder,
             self.default_provider.as_str(),
             self.generate_memories,
+            &mut self.thread_updated_at_touch,
         )
         .await?;
         self.meta = None;
@@ -1612,6 +1678,7 @@ impl RolloutWriterState {
                 written_items.as_slice(),
                 self.default_provider.as_str(),
                 /*new_thread_memory_mode*/ None,
+                &mut self.thread_updated_at_touch,
             )
             .await;
         }
@@ -1683,6 +1750,7 @@ async fn write_session_meta(
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
     generate_memories: bool,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) -> std::io::Result<()> {
     let git_info = collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
         commit_hash: info.commit_hash,
@@ -1708,6 +1776,7 @@ async fn write_session_meta(
         std::slice::from_ref(&rollout_item),
         default_provider,
         (!generate_memories).then_some("disabled"),
+        thread_updated_at_touch,
     )
     .await;
     Ok(())
@@ -1720,8 +1789,10 @@ async fn sync_thread_state_after_write(
     items: &[RolloutItem],
     default_provider: &str,
     new_thread_memory_mode: Option<&str>,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) {
     let updated_at = Utc::now();
+    let now = Instant::now();
     if new_thread_memory_mode.is_some()
         || items
             .iter()
@@ -1738,15 +1809,27 @@ async fn sync_thread_state_after_write(
             Some(updated_at),
         )
         .await;
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
 
     let thread_id = state_builder
         .map(|builder| builder.id)
         .or_else(|| metadata::builder_from_items(items, rollout_path).map(|builder| builder.id));
+    if thread_updated_at_touch
+        .last_persisted_at
+        .is_some_and(|last_persisted_at| {
+            now.duration_since(last_persisted_at) < THREAD_UPDATED_AT_TOUCH_INTERVAL
+        })
+    {
+        thread_updated_at_touch.pending_touch = thread_id.map(|thread_id| (thread_id, updated_at));
+        return;
+    }
+
     if state_db::touch_thread_updated_at(state_db_ctx, thread_id, updated_at, "rollout_writer")
         .await
     {
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
     state_db::apply_rollout_items(
@@ -1760,6 +1843,7 @@ async fn sync_thread_state_after_write(
         Some(updated_at),
     )
     .await;
+    thread_updated_at_touch.mark_persisted(now);
 }
 
 /// Append one already-filtered rollout item to an existing rollout JSONL file.
@@ -1835,6 +1919,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         path: item.rollout_path,
         thread_id: Some(item.id),
         first_user_message: item.first_user_message,
+        preview: item.preview,
         cwd: Some(item.cwd),
         git_branch: item.git_branch,
         git_sha: item.git_sha,

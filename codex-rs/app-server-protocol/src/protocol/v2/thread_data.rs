@@ -104,6 +104,8 @@ pub struct GitInfo {
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Session id shared by threads that belong to the same session tree.
+    pub session_id: String,
     /// Source thread id when this thread was created by forking another thread.
     pub forked_from_id: Option<String>,
     /// Usually the first user message in the thread, if available.

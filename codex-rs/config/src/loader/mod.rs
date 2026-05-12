@@ -60,6 +60,7 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "profile",
     "profiles",
     "experimental_realtime_ws_base_url",
+    "otel",
 ];
 
 async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {

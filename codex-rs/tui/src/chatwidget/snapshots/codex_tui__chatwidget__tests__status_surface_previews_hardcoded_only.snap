@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests/status_surface_previews.rs
 expression: snapshot
 ---
-status line: my-project · feat/awesome-feature · thread title
+status line: my-project · feat/awesome-feature · thread title · Read Only · on-request
 terminal title: thread title | feat/awesome-feature | Tasks 0/0

@@ -1,10 +1,12 @@
 use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use super::REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use super::RemotePluginCatalogError;
 use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins_for_scope_with_download_url;
+use super::remote_plugin_canonical_marketplace_name;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
@@ -150,14 +152,18 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                 BTreeSet::new(),
             ),
+            (
+                REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
         ]);
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (scope, installed_plugins) in [global, workspace] {
-        let marketplace_name = scope.marketplace_name().to_string();
+    for (_scope, installed_plugins) in [global, workspace] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
+            let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
             installed_plugin_names_by_marketplace
                 .entry(marketplace_name.clone())
                 .or_default()
@@ -292,6 +298,7 @@ fn remove_stale_remote_plugin_caches(
     for marketplace_name in [
         REMOTE_GLOBAL_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME,
     ] {
         let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
         if !marketplace_root.exists() {
@@ -449,6 +456,10 @@ mod tests {
                     REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                     BTreeSet::new(),
                 ),
+                (
+                    REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
             ]);
 
         let guard = mark_remote_plugin_cache_mutation_in_flight(
@@ -485,6 +496,44 @@ mod tests {
         )
         .expect("cleanup after install guard is dropped");
         assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert!(!cached_manifest.exists());
+    }
+
+    #[test]
+    fn stale_remote_plugin_cleanup_removes_shared_with_me_cache() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME)
+            .join("private-plugin")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(cached_manifest.parent().expect("manifest parent"))
+            .expect("create cached plugin manifest parent");
+        std::fs::write(&cached_manifest, r#"{"name":"private-plugin"}"#)
+            .expect("write cached plugin manifest");
+        let installed_plugin_names_by_marketplace =
+            BTreeMap::<String, BTreeSet<String>>::from_iter([
+                (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+                (
+                    REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
+                (
+                    REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
+            ]);
+
+        let removed = remove_stale_remote_plugin_caches(
+            codex_home.path(),
+            &installed_plugin_names_by_marketplace,
+        )
+        .expect("cleanup shared-with-me cache");
+
+        assert_eq!(removed, vec!["private-plugin@shared-with-me".to_string()]);
         assert!(!cached_manifest.exists());
     }
 }

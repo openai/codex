@@ -153,8 +153,14 @@ async fn plugin_install_rejects_multiple_install_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_install_rejects_remote_marketplace_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_install_rejects_remote_marketplace_when_plugins_are_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = false
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 

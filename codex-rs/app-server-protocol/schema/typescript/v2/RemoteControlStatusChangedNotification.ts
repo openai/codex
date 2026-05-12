@@ -4,6 +4,6 @@
 import type { RemoteControlConnectionStatus } from "./RemoteControlConnectionStatus";
 
 /**
- * Current remote-control connection status and environment id exposed to clients.
+ * Current remote-control connection status and remote identity exposed to clients.
  */
-export type RemoteControlStatusChangedNotification = { status: RemoteControlConnectionStatus, environmentId: string | null, };
+export type RemoteControlStatusChangedNotification = { status: RemoteControlConnectionStatus, installationId: string, environmentId: string | null, };

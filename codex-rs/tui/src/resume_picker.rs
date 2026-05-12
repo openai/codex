@@ -9,6 +9,7 @@ mod transcript;
 use crate::app_server_session::AppServerSession;
 use crate::color::blend;
 use crate::color::is_light;
+use crate::git_action_directives::parse_assistant_markdown;
 use crate::keymap::PagerKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
@@ -780,7 +781,7 @@ async fn load_transcript_preview(
             }),
             ThreadItem::AgentMessage { text, .. } => Some(TranscriptPreviewLine {
                 speaker: TranscriptPreviewSpeaker::Assistant,
-                text: text.clone(),
+                text: parse_assistant_markdown(text).visible_markdown,
             }),
             _ => None,
         })
@@ -5684,6 +5685,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::from("remote thread"),
             ephemeral: false,
@@ -5717,6 +5719,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::from("preview"),
             ephemeral: false,
@@ -5783,6 +5786,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::from("preview"),
             ephemeral: false,
@@ -5839,6 +5843,7 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            session_id: thread_id.to_string(),
             forked_from_id: None,
             preview: String::from("preview"),
             ephemeral: false,

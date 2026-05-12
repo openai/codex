@@ -11,6 +11,14 @@ import type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewActio
  */
 export type ItemGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string,
 /**
+ * Unix timestamp (in milliseconds) when this review started.
+ */
+startedAtMs: number,
+/**
+ * Unix timestamp (in milliseconds) when this review completed.
+ */
+completedAtMs: number,
+/**
  * Stable identifier for this review.
  */
 reviewId: string,

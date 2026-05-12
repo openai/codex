@@ -649,9 +649,6 @@ pub(crate) fn render_decision_for_unmatched_command(
             codex_shell_command::is_safe_command::is_safe_powershell_words(command)
         }
     };
-    if is_known_safe && !used_complex_parsing {
-        return Decision::Allow;
-    }
 
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
@@ -661,6 +658,14 @@ pub(crate) fn render_decision_for_unmatched_command(
             file_system_sandbox_policy,
             sandbox_cwd,
         );
+
+    if is_known_safe
+        && !used_complex_parsing
+        && (approval_policy == AskForApproval::UnlessTrusted
+            || environment_lacks_sandbox_protections)
+    {
+        return Decision::Allow;
+    }
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without approval.

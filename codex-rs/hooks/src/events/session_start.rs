@@ -190,7 +190,7 @@ fn parse_completed(
                         }
                     }
                 // Preserve plain-text context support without treating malformed JSON as context.
-                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
+                } else if output_parser::looks_like_json(&run_result.stdout) {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
@@ -234,6 +234,7 @@ fn parse_completed(
             stop_reason,
             additional_contexts_for_model,
         },
+        completion_order: 0,
     }
 }
 

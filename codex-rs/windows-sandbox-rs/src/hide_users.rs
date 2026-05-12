@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use crate::logging::log_note;
 use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
@@ -8,19 +6,19 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
-use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_SYSTEM;
+use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
 use windows_sys::Win32::Storage::FileSystem::INVALID_FILE_ATTRIBUTES;
-use windows_sys::Win32::System::Registry::RegCloseKey;
-use windows_sys::Win32::System::Registry::RegCreateKeyExW;
-use windows_sys::Win32::System::Registry::RegSetValueExW;
+use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
 use windows_sys::Win32::System::Registry::HKEY;
 use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows_sys::Win32::System::Registry::KEY_WRITE;
 use windows_sys::Win32::System::Registry::REG_DWORD;
 use windows_sys::Win32::System::Registry::REG_OPTION_NON_VOLATILE;
+use windows_sys::Win32::System::Registry::RegCloseKey;
+use windows_sys::Win32::System::Registry::RegCreateKeyExW;
+use windows_sys::Win32::System::Registry::RegSetValueExW;
 
 const USERLIST_KEY_PATH: &str =
     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList";

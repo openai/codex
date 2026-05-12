@@ -27,6 +27,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
@@ -104,9 +105,11 @@ fn map_todo_items_preserves_text_and_completion_state() {
 
 #[test]
 fn session_configured_produces_thread_started_event() {
+    let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
+        .expect("thread id should parse");
     let session_configured = SessionConfiguredEvent {
-        session_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
-            .expect("thread id should parse"),
+        session_id: SessionId::from(thread_id),
+        thread_id,
         forked_from_id: None,
         thread_source: None,
         thread_name: None,
@@ -119,8 +122,6 @@ fn session_configured_produces_thread_started_event() {
         active_permission_profile: None,
         cwd: test_path_buf("/tmp/project").abs(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
         initial_messages: None,
         network_proxy: None,
         rollout_path: None,

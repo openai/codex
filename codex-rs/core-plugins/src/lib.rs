@@ -26,6 +26,7 @@ pub const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "gmail@openai-curated",
     "google-calendar@openai-curated",
     "google-drive@openai-curated",
+    "openai-developers@openai-curated",
     "canva@openai-curated",
     "teams@openai-curated",
     "sharepoint@openai-curated",

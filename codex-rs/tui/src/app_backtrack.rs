@@ -259,7 +259,9 @@ impl App {
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         if !self.transcript_cells.is_empty() {
-            let width = tui.terminal.last_known_screen_size.width;
+            let width = self
+                .chat_widget
+                .history_wrap_width(tui.terminal.last_known_screen_size.width);
             for cell in &self.transcript_cells {
                 tui.insert_history_lines_with_wrap_policy(
                     cell.display_lines_for_mode(width, self.chat_widget.history_render_mode()),

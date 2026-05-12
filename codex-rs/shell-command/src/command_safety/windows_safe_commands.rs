@@ -373,7 +373,6 @@ mod tests {
             "git diff --output codex_poc.txt",
             "git diff --ext-diff HEAD",
             "git log --textconv -1",
-            "git log --paginate -1",
             "git show --output=codex_poc.txt HEAD",
             "git cat-file --filters HEAD:a.txt",
         ]
@@ -396,7 +395,6 @@ mod tests {
                 ("git diff --output codex_poc.txt", false),
                 ("git diff --ext-diff HEAD", false),
                 ("git log --textconv -1", false),
-                ("git log --paginate -1", false),
                 ("git show --output=codex_poc.txt HEAD", false),
                 ("git cat-file --filters HEAD:a.txt", false),
             ],

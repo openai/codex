@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/app_link_view.rs
+expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))"
+---
+
+  Action required
+  Server: payments
+
+  Review the payment details to continue.
+
+  URL
+  https://payments.example/checkout/123
+
+  Complete the requested action in your browser, then return here.
+
+
+  › 1. Open link
+    2. Back
+  Use tab / ↑ ↓ to move, enter to select, esc to close

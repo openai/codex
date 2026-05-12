@@ -54,6 +54,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use codex_core::test_support::all_model_presets;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -353,6 +354,76 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     assert!(
         !body_contains(request, "- alpha-skill:") && !body_contains(request, "- beta-skill:"),
         "expected trimmed skills to be omitted from the outgoing request body"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+    write_models_cache(codex_home.path())?;
+    let service_tier_model = all_model_presets()
+        .iter()
+        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
+        .expect("bundled model catalog should include a picker model with service tiers");
+    let service_tier_id = service_tier_model.service_tiers[0].id.clone();
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some(service_tier_model.id.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            service_tier: Some(Some(service_tier_id.clone())),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(
+        response_mock.single_request().body_json()["service_tier"],
+        json!(service_tier_id)
     );
 
     Ok(())
@@ -1920,7 +1991,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> Result<()> {
+async fn turn_start_resolves_sticky_thread_local_environment_and_turn_overrides() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -1929,12 +2000,16 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
 
     let server = create_mock_responses_server_repeating_assistant("done").await;
     create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
+    std::fs::write(
+        codex_home.join("environments.toml"),
+        r#"
+[[environments]]
+id = "remote"
+url = "ws://127.0.0.1:1"
+"#,
+    )?;
 
-    let mut mcp = McpProcess::new_with_env(
-        &codex_home,
-        &[("CODEX_EXEC_SERVER_URL", Some("http://127.0.0.1:1"))],
-    )
-    .await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     for case in [
@@ -1954,16 +2029,6 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
             turn: None,
         },
         EnvironmentSelectionCase {
-            name: "sticky_remote_turn_unset",
-            sticky: Some(&["remote"]),
-            turn: None,
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_local_remote_turn_unset",
-            sticky: Some(&["local", "remote"]),
-            turn: None,
-        },
-        EnvironmentSelectionCase {
             name: "sticky_local_turn_empty",
             sticky: Some(&["local"]),
             turn: Some(&[]),
@@ -1972,21 +2037,6 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
             name: "sticky_empty_turn_local",
             sticky: Some(&[]),
             turn: Some(&["local"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_local_turn_remote",
-            sticky: Some(&["local"]),
-            turn: Some(&["remote"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_remote_turn_local",
-            sticky: Some(&["remote"]),
-            turn: Some(&["local"]),
-        },
-        EnvironmentSelectionCase {
-            name: "sticky_unset_turn_local_remote",
-            sticky: None,
-            turn: Some(&["local", "remote"]),
         },
     ] {
         run_environment_selection_case(&mut mcp, &workspace, case).await?;

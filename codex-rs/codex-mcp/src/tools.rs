@@ -1,4 +1,4 @@
-//! MCP tool metadata, filtering, schema shaping, and name qualification.
+//! MCP tool metadata, filtering, schema shaping, and name normalization.
 //!
 //! Raw MCP tool identities must be preserved for protocol calls, while
 //! model-visible tool names must be sanitized, deduplicated, and kept within API
@@ -29,6 +29,12 @@ pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
 pub struct ToolInfo {
     /// Raw MCP server name used for routing the tool call.
     pub server_name: String,
+    /// Whether calls routed to this server may run in parallel.
+    #[serde(default)]
+    pub supports_parallel_tool_calls: bool,
+    /// MCP server origin used for telemetry and diagnostics, when known.
+    #[serde(default)]
+    pub server_origin: Option<String>,
     /// Model-visible tool name used in Responses API tool declarations.
     #[serde(rename = "tool_name", alias = "callable_name")]
     pub callable_name: String,
@@ -130,12 +136,12 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .collect()
 }
 
-/// Returns a qualified-name lookup for MCP tools.
+/// Returns MCP tools with model-visible names normalized.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
-/// every model-visible `mcp__namespace__tool` name is unique and <= 64 bytes.
-pub(crate) fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
+/// every model-visible name is unique and <= 64 bytes.
+pub(crate) fn normalize_tools_for_model<I>(tools: I) -> Vec<ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
@@ -213,9 +219,9 @@ where
     candidates.sort_by(|left, right| left.raw_tool_identity.cmp(&right.raw_tool_identity));
 
     let mut used_names = HashSet::new();
-    let mut qualified_tools = HashMap::new();
+    let mut model_tools = Vec::new();
     for mut candidate in candidates {
-        let (callable_namespace, callable_name, qualified_name) = unique_callable_parts(
+        let (callable_namespace, callable_name) = unique_callable_parts(
             &candidate.callable_namespace,
             &candidate.callable_name,
             &candidate.raw_tool_identity,
@@ -223,9 +229,9 @@ where
         );
         candidate.tool.callable_namespace = callable_namespace;
         candidate.tool.callable_name = callable_name;
-        qualified_tools.insert(qualified_name, candidate.tool);
+        model_tools.push(candidate.tool);
     }
-    qualified_tools
+    model_tools
 }
 
 #[derive(Debug)]
@@ -345,10 +351,10 @@ fn unique_callable_parts(
     tool_name: &str,
     raw_identity: &str,
     used_names: &mut HashSet<String>,
-) -> (String, String, String) {
-    let qualified_name = format!("{namespace}{tool_name}");
-    if qualified_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(qualified_name.clone()) {
-        return (namespace.to_string(), tool_name.to_string(), qualified_name);
+) -> (String, String) {
+    let model_name = format!("{namespace}{tool_name}");
+    if model_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(model_name) {
+        return (namespace.to_string(), tool_name.to_string());
     }
 
     let mut attempt = 0_u32;
@@ -360,9 +366,9 @@ fn unique_callable_parts(
         };
         let (namespace, tool_name) =
             fit_callable_parts_with_hash(namespace, tool_name, &hash_input);
-        let qualified_name = format!("{namespace}{tool_name}");
-        if used_names.insert(qualified_name.clone()) {
-            return (namespace, tool_name, qualified_name);
+        let model_name = format!("{namespace}{tool_name}");
+        if used_names.insert(model_name) {
+            return (namespace, tool_name);
         }
         attempt = attempt.saturating_add(1);
     }
