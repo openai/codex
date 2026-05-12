@@ -1191,15 +1191,21 @@ See the Codex keymap documentation for supported actions and examples."
                             terminal_size.width,
                             terminal_size.height,
                         );
-                        tui.draw_ambient_pet_image(
+                        if let Err(err) = tui.draw_ambient_pet_image(
                             self.chat_widget
                                 .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
-                        )?;
+                        ) {
+                            self.handle_ambient_pet_image_render_error(tui, err)?;
+                        }
                     }
                     if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
-                        tui.draw_pet_picker_preview_image(Some(request))?;
-                    } else if self.chat_widget.should_clear_pet_picker_preview_image() {
-                        tui.draw_pet_picker_preview_image(/*request*/ None)?;
+                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                            self.handle_pet_picker_preview_image_render_error(tui, err)?;
+                        }
+                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
+                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
+                    {
+                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
                     }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget

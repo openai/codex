@@ -35,17 +35,25 @@ pub(super) fn prepare_png_frames(pet: &Pet, frame_dir: &Path) -> Result<Vec<Path
             .with_context(|| format!("read {}", pet.spritesheet_path.display()))?;
         for row in 0..pet.rows {
             for column in 0..pet.columns {
-                let index = row * pet.columns + column;
-                let frame = spritesheet.view(
-                    column * pet.frame_width,
-                    row * pet.frame_height,
-                    pet.frame_width,
-                    pet.frame_height,
-                );
+                let index = row
+                    .checked_mul(pet.columns)
+                    .and_then(|row_offset| row_offset.checked_add(column))
+                    .context("pet frame index overflow")?;
+                let index = usize::try_from(index).context("pet frame index does not fit usize")?;
+                let path = expected
+                    .get(index)
+                    .context("pet frame index exceeds expected frame count")?;
+                let x = column
+                    .checked_mul(pet.frame_width)
+                    .context("pet frame x offset overflow")?;
+                let y = row
+                    .checked_mul(pet.frame_height)
+                    .context("pet frame y offset overflow")?;
+                let frame = spritesheet.try_view(x, y, pet.frame_width, pet.frame_height)?;
                 frame
                     .to_image()
-                    .save_with_format(&expected[index as usize], image::ImageFormat::Png)
-                    .with_context(|| format!("write {}", expected[index as usize].display()))?;
+                    .save_with_format(path, image::ImageFormat::Png)
+                    .with_context(|| format!("write {}", path.display()))?;
             }
         }
     }
@@ -104,6 +112,7 @@ mod tests {
                 frame_height: 1,
                 columns: 2,
                 rows: 1,
+                frame_count: 2,
                 animations: HashMap::new(),
             },
             &dir.path().join("frames"),

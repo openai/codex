@@ -24,6 +24,9 @@ use serde::Deserialize;
 
 use super::catalog;
 
+const MAX_PET_FRAMES: usize = 256;
+const MAX_ANIMATION_FPS: f64 = 60.0;
+
 #[derive(Debug, Clone)]
 pub struct AnimationFrame {
     pub sprite_index: usize,
@@ -62,6 +65,7 @@ pub struct Pet {
     pub frame_height: u32,
     pub columns: u32,
     pub rows: u32,
+    pub frame_count: usize,
     pub animations: HashMap<String, Animation>,
 }
 
@@ -90,7 +94,7 @@ impl Pet {
     }
 
     pub fn frame_count(&self) -> usize {
-        (self.columns * self.rows) as usize
+        self.frame_count
     }
 }
 
@@ -161,6 +165,7 @@ fn load_builtin_pet(pet: catalog::BuiltinPet, codex_home: Option<&Path>) -> Resu
         frame_height: catalog::DEFAULT_FRAME_HEIGHT,
         columns: catalog::DEFAULT_FRAME_COLUMNS,
         rows: catalog::DEFAULT_FRAME_ROWS,
+        frame_count: default_frame_count(),
         animations: default_animations(),
     })
 }
@@ -257,9 +262,11 @@ fn load_pet_manifest(
     if !spritesheet_path.exists() {
         bail!("missing spritesheet {}", spritesheet_path.display());
     }
-    validate_app_spritesheet_dimensions(&spritesheet_path)?;
+    let (spritesheet_width, spritesheet_height) =
+        validate_app_spritesheet_dimensions(&spritesheet_path)?;
 
     let frame = file.frame.unwrap_or_default();
+    let frame_count = validate_frame_spec(&frame, spritesheet_width, spritesheet_height)?;
     Ok(Pet {
         id: pet_id,
         display_name,
@@ -269,7 +276,8 @@ fn load_pet_manifest(
         frame_height: frame.height,
         columns: frame.columns,
         rows: frame.rows,
-        animations: load_animations(file.animations),
+        frame_count,
+        animations: load_animations(file.animations, frame_count)?,
     })
 }
 
@@ -291,7 +299,7 @@ fn resolve_spritesheet_path(pet_dir: &Path, spritesheet_path: &str) -> Result<Pa
     Ok(pet_dir.join(path))
 }
 
-fn validate_app_spritesheet_dimensions(path: &Path) -> Result<()> {
+fn validate_app_spritesheet_dimensions(path: &Path) -> Result<(u32, u32)> {
     let (width, height) =
         image::image_dimensions(path).with_context(|| format!("read {}", path.display()))?;
     if width != catalog::SPRITESHEET_WIDTH || height != catalog::SPRITESHEET_HEIGHT {
@@ -301,7 +309,41 @@ fn validate_app_spritesheet_dimensions(path: &Path) -> Result<()> {
             catalog::SPRITESHEET_HEIGHT
         );
     }
-    Ok(())
+    Ok((width, height))
+}
+
+fn validate_frame_spec(
+    frame: &FrameSpec,
+    spritesheet_width: u32,
+    spritesheet_height: u32,
+) -> Result<usize> {
+    if frame.width == 0 || frame.height == 0 || frame.columns == 0 || frame.rows == 0 {
+        bail!("pet frame dimensions and grid counts must be non-zero");
+    }
+
+    let total_width = frame
+        .width
+        .checked_mul(frame.columns)
+        .context("pet frame grid width overflow")?;
+    let total_height = frame
+        .height
+        .checked_mul(frame.rows)
+        .context("pet frame grid height overflow")?;
+    if total_width != spritesheet_width || total_height != spritesheet_height {
+        bail!(
+            "pet frame grid must cover spritesheet exactly: expected {spritesheet_width}x{spritesheet_height}, got {total_width}x{total_height}"
+        );
+    }
+
+    let frame_count = frame
+        .columns
+        .checked_mul(frame.rows)
+        .context("pet frame count overflow")?;
+    let frame_count = usize::try_from(frame_count).context("pet frame count does not fit usize")?;
+    if frame_count > MAX_PET_FRAMES {
+        bail!("pet frame count {frame_count} exceeds maximum {MAX_PET_FRAMES}");
+    }
+    Ok(frame_count)
 }
 
 fn custom_pet_cache_id(id: &str) -> String {
@@ -331,18 +373,37 @@ fn expand_path(value: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(value))
 }
 
-fn load_animations(specs: HashMap<String, AnimationSpec>) -> HashMap<String, Animation> {
+fn load_animations(
+    specs: HashMap<String, AnimationSpec>,
+    frame_count: usize,
+) -> Result<HashMap<String, Animation>> {
     let mut animations = default_animations();
     if specs.is_empty() {
-        return animations;
+        validate_animation_indices(&animations, frame_count)?;
+        return Ok(animations);
     }
 
     for (name, spec) in specs {
         if spec.frames.is_empty() {
-            continue;
+            bail!("animation {name} must include at least one frame");
+        }
+        for sprite_index in &spec.frames {
+            if *sprite_index >= frame_count {
+                bail!(
+                    "animation {name} references sprite index {sprite_index}, but pet has {frame_count} frames"
+                );
+            }
         }
 
-        let fps = spec.fps.filter(|fps| *fps > 0.0).unwrap_or(8.0);
+        let fps = match spec.fps {
+            Some(fps) if fps.is_finite() && fps > 0.0 && fps <= MAX_ANIMATION_FPS => fps,
+            Some(fps) => {
+                bail!(
+                    "animation {name} fps must be finite and between 0 and {MAX_ANIMATION_FPS}, got {fps}"
+                );
+            }
+            None => 8.0,
+        };
         let duration = Duration::from_secs_f64(1.0 / fps);
         let fallback = if spec.fallback.is_empty() {
             "idle".to_string()
@@ -374,7 +435,32 @@ fn load_animations(specs: HashMap<String, AnimationSpec>) -> HashMap<String, Ani
     animations
         .entry("idle".to_string())
         .or_insert_with(idle_animation);
-    animations
+    validate_animation_indices(&animations, frame_count)?;
+    Ok(animations)
+}
+
+fn validate_animation_indices(
+    animations: &HashMap<String, Animation>,
+    frame_count: usize,
+) -> Result<()> {
+    for (name, animation) in animations {
+        if animation.frames.is_empty() {
+            bail!("animation {name} must include at least one frame");
+        }
+        for frame in &animation.frames {
+            if frame.sprite_index >= frame_count {
+                bail!(
+                    "animation {name} references sprite index {}, but pet has {frame_count} frames",
+                    frame.sprite_index
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn default_frame_count() -> usize {
+    (catalog::DEFAULT_FRAME_COLUMNS * catalog::DEFAULT_FRAME_ROWS) as usize
 }
 
 fn default_animations() -> HashMap<String, Animation> {
@@ -527,9 +613,7 @@ mod tests {
     use super::*;
 
     fn write_minimal_pet() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(
-            dir.path().join("pet.json"),
+        write_pet_manifest(
             r#"{
                 "id": "chefito",
                 "displayName": "Chefito",
@@ -537,7 +621,11 @@ mod tests {
                 "spritesheetPath": "spritesheet.webp"
             }"#,
         )
-        .unwrap();
+    }
+
+    fn write_pet_manifest(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("pet.json"), manifest).unwrap();
         catalog::write_test_spritesheet(&dir.path().join("spritesheet.webp"));
         dir
     }
@@ -613,15 +701,19 @@ mod tests {
 
     #[test]
     fn custom_animation_specs_keep_manifest_fps_and_loop_shape() {
-        let animations = load_animations(HashMap::from([(
-            "custom".to_string(),
-            AnimationSpec {
-                frames: vec![1, 2],
-                fps: Some(/*fps*/ 2.0),
-                loop_animation: Some(/*loop_animation*/ false),
-                fallback: "idle".to_string(),
-            },
-        )]));
+        let animations = load_animations(
+            HashMap::from([(
+                "custom".to_string(),
+                AnimationSpec {
+                    frames: vec![1, 2],
+                    fps: Some(/*fps*/ 2.0),
+                    loop_animation: Some(/*loop_animation*/ false),
+                    fallback: "idle".to_string(),
+                },
+            )]),
+            default_frame_count(),
+        )
+        .unwrap();
         let custom = &animations["custom"];
 
         assert_eq!(sprite_indices(custom), vec![1, 2]);
@@ -643,6 +735,7 @@ mod tests {
         assert_eq!(pet.frame_height, 208);
         assert_eq!(pet.columns, 8);
         assert_eq!(pet.rows, 9);
+        assert_eq!(pet.frame_count(), 72);
         assert!(!pet.animations["idle"].frames.is_empty());
     }
 
@@ -729,6 +822,123 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("spritesheet path must stay inside")
+        );
+    }
+
+    #[test]
+    fn custom_pet_rejects_zero_frame_dimensions() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Zero",
+                "spritesheetPath": "spritesheet.webp",
+                "frame": { "width": 0, "height": 208, "columns": 8, "rows": 9 }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("pet frame dimensions and grid counts must be non-zero")
+        );
+    }
+
+    #[test]
+    fn custom_pet_rejects_frame_grid_that_does_not_cover_spritesheet() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Short",
+                "spritesheetPath": "spritesheet.webp",
+                "frame": { "width": 192, "height": 208, "columns": 7, "rows": 9 }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("pet frame grid must cover spritesheet exactly")
+        );
+    }
+
+    #[test]
+    fn custom_pet_rejects_excessive_frame_count() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Dense",
+                "spritesheetPath": "spritesheet.webp",
+                "frame": { "width": 8, "height": 8, "columns": 192, "rows": 234 }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn custom_pet_rejects_empty_animation_frames() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Empty",
+                "spritesheetPath": "spritesheet.webp",
+                "animations": {
+                    "idle": { "frames": [] }
+                }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("animation idle must include at least one frame")
+        );
+    }
+
+    #[test]
+    fn custom_pet_rejects_animation_frame_outside_grid() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Outside",
+                "spritesheetPath": "spritesheet.webp",
+                "animations": {
+                    "idle": { "frames": [72] }
+                }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("animation idle references sprite index 72")
+        );
+    }
+
+    #[test]
+    fn custom_pet_rejects_invalid_animation_fps() {
+        let dir = write_pet_manifest(
+            r#"{
+                "displayName": "Fast",
+                "spritesheetPath": "spritesheet.webp",
+                "animations": {
+                    "idle": { "frames": [0], "fps": 120.0 }
+                }
+            }"#,
+        );
+
+        let err = Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None)
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("animation idle fps must be finite and between")
         );
     }
 

@@ -67,11 +67,34 @@ pub(crate) fn ensure_builtin_pack_for_pet(
     Ok(())
 }
 
+#[derive(Debug)]
+pub(crate) enum PetImageRenderError {
+    Terminal(std::io::Error),
+    Asset(anyhow::Error),
+}
+
+impl std::fmt::Display for PetImageRenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal(err) => write!(f, "terminal image write failed: {err}"),
+            Self::Asset(err) => write!(f, "pet image asset unavailable: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for PetImageRenderError {}
+
+impl From<std::io::Error> for PetImageRenderError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Terminal(err)
+    }
+}
+
 pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,
     state: &mut PetImageRenderState,
     request: Option<AmbientPetDraw>,
-) -> Result<()> {
+) -> std::result::Result<(), PetImageRenderError> {
     render_pet_image(writer, state, /*image_id*/ 0xC0DE, request)
 }
 
@@ -79,7 +102,7 @@ pub(crate) fn render_pet_picker_preview_image(
     writer: &mut impl Write,
     state: &mut PetImageRenderState,
     request: Option<AmbientPetDraw>,
-) -> Result<()> {
+) -> std::result::Result<(), PetImageRenderError> {
     render_pet_image(writer, state, /*image_id*/ 0xC0DF, request)
 }
 
@@ -94,7 +117,7 @@ fn render_pet_image(
     state: &mut PetImageRenderState,
     image_id: u32,
     request: Option<AmbientPetDraw>,
-) -> Result<()> {
+) -> std::result::Result<(), PetImageRenderError> {
     use crossterm::cursor::MoveTo;
     use crossterm::cursor::RestorePosition;
     use crossterm::cursor::SavePosition;
@@ -122,26 +145,31 @@ fn render_pet_image(
     state.last_protocol = Some(request.protocol);
 
     let payload = match request.protocol {
-        ImageProtocol::Kitty => {
-            AmbientPetPayload::Text(image_protocol::kitty_transmit_png_with_id(
+        ImageProtocol::Kitty => AmbientPetPayload::Text(
+            image_protocol::kitty_transmit_png_with_id(
                 &request.frame,
                 request.columns,
                 request.rows,
                 Some(image_id),
-            )?)
-        }
-        ImageProtocol::KittyLocalFile => {
-            AmbientPetPayload::Text(image_protocol::kitty_transmit_png_file_with_id(
+            )
+            .map_err(PetImageRenderError::Asset)?,
+        ),
+        ImageProtocol::KittyLocalFile => AmbientPetPayload::Text(
+            image_protocol::kitty_transmit_png_file_with_id(
                 &request.frame,
                 request.columns,
                 request.rows,
                 Some(image_id),
-            )?)
-        }
+            )
+            .map_err(PetImageRenderError::Asset)?,
+        ),
         ImageProtocol::Sixel => {
             let path =
-                image_protocol::sixel_frame(&request.frame, &request.sixel_dir, request.height_px)?;
-            let sixel = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+                image_protocol::sixel_frame(&request.frame, &request.sixel_dir, request.height_px)
+                    .map_err(PetImageRenderError::Asset)?;
+            let sixel = std::fs::read(&path)
+                .with_context(|| format!("read {}", path.display()))
+                .map_err(PetImageRenderError::Asset)?;
             AmbientPetPayload::Bytes(sixel)
         }
     };
@@ -216,6 +244,7 @@ fn clear_sixel_area(writer: &mut impl Write, area: SixelClearArea) -> std::io::R
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::path::PathBuf;
 
     use super::image_protocol::ImageProtocol;
@@ -375,5 +404,55 @@ mod tests {
         assert!(output.contains("\x1b[2;3H    \x1b[3;3H    \x1b[4;3H    \x1b[5;3H    "));
         assert!(output.contains("\x1b8"));
         assert!(!output.contains("fake-sixel"));
+    }
+
+    #[test]
+    fn missing_frame_is_an_asset_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = AmbientPetDraw {
+            frame: dir.path().join("missing.png"),
+            protocol: ImageProtocol::Kitty,
+            x: 2,
+            y: 3,
+            clear_top_y: 3,
+            columns: 4,
+            rows: 5,
+            height_px: 75,
+            sixel_dir: PathBuf::new(),
+        };
+        let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
+
+        let err = render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap_err();
+
+        assert!(matches!(err, PetImageRenderError::Asset(_)));
+    }
+
+    #[test]
+    fn writer_failure_is_a_terminal_error() {
+        struct FailingWriter;
+
+        impl io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test writer failed",
+                ))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = FailingWriter;
+        let mut state = PetImageRenderState {
+            last_protocol: Some(ImageProtocol::Kitty),
+            ..Default::default()
+        };
+
+        let err = render_ambient_pet_image(&mut writer, &mut state, /*request*/ None).unwrap_err();
+
+        assert!(matches!(err, PetImageRenderError::Terminal(_)));
     }
 }

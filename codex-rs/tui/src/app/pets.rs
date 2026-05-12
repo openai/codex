@@ -3,6 +3,62 @@
 use super::*;
 
 impl App {
+    pub(super) fn handle_ambient_pet_image_render_error(
+        &mut self,
+        tui: &mut tui::Tui,
+        err: crate::pets::PetImageRenderError,
+    ) -> Result<()> {
+        match err {
+            crate::pets::PetImageRenderError::Terminal(err) => Err(err.into()),
+            crate::pets::PetImageRenderError::Asset(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to render ambient pet image; disabling pet for session"
+                );
+                self.chat_widget.disable_ambient_pet_for_session();
+                if let Err(clear_err) = tui.clear_ambient_pet_image() {
+                    match clear_err {
+                        crate::pets::PetImageRenderError::Terminal(err) => return Err(err.into()),
+                        crate::pets::PetImageRenderError::Asset(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to clear ambient pet image after render failure"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn handle_pet_picker_preview_image_render_error(
+        &mut self,
+        tui: &mut tui::Tui,
+        err: crate::pets::PetImageRenderError,
+    ) -> Result<()> {
+        match err {
+            crate::pets::PetImageRenderError::Terminal(err) => Err(err.into()),
+            crate::pets::PetImageRenderError::Asset(err) => {
+                tracing::warn!(error = %err, "failed to render pet picker preview image");
+                self.chat_widget
+                    .fail_pet_picker_preview_render(err.to_string());
+                if let Err(clear_err) = tui.draw_pet_picker_preview_image(/*request*/ None) {
+                    match clear_err {
+                        crate::pets::PetImageRenderError::Terminal(err) => return Err(err.into()),
+                        crate::pets::PetImageRenderError::Asset(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to clear pet picker preview image after render failure"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(super) fn handle_pet_selected(&mut self, tui: &mut tui::Tui, pet_id: String) {
         let request_id = self.chat_widget.show_pet_selection_loading_popup();
         tui.frame_requester().schedule_frame();

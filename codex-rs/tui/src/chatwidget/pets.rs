@@ -69,6 +69,11 @@ impl ChatWidget {
             .is_some_and(crate::pets::AmbientPet::image_enabled)
     }
 
+    pub(crate) fn disable_ambient_pet_for_session(&mut self) {
+        self.ambient_pet = None;
+        self.request_redraw();
+    }
+
     pub(crate) fn ambient_pet_draw(
         &self,
         area: Rect,
@@ -116,6 +121,12 @@ impl ChatWidget {
 
     pub(crate) fn should_clear_pet_picker_preview_image(&self) -> bool {
         self.pet_picker_preview_image_visible.replace(false)
+    }
+
+    pub(crate) fn fail_pet_picker_preview_render(&mut self, message: String) {
+        self.pet_picker_preview_state.set_error(message);
+        self.pet_picker_preview_pet = None;
+        self.request_redraw();
     }
 
     pub(crate) fn open_pets_picker(&mut self) {

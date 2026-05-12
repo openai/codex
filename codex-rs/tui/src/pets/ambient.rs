@@ -449,6 +449,7 @@ pub(crate) fn test_ambient_pet(
             frame_height: 208,
             columns: 8,
             rows: 9,
+            frame_count: 72,
             animations: HashMap::from([("idle".to_string(), test_animation())]),
         },
         support: PetImageSupport::Supported(ImageProtocol::Kitty),
