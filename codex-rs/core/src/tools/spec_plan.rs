@@ -142,12 +142,11 @@ pub fn build_tool_registry_builder(
 
     if config.search_tool && config.namespace_tools && !all_deferred_tools.is_empty() {
         let mut search_source_infos = params
-            .mcp_tools
+            .deferred_mcp_tools
             .map(|mcp_tools| {
                 collect_tool_search_source_infos(
                     mcp_tools
                         .iter()
-                        .filter(|tool| all_deferred_tools.contains(&tool.canonical_tool_name()))
                         .map(|tool| ToolSearchSource {
                             server_name: tool.server_name.as_str(),
                             connector_name: tool.connector_name.as_deref(),
@@ -424,6 +423,12 @@ fn collect_handler_tools(
 
     if let Some(mcp_tools) = params.mcp_tools {
         for tool in mcp_tools {
+            handlers.push(Arc::new(McpHandler::new(tool.clone())));
+        }
+    }
+
+    if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
+        for tool in deferred_mcp_tools {
             handlers.push(Arc::new(McpHandler::new(tool.clone())));
         }
     }

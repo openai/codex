@@ -2456,21 +2456,12 @@ fn build_specs_with_optional_tool_namespaces(
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
-    let direct_mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
+    let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
             .map(|(name, tool)| tool_info_from_parts(name, tool.clone()))
             .collect::<Vec<_>>()
     });
-    let mcp_tool_inputs = match (direct_mcp_tool_inputs, deferred_mcp_tools) {
-        (Some(mut direct_mcp_tools), Some(deferred_mcp_tools)) => {
-            direct_mcp_tools.extend(deferred_mcp_tools);
-            Some(direct_mcp_tools)
-        }
-        (Some(direct_mcp_tools), None) => Some(direct_mcp_tools),
-        (None, Some(deferred_mcp_tools)) => Some(deferred_mcp_tools),
-        (None, None) => None,
-    };
     let builder = build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
