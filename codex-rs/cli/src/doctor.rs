@@ -16,6 +16,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::future::Future;
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -913,7 +914,13 @@ fn network_check() -> DoctorCheck {
             let path = PathBuf::from(raw);
             match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => {
-                    details.push(format!("{name}: readable file {}", path.display()));
+                    if let Err(err) = read_probe_file(&path) {
+                        status = CheckStatus::Warning;
+                        summary = "custom CA env var points at an unreadable file".to_string();
+                        details.push(format!("{name}: {} ({err})", path.display()));
+                    } else {
+                        details.push(format!("{name}: readable file {}", path.display()));
+                    }
                 }
                 Ok(_) => {
                     status = CheckStatus::Warning;
@@ -930,6 +937,13 @@ fn network_check() -> DoctorCheck {
     }
 
     DoctorCheck::new("network.env", "network", status, summary).details(details)
+}
+
+fn read_probe_file(path: &Path) -> std::io::Result<()> {
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = [0_u8; 1];
+    let _ = file.read(&mut buffer)?;
+    Ok(())
 }
 
 async fn mcp_check(config: &Config) -> DoctorCheck {
@@ -1425,10 +1439,26 @@ fn stdio_command_resolves(
 
 fn executable_path_exists(path: &Path) -> Result<(), String> {
     match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(metadata) if metadata.is_file() => executable_file_permission(path, &metadata),
         Ok(_) => Err("path is not a file".to_string()),
         Err(err) => Err(err.to_string()),
     }
+}
+
+#[cfg(unix)]
+fn executable_file_permission(path: &Path, metadata: &std::fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if metadata.permissions().mode() & 0o111 == 0 {
+        Err(format!("{} is not executable", path.display()))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+fn executable_file_permission(_path: &Path, _metadata: &std::fs::Metadata) -> Result<(), String> {
+    Ok(())
 }
 
 fn path_readiness(details: &mut Vec<String>, label: &str, path: &Path) {
@@ -1892,6 +1922,53 @@ mod tests {
                 "required: stdio command \"definitely-missing-codex-doctor-mcp\" is not resolvable",
             )
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_probe_file_rejects_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let file = tempfile::NamedTempFile::new().expect("create temp file");
+        std::fs::write(file.path(), "cert").expect("write temp file");
+        let mut permissions = std::fs::metadata(file.path())
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(file.path(), permissions).expect("remove read permissions");
+
+        let result = read_probe_file(file.path());
+
+        let mut permissions = std::fs::metadata(file.path())
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(file.path(), permissions).expect("restore read permissions");
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_path_exists_rejects_non_executable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let file = tempfile::NamedTempFile::new().expect("create temp file");
+        std::fs::write(file.path(), "#!/bin/sh\n").expect("write temp file");
+        let mut permissions = std::fs::metadata(file.path())
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(file.path(), permissions).expect("set non-executable mode");
+
+        let result = executable_path_exists(file.path());
+
+        assert!(result.is_err());
+        let mut permissions = std::fs::metadata(file.path())
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(file.path(), permissions).expect("set executable mode");
+        assert_eq!(executable_path_exists(file.path()), Ok(()));
     }
 
     #[test]

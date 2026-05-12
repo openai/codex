@@ -347,6 +347,7 @@ fn redact_url_token(token: &str) -> String {
         .find(['?', '#'])
         .map(|index| &path[..index])
         .unwrap_or(path);
+    let path = redact_url_path(path);
     format!(
         "{}{}{}{}",
         &body[..scheme_prefix_end],
@@ -354,6 +355,18 @@ fn redact_url_token(token: &str) -> String {
         path,
         suffix
     )
+}
+
+fn redact_url_path(path: &str) -> String {
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    let Some(first_segment) = segments.next() else {
+        return path.to_string();
+    };
+    if segments.next().is_some() {
+        format!("/{first_segment}/<redacted>")
+    } else {
+        path.to_string()
+    }
 }
 
 #[derive(Default)]
@@ -615,6 +628,16 @@ Still having issues? Run codex doctor --verbose for more details.
         assert_eq!(
             redacted,
             "reachability failed: https://example.com/mcp (connect failed)"
+        );
+    }
+
+    #[test]
+    fn redact_detail_sanitizes_secret_url_path_segments() {
+        let redacted = redact_detail("reachability failed: https://example.com/mcp/abc123xyz");
+
+        assert_eq!(
+            redacted,
+            "reachability failed: https://example.com/mcp/<redacted>"
         );
     }
 
