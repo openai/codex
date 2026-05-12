@@ -66,7 +66,7 @@ impl ToolHandler for TestSyncHandler {
         Some(create_test_sync_tool())
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
+    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 

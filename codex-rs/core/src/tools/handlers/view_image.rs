@@ -72,7 +72,7 @@ impl ToolHandler for ViewImageHandler {
         Some(create_view_image_tool(self.options))
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
+    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 

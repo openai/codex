@@ -36,7 +36,7 @@ impl ToolHandler for ListMcpResourcesHandler {
         Some(create_list_mcp_resources_tool())
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
+    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 

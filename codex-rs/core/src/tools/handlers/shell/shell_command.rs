@@ -141,17 +141,16 @@ impl ToolHandler for ShellCommandHandler {
         })
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
+        let Some(_) = self.options else {
+            return false;
+        };
         let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
+            return false;
         };
 
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
@@ -161,13 +160,13 @@ impl ToolHandler for ShellCommandHandler {
                     invocation.turn.tools_config.allow_login_shell,
                 ) {
                     Ok(use_login_shell) => use_login_shell,
-                    Err(_) => return true,
+                    Err(_) => return false,
                 };
                 let shell = invocation.session.user_shell();
                 let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-                !is_known_safe_command(&command)
+                is_known_safe_command(&command)
             })
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

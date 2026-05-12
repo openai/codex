@@ -60,7 +60,7 @@ impl ToolHandler for RequestPluginInstallHandler {
         Some(create_request_plugin_install_tool(&self.discoverable_tools))
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
+    fn supports_parallel_tool_calls(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::session::tests::make_session_and_context;
+use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
@@ -78,6 +79,23 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
     Arc::new(builder.build())
 }
 
+fn invocation_for_call(
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
+    call: &ToolCall,
+) -> ToolInvocation {
+    ToolInvocation {
+        session,
+        turn,
+        cancellation_token: CancellationToken::new(),
+        tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+        call_id: call.call_id.clone(),
+        tool_name: call.tool_name.clone(),
+        source: ToolCallSource::Direct,
+        payload: call.payload.clone(),
+    }
+}
+
 #[tokio::test]
 #[expect(
     clippy::await_holding_invalid_type,
@@ -85,6 +103,8 @@ fn extension_tool_test_registry() -> Arc<ExtensionRegistry<Config>> {
 )]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
     let mcp_tools = session
         .services
         .mcp_connection_manager
@@ -104,26 +124,66 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         },
     );
 
-    let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
-        .into_iter()
-        .find(|name| {
-            router.tool_supports_parallel(&ToolCall {
-                tool_name: ToolName::plain(*name),
-                call_id: "call-parallel-tool".to_string(),
-                payload: ToolPayload::Function {
-                    arguments: "{}".to_string(),
+    let candidate_calls = [
+        ToolCall {
+            tool_name: ToolName::plain("shell"),
+            call_id: "call-parallel-shell".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({ "command": ["pwd"] }).to_string(),
+            },
+        },
+        ToolCall {
+            tool_name: ToolName::plain("local_shell"),
+            call_id: "call-parallel-local-shell".to_string(),
+            payload: ToolPayload::LocalShell {
+                params: codex_protocol::models::ShellToolCallParams {
+                    command: vec!["pwd".to_string()],
+                    workdir: None,
+                    timeout_ms: Some(10_000),
+                    sandbox_permissions: None,
+                    additional_permissions: None,
+                    prefix_rule: None,
+                    justification: None,
                 },
-            })
-        })
-        .expect("test session should expose a parallel shell-like tool");
+            },
+        },
+        ToolCall {
+            tool_name: ToolName::plain("exec_command"),
+            call_id: "call-parallel-exec-command".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({ "cmd": "pwd" }).to_string(),
+            },
+        },
+        ToolCall {
+            tool_name: ToolName::plain("shell_command"),
+            call_id: "call-parallel-shell-command".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({ "command": "pwd" }).to_string(),
+            },
+        },
+    ];
 
-    assert!(!router.tool_supports_parallel(&ToolCall {
+    let mut parallel_tool_name = None;
+    for call in candidate_calls {
+        let invocation = invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &call);
+        if router.tool_supports_parallel(&invocation) {
+            parallel_tool_name = Some(call.tool_name.name);
+            break;
+        }
+    }
+    let parallel_tool_name =
+        parallel_tool_name.expect("test session should expose a parallel shell-like tool");
+
+    let namespaced_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__server__", parallel_tool_name),
         call_id: "call-namespaced-tool".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-    }));
+    };
+    let namespaced_invocation =
+        invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &namespaced_call);
+    assert!(!router.tool_supports_parallel(&namespaced_invocation));
 
     Ok(())
 }
@@ -158,7 +218,9 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
@@ -191,7 +253,8 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
     };
-    assert!(router.tool_supports_parallel(&call));
+    let invocation = invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &call);
+    assert!(router.tool_supports_parallel(&invocation));
 
     let different_server_call = ToolCall {
         tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
@@ -200,14 +263,21 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
     };
-    assert!(!router.tool_supports_parallel(&different_server_call));
+    let different_server_invocation = invocation_for_call(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        &different_server_call,
+    );
+    assert!(!router.tool_supports_parallel(&different_server_invocation));
 
     Ok(())
 }
 
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
@@ -220,13 +290,138 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
         },
     );
 
-    assert!(!router.tool_supports_parallel(&ToolCall {
+    let call = ToolCall {
         tool_name: ToolName::plain("web_search"),
         call_id: "call-web-search".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-    }));
+    };
+    let invocation = invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &call);
+    assert!(!router.tool_supports_parallel(&invocation));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shell_like_parallel_support_depends_on_invocation_safety() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+        },
+    );
+
+    let candidate_calls = [
+        (
+            ToolCall {
+                tool_name: ToolName::plain("shell"),
+                call_id: "call-safe-shell".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "command": ["pwd"] }).to_string(),
+                },
+            },
+            ToolCall {
+                tool_name: ToolName::plain("shell"),
+                call_id: "call-unsafe-shell".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "command": ["touch", "file.txt"] }).to_string(),
+                },
+            },
+        ),
+        (
+            ToolCall {
+                tool_name: ToolName::plain("local_shell"),
+                call_id: "call-safe-local-shell".to_string(),
+                payload: ToolPayload::LocalShell {
+                    params: codex_protocol::models::ShellToolCallParams {
+                        command: vec!["pwd".to_string()],
+                        workdir: None,
+                        timeout_ms: Some(10_000),
+                        sandbox_permissions: None,
+                        additional_permissions: None,
+                        prefix_rule: None,
+                        justification: None,
+                    },
+                },
+            },
+            ToolCall {
+                tool_name: ToolName::plain("local_shell"),
+                call_id: "call-unsafe-local-shell".to_string(),
+                payload: ToolPayload::LocalShell {
+                    params: codex_protocol::models::ShellToolCallParams {
+                        command: vec!["touch".to_string(), "file.txt".to_string()],
+                        workdir: None,
+                        timeout_ms: Some(10_000),
+                        sandbox_permissions: None,
+                        additional_permissions: None,
+                        prefix_rule: None,
+                        justification: None,
+                    },
+                },
+            },
+        ),
+        (
+            ToolCall {
+                tool_name: ToolName::plain("exec_command"),
+                call_id: "call-safe-exec-command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "cmd": "pwd" }).to_string(),
+                },
+            },
+            ToolCall {
+                tool_name: ToolName::plain("exec_command"),
+                call_id: "call-unsafe-exec-command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "cmd": "touch file.txt" }).to_string(),
+                },
+            },
+        ),
+        (
+            ToolCall {
+                tool_name: ToolName::plain("shell_command"),
+                call_id: "call-safe-shell-command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "command": "pwd" }).to_string(),
+                },
+            },
+            ToolCall {
+                tool_name: ToolName::plain("shell_command"),
+                call_id: "call-unsafe-shell-command".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: json!({ "command": "touch file.txt" }).to_string(),
+                },
+            },
+        ),
+    ];
+
+    let mut checked_tool = false;
+    for (safe_call, unsafe_call) in candidate_calls {
+        let safe_invocation =
+            invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &safe_call);
+        if !router.tool_supports_parallel(&safe_invocation) {
+            continue;
+        }
+
+        let unsafe_invocation =
+            invocation_for_call(Arc::clone(&session), Arc::clone(&turn), &unsafe_call);
+        assert!(!router.tool_supports_parallel(&unsafe_invocation));
+        checked_tool = true;
+        break;
+    }
+
+    assert!(
+        checked_tool,
+        "expected at least one parallel shell-like tool"
+    );
 
     Ok(())
 }
@@ -361,17 +556,9 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
+    let invocation = invocation_for_call(Arc::new(session), Arc::new(turn), &call);
 
-    let result = router
-        .dispatch_tool_call_with_code_mode_result(
-            Arc::new(session),
-            Arc::new(turn),
-            CancellationToken::new(),
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-            call,
-            ToolCallSource::Direct,
-        )
-        .await?;
+    let result = router.dispatch(invocation).await?;
 
     let response = result.into_response();
     match response {

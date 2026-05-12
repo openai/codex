@@ -85,25 +85,21 @@ impl ToolHandler for ExecCommandHandler {
         ))
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        true
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             tracing::error!(
                 "This should never happen, invocation payload is wrong: {:?}",
                 invocation.payload
             );
-            return true;
+            return false;
         };
 
         let Ok(params) = parse_arguments::<ExecCommandArgs>(arguments) else {
-            return true;
+            return false;
         };
         let command = match get_command(
             &params,
@@ -112,9 +108,9 @@ impl ToolHandler for ExecCommandHandler {
             invocation.turn.tools_config.allow_login_shell,
         ) {
             Ok(command) => command,
-            Err(_) => return true,
+            Err(_) => return false,
         };
-        !is_known_safe_command(&command)
+        is_known_safe_command(&command)
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

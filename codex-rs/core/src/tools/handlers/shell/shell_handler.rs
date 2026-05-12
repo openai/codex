@@ -74,22 +74,21 @@ impl ToolHandler for ShellHandler {
         self.options.map(create_shell_tool)
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    fn supports_parallel_tool_calls(&self, invocation: &ToolInvocation) -> bool {
+        if self.options.is_none() {
+            return false;
+        }
         let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
+            return false;
         };
 
         serde_json::from_str::<ShellToolCallParams>(arguments)
-            .map(|params| !is_known_safe_command(&params.command))
-            .unwrap_or(true)
+            .map(|params| is_known_safe_command(&params.command))
+            .unwrap_or(false)
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

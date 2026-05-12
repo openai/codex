@@ -1,8 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
@@ -22,8 +20,6 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashSet;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
@@ -135,10 +131,8 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
-    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
-        self.registry
-            .supports_parallel_tool_calls(&call.tool_name)
-            .unwrap_or(false)
+    pub fn tool_supports_parallel(&self, invocation: &ToolInvocation) -> bool {
+        self.registry.supports_parallel_tool_calls(invocation)
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -221,32 +215,10 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch_tool_call_with_code_mode_result(
+    pub async fn dispatch(
         &self,
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        cancellation_token: CancellationToken,
-        tracker: SharedTurnDiffTracker,
-        call: ToolCall,
-        source: ToolCallSource,
+        invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
-        let ToolCall {
-            tool_name,
-            call_id,
-            payload,
-        } = call;
-
-        let invocation = ToolInvocation {
-            session,
-            turn,
-            cancellation_token,
-            tracker,
-            call_id,
-            tool_name,
-            source,
-            payload,
-        };
-
         self.registry.dispatch_any(invocation).await
     }
 }
