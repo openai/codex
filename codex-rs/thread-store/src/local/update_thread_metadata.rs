@@ -172,6 +172,9 @@ async fn apply_metadata_update(
 ) -> ThreadStoreResult<StoredThread> {
     let live_rollout_path = live_writer::rollout_path(store, thread_id).await.ok();
     let mut rollout_path = patch.rollout_path.clone().or(live_rollout_path);
+    let mut rollout_path_archived = rollout_path
+        .as_deref()
+        .is_some_and(|path| rollout_path_is_archived(store, path));
     let state_db = store.state_db().await;
     let sqlite_write_result: ThreadStoreResult<()> = if let Some(state_db) = state_db.as_ref() {
         let patch = patch.clone();
@@ -184,11 +187,9 @@ async fn apply_metadata_update(
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
             if existing.is_none() && rollout_path.is_none() {
-                rollout_path = Some(
-                    resolve_rollout_path(store, thread_id, include_archived)
-                        .await?
-                        .path,
-                );
+                let resolved = resolve_rollout_path(store, thread_id, include_archived).await?;
+                rollout_path_archived = resolved.archived;
+                rollout_path = Some(resolved.path);
             }
             let mut metadata = existing.clone().unwrap_or_else(|| {
                 let created_at = patch
@@ -206,9 +207,13 @@ async fn apply_metadata_update(
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
                 builder.agent_path = patch.agent_path.clone().flatten();
-                builder.cwd = patch.cwd.clone().unwrap_or_default();
+                builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
                 builder.cli_version = patch.cli_version.clone();
-                builder.build(store.config.default_model_provider_id.as_str())
+                let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
+                if rollout_path_archived {
+                    metadata.archived_at = Some(metadata.updated_at);
+                }
+                metadata
             });
             if let Some(rollout_path) = rollout_path {
                 metadata.rollout_path = rollout_path;
@@ -253,7 +258,7 @@ async fn apply_metadata_update(
                 metadata.agent_path = agent_path;
             }
             if let Some(cwd) = patch.cwd {
-                metadata.cwd = cwd;
+                metadata.cwd = normalize_cwd(cwd);
             }
             if let Some(cli_version) = patch.cli_version {
                 metadata.cli_version = cli_version;
@@ -365,6 +370,10 @@ fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
         Ok(other) => other.to_string(),
         Err(_) => String::new(),
     }
+}
+
+fn normalize_cwd(cwd: PathBuf) -> PathBuf {
+    codex_utils_path::normalize_for_path_comparison(cwd.as_path()).unwrap_or(cwd)
 }
 
 async fn apply_thread_git_info(
@@ -580,10 +589,13 @@ mod tests {
 
     use super::*;
     use crate::GitInfoPatch;
+    use crate::ListThreadsParams;
     use crate::ResumeThreadParams;
+    use crate::SortDirection;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
+    use crate::ThreadSortKey;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -1261,6 +1273,110 @@ mod tests {
             .await
             .expect("sqlite metadata read");
         assert!(metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_recreates_missing_archived_sqlite_row_as_archived() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(315);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_archived_session_file(home.path(), "2025-01-03T19-30-00", uuid)
+            .expect("archived session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    preview: Some("Archived missing sqlite row".to_string()),
+                    ..Default::default()
+                },
+                include_archived: true,
+            })
+            .await
+            .expect("update archived thread without sqlite row");
+
+        assert!(thread.archived_at.is_some());
+        assert!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("get metadata")
+                .expect("metadata")
+                .archived_at
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn observed_metadata_normalizes_cwd_for_list_filters() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let uuid = Uuid::from_u128(316);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T20-00-00", uuid).expect("session file");
+        let workspace = home.path().join("workspace");
+        let child = workspace.join("child");
+        std::fs::create_dir_all(child.as_path()).expect("create workspace");
+        let unnormalized_cwd = child.join("..");
+        let normalized_cwd = codex_utils_path::normalize_for_path_comparison(workspace.as_path())
+            .expect("normalize cwd");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    cwd: Some(unnormalized_cwd),
+                    preview: Some("cwd preview".to_string()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("update observed cwd");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("get metadata")
+            .expect("metadata");
+        assert_eq!(metadata.cwd, normalized_cwd);
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: Some(Vec::new()),
+                cwd_filters: Some(vec![workspace]),
+                archived: false,
+                search_term: None,
+                use_state_db_only: true,
+            })
+            .await
+            .expect("list threads by cwd");
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|thread| thread.thread_id)
+                .collect::<Vec<_>>(),
+            vec![thread_id]
+        );
     }
 
     #[tokio::test]
