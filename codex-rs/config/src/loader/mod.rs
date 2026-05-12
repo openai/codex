@@ -627,6 +627,7 @@ struct ProjectTrustContext {
     project_root: AbsolutePathBuf,
     project_root_key: String,
     project_root_lookup_keys: Vec<String>,
+    checkout_root: Option<AbsolutePathBuf>,
     repo_root: Option<AbsolutePathBuf>,
     repo_root_key: Option<String>,
     repo_root_lookup_keys: Option<Vec<String>>,
@@ -715,15 +716,13 @@ impl ProjectTrustContext {
     }
 
     fn root_checkout_hooks_folder_for_dir(&self, dir: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+        let checkout_root = self.checkout_root.as_ref()?;
         let repo_root = self.repo_root.as_ref()?;
-        if repo_root == &self.project_root {
+        if checkout_root == repo_root {
             return None;
         }
 
-        let relative_dir = dir
-            .as_path()
-            .strip_prefix(self.project_root.as_path())
-            .ok()?;
+        let relative_dir = dir.as_path().strip_prefix(checkout_root.as_path()).ok()?;
         Some(repo_root.join(relative_dir).join(".codex"))
     }
 }
@@ -732,7 +731,7 @@ fn project_layer_entry(
     dot_codex_folder: &AbsolutePathBuf,
     config: TomlValue,
     disabled_reason: Option<String>,
-    hook_declarations_folder: Option<AbsolutePathBuf>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
@@ -743,7 +742,7 @@ fn project_layer_entry(
     } else {
         ConfigLayerEntry::new(source, config)
     };
-    entry.with_hook_declarations_folder(hook_declarations_folder)
+    entry.with_hooks_config_folder_override(hooks_config_folder_override)
 }
 
 fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
@@ -802,6 +801,7 @@ async fn project_trust_context(
         .first()
         .cloned()
         .unwrap_or_else(|| project_trust_key(project_root.as_path()));
+    let checkout_root = find_git_checkout_root(fs, cwd).await;
     let repo_root = resolve_root_git_project_for_trust(fs, cwd).await;
     let repo_root_lookup_keys = repo_root
         .as_ref()
@@ -819,6 +819,7 @@ async fn project_trust_context(
         project_root,
         project_root_key,
         project_root_lookup_keys,
+        checkout_root,
         repo_root,
         repo_root_key,
         repo_root_lookup_keys,
@@ -961,6 +962,24 @@ async fn find_project_root(
     Ok(cwd.clone())
 }
 
+async fn find_git_checkout_root(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+
+    for dir in base.ancestors() {
+        let dot_git = dir.join(".git");
+        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok() {
+            return Some(dir);
+        }
+    }
+    None
+}
+
 struct LoadedProjectLayers {
     layers: Vec<ConfigLayerEntry>,
     startup_warnings: Vec<String>,
@@ -1012,7 +1031,7 @@ async fn load_project_layers(
 
         let decision = trust_context.decision_for_dir(&dir);
         let disabled_reason = trust_context.disabled_reason_for_decision(&decision);
-        let hook_declarations_folder = trust_context.root_checkout_hooks_folder_for_dir(&dir);
+        let hooks_config_folder_override = trust_context.root_checkout_hooks_folder_for_dir(&dir);
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
@@ -1037,7 +1056,7 @@ async fn load_project_layers(
                             &dot_codex_abs,
                             TomlValue::Table(toml::map::Map::new()),
                             disabled_reason.clone(),
-                            hook_declarations_folder.clone(),
+                            hooks_config_folder_override.clone(),
                         ));
                         continue;
                     }
@@ -1049,7 +1068,7 @@ async fn load_project_layers(
                 let config = load_root_checkout_project_hooks(
                     fs,
                     config,
-                    hook_declarations_folder.as_ref(),
+                    hooks_config_folder_override.as_ref(),
                     decision.is_trusted(),
                 )
                 .await?;
@@ -1063,7 +1082,7 @@ async fn load_project_layers(
                     &dot_codex_abs,
                     config,
                     disabled_reason.clone(),
-                    hook_declarations_folder.clone(),
+                    hooks_config_folder_override.clone(),
                 );
                 layers.push(entry);
             }
@@ -1072,11 +1091,18 @@ async fn load_project_layers(
                     // If there is no config.toml file, record an empty entry
                     // for this project layer, as this may still have subfolders
                     // that are significant in the overall ConfigLayerStack.
+                    let config = load_root_checkout_project_hooks(
+                        fs,
+                        TomlValue::Table(toml::map::Map::new()),
+                        hooks_config_folder_override.as_ref(),
+                        decision.is_trusted(),
+                    )
+                    .await?;
                     layers.push(project_layer_entry(
                         &dot_codex_abs,
-                        TomlValue::Table(toml::map::Map::new()),
+                        config,
                         disabled_reason,
-                        hook_declarations_folder,
+                        hooks_config_folder_override,
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
@@ -1100,10 +1126,10 @@ async fn load_project_layers(
 async fn load_root_checkout_project_hooks(
     fs: &dyn ExecutorFileSystem,
     mut config: TomlValue,
-    hook_declarations_folder: Option<&AbsolutePathBuf>,
+    hooks_config_folder_override: Option<&AbsolutePathBuf>,
     is_trusted: bool,
 ) -> io::Result<TomlValue> {
-    let Some(hooks_config_folder) = hook_declarations_folder else {
+    let Some(hooks_config_folder) = hooks_config_folder_override else {
         return Ok(config);
     };
     let hooks_config_file = hooks_config_folder.join(CONFIG_TOML_FILE);

@@ -66,7 +66,7 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
-    hook_declarations_folder: Option<AbsolutePathBuf>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
 }
 
 impl ConfigLayerEntry {
@@ -78,7 +78,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
-            hook_declarations_folder: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -90,7 +90,7 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
-            hook_declarations_folder: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -106,7 +106,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
-            hook_declarations_folder: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -118,11 +118,11 @@ impl ConfigLayerEntry {
         self.raw_toml.as_deref()
     }
 
-    pub(crate) fn with_hook_declarations_folder(
+    pub(crate) fn with_hooks_config_folder_override(
         mut self,
-        hook_declarations_folder: Option<AbsolutePathBuf>,
+        hooks_config_folder_override: Option<AbsolutePathBuf>,
     ) -> Self {
-        self.hook_declarations_folder = hook_declarations_folder;
+        self.hooks_config_folder_override = hooks_config_folder_override;
         self
     }
 
@@ -162,7 +162,7 @@ impl ConfigLayerEntry {
     /// checkout while the rest of the project config still comes from the
     /// worktree.
     pub fn hooks_config_folder(&self) -> Option<AbsolutePathBuf> {
-        self.hook_declarations_folder
+        self.hooks_config_folder_override
             .clone()
             .or_else(|| self.config_folder())
     }

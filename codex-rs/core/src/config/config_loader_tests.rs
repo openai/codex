@@ -1480,6 +1480,180 @@ command = "echo worktree child hook"
     Ok(())
 }
 
+#[tokio::test]
+async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_config_toml()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let worktree_root = tmp.path().join("worktree");
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+
+    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(&worktree_git_dir).await?;
+    tokio::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .await?;
+    tokio::fs::write(
+        repo_root.join(".codex/config.toml"),
+        r#"[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo repo root hook"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_root)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo repo root hook")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let project_root = repo_root.join("project");
+    let nested = project_root.join("child");
+
+    tokio::fs::create_dir_all(repo_root.join(".git")).await?;
+    tokio::fs::create_dir_all(repo_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".hg"), "hg").await?;
+    tokio::fs::write(
+        repo_root.join(".codex/config.toml"),
+        r#"[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo repo root hook"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        project_root.join(".codex/config.toml"),
+        r#"[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo project root hook"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex/config.toml"),
+        r#"[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo nested hook"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        Some(vec![".hg".to_string()]),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(nested.join(".codex"))?)
+    );
+    assert_eq!(
+        project_layers[1].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            project_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo nested hook")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[1]),
+        Some("echo project root hook")
+    );
+
+    Ok(())
+}
+
 fn project_hook_command(layer: &ConfigLayerEntry) -> Option<&str> {
     layer
         .config
