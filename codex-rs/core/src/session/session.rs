@@ -860,7 +860,7 @@ impl Session {
                 // TODO(jif): extract session to share between sub-agents
                 session_extension_data,
                 thread_extension_data,
-                agent_control: agent_control.clone(),
+                agent_control,
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
