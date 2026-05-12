@@ -151,14 +151,12 @@ fn status_marker(status: CheckStatus, options: HumanOutputOptions) -> String {
             CheckStatus::Ok => "[ok]",
             CheckStatus::Warning => "[!!]",
             CheckStatus::Fail => "[XX]",
-            CheckStatus::Skipped => "[--]",
         }
     } else {
         match status {
             CheckStatus::Ok => "✓",
             CheckStatus::Warning => "⚠",
             CheckStatus::Fail => "✗",
-            CheckStatus::Skipped => "⊘",
         }
     };
 
@@ -166,7 +164,6 @@ fn status_marker(status: CheckStatus, options: HumanOutputOptions) -> String {
         CheckStatus::Ok => green(marker, options),
         CheckStatus::Warning => yellow(marker, options),
         CheckStatus::Fail => red(marker, options),
-        CheckStatus::Skipped => dim(marker, options),
     }
 }
 
@@ -180,7 +177,6 @@ fn style_description(
         CheckStatus::Ok => dim(&highlighted, options),
         CheckStatus::Warning => yellow(&highlighted, options),
         CheckStatus::Fail => red(&highlighted, options),
-        CheckStatus::Skipped => dim(&highlighted, options),
     }
 }
 
@@ -189,14 +185,12 @@ fn summary_line(report: &DoctorReport, options: HumanOutputOptions) -> String {
     let separator = dim(if options.ascii { " | " } else { " · " }, options);
     let status = overall_status_label(report.overall_status);
     format!(
-        "{}{}{}{}{}{}{} {}",
+        "{}{}{}{}{} {}",
         count_label(counts.ok, "ok", CheckStatus::Ok, options),
         separator,
         count_label(counts.warning, "warn", CheckStatus::Warning, options),
         separator,
         count_label(counts.fail, "fail", CheckStatus::Fail, options),
-        separator,
-        count_label(counts.skipped, "skipped", CheckStatus::Skipped, options),
         styled_overall_status(status, report.overall_status, options)
     )
 }
@@ -212,14 +206,13 @@ fn count_label(
         CheckStatus::Ok => green(label, options),
         CheckStatus::Warning => yellow(label, options),
         CheckStatus::Fail => red(label, options),
-        CheckStatus::Skipped => dim(label, options),
     };
     format!("{count} {label}")
 }
 
 fn overall_status_label(status: CheckStatus) -> &'static str {
     match status {
-        CheckStatus::Ok | CheckStatus::Skipped => "ok",
+        CheckStatus::Ok => "ok",
         CheckStatus::Warning => "degraded",
         CheckStatus::Fail => "failed",
     }
@@ -231,7 +224,7 @@ fn styled_overall_status(label: &str, status: CheckStatus, options: HumanOutputO
     }
 
     match status {
-        CheckStatus::Ok | CheckStatus::Skipped => label.green().bold().to_string(),
+        CheckStatus::Ok => label.green().bold().to_string(),
         CheckStatus::Warning => label.yellow().bold().to_string(),
         CheckStatus::Fail => label.red().bold().to_string(),
     }
@@ -325,7 +318,6 @@ struct StatusCounts {
     ok: usize,
     warning: usize,
     fail: usize,
-    skipped: usize,
 }
 
 impl StatusCounts {
@@ -336,7 +328,6 @@ impl StatusCounts {
                 CheckStatus::Ok => counts.ok += 1,
                 CheckStatus::Warning => counts.warning += 1,
                 CheckStatus::Fail => counts.fail += 1,
-                CheckStatus::Skipped => counts.skipped += 1,
             }
         }
         counts
@@ -506,7 +497,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────
-8 ok · 1 warn · 1 fail · 0 skipped failed
+8 ok · 1 warn · 1 fail failed
 
 --json redacted support report
 Still having issues? Run codex doctor --verbose for more details.
@@ -549,7 +540,7 @@ Background Server
   [ok] app-server   background server is not running
 
 {}
-8 ok | 1 warn | 1 fail | 0 skipped failed
+8 ok | 1 warn | 1 fail failed
 
 --json redacted support report
 Still having issues? Run codex doctor --verbose for more details.

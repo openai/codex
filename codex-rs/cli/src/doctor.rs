@@ -86,7 +86,6 @@ enum CheckStatus {
     Ok,
     Warning,
     Fail,
-    Skipped,
 }
 
 /// Machine-readable doctor output shared by human and JSON renderers.
@@ -823,7 +822,6 @@ fn mcp_check(config: &Config) -> DoctorCheck {
         CheckStatus::Ok => "MCP configuration is locally consistent",
         CheckStatus::Warning => "MCP configuration has missing optional inputs",
         CheckStatus::Fail => "MCP configuration has failing required inputs or reachability",
-        CheckStatus::Skipped => unreachable!(),
     };
 
     let mut check = DoctorCheck::new("mcp.config", "mcp", status, summary).details(details);
