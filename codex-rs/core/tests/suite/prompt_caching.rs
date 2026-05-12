@@ -28,7 +28,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
@@ -86,17 +85,11 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
                 .to_string()
         })
         .collect::<Vec<_>>();
-    let tool_name_set = tool_names.iter().cloned().collect::<BTreeSet<_>>();
-    assert_eq!(
-        tool_name_set.len(),
-        tool_names.len(),
-        "duplicate tool names detected: {tool_names:?}"
-    );
-    let expected_name_set = expected_names
+    let expected_names = expected_names
         .iter()
         .map(std::string::ToString::to_string)
-        .collect();
-    assert_eq!(tool_name_set, expected_name_set);
+        .collect::<Vec<_>>();
+    assert_eq!(tool_names, expected_names);
 }
 
 fn normalize_newlines(text: &str) -> String {
@@ -188,13 +181,13 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "update_plan",
         "request_user_input",
         "apply_patch",
-        "web_search",
         "view_image",
         "spawn_agent",
         "send_input",
         "resume_agent",
         "wait_agent",
         "close_agent",
+        "web_search",
     ]);
     let body0 = req1.single_request().body_json();
 
