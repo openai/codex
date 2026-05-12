@@ -99,11 +99,11 @@ pub struct ExecParams {
 ///
 /// The elevated Windows backend consumes extra deny-read paths plus explicit
 /// read and write roots during setup/refresh. The unelevated restricted-token
-/// backend only consumes extra deny-write carveouts on top of the legacy
-/// `WorkspaceWrite` allow set. Read-root overrides are layered on top of the
-/// baseline helper roots that the elevated setup path needs to launch the
-/// sandboxed command; split policies that opt into platform defaults carry
-/// that explicitly with the override.
+/// backend consumes explicit write roots and extra deny-write carveouts on top
+/// of the legacy `WorkspaceWrite` shape.
+/// Read-root overrides are layered on top of the baseline helper roots that the
+/// elevated setup path needs to launch the sandboxed command. Split policies
+/// that opt into platform defaults carry that explicitly with the override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsSandboxFilesystemOverrides {
     pub(crate) read_roots_override: Option<Vec<PathBuf>>,
@@ -296,6 +296,7 @@ pub async fn process_exec_tool_call(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
@@ -304,6 +305,7 @@ pub async fn process_exec_tool_call(
         params,
         permission_profile,
         sandbox_cwd,
+        workspace_roots,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
     )?;
@@ -318,6 +320,7 @@ pub fn build_exec_request(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
@@ -379,6 +382,7 @@ pub fn build_exec_request(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
+            workspace_roots,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
             windows_sandbox_level,
@@ -612,11 +616,11 @@ async fn exec_windows_sandbox(
     let additional_deny_read_paths = windows_sandbox_filesystem_overrides
         .map(|overrides| overrides.additional_deny_read_paths.clone())
         .unwrap_or_default();
-    let elevated_read_roots_override = windows_sandbox_filesystem_overrides
+    let read_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.read_roots_override.clone());
-    let elevated_read_roots_include_platform_defaults = windows_sandbox_filesystem_overrides
+    let read_roots_include_platform_defaults = windows_sandbox_filesystem_overrides
         .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
-    let elevated_write_roots_override = windows_sandbox_filesystem_overrides
+    let write_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.write_roots_override.clone());
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
@@ -631,10 +635,9 @@ async fn exec_windows_sandbox(
                     timeout_ms,
                     use_private_desktop: windows_sandbox_private_desktop,
                     proxy_enforced,
-                    read_roots_override: elevated_read_roots_override.as_deref(),
-                    read_roots_include_platform_defaults:
-                        elevated_read_roots_include_platform_defaults,
-                    write_roots_override: elevated_write_roots_override.as_deref(),
+                    read_roots_override: read_roots_override.as_deref(),
+                    read_roots_include_platform_defaults,
+                    write_roots_override: write_roots_override.as_deref(),
                     deny_read_paths_override: &additional_deny_read_paths,
                     deny_write_paths_override: &additional_deny_write_paths,
                 },
@@ -648,6 +651,7 @@ async fn exec_windows_sandbox(
                 &cwd,
                 env,
                 timeout_ms,
+                write_roots_override.as_deref(),
                 &additional_deny_read_paths,
                 &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
@@ -1075,12 +1079,18 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
         .map(|root| normalize_windows_override_path(root.root.as_path()))
         .collect::<std::result::Result<_, _>>()?;
 
-    if legacy_root_paths != split_root_paths {
+    let write_roots_override = if legacy_root_paths == split_root_paths {
+        None
+    } else if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. })
+        && !split_root_paths.iter().any(|path| path.parent().is_none())
+    {
+        Some(split_root_paths.iter().cloned().collect::<Vec<_>>())
+    } else {
         return Err(
             "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
                 .to_string(),
         );
-    }
+    };
 
     for writable_root in &split_writable_roots {
         for read_only_subpath in &writable_root.read_only_subpaths {
@@ -1102,22 +1112,18 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
     let mut additional_deny_write_paths = BTreeSet::new();
     for split_root in &split_writable_roots {
         let split_root_path = normalize_windows_override_path(split_root.root.as_path())?;
-        let Some(legacy_root) = legacy_writable_roots.iter().find(|candidate| {
+        let legacy_root = legacy_writable_roots.iter().find(|candidate| {
             normalize_windows_override_path(candidate.root.as_path())
                 .is_ok_and(|candidate_path| candidate_path == split_root_path)
-        }) else {
-            return Err(
-                "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
-                    .to_string(),
-            );
-        };
+        });
 
         for read_only_subpath in &split_root.read_only_subpaths {
-            if !legacy_root
-                .read_only_subpaths
-                .iter()
-                .any(|candidate| candidate == read_only_subpath)
-            {
+            if !legacy_root.is_some_and(|legacy_root| {
+                legacy_root
+                    .read_only_subpaths
+                    .iter()
+                    .any(|candidate| candidate == read_only_subpath)
+            }) {
                 additional_deny_write_paths.insert(normalize_windows_override_path(
                     read_only_subpath.as_path(),
                 )?);
@@ -1125,15 +1131,15 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
         }
     }
 
-    if additional_deny_read_paths.is_empty() && additional_deny_write_paths.is_empty() {
+    if write_roots_override.is_none() && additional_deny_write_paths.is_empty() {
         return Ok(None);
     }
 
     Ok(Some(WindowsSandboxFilesystemOverrides {
         read_roots_override: None,
         read_roots_include_platform_defaults: false,
-        write_roots_override: None,
         additional_deny_read_paths,
+        write_roots_override,
         additional_deny_write_paths: additional_deny_write_paths
             .into_iter()
             .map(|path| AbsolutePathBuf::from_absolute_path(path).map_err(|err| err.to_string()))

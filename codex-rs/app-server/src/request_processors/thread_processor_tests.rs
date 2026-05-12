@@ -496,6 +496,101 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn persisted_thread_permission_state_uses_latest_turn_active_profile() {
+        let cwd = test_path_buf("/tmp/project").abs();
+        let workspace_root = test_path_buf("/tmp/workspace").abs();
+        let active_permission_profile =
+            codex_protocol::models::ActivePermissionProfile::new(":workspace");
+        let permission_profile = codex_protocol::models::PermissionProfile::workspace_write();
+
+        let history = codex_protocol::protocol::InitialHistory::Forked(vec![
+            codex_protocol::protocol::RolloutItem::TurnContext(
+                codex_protocol::protocol::TurnContextItem {
+                    turn_id: Some("turn-1".to_string()),
+                    trace_id: None,
+                    cwd: cwd.to_path_buf(),
+                    workspace_roots: vec![workspace_root.clone()],
+                    current_date: None,
+                    timezone: None,
+                    approval_policy: AskForApproval::Never,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    permission_profile: Some(permission_profile.clone()),
+                    active_permission_profile: Some(active_permission_profile.clone()),
+                    network: None,
+                    file_system_sandbox_policy: None,
+                    model: "gpt-5".to_string(),
+                    personality: None,
+                    collaboration_mode: None,
+                    realtime_active: None,
+                    effort: None,
+                    summary: codex_protocol::config_types::ReasoningSummary::Auto,
+                    user_instructions: None,
+                    developer_instructions: None,
+                    final_output_json_schema: None,
+                    truncation_policy: None,
+                },
+            ),
+        ]);
+
+        let persisted = persisted_thread_permission_state(
+            &history,
+            Some(cwd.as_path()),
+            /*fallback_sandbox_policy*/ None,
+        )
+        .expect("permission state should be reconstructed");
+
+        assert_eq!(persisted.permission_profile, permission_profile);
+        assert_eq!(
+            persisted.active_permission_profile,
+            Some(active_permission_profile)
+        );
+        assert_eq!(persisted.workspace_roots, vec![workspace_root]);
+    }
+
+    #[test]
+    fn persisted_thread_permission_state_preserves_empty_workspace_roots_from_event_roundtrip() {
+        let cwd = test_path_buf("/tmp/project").abs();
+        let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+        let permission_profile = codex_protocol::models::PermissionProfile::workspace_write();
+        let event = codex_protocol::protocol::EventMsg::SessionConfigured(
+            codex_protocol::protocol::SessionConfiguredEvent {
+                session_id: thread_id.into(),
+                thread_id,
+                forked_from_id: None,
+                thread_source: None,
+                thread_name: None,
+                model: "gpt-5".to_string(),
+                model_provider_id: "mock_provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+                permission_profile: permission_profile.clone(),
+                active_permission_profile: None,
+                cwd: cwd.clone(),
+                workspace_roots: Vec::new(),
+                reasoning_effort: None,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            },
+        );
+        let event = serde_json::from_value(serde_json::to_value(event).unwrap()).unwrap();
+        let history = codex_protocol::protocol::InitialHistory::Forked(vec![
+            codex_protocol::protocol::RolloutItem::EventMsg(event),
+        ]);
+
+        let persisted = persisted_thread_permission_state(
+            &history,
+            Some(cwd.as_path()),
+            /*fallback_sandbox_policy*/ None,
+        )
+        .expect("permission state should be reconstructed");
+
+        assert_eq!(persisted.permission_profile, permission_profile);
+        assert_eq!(persisted.workspace_roots, Vec::<AbsolutePathBuf>::new());
+    }
+
+    #[test]
     fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::Auth,
@@ -630,6 +725,7 @@ mod thread_processor_behavior_tests {
             model_provider: None,
             service_tier: Some(Some("priority".to_string())),
             cwd: None,
+            workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
@@ -650,6 +746,7 @@ mod thread_processor_behavior_tests {
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
             cwd,
+            workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
