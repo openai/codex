@@ -3,10 +3,8 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
@@ -311,14 +309,14 @@ async fn apply_metadata_update(
     } else {
         Ok(())
     };
-    let sqlite_write_succeeded = match (state_db.is_some(), sqlite_write_result) {
-        (true, Ok(())) => true,
+    match (state_db.is_some(), sqlite_write_result) {
+        (true, Ok(())) => {}
         (true, Err(err)) => return Err(err),
-        (false, Ok(())) => false,
+        (false, Ok(())) => {}
         (false, Err(err)) => return Err(err),
-    };
+    }
 
-    let read_result = read_thread::read_thread(
+    read_thread::read_thread(
         store,
         ReadThreadParams {
             thread_id,
@@ -326,51 +324,7 @@ async fn apply_metadata_update(
             include_history: false,
         },
     )
-    .await;
-    if sqlite_write_succeeded {
-        read_result
-    } else {
-        read_result.or_else(|_| Ok(fallback_metadata_update_thread(thread_id, fallback_update)))
-    }
-}
-
-fn fallback_metadata_update_thread(
-    thread_id: ThreadId,
-    update: ThreadMetadataUpdate,
-) -> StoredThread {
-    let now = Utc::now();
-    let created_at = update.created_at.unwrap_or(now);
-    StoredThread {
-        thread_id,
-        rollout_path: update.rollout_path,
-        forked_from_id: None,
-        preview: update
-            .preview
-            .or(update.first_user_message.clone())
-            .unwrap_or_default(),
-        name: None,
-        model_provider: update.model_provider.unwrap_or_default(),
-        model: update.model,
-        reasoning_effort: update.reasoning_effort,
-        created_at,
-        updated_at: update.updated_at.unwrap_or(created_at),
-        archived_at: None,
-        cwd: update.cwd.unwrap_or_default(),
-        cli_version: update.cli_version.unwrap_or_default(),
-        source: update.source.unwrap_or(SessionSource::Unknown),
-        thread_source: update.thread_source.flatten(),
-        agent_nickname: update.agent_nickname.flatten(),
-        agent_role: update.agent_role.flatten(),
-        agent_path: update.agent_path.flatten(),
-        git_info: update.git_info,
-        approval_mode: update.approval_mode.unwrap_or(AskForApproval::OnRequest),
-        sandbox_policy: update
-            .sandbox_policy
-            .unwrap_or_else(SandboxPolicy::new_read_only_policy),
-        token_usage: update.token_usage,
-        first_user_message: update.first_user_message,
-        history: None,
-    }
+    .await
 }
 
 fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
@@ -1254,10 +1208,10 @@ mod tests {
             .await
             .expect("apply later observed metadata");
 
-        assert_eq!(thread.preview, "Original preview");
+        assert_eq!(thread.preview, "Hello from user");
         assert_eq!(
             thread.first_user_message.as_deref(),
-            Some("Original first message")
+            Some("Hello from user")
         );
         let metadata = runtime
             .get_thread(thread_id)
