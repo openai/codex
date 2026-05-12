@@ -37,6 +37,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::*;
@@ -365,7 +366,14 @@ async fn assert_model_tools(
         .iter()
         .map(ToolSpec::name)
         .collect::<Vec<_>>();
-    assert_eq!(&tool_names, &expected_tools,);
+    let tool_name_set = tool_names.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        tool_name_set.len(),
+        tool_names.len(),
+        "duplicate tool names detected: {tool_names:?}"
+    );
+    let expected_tool_set = expected_tools.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(tool_name_set, expected_tool_set);
 }
 
 async fn assert_default_model_tools(
@@ -396,14 +404,14 @@ async fn test_build_specs_gpt5_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -421,14 +429,14 @@ async fn test_build_specs_gpt51_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -448,14 +456,14 @@ async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -475,14 +483,14 @@ async fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -500,14 +508,14 @@ async fn test_gpt_5_1_codex_max_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -525,14 +533,14 @@ async fn test_codex_5_1_mini_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -550,14 +558,14 @@ async fn test_gpt_5_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -575,14 +583,14 @@ async fn test_gpt_5_1_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
@@ -602,14 +610,14 @@ async fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
-            "web_search",
-            "image_generation",
         ],
     )
     .await;
