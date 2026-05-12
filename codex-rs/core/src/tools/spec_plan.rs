@@ -48,6 +48,7 @@ use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
@@ -121,11 +122,58 @@ pub fn build_tool_registry_builder(
     }
 
     let handlers = collect_handler_tools(config, params);
-    let non_deferred_specs = handlers
+    let all_dynamic_tools = params
+        .dynamic_tools
         .iter()
-        .filter(|handler| !all_deferred_tools.contains(&handler.tool_name()))
-        .filter_map(|handler| handler.spec())
-        .collect::<Vec<_>>();
+        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
+        .collect::<HashSet<_>>();
+    let mut hosted_specs = Vec::new();
+    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
+        web_search_mode: config.web_search_mode,
+        web_search_config: config.web_search_config.as_ref(),
+        web_search_tool_type: config.web_search_tool_type,
+    }) {
+        hosted_specs.push(web_search_tool);
+    }
+    if config.image_gen_tool {
+        hosted_specs.push(create_image_generation_tool("png"));
+    }
+
+    let mut hosted_specs_added = false;
+    let mut non_deferred_specs = Vec::new();
+    for handler in &handlers {
+        let tool_name = handler.tool_name();
+        if !hosted_specs_added
+            && (tool_name.namespace.is_some()
+                || all_dynamic_tools.contains(&tool_name)
+                || matches!(
+                    tool_name.name.as_str(),
+                    VIEW_IMAGE_TOOL_NAME
+                        | "spawn_agent"
+                        | "send_input"
+                        | "send_message"
+                        | "followup_task"
+                        | "resume_agent"
+                        | "wait_agent"
+                        | "close_agent"
+                        | "list_agents"
+                        | "spawn_agents_on_csv"
+                        | "report_agent_job_result"
+                ))
+        {
+            non_deferred_specs.append(&mut hosted_specs);
+            hosted_specs_added = true;
+        }
+
+        if !all_deferred_tools.contains(&tool_name)
+            && let Some(spec) = handler.spec()
+        {
+            non_deferred_specs.push(spec);
+        }
+    }
+    if !hosted_specs_added {
+        non_deferred_specs.append(&mut hosted_specs);
+    }
 
     for spec in merge_into_namespaces(non_deferred_specs) {
         if !config.namespace_tools && matches!(spec, ToolSpec::Namespace(_)) {
@@ -165,18 +213,6 @@ pub fn build_tool_registry_builder(
         )));
     }
 
-    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
-        web_search_mode: config.web_search_mode,
-        web_search_config: config.web_search_config.as_ref(),
-        web_search_tool_type: config.web_search_tool_type,
-    }) {
-        builder.push_spec(web_search_tool);
-    }
-
-    if config.image_gen_tool {
-        builder.push_spec(create_image_generation_tool("png"));
-    }
-
     for bundle in params.extension_tool_bundles.iter().cloned() {
         builder.register_tool_bundle(bundle);
     }
@@ -184,25 +220,16 @@ pub fn build_tool_registry_builder(
     builder
 }
 
-fn merge_into_namespaces(mut specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
-    specs.sort_by(|left, right| {
-        left.name()
-            .cmp(right.name())
-            .then_with(|| match (left, right) {
-                (ToolSpec::Namespace(_), ToolSpec::Namespace(_)) => std::cmp::Ordering::Equal,
-                (ToolSpec::Namespace(_), _) => std::cmp::Ordering::Less,
-                (_, ToolSpec::Namespace(_)) => std::cmp::Ordering::Greater,
-                _ => std::cmp::Ordering::Equal,
-            })
-    });
-
+fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     let mut merged_specs = Vec::with_capacity(specs.len());
+    let mut namespace_indices = BTreeMap::<String, usize>::new();
     for spec in specs {
         match spec {
             ToolSpec::Namespace(mut namespace) => {
-                if let Some(ToolSpec::Namespace(existing_namespace)) = merged_specs.last_mut()
-                    && existing_namespace.name == namespace.name
-                {
+                if let Some(index) = namespace_indices.get(&namespace.name).copied() {
+                    let ToolSpec::Namespace(existing_namespace) = &mut merged_specs[index] else {
+                        unreachable!("namespace index must point to a namespace spec");
+                    };
                     if existing_namespace.description.trim().is_empty()
                         && !namespace.description.trim().is_empty()
                     {
@@ -212,6 +239,7 @@ fn merge_into_namespaces(mut specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
                     continue;
                 }
 
+                namespace_indices.insert(namespace.name.clone(), merged_specs.len());
                 merged_specs.push(ToolSpec::Namespace(namespace));
             }
             spec => merged_specs.push(spec),
