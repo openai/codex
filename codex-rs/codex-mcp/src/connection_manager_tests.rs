@@ -10,6 +10,7 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -38,6 +39,8 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     let tool_namespace = format!("mcp__{server_name}__");
     ToolInfo {
         server_name: server_name.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
         namespace_description: None,
@@ -713,44 +716,6 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
-    let startup_tools = vec![create_test_tool("rmcp", "echo")];
-    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
-        .boxed()
-        .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
-    manager.clients.insert(
-        "rmcp".to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
-        },
-    );
-
-    let tool = manager
-        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
-        .await
-        .expect("split MCP tool namespace and name should resolve");
-
-    let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
-    assert_eq!(
-        (
-            tool.server_name.as_str(),
-            tool.callable_namespace.as_str(),
-            tool.callable_name.as_str(),
-            tool.tool.name.as_ref(),
-        ),
-        expected
-    );
-}
-
-#[tokio::test]
 async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -840,6 +805,46 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn list_all_tools_adds_server_metadata_to_cached_tools() {
+    let server_name = "docs";
+    let startup_tools = vec![create_test_tool(server_name, "search")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    manager.server_metadata.insert(
+        server_name.to_string(),
+        McpServerMetadata {
+            pollutes_memory: true,
+            origin: Some(McpServerOrigin::StreamableHttp(
+                "https://docs.example".to_string(),
+            )),
+            supports_parallel_tool_calls: true,
+        },
+    );
+    manager.clients.insert(
+        server_name.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = manager.list_all_tools().await;
+    assert_eq!(tools.len(), 1);
+    let tool = &tools[0];
+    assert_eq!(tool.server_name, server_name);
+    assert!(tool.supports_parallel_tool_calls);
+    assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
 }
 
 #[test]

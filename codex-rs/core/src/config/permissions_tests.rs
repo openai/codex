@@ -247,7 +247,7 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_bare_network_access() {
 }
 
 #[test]
-fn profile_network_proxy_config_enables_proxy_for_proxy_policy() {
+fn profile_network_proxy_config_keeps_proxy_disabled_for_proxy_policy() {
     let config = network_proxy_config_from_profile_network(Some(&NetworkToml {
         enabled: Some(true),
         proxy_url: Some("http://127.0.0.1:43128".to_string()),
@@ -261,7 +261,7 @@ fn profile_network_proxy_config_enables_proxy_for_proxy_policy() {
         ..Default::default()
     }));
 
-    assert!(config.network.enabled);
+    assert!(!config.network.enabled);
     assert_eq!(config.network.proxy_url, "http://127.0.0.1:43128");
     assert!(!config.network.enable_socks5);
     assert_eq!(

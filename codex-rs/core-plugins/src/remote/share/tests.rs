@@ -93,6 +93,7 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "discoverability": "PRIVATE",
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
@@ -584,7 +585,8 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         vec![
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_123".to_string(),
@@ -621,7 +623,8 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
             },
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_456".to_string(),
+                    id: "demo-plugin@shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_456".to_string(),
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_456".to_string(),

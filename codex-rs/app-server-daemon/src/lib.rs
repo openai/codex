@@ -89,6 +89,13 @@ pub struct BootstrapOutput {
     pub app_server_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum RemoteControlStartOutput {
+    Bootstrap(BootstrapOutput),
+    Start(LifecycleOutput),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteControlMode {
     Enabled,
@@ -163,6 +170,13 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.bootstrap(options).await
+}
+
+pub async fn ensure_remote_control_started() -> Result<RemoteControlStartOutput> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?
+        .ensure_remote_control_started()
+        .await
 }
 
 pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControlOutput> {
@@ -397,8 +411,34 @@ impl Daemon {
         self.bootstrap_locked(options).await
     }
 
+    async fn ensure_remote_control_started(&self) -> Result<RemoteControlStartOutput> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let settings = self.load_settings().await?;
+        if self.is_bootstrapped(&settings).await? {
+            let _ = self
+                .set_remote_control_locked(RemoteControlMode::Enabled)
+                .await?;
+            let output = self.start().await?;
+            return Ok(RemoteControlStartOutput::Start(output));
+        }
+
+        let output = self
+            .bootstrap_locked(BootstrapOptions {
+                remote_control_enabled: true,
+            })
+            .await?;
+        Ok(RemoteControlStartOutput::Bootstrap(output))
+    }
+
     async fn set_remote_control(&self, mode: RemoteControlMode) -> Result<RemoteControlOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
+        self.set_remote_control_locked(mode).await
+    }
+
+    async fn set_remote_control_locked(
+        &self,
+        mode: RemoteControlMode,
+    ) -> Result<RemoteControlOutput> {
         let previous_settings = self.load_settings().await?;
         let mut settings = previous_settings.clone();
         let remote_control_enabled = mode.is_enabled();
@@ -515,6 +555,11 @@ impl Daemon {
         let backend =
             backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
         backend.start().await
+    }
+
+    async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
+        let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
+        updater.is_starting_or_running().await
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
@@ -687,8 +732,12 @@ fn try_lock_file(_file: &tokio::fs::File) -> Result<bool> {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::BackendKind;
+    use super::BootstrapOutput;
     use super::BootstrapStatus;
+    use super::LifecycleOutput;
     use super::LifecycleStatus;
+    use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
     use super::RestartIfRunningOutcome;
@@ -776,7 +825,7 @@ mod tests {
                 restart_decision(
                     RestartMode::Always,
                     /*info*/ None,
-                    /*managed_version*/ None
+                    /*managed_version*/ None,
                 ),
             ],
             [
@@ -785,6 +834,41 @@ mod tests {
                 RestartDecision::Restart,
                 RestartDecision::Restart,
             ]
+        );
+    }
+
+    #[test]
+    fn remote_control_start_output_serializes_inner_output_without_tag() {
+        let lifecycle_output = LifecycleOutput {
+            status: LifecycleStatus::AlreadyRunning,
+            backend: Some(BackendKind::Pid),
+            pid: None,
+            socket_path: "codex.sock".into(),
+            cli_version: Some("1.2.3".to_string()),
+            app_server_version: Some("1.2.4".to_string()),
+        };
+        let output = RemoteControlStartOutput::Start(lifecycle_output.clone());
+
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize"),
+            serde_json::to_value(lifecycle_output).expect("serialize")
+        );
+
+        let bootstrap_output = BootstrapOutput {
+            status: BootstrapStatus::Bootstrapped,
+            backend: BackendKind::Pid,
+            auto_update_enabled: true,
+            remote_control_enabled: true,
+            managed_codex_path: "codex".into(),
+            socket_path: "codex.sock".into(),
+            cli_version: "1.2.3".to_string(),
+            app_server_version: "1.2.4".to_string(),
+        };
+        let output = RemoteControlStartOutput::Bootstrap(bootstrap_output.clone());
+
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize"),
+            serde_json::to_value(bootstrap_output).expect("serialize")
         );
     }
 }

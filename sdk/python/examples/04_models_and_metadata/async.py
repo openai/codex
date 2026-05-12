@@ -11,7 +11,7 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from codex_app_server import AsyncCodex
+from openai_codex import AsyncCodex
 
 
 async def main() -> None:

@@ -17,6 +17,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
+use core_test_support::managed_network_requirements_loader;
 use core_test_support::process::process_is_alive;
 use core_test_support::process::wait_for_pid_file;
 use core_test_support::process::wait_for_process_exit;
@@ -872,13 +873,7 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
 async fn unified_exec_network_denial_test(
     server: &wiremock::MockServer,
 ) -> Result<(TestCodex, SandboxPolicy)> {
-    use codex_config::ConfigLayerStack;
-    use codex_config::ConfigLayerStackOrdering;
     use codex_config::Constrained;
-    use codex_config::NetworkConstraints;
-    use codex_config::NetworkRequirementsToml;
-    use codex_config::RequirementSource;
-    use codex_config::Sourced;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -901,46 +896,20 @@ allow_local_binding = true
         *network_access = true;
     }
     let sandbox_policy_for_config = sandbox_policy.clone();
-    let mut builder = test_codex().with_home(home).with_config(move |config| {
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
-        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
-        config.permissions.permission_profile = Constrained::allow_any(
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy_for_config),
-        );
-        let layers = config
-            .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
-            .cloned()
-            .collect();
-        let mut requirements = config.config_layer_stack.requirements().clone();
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allow_local_binding: Some(true),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
-        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-        requirements_toml.network = Some(NetworkRequirementsToml {
-            enabled: Some(true),
-            allow_local_binding: Some(true),
-            ..Default::default()
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config.permissions.permission_profile = Constrained::allow_any(
+                PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy_for_config),
+            );
         });
-        config.config_layer_stack =
-            match ConfigLayerStack::new(layers, requirements, requirements_toml) {
-                Ok(stack) => stack,
-                Err(err) => panic!("rebuild config layer stack with network requirements: {err}"),
-            };
-    });
     let test = builder.build_remote_aware(server).await?;
     assert!(
         test.config.permissions.network.is_some(),

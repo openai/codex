@@ -6,7 +6,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -34,10 +33,6 @@ impl ToolHandler for DynamicToolHandler {
 
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {

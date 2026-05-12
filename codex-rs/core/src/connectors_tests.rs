@@ -120,6 +120,8 @@ fn codex_app_tool(
 
     ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
         namespace_description: None,
@@ -190,6 +192,8 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
         ),
         ToolInfo {
             server_name: "sample".to_string(),
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: "echo".to_string(),
             callable_namespace: "sample".to_string(),
             namespace_description: None,
@@ -305,6 +309,8 @@ fn merge_connectors_unions_and_dedupes_plugin_display_names() {
 fn accessible_connectors_from_mcp_tools_preserves_description() {
     let mcp_tools = vec![ToolInfo {
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: "calendar_create_event".to_string(),
         callable_namespace: "mcp__codex_apps__calendar".to_string(),
         namespace_description: Some("Plan events".to_string()),
