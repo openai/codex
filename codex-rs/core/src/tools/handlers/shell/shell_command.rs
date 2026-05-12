@@ -17,11 +17,12 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -144,10 +145,6 @@ impl ToolHandler for ShellCommandHandler {
         self.options.is_some()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -180,6 +177,27 @@ impl ToolHandler for ShellCommandHandler {
         })
     }
 
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported shell_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "shell_command",
+                "command",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -206,10 +224,10 @@ impl ToolHandler for ShellCommandHandler {
             ..
         } = invocation;
 
+        let tool_name = self.tool_name();
         let ToolPayload::Function { arguments } = payload else {
             return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell_command handler: {}",
-                self.tool_name().display()
+                "unsupported payload for shell_command handler: {tool_name}"
             )));
         };
 
@@ -232,7 +250,7 @@ impl ToolHandler for ShellCommandHandler {
             turn.tools_config.allow_login_shell,
         )?;
         run_exec_like(RunExecLikeArgs {
-            tool_name: self.tool_name().display(),
+            tool_name,
             exec_params,
             hook_command: params.command,
             additional_permissions: params.additional_permissions.clone(),

@@ -15,7 +15,6 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
-use codex_app_server_client::EnvironmentManagerArgs;
 use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
@@ -479,6 +478,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             None
         }
     };
+    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
+    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -509,6 +510,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let state_db = codex_core::init_state_db(&config).await;
+    let environment_manager = if run_loader_overrides.ignore_user_config {
+        EnvironmentManager::from_env(local_runtime_paths).await?
+    } else {
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?
+    };
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -518,9 +524,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
-        environment_manager: std::sync::Arc::new(
-            EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await,
-        ),
+        environment_manager: std::sync::Arc::new(environment_manager),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
@@ -1601,6 +1605,15 @@ async fn handle_server_request(
                 request_id,
                 &method,
                 "chatgpt auth token refresh is not supported in exec mode".to_string(),
+            )
+            .await
+        }
+        ServerRequest::AttestationGenerate { request_id, .. } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                "attestation generation is not supported in exec mode".to_string(),
             )
             .await
         }

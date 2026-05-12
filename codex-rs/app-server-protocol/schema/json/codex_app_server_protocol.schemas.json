@@ -83,6 +83,25 @@
       "title": "ApplyPatchApprovalResponse",
       "type": "object"
     },
+    "AttestationGenerateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "AttestationGenerateParams",
+      "type": "object"
+    },
+    "AttestationGenerateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "token": {
+          "description": "Opaque client attestation token.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "title": "AttestationGenerateResponse",
+      "type": "object"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2146,6 +2165,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2155,6 +2179,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -2411,6 +2436,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2420,6 +2450,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -2608,6 +2639,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3591,6 +3627,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -3602,6 +3643,7 @@
         "cwd",
         "itemId",
         "permissions",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -5187,6 +5229,31 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "description": "Generate a fresh upstream attestation result on demand.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "attestation/generate"
+              ],
+              "title": "Attestation/generateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AttestationGenerateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Attestation/generateRequest",
           "type": "object"
         },
         {
@@ -7657,6 +7724,12 @@
               "command": {
                 "type": "string"
               },
+              "commandWindows": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "statusMessage": {
                 "type": [
                   "string",
@@ -9878,6 +9951,11 @@
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
+          "completedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review completed.",
+            "format": "int64",
+            "type": "integer"
+          },
           "decisionSource": {
             "$ref": "#/definitions/v2/AutoReviewDecisionSource"
           },
@@ -9887,6 +9965,11 @@
           "reviewId": {
             "description": "Stable identifier for this review.",
             "type": "string"
+          },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
           },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
@@ -9904,9 +9987,11 @@
         },
         "required": [
           "action",
+          "completedAtMs",
           "decisionSource",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -9927,6 +10012,11 @@
             "description": "Stable identifier for this review.",
             "type": "string"
           },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
+          },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
             "type": [
@@ -9945,6 +10035,7 @@
           "action",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -12185,10 +12276,20 @@
               "null"
             ]
           },
+          "discoverability": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginShareDiscoverability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "remotePluginId": {
             "type": "string"
           },
-          "shareTargets": {
+          "sharePrincipals": {
             "items": {
               "$ref": "#/definitions/v2/PluginSharePrincipal"
             },
@@ -12249,14 +12350,10 @@
           },
           "plugin": {
             "$ref": "#/definitions/v2/PluginSummary"
-          },
-          "shareUrl": {
-            "type": "string"
           }
         },
         "required": [
-          "plugin",
-          "shareUrl"
+          "plugin"
         ],
         "type": "object"
       },
@@ -12291,14 +12388,26 @@
           },
           "principalType": {
             "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          },
+          "role": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalRole"
           }
         },
         "required": [
           "name",
           "principalId",
-          "principalType"
+          "principalType",
+          "role"
         ],
         "type": "object"
+      },
+      "PluginSharePrincipalRole": {
+        "enum": [
+          "reader",
+          "editor",
+          "owner"
+        ],
+        "type": "string"
       },
       "PluginSharePrincipalType": {
         "enum": [
@@ -12370,17 +12479,38 @@
           },
           "principalType": {
             "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          },
+          "role": {
+            "$ref": "#/definitions/v2/PluginShareTargetRole"
           }
         },
         "required": [
           "principalId",
-          "principalType"
+          "principalType",
+          "role"
         ],
         "type": "object"
+      },
+      "PluginShareTargetRole": {
+        "enum": [
+          "reader",
+          "editor"
+        ],
+        "type": "string"
+      },
+      "PluginShareUpdateDiscoverability": {
+        "enum": [
+          "UNLISTED",
+          "PRIVATE"
+        ],
+        "type": "string"
       },
       "PluginShareUpdateTargetsParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "discoverability": {
+            "$ref": "#/definitions/v2/PluginShareUpdateDiscoverability"
+          },
           "remotePluginId": {
             "type": "string"
           },
@@ -12392,6 +12522,7 @@
           }
         },
         "required": [
+          "discoverability",
           "remotePluginId",
           "shareTargets"
         ],
@@ -12401,6 +12532,9 @@
       "PluginShareUpdateTargetsResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "discoverability": {
+            "$ref": "#/definitions/v2/PluginShareDiscoverability"
+          },
           "principals": {
             "items": {
               "$ref": "#/definitions/v2/PluginSharePrincipal"
@@ -12409,6 +12543,7 @@
           }
         },
         "required": [
+          "discoverability",
           "principals"
         ],
         "title": "PluginShareUpdateTargetsResponse",
@@ -12572,6 +12707,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "remotePluginId": {
+            "description": "Backend remote plugin identifier when available.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "shareContext": {
             "anyOf": [
@@ -13255,7 +13397,7 @@
       },
       "RemoteControlStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Current remote-control connection status and environment id exposed to clients.",
+        "description": "Current remote-control connection status and remote identity exposed to clients.",
         "properties": {
           "environmentId": {
             "type": [
@@ -13263,11 +13405,15 @@
               "null"
             ]
           },
+          "installationId": {
+            "type": "string"
+          },
           "status": {
             "$ref": "#/definitions/v2/RemoteControlConnectionStatus"
           }
         },
         "required": [
+          "installationId",
           "status"
         ],
         "title": "RemoteControlStatusChangedNotification",
@@ -14730,24 +14876,6 @@
         ],
         "type": "object"
       },
-      "SkillsListExtraRootsForCwd": {
-        "properties": {
-          "cwd": {
-            "type": "string"
-          },
-          "extraUserRoots": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "cwd",
-          "extraUserRoots"
-        ],
-        "type": "object"
-      },
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14761,17 +14889,6 @@
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"
-          },
-          "perCwdExtraUserRoots": {
-            "default": null,
-            "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
-            "items": {
-              "$ref": "#/definitions/v2/SkillsListExtraRootsForCwd"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
           }
         },
         "title": "SkillsListParams",

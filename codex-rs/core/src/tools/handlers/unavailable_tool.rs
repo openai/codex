@@ -3,7 +3,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -48,17 +47,13 @@ impl ToolHandler for UnavailableToolHandler {
         self.spec.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         match payload {
             ToolPayload::Function { .. } => Ok(FunctionToolOutput::from_text(
                 unavailable_tool_message(
-                    self.tool_name.display(),
+                    &self.tool_name,
                     "Retry after the tool becomes available or ask the user to re-enable it.",
                 ),
                 Some(false),

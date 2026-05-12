@@ -19,10 +19,6 @@ impl ToolHandler for Handler {
         Some(create_followup_task_tool())
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::error_code::method_not_found;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -316,6 +317,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) background_tasks: TaskTracker,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
 impl ThreadRequestProcessor {
@@ -334,6 +336,7 @@ impl ThreadRequestProcessor {
         thread_list_state_permit: Arc<Semaphore>,
         thread_goal_processor: ThreadGoalRequestProcessor,
         state_db: Option<StateDbHandle>,
+        skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
         Self {
             auth_manager,
@@ -350,6 +353,7 @@ impl ThreadRequestProcessor {
             thread_goal_processor,
             state_db,
             background_tasks: TaskTracker::new(),
+            skills_watcher,
         }
     }
 
@@ -591,6 +595,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_turns_items_list(
+        &self,
+        _params: ThreadTurnsItemsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        Err(method_not_found(
+            "thread/turns/items/list is not supported yet",
+        ))
+    }
+
     pub(crate) async fn thread_shell_command(
         &self,
         request_id: &ConnectionRequestId,
@@ -742,6 +755,7 @@ impl ThreadRequestProcessor {
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            skills_watcher: Arc::clone(&self.skills_watcher),
         }
     }
 
@@ -839,6 +853,7 @@ impl ThreadRequestProcessor {
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            skills_watcher: Arc::clone(&self.skills_watcher),
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
@@ -945,6 +960,7 @@ impl ThreadRequestProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
+        let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1039,7 +1055,7 @@ impl ThreadRequestProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
-
+        let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
             thread,
@@ -1074,6 +1090,12 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error creating thread: {err}")),
             })?;
+        let session_telemetry = thread.session_telemetry();
+        session_telemetry.record_startup_phase(
+            "thread_start_create_thread",
+            create_thread_started_at.elapsed(),
+            Some("ready"),
+        );
 
         Self::set_app_server_client_info(
             thread.as_ref(),
@@ -1175,6 +1197,11 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
+        session_telemetry.record_startup_phase(
+            "thread_start_total",
+            thread_start_started_at.elapsed(),
+            Some("ready"),
+        );
         Ok(())
     }
 
@@ -2072,7 +2099,9 @@ impl ThreadRequestProcessor {
             cursor,
             limit,
             sort_direction,
+            items_view,
         } = params;
+        let items_view = items_view.unwrap_or(TurnItemsView::Summary);
 
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -2101,7 +2130,7 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        let turns = reconstruct_thread_turns_for_turns_list(
+        let mut turns = reconstruct_thread_turns_for_turns_list(
             &items,
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread_uuid.to_string())
@@ -2109,6 +2138,41 @@ impl ThreadRequestProcessor {
             has_live_running_thread,
             active_turn,
         );
+        for turn in &mut turns {
+            match items_view {
+                TurnItemsView::NotLoaded => {
+                    turn.items.clear();
+                    turn.items_view = TurnItemsView::NotLoaded;
+                }
+                TurnItemsView::Summary => {
+                    let first_user_message = turn
+                        .items
+                        .iter()
+                        .find(|item| matches!(item, ThreadItem::UserMessage { .. }))
+                        .cloned();
+                    let final_agent_message = turn
+                        .items
+                        .iter()
+                        .rev()
+                        .find(|item| matches!(item, ThreadItem::AgentMessage { .. }))
+                        .cloned();
+                    turn.items = match (first_user_message, final_agent_message) {
+                        (Some(user_message), Some(agent_message))
+                            if user_message.id() != agent_message.id() =>
+                        {
+                            vec![user_message, agent_message]
+                        }
+                        (Some(user_message), _) => vec![user_message],
+                        (None, Some(agent_message)) => vec![agent_message],
+                        (None, None) => Vec::new(),
+                    };
+                    turn.items_view = TurnItemsView::Summary;
+                }
+                TurnItemsView::Full => {
+                    turn.items_view = TurnItemsView::Full;
+                }
+            }
+        }
         let page = paginate_thread_turns(
             turns,
             cursor.as_deref(),
@@ -2183,9 +2247,13 @@ impl ThreadRequestProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        capabilities: ConnectionCapabilities,
+    ) {
         self.thread_state_manager
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, capabilities)
             .await;
     }
 
@@ -2278,6 +2346,8 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let redact_resume_payloads =
+            should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -2472,6 +2542,10 @@ impl ThreadRequestProcessor {
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
+                let token_usage_thread = include_turns.then(|| thread.clone());
+                if redact_resume_payloads {
+                    redact_thread_resume_payloads(&mut thread);
+                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2489,7 +2563,6 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
@@ -2609,6 +2682,8 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+            let redact_resume_payloads =
+                should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
                 .history
                 .as_ref()
@@ -2683,6 +2758,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    redact_resume_payloads,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3496,19 +3572,30 @@ fn normalize_thread_turns_status(
 
 enum ThreadReadViewError {
     InvalidRequest(String),
+    Unsupported(&'static str),
     Internal(String),
 }
 
 fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     match err {
         ThreadReadViewError::InvalidRequest(message) => invalid_request(message),
+        ThreadReadViewError::Unsupported(operation) => {
+            unsupported_thread_store_operation(operation)
+        }
         ThreadReadViewError::Internal(message) => internal_error(message),
     }
+}
+
+fn unsupported_thread_store_operation(operation: &'static str) -> JSONRPCErrorError {
+    method_not_found(format!("{operation} is not supported yet"))
 }
 
 fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!("failed to list threads: {err}")),
     }
 }
@@ -3516,6 +3603,9 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
 fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         ThreadStoreError::ThreadNotFound { thread_id } => {
             invalid_request(format!("no rollout found for thread id {thread_id}"))
         }
@@ -3538,6 +3628,7 @@ fn thread_turns_list_history_load_error(
         ThreadStoreError::InvalidRequest { message } => {
             ThreadReadViewError::InvalidRequest(message)
         }
+        ThreadStoreError::Unsupported { operation } => ThreadReadViewError::Unsupported(operation),
         err => ThreadReadViewError::Internal(format!(
             "failed to load thread history for thread {thread_id}: {err}"
         )),
@@ -3564,6 +3655,7 @@ fn thread_read_history_load_error(
         ThreadStoreError::InvalidRequest { message } => {
             ThreadReadViewError::InvalidRequest(message)
         }
+        ThreadStoreError::Unsupported { operation } => ThreadReadViewError::Unsupported(operation),
         err => ThreadReadViewError::Internal(format!(
             "failed to load thread history for thread {thread_id}: {err}"
         )),
@@ -3578,6 +3670,9 @@ fn conversation_summary_thread_id_read_error(
     match err {
         ThreadStoreError::InvalidRequest { message } if message == no_rollout_message => {
             conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
         }
         ThreadStoreError::ThreadNotFound { thread_id } if thread_id == conversation_id => {
             conversation_summary_not_found_error(conversation_id)
@@ -3601,6 +3696,9 @@ fn conversation_summary_rollout_path_read_error(
 ) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!(
             "failed to load conversation summary from {}: {}",
             path.display(),
@@ -3615,6 +3713,9 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
             invalid_request(format!("thread not found: {thread_id}"))
         }
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
         err => internal_error(format!("failed to {operation}: {err}")),
     }
 }
@@ -3622,6 +3723,9 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported {
+            operation: unsupported_operation,
+        } => unsupported_thread_store_operation(unsupported_operation),
         err => internal_error(format!("failed to {operation} thread: {err}")),
     }
 }
@@ -3662,7 +3766,7 @@ pub(crate) fn thread_from_stored_thread(
         id: thread_id.clone(),
         session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         ephemeral: false,
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -3704,7 +3808,7 @@ fn summary_from_stored_thread(
     ConversationSummary {
         conversation_id: thread.thread_id,
         path,
-        preview: thread.first_user_message.unwrap_or(thread.preview),
+        preview: thread.preview,
         // Preserve millisecond precision from the thread store so thread/list cursors
         // round-trip the same ordering key used by pagination queries.
         timestamp: Some(
@@ -3735,6 +3839,7 @@ fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
     first_user_message: Option<String>,
+    preview: Option<String>,
     timestamp: String,
     updated_at: String,
     model_provider: String,
@@ -3748,7 +3853,7 @@ fn summary_from_state_db_metadata(
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 ) -> ConversationSummary {
-    let preview = first_user_message.unwrap_or_default();
+    let preview = preview.or(first_user_message).unwrap_or_default();
     let source = serde_json::from_str(&source)
         .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
@@ -3782,6 +3887,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
         metadata.id,
         metadata.rollout_path.clone(),
         metadata.first_user_message.clone(),
+        metadata.preview.clone(),
         metadata
             .created_at
             .to_rfc3339_opts(SecondsFormat::Secs, true),

@@ -22,6 +22,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -197,7 +198,11 @@ async fn run_remote_compact_task_inner_impl(
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort,
                 summary: turn_context.reasoning_summary,
-                service_tier: turn_context.config.service_tier.clone(),
+                service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
+                    None
+                } else {
+                    turn_context.config.service_tier.clone()
+                },
             },
             &turn_context.session_telemetry,
             &compaction_trace,
@@ -282,8 +287,9 @@ pub(crate) async fn process_compacted_history(
 ///
 /// This intentionally keeps:
 /// - `assistant` messages (future remote compaction models may emit them)
-/// - `user`-role warnings and compaction-generated summary messages because
-///   they parse as `TurnItem::UserMessage`.
+/// - `user`-role warnings that parse as `TurnItem::UserMessage` and compaction-generated summary
+///   messages. Legacy warning fragments are filtered by `parse_turn_item` before they reach this
+///   check.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,

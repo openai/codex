@@ -7,6 +7,7 @@ version.workspace = true
 [lib]
 name = "codex_mcp"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -17,7 +18,6 @@ async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
-codex-builtin-mcps = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }

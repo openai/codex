@@ -3,6 +3,7 @@ use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::SessionPickerViewMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
@@ -30,6 +31,34 @@ fn blocking_set_model_top_level() {
 model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
+}
+
+#[test]
+fn set_service_tier_saves_priority_as_fast() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_service_tier(Some(ServiceTier::Fast.request_value().to_string()))
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "service_tier = \"fast\"\n");
+}
+
+#[test]
+fn set_service_tier_preserves_unknown_service_tier() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_service_tier(Some("experimental-tier-id".to_string()))
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "service_tier = \"experimental-tier-id\"\n");
 }
 
 #[test]

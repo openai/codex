@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use futures::future::join_all;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -20,6 +21,7 @@ use crate::events::common::matches_matcher;
 pub(crate) struct ParsedHandler<T> {
     pub completed: HookCompletedEvent,
     pub data: T,
+    pub completion_order: usize,
 }
 
 pub(crate) fn select_handlers(
@@ -90,18 +92,25 @@ pub(crate) async fn execute_handlers<T>(
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
-    let results = join_all(
-        handlers
-            .iter()
-            .map(|handler| run_command(shell, handler, &input_json, cwd)),
-    )
-    .await;
+    let mut pending = FuturesUnordered::new();
+    for (configured_order, handler) in handlers.into_iter().enumerate() {
+        let input_json = input_json.clone();
+        let turn_id = turn_id.clone();
+        pending.push(async move {
+            let result = run_command(shell, &handler, &input_json, cwd).await;
+            (configured_order, parse(&handler, result, turn_id))
+        });
+    }
 
-    handlers
-        .into_iter()
-        .zip(results)
-        .map(|(handler, result)| parse(&handler, result, turn_id.clone()))
-        .collect()
+    let mut completed = Vec::new();
+    let mut completion_order = 0;
+    while let Some((configured_order, mut parsed)) = pending.next().await {
+        parsed.completion_order = completion_order;
+        completion_order += 1;
+        completed.push((configured_order, parsed));
+    }
+    completed.sort_by_key(|(configured_order, _)| *configured_order);
+    completed.into_iter().map(|(_, parsed)| parsed).collect()
 }
 
 pub(crate) fn completed_summary(

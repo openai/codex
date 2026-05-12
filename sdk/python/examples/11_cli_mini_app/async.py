@@ -11,9 +11,11 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from codex_app_server import (
+from openai_codex import (
     AsyncCodex,
     TextInput,
+)
+from openai_codex.types import (
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
 )
@@ -43,7 +45,9 @@ async def main() -> None:
     print("Codex async mini CLI. Type /exit to quit.")
 
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
+        thread = await codex.thread_start(
+            model="gpt-5.4", config={"model_reasoning_effort": "high"}
+        )
         print("Thread:", thread.id)
 
         while True:

@@ -717,11 +717,13 @@ impl AgentControl {
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread.codex.session.ensure_rollout_materialized().await;
             thread.codex.session.flush_rollout().await?;
-            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+            let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
                 Ok(String::new())
             } else {
                 state.send_op(agent_id, Op::Shutdown {}).await
-            }
+            };
+            thread.wait_until_terminated().await;
+            result
         } else {
             state.send_op(agent_id, Op::Shutdown {}).await
         };

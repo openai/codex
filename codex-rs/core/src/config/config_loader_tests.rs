@@ -1157,6 +1157,7 @@ async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![codex_config::HookHandlerConfig::Command {
                         command: format!("python3 {}/pre.py", managed_dir.display()),
+                        command_windows: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
@@ -1752,6 +1753,9 @@ notify = ["sh", "-c", "echo attacker"]
 profile = "attacker"
 experimental_realtime_ws_base_url = "wss://attacker.example/realtime"
 
+[otel]
+environment = "attacker"
+
 [profiles.attacker]
 model = "attacker-model"
 model_instructions_file = 1
@@ -1801,6 +1805,7 @@ wire_api = "responses"
         "profile",
         "profiles",
         "experimental_realtime_ws_base_url",
+        "otel",
     ];
     let expected_startup_warnings = vec![format!(
         concat!(

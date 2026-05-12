@@ -17,7 +17,6 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_tools::AdditionalProperties;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::LoadableToolSpec;
@@ -61,6 +60,8 @@ fn mcp_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
     ToolInfo {
         server_name: "test_server".to_string(),
         server_provenance: Default::default(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: tool.name.to_string(),
         callable_namespace: "mcp__test_server__".to_string(),
         namespace_description: None,
@@ -80,6 +81,8 @@ fn mcp_tool_info_with_display_name(display_name: &str, tool: rmcp::model::Tool) 
     ToolInfo {
         server_name: "test_server".to_string(),
         server_provenance: Default::default(),
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name,
         callable_namespace,
         namespace_description: None,
@@ -161,11 +164,11 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
 }
 
 // Avoid order-based assertions; compare via set containment instead.
-fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
+fn assert_contains_tool_names(tools: &[ToolSpec], expected_subset: &[&str]) {
     use std::collections::HashSet;
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().map(ConfiguredToolSpec::name) {
+    for name in tools.iter().map(ToolSpec::name) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -192,7 +195,7 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     }
 }
 
-fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
+fn find_tool<'a>(tools: &'a [ToolSpec], expected_name: &str) -> &'a ToolSpec {
     tools
         .iter()
         .find(|tool| tool.name() == expected_name)
@@ -200,12 +203,12 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
 }
 
 fn find_namespace_function_tool<'a>(
-    tools: &'a [ConfiguredToolSpec],
+    tools: &'a [ToolSpec],
     expected_namespace: &str,
     expected_name: &str,
 ) -> &'a ResponsesApiTool {
     let namespace_tool = find_tool(tools, expected_namespace);
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
         panic!("expected namespace tool {expected_namespace}");
     };
     namespace
@@ -247,7 +250,7 @@ fn multi_agent_v2_spawn_agent_description(tools_config: &ToolsConfig) -> String 
     )
     .build();
     let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &spawn_agent.spec else {
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = spawn_agent else {
         panic!("spawn_agent should be a function tool");
     };
     description.clone()
@@ -294,6 +297,7 @@ fn build_specs_with_unavailable_tools(
         deferred_mcp_tools,
         unavailable_called_tools,
         /*discoverable_tools*/ None,
+        /*extension_tool_bundles*/ &[],
         dynamic_tools,
     )
 }
@@ -323,7 +327,7 @@ async fn get_memory_requires_feature_flag() {
     )
     .build();
     assert!(
-        !tools.iter().any(|t| t.spec.name() == "get_memory"),
+        !tools.iter().any(|t| t.name() == "get_memory"),
         "get_memory should be disabled when memory_tool feature is off"
     );
 }
@@ -353,8 +357,8 @@ async fn assert_model_tools(
             mcp_tools: None,
             deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: &[],
         },
     );
@@ -775,7 +779,7 @@ async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
     )
     .build();
     let wait_agent = find_tool(&tools, "wait_agent");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &wait_agent.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = wait_agent else {
         panic!("wait_agent should be a function tool");
     };
     let timeout_description = parameters
@@ -824,6 +828,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             /*deferred_mcp_tools*/ None,
             Vec::new(),
             discoverable_tools.clone(),
+            /*extension_tool_bundles*/ &[],
             &[],
         )
         .build();
@@ -863,7 +868,7 @@ async fn search_tool_description_handles_no_enabled_mcp_tools() {
     )
     .build();
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
         panic!("expected tool_search tool");
     };
 
@@ -895,6 +900,8 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
         Some(vec![ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             server_provenance: codex_config::McpServerProvenance::HostOwnedCodexApps,
+            supports_parallel_tool_calls: false,
+            server_origin: None,
             callable_name: "_create_event".to_string(),
             callable_namespace: "mcp__codex_apps__calendar".to_string(),
             namespace_description: None,
@@ -911,7 +918,7 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
     )
     .build();
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
         panic!("expected tool_search tool");
     };
 
@@ -944,6 +951,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 server_provenance: codex_config::McpServerProvenance::HostOwnedCodexApps,
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "_create_event".to_string(),
                 callable_namespace: "mcp__codex_apps__calendar".to_string(),
                 namespace_description: None,
@@ -959,6 +968,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 server_provenance: codex_config::McpServerProvenance::HostOwnedCodexApps,
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "_list_events".to_string(),
                 callable_namespace: "mcp__codex_apps__calendar".to_string(),
                 namespace_description: None,
@@ -974,6 +985,8 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
             ToolInfo {
                 server_name: "rmcp".to_string(),
                 server_provenance: Default::default(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name: "echo".to_string(),
                 callable_namespace: "mcp__rmcp__".to_string(),
                 namespace_description: None,
@@ -1115,7 +1128,7 @@ async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
         description,
         parameters,
         ..
-    }) = &tool.spec
+    }) = tool
     else {
         panic!("unavailable MCP tool should be exposed as a function tool");
     };

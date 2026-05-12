@@ -515,6 +515,12 @@ pub struct OtelConfigToml {
 
     /// Optional metrics exporter
     pub metrics_exporter: Option<OtelExporterKind>,
+
+    /// Attributes to add to every exported trace span.
+    pub span_attributes: Option<BTreeMap<String, String>>,
+
+    /// Semicolon-separated `key:value` fields to upsert into W3C tracestate members.
+    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 /// Effective OTEL settings after defaults are applied.
@@ -525,6 +531,8 @@ pub struct OtelConfig {
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
     pub metrics_exporter: OtelExporterKind,
+    pub span_attributes: BTreeMap<String, String>,
+    pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Default for OtelConfig {
@@ -535,6 +543,8 @@ impl Default for OtelConfig {
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
             metrics_exporter: OtelExporterKind::Statsig,
+            span_attributes: BTreeMap::new(),
+            tracestate: BTreeMap::new(),
         }
     }
 }
@@ -588,6 +598,16 @@ impl fmt::Display for NotificationCondition {
             NotificationCondition::Always => write!(f, "always"),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuiPetAnchor {
+    /// Anchor the pet to the bottom of the current TUI composer viewport.
+    #[default]
+    Composer,
+    /// Anchor the pet to the physical bottom of the terminal screen.
+    ScreenBottom,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
@@ -685,6 +705,18 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Pet id to preselect in the terminal pet picker.
+    ///
+    /// Custom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.
+    #[serde(default)]
+    pub pet: Option<String>,
+
+    /// Where the terminal pet should anchor vertically.
+    ///
+    /// Defaults to `composer`, which follows the current TUI composer viewport.
+    #[serde(default)]
+    pub pet_anchor: TuiPetAnchor,
 
     /// Preferred layout for resume/fork session picker results.
     #[serde(default)]

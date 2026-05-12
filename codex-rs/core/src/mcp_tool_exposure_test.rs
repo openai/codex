@@ -55,6 +55,8 @@ fn make_mcp_tool(
         } else {
             McpServerProvenance::UserConfigured
         },
+        supports_parallel_tool_calls: false,
+        server_origin: None,
         callable_name: callable_name.to_string(),
         callable_namespace: callable_namespace.to_string(),
         namespace_description: None,

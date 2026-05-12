@@ -617,11 +617,17 @@ async fn mount_remote_plugin_detail_with_name(
     release_version: &str,
     scope: &str,
 ) {
+    let discoverability = if scope == "WORKSPACE" {
+        r#"
+  "discoverability": "LISTED","#
+    } else {
+        ""
+    };
     let detail_body = format!(
         r#"{{
   "id": "{remote_plugin_id}",
   "name": "{plugin_name}",
-  "scope": "{scope}",
+  "scope": "{scope}",{discoverability}
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {{

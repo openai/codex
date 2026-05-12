@@ -3,8 +3,9 @@
 //!
 //! The official Lark grammar for the apply-patch format is:
 //!
-//! start: begin_patch hunk+ end_patch
+//! start: begin_patch environment_id? hunk+ end_patch
 //! begin_patch: "*** Begin Patch" LF
+//! environment_id: "*** Environment ID: " filename LF
 //! end_patch: "*** End Patch" LF?
 //!
 //! hunk: add_hunk | delete_hunk | update_hunk
@@ -32,6 +33,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub(crate) const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
+pub(crate) const ENVIRONMENT_ID_MARKER: &str = "*** Environment ID: ";
 pub(crate) const END_PATCH_MARKER: &str = "*** End Patch";
 pub(crate) const ADD_FILE_MARKER: &str = "*** Add File: ";
 pub(crate) const DELETE_FILE_MARKER: &str = "*** Delete File: ";
@@ -178,9 +180,9 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
     };
 
+    let (environment_id, mut remaining_lines, mut line_number) =
+        parse_environment_id_preamble(hunk_lines)?;
     let mut hunks: Vec<Hunk> = Vec::new();
-    let mut remaining_lines = hunk_lines;
-    let mut line_number = 2;
     while !remaining_lines.is_empty() {
         let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number)?;
         hunks.push(hunk);
@@ -192,7 +194,26 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         hunks,
         patch,
         workdir: None,
+        environment_id,
     })
+}
+
+fn parse_environment_id_preamble<'a>(
+    hunk_lines: &'a [&'a str],
+) -> Result<(Option<String>, &'a [&'a str], usize), ParseError> {
+    let Some(first_line) = hunk_lines.first() else {
+        return Ok((None, hunk_lines, 2));
+    };
+    let Some(environment_id) = first_line.trim_start().strip_prefix(ENVIRONMENT_ID_MARKER) else {
+        return Ok((None, hunk_lines, 2));
+    };
+    let environment_id = environment_id.trim();
+    if environment_id.is_empty() {
+        return Err(InvalidPatchError(
+            "apply_patch environment_id cannot be empty".to_string(),
+        ));
+    }
+    Ok((Some(environment_id.to_string()), &hunk_lines[1..], 3))
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -837,6 +858,7 @@ fn test_parse_patch_lenient() {
             hunks: expected_patch.clone(),
             patch: patch_text.to_string(),
             workdir: None,
+            environment_id: None,
         })
     );
 
@@ -851,6 +873,7 @@ fn test_parse_patch_lenient() {
             hunks: expected_patch.clone(),
             patch: patch_text.to_string(),
             workdir: None,
+            environment_id: None,
         })
     );
 
@@ -865,6 +888,7 @@ fn test_parse_patch_lenient() {
             hunks: expected_patch,
             patch: patch_text.to_string(),
             workdir: None,
+            environment_id: None,
         })
     );
 
@@ -888,6 +912,43 @@ fn test_parse_patch_lenient() {
         parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Lenient),
         Err(InvalidPatchError(
             "The last line of the patch must be '*** End Patch'".to_string()
+        ))
+    );
+}
+
+#[test]
+fn test_parse_patch_environment_id_preamble() {
+    assert_eq!(
+        parse_patch_text(
+            "*** Begin Patch\n\
+             *** Environment ID: remote\n\
+             *** Add File: hello.txt\n\
+             +hello\n\
+             *** End Patch",
+            ParseMode::Strict
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![AddFile {
+                path: PathBuf::from("hello.txt"),
+                contents: "hello\n".to_string(),
+            }],
+            patch: "*** Begin Patch\n*** Environment ID: remote\n*** Add File: hello.txt\n+hello\n*** End Patch".to_string(),
+            workdir: None,
+            environment_id: Some("remote".to_string()),
+        })
+    );
+
+    assert_eq!(
+        parse_patch_text(
+            "*** Begin Patch\n\
+             *** Environment ID:   \n\
+             *** Add File: hello.txt\n\
+             +hello\n\
+             *** End Patch",
+            ParseMode::Strict
+        ),
+        Err(InvalidPatchError(
+            "apply_patch environment_id cannot be empty".to_string()
         ))
     );
 }

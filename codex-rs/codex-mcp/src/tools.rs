@@ -33,6 +33,12 @@ pub struct ToolInfo {
     /// Runtime-only provenance for the server that exposed this tool.
     #[serde(skip)]
     pub server_provenance: McpServerProvenance,
+    /// Whether calls routed to this server may run in parallel.
+    #[serde(default)]
+    pub supports_parallel_tool_calls: bool,
+    /// MCP server origin used for telemetry and diagnostics, when known.
+    #[serde(default)]
+    pub server_origin: Option<String>,
     /// Model-visible tool name used in Responses API tool declarations.
     #[serde(rename = "tool_name", alias = "callable_name")]
     pub callable_name: String,
