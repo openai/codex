@@ -24,13 +24,34 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
+- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 - unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
+
+When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+
+- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
+- `GET /healthz` returns `200 OK` when no `Origin` header is present.
+- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
+
+Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
 The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
 opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
 by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
 The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
+
+Security note:
+
+- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
+- Non-loopback websocket listeners (`ws://0.0.0.0:PORT` or another non-localhost address) require websocket auth at startup.
+- Supported auth modes are app-server flags:
+  - `--ws-auth capability-token --ws-token-file /absolute/path`
+  - `--ws-auth capability-token --ws-token-sha256 HEX`
+  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
+- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
+- When starting `codex app-server` manually, prefer `--ws-token-file` over passing raw bearer tokens on the command line. Store a high-entropy token in a file readable only by your user, then have your client present that token in the websocket `Authorization` header.
+- `--ws-token-sha256` is intended for clients that keep the raw token in a separate local secret store and only need the server to know the SHA-256 verifier. The hash may appear in process listings, but it is not sufficient to authenticate; clients still need the original raw token. Only use this mode with randomly generated high-entropy tokens, not passwords or other guessable values.
 
 Tracing/log output:
 
