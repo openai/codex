@@ -30,7 +30,6 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     COLLABORATION_MODE_OPEN_TAG,
     REALTIME_CONVERSATION_OPEN_TAG,
     "<personality_spec>",
-    "<hook_context>",
 ];
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {

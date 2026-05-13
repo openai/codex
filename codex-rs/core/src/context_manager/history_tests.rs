@@ -902,7 +902,6 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
-        developer_msg("<hook_context>ROLLED_BACK_HOOK_CONTEXT</hook_context>"),
         developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
         user_input_text_msg(
             "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
