@@ -223,6 +223,7 @@ macro_rules! client_request_definitions {
 
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
