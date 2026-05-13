@@ -98,6 +98,7 @@ fn server_mode(state_dir: &Path) -> &'static str {
 enum SocketStatus {
     NotRunning,
     Running,
+    #[cfg(unix)]
     StaleOrUnreachable,
 }
 
@@ -105,6 +106,7 @@ impl SocketStatus {
     fn check_status(self) -> CheckStatus {
         match self {
             Self::NotRunning | Self::Running => CheckStatus::Ok,
+            #[cfg(unix)]
             Self::StaleOrUnreachable => CheckStatus::Warning,
         }
     }
@@ -113,6 +115,7 @@ impl SocketStatus {
         match self {
             Self::NotRunning => "background server is not running",
             Self::Running => "background server is running",
+            #[cfg(unix)]
             Self::StaleOrUnreachable => "background server socket is stale or unreachable",
         }
     }
@@ -121,6 +124,7 @@ impl SocketStatus {
         match self {
             Self::NotRunning => "not running",
             Self::Running => "running",
+            #[cfg(unix)]
             Self::StaleOrUnreachable => "stale or unreachable",
         }
     }
