@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookVisibilityHint;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -134,6 +135,13 @@ pub enum HookHandlerConfig {
         r#async: bool,
         #[serde(default, rename = "statusMessage")]
         status_message: Option<String>,
+        #[schemars(skip)]
+        #[serde(
+            default,
+            rename = "visibilityHint",
+            skip_serializing_if = "HookVisibilityHint::is_default"
+        )]
+        visibility_hint: HookVisibilityHint,
     },
     #[serde(rename = "prompt")]
     Prompt {},

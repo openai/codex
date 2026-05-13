@@ -161,6 +161,7 @@ export type { HookScope } from "./HookScope";
 export type { HookSource } from "./HookSource";
 export type { HookStartedNotification } from "./HookStartedNotification";
 export type { HookTrustStatus } from "./HookTrustStatus";
+export type { HookVisibilityHint } from "./HookVisibilityHint";
 export type { HooksListEntry } from "./HooksListEntry";
 export type { HooksListParams } from "./HooksListParams";
 export type { HooksListResponse } from "./HooksListResponse";

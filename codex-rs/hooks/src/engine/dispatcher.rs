@@ -77,6 +77,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
+        visibility_hint: handler.visibility_hint,
         started_at: chrono::Utc::now().timestamp(),
         completed_at: None,
         duration_ms: None,
@@ -130,6 +131,7 @@ pub(crate) fn completed_summary(
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
+        visibility_hint: handler.visibility_hint,
         started_at: run_result.started_at,
         completed_at: Some(run_result.completed_at),
         duration_ms: Some(run_result.duration_ms),
@@ -177,6 +179,7 @@ mod tests {
             source: HookSource::User,
             display_order,
             env: std::collections::HashMap::new(),
+            visibility_hint: Default::default(),
         }
     }
 

@@ -528,6 +528,7 @@ mod tests {
             command: "echo hook".to_string(),
             timeout_sec: 600,
             status_message: None,
+            visibility_hint: Default::default(),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,

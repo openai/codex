@@ -8,6 +8,7 @@ use super::HooksFile;
 use super::HooksToml;
 use super::ManagedHooksRequirementsToml;
 use super::MatcherGroup;
+use codex_protocol::protocol::HookVisibilityHint;
 
 #[test]
 fn hooks_file_deserializes_existing_json_shape() {
@@ -44,6 +45,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
+                        visibility_hint: HookVisibilityHint::Default,
                     }],
                 }],
                 ..Default::default()
@@ -79,6 +81,7 @@ statusMessage = "checking"
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -116,6 +119,7 @@ command = "python3 /tmp/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: HookVisibilityHint::Default,
                     }],
                 }],
                 ..Default::default()
@@ -143,6 +147,7 @@ matcher = "^Bash$"
 [[PreToolUse.hooks]]
 type = "command"
 command = "python3 /enterprise/place/pre.py"
+visibilityHint = "hidden"
 "#,
     )
     .expect("requirements hooks TOML should deserialize");
@@ -161,6 +166,7 @@ command = "python3 /enterprise/place/pre.py"
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: HookVisibilityHint::Hidden,
                     }],
                 }],
                 ..Default::default()
@@ -197,6 +203,7 @@ command_windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -232,6 +239,7 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()

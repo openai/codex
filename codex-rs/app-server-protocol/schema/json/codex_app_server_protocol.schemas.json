@@ -9787,6 +9787,14 @@
               "string",
               "null"
             ]
+          },
+          "visibilityHint": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HookVisibilityHint"
+              }
+            ],
+            "default": "default"
           }
         },
         "required": [
@@ -9854,6 +9862,13 @@
           "untrusted",
           "trusted",
           "modified"
+        ],
+        "type": "string"
+      },
+      "HookVisibilityHint": {
+        "enum": [
+          "default",
+          "hidden"
         ],
         "type": "string"
       },

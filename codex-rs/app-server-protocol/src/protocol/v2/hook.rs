@@ -9,6 +9,7 @@ use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::HookTrustStatus as CoreHookTrustStatus;
+use codex_protocol::protocol::HookVisibilityHint as CoreHookVisibilityHint;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -71,6 +72,14 @@ v2_enum_from_core!(
 );
 
 v2_enum_from_core!(
+    #[derive(Default)]
+    pub enum HookVisibilityHint from CoreHookVisibilityHint {
+        #[default]
+        Default, Hidden
+    }
+);
+
+v2_enum_from_core!(
     pub enum HookOutputEntryKind from CoreHookOutputEntryKind {
         Warning, Stop, Feedback, Context, Error
     }
@@ -108,6 +117,8 @@ pub struct HookRunSummary {
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
+    #[serde(default)]
+    pub visibility_hint: HookVisibilityHint,
     pub started_at: i64,
     pub completed_at: Option<i64>,
     pub duration_ms: Option<i64>,
@@ -127,6 +138,7 @@ impl From<CoreHookRunSummary> for HookRunSummary {
             display_order: value.display_order,
             status: value.status.into(),
             status_message: value.status_message,
+            visibility_hint: value.visibility_hint.into(),
             started_at: value.started_at,
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,

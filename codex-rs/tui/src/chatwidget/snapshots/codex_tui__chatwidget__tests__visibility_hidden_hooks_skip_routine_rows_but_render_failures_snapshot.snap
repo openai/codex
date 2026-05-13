@@ -1,0 +1,22 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"{routine_running_snapshot}\\n\\n{routine_completed_snapshot}\\n\\n{failed_snapshot}\")"
+---
+routine running
+live hooks:
+<empty>
+history:
+<empty>
+
+routine completed
+live hooks:
+<empty>
+history:
+<empty>
+
+failed
+live hooks:
+<empty>
+history:
+• PostToolUse hook (failed)
+  error: hook exited with code 7

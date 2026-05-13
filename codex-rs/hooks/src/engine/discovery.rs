@@ -29,6 +29,7 @@ use crate::events::common::validate_matcher_pattern;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use codex_protocol::protocol::HookVisibilityHint;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
@@ -434,7 +435,19 @@ fn append_matcher_groups(
                     timeout_sec,
                     r#async,
                     status_message,
+                    visibility_hint,
                 } => {
+                    let visibility_hint = if source.is_managed {
+                        visibility_hint
+                    } else if visibility_hint == HookVisibilityHint::Hidden {
+                        warnings.push(format!(
+                            "ignoring visibilityHint in {}: hidden hooks are only supported for managed hook sources",
+                            source.path.display()
+                        ));
+                        HookVisibilityHint::Default
+                    } else {
+                        HookVisibilityHint::Default
+                    };
                     let command = if cfg!(windows) {
                         command_windows.unwrap_or(command)
                     } else {
@@ -461,6 +474,7 @@ fn append_matcher_groups(
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
+                        visibility_hint: HookVisibilityHint::Default,
                     };
                     let current_hash =
                         command_hook_hash(event_name, matcher, &group, normalized_handler);
@@ -509,6 +523,7 @@ fn append_matcher_groups(
                             source: source.source,
                             display_order: *display_order,
                             env: source.env.clone(),
+                            visibility_hint,
                         });
                     }
                     *display_order += 1;
@@ -630,6 +645,7 @@ mod tests {
     use codex_config::MatcherGroup;
     use codex_config::TomlValue;
     use codex_protocol::protocol::HookTrustStatus;
+    use codex_protocol::protocol::HookVisibilityHint;
 
     fn source_path() -> AbsolutePathBuf {
         test_path_buf("/tmp/hooks.json").abs()
@@ -681,6 +697,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                visibility_hint: HookVisibilityHint::Default,
             }],
         }
     }
@@ -716,6 +733,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                visibility_hint: HookVisibilityHint::Default,
             }]
         );
     }
@@ -751,6 +769,7 @@ mod tests {
                 source: hook_source(),
                 display_order: 0,
                 env: std::collections::HashMap::new(),
+                visibility_hint: HookVisibilityHint::Default,
             }]
         );
     }
@@ -869,6 +888,103 @@ mod tests {
     }
 
     #[test]
+    fn visibility_hint_does_not_change_command_trust_hash() {
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+        let mut default_entries = Vec::new();
+        let mut hidden_entries = Vec::new();
+        let mut default_handlers = Vec::new();
+        let mut hidden_handlers = Vec::new();
+        let mut default_warnings = Vec::new();
+        let mut hidden_warnings = Vec::new();
+        let mut default_display_order = 0;
+        let mut hidden_display_order = 0;
+        let default_group = command_group(Some("^Bash$"));
+        let mut hidden_group = command_group(Some("^Bash$"));
+        let HookHandlerConfig::Command {
+            visibility_hint, ..
+        } = &mut hidden_group.hooks[0]
+        else {
+            unreachable!("command_group should create a command hook");
+        };
+        *visibility_hint = HookVisibilityHint::Hidden;
+
+        append_matcher_groups(
+            &mut default_handlers,
+            &mut default_entries,
+            &mut default_warnings,
+            &mut default_display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::PreToolUse,
+            vec![default_group],
+        );
+        append_matcher_groups(
+            &mut hidden_handlers,
+            &mut hidden_entries,
+            &mut hidden_warnings,
+            &mut hidden_display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::PreToolUse,
+            vec![hidden_group],
+        );
+
+        assert_eq!(default_warnings, Vec::<String>::new());
+        assert_eq!(hidden_warnings, Vec::<String>::new());
+        assert_eq!(
+            default_entries[0].current_hash,
+            hidden_entries[0].current_hash
+        );
+    }
+
+    #[test]
+    fn unmanaged_visibility_hint_is_ignored_with_warning() {
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+        let mut handlers = Vec::new();
+        let mut entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let mut hidden_group = command_group(Some("^Bash$"));
+        let HookHandlerConfig::Command {
+            visibility_hint, ..
+        } = &mut hidden_group.hooks[0]
+        else {
+            unreachable!("command_group should create a command hook");
+        };
+        *visibility_hint = HookVisibilityHint::Hidden;
+        let unmanaged_source = super::HookHandlerSource {
+            path: &source_path,
+            key_source: source_path.display().to_string(),
+            source: HookSource::User,
+            is_managed: false,
+            bypass_hook_trust: false,
+            hook_states: &hook_states,
+            env: std::collections::HashMap::new(),
+            plugin_id: None,
+        };
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut entries,
+            &mut warnings,
+            &mut display_order,
+            &unmanaged_source,
+            HookEventName::PreToolUse,
+            vec![hidden_group],
+        );
+
+        assert_eq!(handlers, Vec::<ConfiguredHandler>::new());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            warnings,
+            vec![format!(
+                "ignoring visibilityHint in {}: hidden hooks are only supported for managed hook sources",
+                source_path.display()
+            )]
+        );
+    }
+
+    #[test]
     fn toml_hook_discovery_ignores_malformed_state_entries() {
         let layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -893,6 +1009,7 @@ mod tests {
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
+                        visibility_hint: HookVisibilityHint::Default,
                     }],
                 }],
                 ..Default::default()
@@ -923,6 +1040,7 @@ mod tests {
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
         );

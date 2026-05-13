@@ -1550,6 +1550,8 @@ For linked Git worktrees, project hook declarations come from the matching `.cod
 
 Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
 
+Hook execution notifications still report every started and completed run. `HookRunSummary.visibilityHint` is a presentation-only hint (`default` or `hidden`) that clients may use to quiet routine managed-hook rendering without suppressing consequential outcomes.
+
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json

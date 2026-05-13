@@ -598,18 +598,24 @@ fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::ContentItem;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookHandlerType;
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookScope;
     use codex_protocol::protocol::HookSource;
+    use codex_protocol::protocol::HookStartedEvent;
+    use codex_protocol::protocol::HookVisibilityHint;
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
+    use super::emit_hook_completed_events;
+    use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
     use crate::session::tests::make_session_and_context;
+    use crate::session::tests::make_session_and_context_with_rx;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -684,6 +690,56 @@ mod tests {
         assert_eq!(hook.status, HookRunStatus::Failed);
     }
 
+    #[tokio::test]
+    async fn hidden_hook_lifecycle_events_still_reach_clients() {
+        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+        let hidden_run = HookRunSummary {
+            visibility_hint: HookVisibilityHint::Hidden,
+            ..sample_hook_run(HookRunStatus::Running, HookSource::CloudRequirements)
+        };
+        let completed_run = HookRunSummary {
+            status: HookRunStatus::Completed,
+            completed_at: Some(37),
+            duration_ms: Some(27),
+            ..hidden_run.clone()
+        };
+
+        emit_hook_started_events(&session, &turn_context, vec![hidden_run.clone()]).await;
+        emit_hook_completed_events(
+            &session,
+            &turn_context,
+            vec![HookCompletedEvent {
+                turn_id: Some(turn_context.sub_id.clone()),
+                run: completed_run.clone(),
+            }],
+        )
+        .await;
+
+        let started = rx.recv().await.expect("hook started event");
+        match started.msg {
+            EventMsg::HookStarted(event) => assert_eq!(
+                event,
+                HookStartedEvent {
+                    turn_id: Some(turn_context.sub_id.clone()),
+                    run: hidden_run,
+                }
+            ),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let completed = rx.recv().await.expect("hook completed event");
+        match completed.msg {
+            EventMsg::HookCompleted(event) => assert_eq!(
+                event,
+                HookCompletedEvent {
+                    turn_id: Some(turn_context.sub_id.clone()),
+                    run: completed_run,
+                }
+            ),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
     #[test]
     fn hook_run_metric_tags_match_analytics_shape() {
         let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
@@ -736,6 +792,7 @@ mod tests {
             display_order: 0,
             status,
             status_message: None,
+            visibility_hint: Default::default(),
             started_at: 10,
             completed_at: Some(37),
             duration_ms: Some(27),

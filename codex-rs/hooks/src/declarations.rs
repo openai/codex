@@ -69,6 +69,7 @@ mod tests {
                             timeout_sec: None,
                             r#async: false,
                             status_message: None,
+                            visibility_hint: Default::default(),
                         },
                     ],
                 }],

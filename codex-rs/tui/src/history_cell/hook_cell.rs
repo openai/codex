@@ -22,6 +22,7 @@ use codex_app_server_protocol::HookOutputEntry;
 use codex_app_server_protocol::HookOutputEntryKind;
 use codex_app_server_protocol::HookRunStatus;
 use codex_app_server_protocol::HookRunSummary;
+use codex_app_server_protocol::HookVisibilityHint;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
@@ -679,6 +680,16 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
     HookCell::new_completed(run, animations_enabled)
 }
 
+/// Returns true when a hook marked as hidden has no user-relevant consequence to render.
+pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
+    run.visibility_hint == HookVisibilityHint::Hidden
+        && match run.status {
+            HookRunStatus::Running => true,
+            HookRunStatus::Completed => run.entries.is_empty(),
+            HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => false,
+        }
+}
+
 /// Returns true for hook completions that should be invisible in history.
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
     run.status == HookRunStatus::Completed && run.entries.is_empty()
@@ -802,6 +813,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hidden_hook_skips_routine_running_and_empty_completion_rows() {
+        let mut run = hook_run_summary("hook-1");
+        run.visibility_hint = HookVisibilityHint::Hidden;
+        assert!(hook_run_should_skip_render(&run));
+
+        run.status = HookRunStatus::Completed;
+        assert!(hook_run_should_skip_render(&run));
+    }
+
+    #[test]
+    fn hidden_hook_still_surfaces_user_relevant_outcomes() {
+        let mut run = hook_run_summary("hook-1");
+        run.visibility_hint = HookVisibilityHint::Hidden;
+        run.status = HookRunStatus::Failed;
+        assert!(!hook_run_should_skip_render(&run));
+
+        run.status = HookRunStatus::Blocked;
+        assert!(!hook_run_should_skip_render(&run));
+
+        run.status = HookRunStatus::Stopped;
+        assert!(!hook_run_should_skip_render(&run));
+
+        run.status = HookRunStatus::Completed;
+        run.entries = vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Warning,
+            text: "Review this hook result".to_string(),
+        }];
+        assert!(!hook_run_should_skip_render(&run));
+    }
+
     fn hook_run_summary(id: &str) -> HookRunSummary {
         HookRunSummary {
             id: id.to_string(),
@@ -814,6 +856,7 @@ mod tests {
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),
+            visibility_hint: HookVisibilityHint::Default,
             started_at: 1,
             completed_at: None,
             duration_ms: None,

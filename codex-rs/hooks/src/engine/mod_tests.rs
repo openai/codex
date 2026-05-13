@@ -25,6 +25,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use codex_protocol::protocol::HookVisibilityHint;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -66,6 +67,7 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
                 timeout_sec: Some(10),
                 r#async: false,
                 status_message: Some("checking".to_string()),
+                visibility_hint: HookVisibilityHint::Default,
             }],
         }],
         ..Default::default()
@@ -173,6 +175,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Hidden,
                 }],
             }],
             ..Default::default()
@@ -235,6 +238,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     });
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source_path, managed_dir);
+    assert_eq!(preview[0].visibility_hint, HookVisibilityHint::Hidden);
 
     let outcome = engine
         .run_pre_tool_use(PreToolUseRequest {
@@ -252,6 +256,10 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         .await;
 
     assert!(!outcome.should_block);
+    assert_eq!(
+        outcome.hook_events[0].run.visibility_hint,
+        HookVisibilityHint::Hidden
+    );
     let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
 }
@@ -274,6 +282,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -352,6 +361,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -420,6 +430,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -651,6 +662,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -1146,6 +1158,7 @@ print(json.dumps({
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()
@@ -1258,6 +1271,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    visibility_hint: HookVisibilityHint::Default,
                 }],
             }],
             ..Default::default()

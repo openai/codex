@@ -132,6 +132,14 @@
             "string",
             "null"
           ]
+        },
+        "visibilityHint": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookVisibilityHint"
+            }
+          ],
+          "default": "default"
         }
       },
       "required": [
@@ -167,6 +175,13 @@
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "HookVisibilityHint": {
+      "enum": [
+        "default",
+        "hidden"
       ],
       "type": "string"
     }

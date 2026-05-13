@@ -1873,6 +1873,14 @@
             "string",
             "null"
           ]
+        },
+        "visibilityHint": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookVisibilityHint"
+            }
+          ],
+          "default": "default"
         }
       },
       "required": [
@@ -1931,6 +1939,13 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "HookVisibilityHint": {
+      "enum": [
+        "default",
+        "hidden"
+      ],
+      "type": "string"
     },
     "ItemCompletedNotification": {
       "properties": {

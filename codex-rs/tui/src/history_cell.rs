@@ -106,6 +106,7 @@ const RAW_TOOL_OUTPUT_WIDTH: usize = 10_000;
 mod hook_cell;
 
 pub(crate) use hook_cell::HookCell;
+pub(crate) use hook_cell::hook_run_should_skip_render;
 pub(crate) use hook_cell::new_active_hook_cell;
 pub(crate) use hook_cell::new_completed_hook_cell;
 
