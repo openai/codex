@@ -1710,7 +1710,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 }
 
 #[test]
-fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
+fn no_search_tool_when_namespaces_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
