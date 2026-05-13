@@ -492,7 +492,7 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
     )
     .await?;
     let call_id = "call-view-image-outside-cwd";
-    let response_mock = mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
             sse(vec![
