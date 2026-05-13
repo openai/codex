@@ -281,13 +281,6 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
                 }
             }
         }
-        if let Some(enabled) = profile.include_apply_patch_tool {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.include_apply_patch_tool"),
-                Feature::ApplyPatchFreeform,
-                enabled,
-            ));
-        }
         if let Some(enabled) = profile.experimental_use_unified_exec_tool {
             explicit_settings.push((
                 format!("profiles.{profile_name}.experimental_use_unified_exec_tool"),
@@ -360,7 +353,7 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
             },
             FeatureConfigSource {
                 features: profile.features.as_ref(),
-                include_apply_patch_tool: profile.include_apply_patch_tool,
+                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
             },
             FeatureOverrides::default(),

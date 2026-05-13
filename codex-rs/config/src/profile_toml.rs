@@ -54,7 +54,6 @@ pub struct ConfigProfile {
     #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
-    pub include_apply_patch_tool: Option<bool>,
     pub include_permissions_instructions: Option<bool>,
     pub include_apps_instructions: Option<bool>,
     pub include_collaboration_mode_instructions: Option<bool>,
