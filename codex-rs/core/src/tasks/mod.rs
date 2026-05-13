@@ -346,7 +346,7 @@ impl Session {
             debug_assert!(turn.tasks.is_empty());
             Arc::clone(&turn.turn_state)
         };
-        let turn_extension_data = {
+        {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
             for item in queued_response_items {
@@ -355,9 +355,8 @@ impl Session {
             for item in mailbox_items {
                 turn_state.push_pending_input(item);
             }
-            Arc::clone(&turn_state.extension_data)
-        };
-        self.emit_turn_start_lifecycle(turn_context.as_ref(), turn_extension_data.as_ref());
+        }
+        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
 
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -428,7 +427,6 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
-            turn_extension_data,
             _timer: timer,
         };
         turn.add_task(running_task);
@@ -480,14 +478,10 @@ impl Session {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
-        let mut turn_extension_data = None;
         if let Some(mut active_turn) = self.take_active_turn().await {
             let tasks = active_turn.drain_tasks();
             aborted_turn = !tasks.is_empty();
             turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
-            turn_extension_data = tasks
-                .first()
-                .map(|task| Arc::clone(&task.turn_extension_data));
             for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }
@@ -496,10 +490,8 @@ impl Session {
             }
         }
 
-        if let Some(turn_context) = turn_context.as_deref()
-            && let Some(turn_extension_data) = turn_extension_data.as_deref()
-        {
-            self.emit_turn_abort_lifecycle(turn_context, reason.clone(), turn_extension_data);
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
         }
         if (aborted_turn || reason == TurnAbortReason::Interrupted)
             && let Err(err) = self
@@ -543,16 +535,11 @@ impl Session {
 
         let tasks = active_turn.drain_tasks();
         let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
-        let turn_extension_data = tasks
-            .first()
-            .map(|task| Arc::clone(&task.turn_extension_data));
         for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        if let Some(turn_context) = turn_context.as_deref()
-            && let Some(turn_extension_data) = turn_extension_data.as_deref()
-        {
-            self.emit_turn_abort_lifecycle(turn_context, reason.clone(), turn_extension_data);
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
@@ -589,7 +576,6 @@ impl Session {
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
         let mut records_turn_token_usage_on_span = false;
-        let mut turn_extension_data = None;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
@@ -598,7 +584,6 @@ impl Session {
                 records_turn_token_usage_on_span = removed_task.records_turn_token_usage_on_span;
                 if removed_task.active_turn_is_empty {
                     should_clear_active_turn = true;
-                    turn_extension_data = Some(removed_task.turn_extension_data);
                     let turn_state = Arc::clone(&at.turn_state);
                     Some(turn_state)
                 } else {
@@ -756,10 +741,8 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
-        if should_clear_active_turn
-            && let Some(turn_extension_data) = turn_extension_data.as_deref()
-        {
-            self.emit_turn_stop_lifecycle(turn_context.as_ref(), turn_extension_data);
+        if should_clear_active_turn {
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {

@@ -336,6 +336,51 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     Ok(())
 }
 
+pub(crate) async fn apply_spawn_agent_service_tier(
+    session: &Session,
+    config: &mut Config,
+    parent_service_tier: Option<&str>,
+    requested_service_tier: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
+        return Ok(());
+    };
+    let model = config.model.clone().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model for service tier validation".to_string(),
+        )
+    })?;
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(model.as_str(), &config.to_models_manager_config())
+        .await;
+
+    if model_info.supports_service_tier(candidate_service_tier) {
+        config.service_tier = Some(candidate_service_tier.to_string());
+        return Ok(());
+    }
+
+    if requested_service_tier.is_none() {
+        config.service_tier = None;
+        return Ok(());
+    }
+
+    let supported_service_tiers = if model_info.service_tiers.is_empty() {
+        "none".to_string()
+    } else {
+        model_info
+            .service_tiers
+            .iter()
+            .map(|tier| tier.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Err(FunctionCallError::RespondToModel(format!(
+        "Service tier `{candidate_service_tier}` is not supported for model `{model}`. Supported service tiers: {supported_service_tiers}"
+    )))
+}
+
 fn find_spawn_agent_model_name(
     available_models: &[codex_protocol::openai_models::ModelPreset],
     requested_model: &str,

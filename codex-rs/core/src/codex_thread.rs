@@ -149,7 +149,6 @@ impl CodexThread {
             .thread_lifecycle_contributors()
         {
             contributor.on_thread_resume(codex_extension_api::ThreadResumeInput {
-                thread_id: self.codex.session.conversation_id,
                 session_store: &self.codex.session.services.session_extension_data,
                 thread_store: &self.codex.session.services.thread_extension_data,
             });

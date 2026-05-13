@@ -53,7 +53,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
 use codex_state::log_db;
-use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -1655,36 +1654,17 @@ impl Drop for TerminalRestoreGuard {
 
 /// Determine whether to use the terminal's alternate screen buffer.
 ///
-/// The alternate screen buffer provides a cleaner fullscreen experience without polluting
-/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
-/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
-/// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
-/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
-/// change this behavior.
-///
-/// This function implements a pragmatic workaround:
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
-///   - `always`: Use alternate screen everywhere (original behavior)
+///   - `always`: Use alternate screen
 ///   - `never`: Inline mode only, preserves scrollback
-///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
-///     only in Zellij, enabling it everywhere else
+///   - `auto` (default): Use alternate screen
 fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
     if no_alt_screen {
-        false
-    } else {
-        match tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                let terminal_info = terminal_info();
-                !matches!(
-                    terminal_info.multiplexer,
-                    Some(codex_terminal_detection::Multiplexer::Zellij {})
-                )
-            }
-        }
+        return false;
     }
+
+    tui_alternate_screen != AltScreenMode::Never
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1815,6 +1795,26 @@ mod tests {
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
+    }
+
+    #[test]
+    fn alternate_screen_auto_uses_alt_screen() {
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Auto,
+        ));
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Always,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Never,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ true,
+            AltScreenMode::Auto,
+        ));
     }
 
     #[test]

@@ -531,8 +531,8 @@ pub struct Config {
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// This is the same `tui.alternate_screen` value from `config.toml`.
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
+    /// - `auto` (default): Use alternate screen.
+    /// - `always`: Always use alternate screen.
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
     /// Ordered list of status line item identifiers for the TUI.

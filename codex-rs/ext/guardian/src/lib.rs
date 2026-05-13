@@ -52,8 +52,11 @@ where
     S: Send + Sync,
 {
     fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+        let Ok(forked_from_thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+            return;
+        };
         input.thread_store.insert(GuardianThreadContext {
-            forked_from_thread_id: input.thread_id,
+            forked_from_thread_id,
         });
     }
 }

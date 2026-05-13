@@ -47,6 +47,7 @@ members = [
     "ext/extension-api",
     "ext/guardian",
     "ext/git-attribution",
+    "ext/memories",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -179,6 +180,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
+codex-memories-extension = { path = "ext/memories" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -469,6 +471,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-memories-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

@@ -306,6 +306,18 @@ pub struct TuiListKeymap {
     pub move_up: Option<KeybindingsSpec>,
     /// Move list selection down.
     pub move_down: Option<KeybindingsSpec>,
+    /// Move horizontally left in list pickers that support horizontal actions.
+    pub move_left: Option<KeybindingsSpec>,
+    /// Move horizontally right in list pickers that support horizontal actions.
+    pub move_right: Option<KeybindingsSpec>,
+    /// Move list selection up by one page.
+    pub page_up: Option<KeybindingsSpec>,
+    /// Move list selection down by one page.
+    pub page_down: Option<KeybindingsSpec>,
+    /// Jump to the first list item.
+    pub jump_top: Option<KeybindingsSpec>,
+    /// Jump to the last list item.
+    pub jump_bottom: Option<KeybindingsSpec>,
     /// Accept current selection.
     pub accept: Option<KeybindingsSpec>,
     /// Cancel and close selection view.

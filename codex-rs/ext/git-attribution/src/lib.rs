@@ -16,21 +16,23 @@ const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 pub struct GitAttributionExtension;
 
 impl ContextContributor for GitAttributionExtension {
-    fn contribute(
-        &self,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment> {
-        let Some(config_store) = thread_store.get::<GitAttributionConfig>() else {
-            return Vec::new();
-        };
-        if !config_store.enabled {
-            return Vec::new();
-        }
-        build_instruction(config_store.prompt.as_deref())
-            .map(PromptFragment::developer_policy)
-            .into_iter()
-            .collect()
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(config_store) = thread_store.get::<GitAttributionConfig>() else {
+                return Vec::new();
+            };
+            if !config_store.enabled {
+                return Vec::new();
+            }
+            build_instruction(config_store.prompt.as_deref())
+                .map(PromptFragment::developer_policy)
+                .into_iter()
+                .collect()
+        })
     }
 }
 

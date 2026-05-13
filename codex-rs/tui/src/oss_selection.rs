@@ -1,6 +1,9 @@
 use std::io;
 use std::sync::LazyLock;
 
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::legacy_core::config::set_default_oss_provider;
 use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
 use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
@@ -10,6 +13,7 @@ use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::{self};
 use crossterm::execute;
 use crossterm::terminal::EnterAlternateScreen;
@@ -76,6 +80,18 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
         },
     ]
 });
+
+// This startup wizard runs before the main TUI runtime keymap is available, so
+// it mirrors the built-in horizontal list defaults instead of reading config.
+// The shared matcher still covers raw C0 Ctrl-H/Ctrl-L terminal reports.
+const MOVE_LEFT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Left),
+    key_hint::ctrl(KeyCode::Char('h')),
+];
+const MOVE_RIGHT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Right),
+    key_hint::ctrl(KeyCode::Char('l')),
+];
 
 pub struct OssSelectionWidget<'a> {
     select_options: &'a Vec<SelectOption>,
@@ -178,29 +194,35 @@ impl OssSelectionWidget<'_> {
     }
 
     fn handle_select_key(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('c')
-                if key_event
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_decision("__CANCELLED__".to_string());
             }
-            KeyCode::Left => {
+            _ if MOVE_LEFT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + self.select_options.len() - 1)
                     % self.select_options.len();
             }
-            KeyCode::Right => {
+            _ if MOVE_RIGHT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
-            KeyCode::Enter => {
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
                 let opt = &self.select_options[self.selected_option];
                 self.send_decision(opt.provider_id.to_string());
             }
-            KeyCode::Esc => {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
                 self.send_decision(LMSTUDIO_OSS_PROVIDER_ID.to_string());
             }
-            other => {
+            KeyEvent { code, .. } => {
+                let other = code;
                 let normalized = Self::normalize_keycode(other);
                 if let Some(opt) = self
                     .select_options
@@ -369,5 +391,22 @@ async fn check_port_status(port: u16) -> io::Result<bool> {
     match client.get(&url).send().await {
         Ok(response) => Ok(response.status().is_success()),
         Err(_) => Ok(false), // Connection failed = not running
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_h_l_move_provider_selection() {
+        let mut widget = OssSelectionWidget::new(ProviderStatus::Unknown, ProviderStatus::Unknown)
+            .expect("widget should initialize");
+
+        assert_eq!(widget.selected_option, 0);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 1);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 0);
     }
 }

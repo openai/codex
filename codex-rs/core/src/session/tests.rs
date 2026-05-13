@@ -1802,6 +1802,248 @@ async fn recompute_token_usage_updates_model_context_window() {
 }
 
 #[tokio::test]
+async fn record_token_usage_info_notifies_extension_contributors() {
+    struct SessionTokenUsageMarker;
+    struct ThreadTokenUsageMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTokenUsage {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
+        token_usage: TokenUsageInfo,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TokenUsageRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTokenUsage>>>,
+    }
+
+    impl codex_extension_api::TokenUsageContributor for TokenUsageRecorder {
+        fn on_token_usage(
+            &self,
+            session_store: &codex_extension_api::ExtensionData,
+            thread_store: &codex_extension_api::ExtensionData,
+            turn_store: &codex_extension_api::ExtensionData,
+            token_usage: &TokenUsageInfo,
+        ) {
+            self.records
+                .lock()
+                .expect("token usage records lock")
+                .push(RecordedTokenUsage {
+                    session_level_id: session_store.level_id().to_string(),
+                    thread_level_id: thread_store.level_id().to_string(),
+                    turn_level_id: turn_store.level_id().to_string(),
+                    token_usage: token_usage.clone(),
+                    saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
+                    saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.token_usage_contributor(Arc::new(TokenUsageRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTokenUsageMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTokenUsageMarker);
+
+    let first_usage = TokenUsage {
+        input_tokens: 10,
+        cached_input_tokens: 2,
+        output_tokens: 20,
+        reasoning_output_tokens: 3,
+        total_tokens: 33,
+    };
+    let second_usage = TokenUsage {
+        input_tokens: 7,
+        cached_input_tokens: 1,
+        output_tokens: 8,
+        reasoning_output_tokens: 5,
+        total_tokens: 20,
+    };
+
+    session
+        .record_token_usage_info(&turn_context, Some(&first_usage))
+        .await;
+    session
+        .record_token_usage_info(&turn_context, Some(&second_usage))
+        .await;
+
+    let mut expected_total_usage = first_usage.clone();
+    expected_total_usage.add_assign(&second_usage);
+    let expected = vec![
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: first_usage.clone(),
+                last_token_usage: first_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: expected_total_usage,
+                last_token_usage: second_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+    ];
+    let actual = records
+        .lock()
+        .expect("token usage records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn config_change_contributor_observes_effective_config_changes() {
+    struct SessionConfigMarker;
+    struct ThreadConfigMarker;
+
+    #[derive(Debug, PartialEq)]
+    struct RecordedConfigChange {
+        previous_model: Option<String>,
+        new_model: Option<String>,
+        previous_disabled_tools: Vec<ToolSuggestDisabledTool>,
+        new_disabled_tools: Vec<ToolSuggestDisabledTool>,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct ConfigRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedConfigChange>>>,
+    }
+
+    impl codex_extension_api::ConfigContributor<crate::config::Config> for ConfigRecorder {
+        fn on_config_changed(
+            &self,
+            session_store: &codex_extension_api::ExtensionData,
+            thread_store: &codex_extension_api::ExtensionData,
+            previous_config: &crate::config::Config,
+            new_config: &crate::config::Config,
+        ) {
+            self.records
+                .lock()
+                .expect("config change records lock")
+                .push(RecordedConfigChange {
+                    previous_model: previous_config.model.clone(),
+                    new_model: new_config.model.clone(),
+                    previous_disabled_tools: previous_config.tool_suggest.disabled_tools.clone(),
+                    new_disabled_tools: new_config.tool_suggest.disabled_tools.clone(),
+                    saw_session_store: session_store.get::<SessionConfigMarker>().is_some(),
+                    saw_thread_store: thread_store.get::<ThreadConfigMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.config_contributor(Arc::new(ConfigRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionConfigMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadConfigMarker);
+
+    let original_model = session.collaboration_mode().await.model().to_string();
+    let original_disabled_tools = session
+        .get_config()
+        .await
+        .tool_suggest
+        .disabled_tools
+        .clone();
+    let next_model = if original_model == "gpt-5.4" {
+        "gpt-5.2"
+    } else {
+        "gpt-5.4"
+    };
+    let collaboration_mode = session.collaboration_mode().await.with_updates(
+        Some(next_model.to_string()),
+        /*effort*/ None,
+        /*developer_instructions*/ None,
+    );
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("update settings");
+
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " calendar " },
+  { type = "plugin", id = "slack@openai-curated" },
+]
+"#,
+    )
+    .expect("write user config");
+    let next_config = load_latest_config_for_session(&session).await;
+    session.refresh_runtime_config(next_config).await;
+
+    let expected_disabled_tools = vec![
+        ToolSuggestDisabledTool::connector("calendar"),
+        ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+    ];
+    let expected = vec![
+        RecordedConfigChange {
+            previous_model: Some(original_model),
+            new_model: Some(next_model.to_string()),
+            previous_disabled_tools: original_disabled_tools.clone(),
+            new_disabled_tools: original_disabled_tools.clone(),
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+        RecordedConfigChange {
+            previous_model: Some(next_model.to_string()),
+            new_model: Some(next_model.to_string()),
+            previous_disabled_tools: original_disabled_tools,
+            new_disabled_tools: expected_disabled_tools,
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+    ];
+    let actual = records
+        .lock()
+        .expect("config change records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, actual);
+}
+
+#[tokio::test]
 async fn record_initial_history_reconstructs_forked_transcript() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
@@ -3870,8 +4112,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5198,6 +5442,125 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
+    struct SessionStopMarker;
+    struct ThreadStopMarker;
+
+    struct ThreadStopRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        expected_thread_id: ThreadId,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert!(input.session_store.get::<SessionStopMarker>().is_some());
+            assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadStopRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionStopMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadStopMarker);
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    let session = Arc::new(session);
+    submission_loop(session, Arc::clone(&turn_context.config), rx_sub).await;
+
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lifecycle() {
+    struct LifecycleRecorder {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        expected_thread_id: ThreadId,
+        expected_turn_id: String,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("thread_stop");
+        }
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
+        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert_eq!(self.expected_turn_id, input.turn_store.level_id());
+            assert_eq!(TurnAbortReason::Interrupted, input.reason);
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("turn_abort");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::new(LifecycleRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+        expected_turn_id: turn_context.sub_id.clone(),
+    });
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(recorder.clone());
+    builder.turn_lifecycle_contributor(recorder);
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(
+            Arc::new(turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    submission_loop(Arc::clone(&session), session.get_config().await, rx_sub).await;
+
+    assert_eq!(
+        vec!["turn_abort", "thread_stop"],
+        *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
@@ -5590,8 +5953,10 @@ where
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -6115,21 +6480,25 @@ struct GitAttributionTestContributor;
 struct GitAttributionTestState;
 
 impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
-    fn contribute(
-        &self,
-        _session_store: &codex_extension_api::ExtensionData,
-        thread_store: &codex_extension_api::ExtensionData,
-    ) -> Vec<codex_extension_api::PromptFragment> {
-        thread_store
-            .get::<GitAttributionTestState>()
-            .is_some()
-            .then(|| {
-                codex_extension_api::PromptFragment::developer_policy(
-                    "git attribution extension enabled",
-                )
-            })
-            .into_iter()
-            .collect()
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a codex_extension_api::ExtensionData,
+        thread_store: &'a codex_extension_api::ExtensionData,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            thread_store
+                .get::<GitAttributionTestState>()
+                .is_some()
+                .then(|| {
+                    codex_extension_api::PromptFragment::developer_policy(
+                        "git attribution extension enabled",
+                    )
+                })
+                .into_iter()
+                .collect()
+        })
     }
 }
 

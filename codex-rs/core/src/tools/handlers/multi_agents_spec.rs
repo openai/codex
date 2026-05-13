@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Optional model override for the new agent. Leave unset to inherit the same model as the parent, which is the preferred default. Only set this when the user explicitly asks for a different model or the task clearly requires one.";
+const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str = "Optional service tier override for the new agent. Leave unset unless the user explicitly asks for one.";
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -545,6 +546,12 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                     .to_string(),
             )),
         ),
+        (
+            "service_tier".to_string(),
+            JsonSchema::string(Some(
+                SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
+            )),
+        ),
     ])
 }
 
@@ -578,6 +585,12 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
                     .to_string(),
             )),
         ),
+        (
+            "service_tier".to_string(),
+            JsonSchema::string(Some(
+                SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
+            )),
+        ),
     ])
 }
 
@@ -585,6 +598,7 @@ fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchem
     properties.remove("agent_type");
     properties.remove("model");
     properties.remove("reasoning_effort");
+    properties.remove("service_tier");
 }
 
 fn spawn_agent_tool_description(
@@ -712,13 +726,24 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
                 .map(|preset| format!("{} ({})", preset.effort, preset.description))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let service_tiers = if model.service_tiers.is_empty() {
+                "none".to_string()
+            } else {
+                model
+                    .service_tiers
+                    .iter()
+                    .map(|tier| format!("{} ({}: {})", tier.id, tier.name, tier.description))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             format!(
-                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
+                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}. Supported service tiers: {}.",
                 model.display_name,
                 model.model,
                 model.description,
                 model.default_reasoning_effort,
-                efforts
+                efforts,
+                service_tiers
             )
         })
         .collect::<Vec<_>>()
