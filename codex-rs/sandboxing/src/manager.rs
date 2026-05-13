@@ -11,7 +11,9 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -97,6 +99,7 @@ pub struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
+    pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_linux_sandbox_exe: Option<&'a Path>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -176,6 +179,7 @@ impl SandboxManager {
             enforce_managed_network,
             network,
             sandbox_policy_cwd,
+            workspace_roots,
             codex_linux_sandbox_exe,
             use_legacy_landlock,
             windows_sandbox_level,
@@ -183,7 +187,8 @@ impl SandboxManager {
         } = request;
         let additional_permissions = command.additional_permissions.take();
         let effective_permission_profile =
-            effective_permission_profile(permissions, additional_permissions.as_ref());
+            effective_permission_profile(permissions, additional_permissions.as_ref())
+                .materialize_project_roots_with_workspace_roots(workspace_roots);
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         let mut argv = Vec::with_capacity(1 + command.args.len());
@@ -278,30 +283,38 @@ fn compatibility_workspace_write_policy(
     network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {
-    let cwd_abs = AbsolutePathBuf::from_absolute_path(cwd).ok();
-    let writable_roots = file_system_policy
-        .get_writable_roots_with_cwd(cwd)
-        .into_iter()
-        .map(|root| root.root)
-        .filter(|root| cwd_abs.as_ref() != Some(root))
-        .collect();
-    let tmpdir_writable = std::env::var_os("TMPDIR")
-        .filter(|tmpdir| !tmpdir.is_empty())
-        .and_then(|tmpdir| {
-            AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(tmpdir)).ok()
-        })
-        .is_some_and(|tmpdir| file_system_policy.can_write_path_with_cwd(tmpdir.as_path(), cwd));
+    let tmpdir_writable =
+        has_special_write_entry(file_system_policy, &FileSystemSpecialPath::Tmpdir)
+            || std::env::var_os("TMPDIR")
+                .filter(|tmpdir| !tmpdir.is_empty())
+                .and_then(|tmpdir| {
+                    AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(tmpdir)).ok()
+                })
+                .is_some_and(|tmpdir| {
+                    file_system_policy.can_write_path_with_cwd(tmpdir.as_path(), cwd)
+                });
     let slash_tmp = Path::new("/tmp");
-    let slash_tmp_writable = slash_tmp.is_absolute()
-        && slash_tmp.is_dir()
-        && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
+    let slash_tmp_writable =
+        has_special_write_entry(file_system_policy, &FileSystemSpecialPath::SlashTmp)
+            || slash_tmp.is_absolute()
+                && slash_tmp.is_dir()
+                && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
 
     SandboxPolicy::WorkspaceWrite {
-        writable_roots,
         network_access: network_policy.is_enabled(),
         exclude_tmpdir_env_var: !tmpdir_writable,
         exclude_slash_tmp: !slash_tmp_writable,
     }
+}
+
+fn has_special_write_entry(
+    file_system_policy: &FileSystemSandboxPolicy,
+    special_path: &FileSystemSpecialPath,
+) -> bool {
+    file_system_policy.entries.iter().any(|entry| {
+        entry.access.can_write()
+            && matches!(&entry.path, FileSystemPath::Special { value } if value == special_path)
+    })
 }
 
 #[cfg(target_os = "linux")]

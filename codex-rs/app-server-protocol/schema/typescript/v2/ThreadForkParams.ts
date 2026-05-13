@@ -23,7 +23,12 @@ model?: string | null, modelProvider?: string | null, serviceTier?: string | nul
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
+approvalsReviewer?: ApprovalsReviewer | null, /**
+ * Deprecated for fork. When present, the server treats this as a
+ * compatibility spelling for selecting a matching named permissions
+ * profile.
+ */
+sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
  * Optional client-supplied analytics source classification for this forked thread.
  */
 threadSource?: ThreadSource | null};

@@ -256,15 +256,10 @@ pub fn apply_capability_denies_for_world_writable(
     let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
     let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+        SandboxPolicy::WorkspaceWrite { .. } => {
             let sid = unsafe { convert_string_sid_to_sid(&caps.workspace) }
                 .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for workspace capability"))?;
-            let mut roots: Vec<PathBuf> =
-                vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
-            for root in writable_roots {
-                let candidate = root.as_path();
-                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
-            }
+            let roots = vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
             (sid, roots)
         }
         SandboxPolicy::ReadOnly { .. } => (
