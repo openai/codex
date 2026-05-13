@@ -117,6 +117,7 @@ impl McpRequestProcessor {
             name,
             thread_id,
             scopes,
+            client_metadata_url_base,
             timeout_secs,
         } = params;
 
@@ -196,6 +197,7 @@ impl McpRequestProcessor {
             &resolved_scopes.scopes,
             server.oauth_client_id(),
             server.oauth_resource.as_deref(),
+            client_metadata_url_base.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),

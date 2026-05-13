@@ -1607,6 +1607,12 @@
     },
     "McpServerOauthLoginParams": {
       "properties": {
+        "clientMetadataUrlBase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },
