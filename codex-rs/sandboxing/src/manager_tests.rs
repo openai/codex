@@ -15,6 +15,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
@@ -91,6 +92,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
+            workspace_roots: std::slice::from_ref(&cwd),
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -142,6 +144,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
+            workspace_roots: std::slice::from_ref(&cwd),
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -210,6 +213,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
+            workspace_roots: std::slice::from_ref(&cwd),
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -242,6 +246,43 @@ fn transform_additional_permissions_preserves_denied_entries() {
     );
 }
 
+#[test]
+fn compatibility_projection_preserves_tmp_special_entries_when_falling_back() {
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+    let extra_root = TempDir::new().expect("create temp dir");
+    let extra_root = AbsolutePathBuf::from_absolute_path(
+        canonicalize(extra_root.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let file_system_policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ false,
+    )
+    .with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&extra_root));
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
+
+    assert!(permissions.to_legacy_sandbox_policy(cwd.as_path()).is_err());
+    let sandbox_policy = super::compatibility_sandbox_policy_for_permission_profile(
+        &permissions,
+        &file_system_policy,
+        NetworkSandboxPolicy::Enabled,
+        cwd.as_path(),
+    );
+
+    assert_eq!(
+        sandbox_policy,
+        SandboxPolicy::WorkspaceWrite {
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        }
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn transform_linux_seccomp_request(
     codex_linux_sandbox_exe: &std::path::Path,
@@ -263,6 +304,7 @@ fn transform_linux_seccomp_request(
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
+            workspace_roots: std::slice::from_ref(&cwd),
             codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,

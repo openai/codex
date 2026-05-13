@@ -36,6 +36,8 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
+use crate::allow::protected_child_deny_paths_for_roots;
+
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
@@ -171,8 +173,8 @@ fn run_setup_refresh_inner(
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths.clone());
+    let deny_write_paths = build_payload_deny_write_paths(&request, &overrides, &write_roots);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -360,7 +362,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
 
 fn gather_legacy_full_read_roots(
     command_cwd: &Path,
-    policy: &SandboxPolicy,
+    _policy: &SandboxPolicy,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
@@ -373,11 +375,6 @@ fn gather_legacy_full_read_roots(
         roots.extend(profile_read_roots(Path::new(&up)));
     }
     roots.push(command_cwd.to_path_buf());
-    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-        for root in writable_roots {
-            roots.push(root.to_path_buf());
-        }
-    }
     canonical_existing(&roots)
 }
 
@@ -747,8 +744,8 @@ pub fn run_elevated_setup(
         )
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths.clone());
+    let deny_write_paths = build_payload_deny_write_paths(&request, &overrides, &write_roots);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -816,7 +813,8 @@ fn build_payload_roots(
 
 fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
-    explicit_deny_write_paths: Option<Vec<PathBuf>>,
+    overrides: &SetupRootOverrides,
+    write_roots: &[PathBuf],
 ) -> Vec<PathBuf> {
     let allow_deny_paths: AllowDenyPaths = compute_allow_paths(
         request.policy,
@@ -824,12 +822,20 @@ fn build_payload_deny_write_paths(
         request.command_cwd,
         request.env_map,
     );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
+    let mut deny_write_paths: Vec<PathBuf> = overrides
+        .deny_write_paths
+        .as_deref()
         .unwrap_or_default()
-        .into_iter()
-        .map(|path| canonicalize_path(&path))
+        .iter()
+        .map(|path| canonicalize_path(path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    if overrides.write_roots.is_some() {
+        deny_write_paths.extend(protected_child_deny_paths_for_roots(
+            write_roots,
+            request.policy_cwd,
+        ));
+    }
     deny_write_paths
 }
 
@@ -974,7 +980,6 @@ mod tests {
     use super::proxy_ports_from_env;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -1298,26 +1303,19 @@ mod tests {
     }
 
     #[test]
-    fn workspace_write_roots_remain_readable() {
+    fn workspace_write_cwd_remains_readable() {
         let tmp = TempDir::new().expect("tempdir");
         let codex_home = tmp.path().join("codex-home");
         let command_cwd = tmp.path().join("workspace");
-        let writable_root = tmp.path().join("extra-write-root");
         fs::create_dir_all(&command_cwd).expect("create workspace");
-        fs::create_dir_all(&writable_root).expect("create writable root");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::from_absolute_path(&writable_root)
-                    .expect("absolute writable root"),
-            ],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
 
         let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
-        let expected_writable =
-            dunce::canonicalize(&writable_root).expect("canonical writable root");
+        let expected_writable = dunce::canonicalize(&command_cwd).expect("canonical command cwd");
 
         assert!(roots.contains(&expected_writable));
     }
@@ -1430,7 +1428,6 @@ mod tests {
         fs::create_dir_all(&extra_root).expect("create extra root");
         fs::create_dir_all(&sandbox_root).expect("create sandbox root");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1490,10 +1487,6 @@ mod tests {
         fs::create_dir_all(&command_git).expect("create command .git");
         fs::create_dir_all(&extra_codex).expect("create extra .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::from_absolute_path(&extra_write_root)
-                    .expect("absolute writable root"),
-            ],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1507,8 +1500,14 @@ mod tests {
             proxy_enforced: false,
         };
 
+        let overrides = super::SetupRootOverrides {
+            write_roots: Some(vec![command_cwd.clone(), extra_write_root]),
+            deny_write_paths: Some(vec![explicit_deny.clone()]),
+            ..Default::default()
+        };
+        let (_, write_roots) = super::build_payload_roots(&request, &overrides);
         let deny_write_paths =
-            super::build_payload_deny_write_paths(&request, Some(vec![explicit_deny.clone()]));
+            super::build_payload_deny_write_paths(&request, &overrides, &write_roots);
 
         assert_eq!(
             [

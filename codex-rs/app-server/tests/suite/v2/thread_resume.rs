@@ -1474,6 +1474,7 @@ stream_max_retries = 0
         forked_from_id: None,
         timestamp: "2025-01-05T12:00:00Z".to_string(),
         cwd: repo_path.clone(),
+        workspace_roots: Vec::new(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
@@ -2970,6 +2971,64 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_resume_preserves_persisted_workspace_roots_when_request_omits_them() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let repo = TempDir::new()?;
+    let shared = TempDir::new()?;
+    let workspace_roots = vec![
+        AbsolutePathBuf::try_from(repo.path())?,
+        AbsolutePathBuf::try_from(shared.path())?,
+    ];
+
+    let RestartedThreadFixture {
+        mut mcp, thread_id, ..
+    } = start_materialized_thread_with_params_and_restart(
+        codex_home.path(),
+        "seed history",
+        ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            cwd: Some(repo.path().display().to_string()),
+            permissions: Some(":workspace".to_string()),
+            workspace_roots: Some(workspace_roots.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        workspace_roots: resumed_roots,
+        permission_profile,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(resumed_roots, workspace_roots);
+    let permission_profile: codex_protocol::models::PermissionProfile = permission_profile
+        .expect("resume response should include exact permissions")
+        .into();
+    assert!(
+        permission_profile
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(shared.path(), repo.path())
+    );
+
+    Ok(())
+}
+
 struct RestartedThreadFixture {
     mcp: McpProcess,
     thread_id: String,
@@ -2981,15 +3040,26 @@ async fn start_materialized_thread_and_restart(
     codex_home: &Path,
     seed_text: &str,
 ) -> Result<RestartedThreadFixture> {
+    start_materialized_thread_with_params_and_restart(
+        codex_home,
+        seed_text,
+        ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn start_materialized_thread_with_params_and_restart(
+    codex_home: &Path,
+    seed_text: &str,
+    start_params: ThreadStartParams,
+) -> Result<RestartedThreadFixture> {
     let mut first_mcp = McpProcess::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, first_mcp.initialize()).await??;
 
-    let start_id = first_mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
+    let start_id = first_mcp.send_thread_start_request(start_params).await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         first_mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
