@@ -723,7 +723,10 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/user-hook.py"),
         )],
         requirements,
@@ -774,7 +777,10 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml,
         )],
         ConfigRequirements::default(),
@@ -841,7 +847,10 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/toml-hook.py"),
         )],
         requirements,
