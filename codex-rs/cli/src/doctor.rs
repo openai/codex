@@ -1899,7 +1899,7 @@ async fn websocket_reachability_check(
     .await
     {
         Ok(Ok(probe)) => {
-            details.push(format!("handshake status: {}", probe.status));
+            details.push(format!("handshake result: HTTP {}", probe.status));
             details.push(format!("reasoning header: {}", probe.reasoning_included));
             details.push(format!(
                 "models etag present: {}",

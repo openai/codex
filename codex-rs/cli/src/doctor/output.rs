@@ -660,11 +660,12 @@ fn network_summary(check: &DoctorCheck) -> String {
 }
 
 fn websocket_summary(check: &DoctorCheck) -> String {
-    let status = detail::detail_value(check, "handshake status");
+    let status = detail::detail_value(check, "handshake result")
+        .or_else(|| detail::detail_value(check, "handshake status"));
     let timeout = detail::detail_value(check, "connect timeout")
         .map(|value| value.replace("000 ms", "s").replace(" ms", "ms"));
     match (status, timeout) {
-        (Some(status), Some(timeout)) => format!("{status} · {timeout} timeout"),
+        (Some(status), Some(timeout)) => format!("connected ({status}) · {timeout} timeout"),
         _ => check.summary.clone(),
     }
 }
