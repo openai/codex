@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_extension_api::ExtensionData;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Notify;
@@ -197,15 +198,17 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
-    /// `ctx`, returning an optional final agent message when finished. The
-    /// provided `cancellation_token` is cancelled when the session requests an
-    /// abort; implementers should watch for it and terminate quickly once it
-    /// fires. Returning [`Some`] yields a final message that
+    /// `ctx`, using `turn_extension_data` for scoped extension state and
+    /// returning an optional final agent message when finished. The provided
+    /// `cancellation_token` is cancelled when the session requests an abort;
+    /// implementers should watch for it and terminate quickly once it fires.
+    /// Returning [`Some`] yields a final message that
     /// [`Session::on_task_finished`] will emit to the client.
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Option<String>> + Send;
@@ -237,6 +240,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>>;
@@ -268,6 +272,7 @@ where
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>> {
@@ -275,6 +280,7 @@ where
             self,
             session,
             ctx,
+            turn_extension_data,
             input,
             cancellation_token,
         ))
@@ -366,6 +372,7 @@ impl Session {
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
+        let turn_extension_data_for_run = Arc::clone(&turn_extension_data);
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
@@ -391,6 +398,7 @@ impl Session {
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
+                        turn_extension_data_for_run,
                         input,
                         task_cancellation_token.child_token(),
                     )

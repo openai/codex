@@ -139,6 +139,7 @@ use tracing::warn;
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    turn_extension_data: Arc<codex_extension_api::ExtensionData>,
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
@@ -166,19 +167,6 @@ pub(crate) async fn run_turn(
     if pre_sampling_compact.reset_client_session {
         client_session.reset_websocket_session();
     }
-    let turn_extension_data = {
-        let active_turn_state = {
-            let active_turn = sess.active_turn.lock().await;
-            active_turn
-                .as_ref()
-                .map(|active_turn| Arc::clone(&active_turn.turn_state))
-        };
-        if let Some(active_turn_state) = active_turn_state {
-            Arc::clone(&active_turn_state.lock().await.extension_data)
-        } else {
-            Arc::new(codex_extension_api::ExtensionData::new())
-        }
-    };
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 

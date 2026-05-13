@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_extension_api::ExtensionData;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::turn::run_turn;
@@ -41,6 +42,7 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
@@ -72,6 +74,7 @@ impl SessionTask for RegularTask {
             let last_agent_message = run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&ctx),
+                Arc::clone(&turn_extension_data),
                 next_input,
                 prewarmed_client_session.take(),
                 cancellation_token.child_token(),

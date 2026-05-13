@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_extension_api::ExtensionData;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
@@ -77,6 +78,7 @@ impl SessionTask for UserShellCommandTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         turn_context: Arc<TurnContext>,
+        _turn_extension_data: Arc<ExtensionData>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
