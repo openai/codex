@@ -311,10 +311,6 @@ impl ToolHandler for ApplyPatchHandler {
         matches!(payload, ToolPayload::Custom { .. })
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }

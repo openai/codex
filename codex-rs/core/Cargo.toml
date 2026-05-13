@@ -70,7 +70,6 @@ codex-utils-output-truncation = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-pty = { workspace = true }
-codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
 codex-utils-template = { workspace = true }

@@ -7353,6 +7353,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_collaboration_mode_instructions: true,
             include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
@@ -7799,6 +7800,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -7959,6 +7961,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -8104,6 +8107,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -9341,6 +9345,7 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config_and_profiles() ->
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"include_permissions_instructions = false
 include_apps_instructions = false
+include_collaboration_mode_instructions = false
 include_environment_context = false
 profile = "chatty"
 
@@ -9349,6 +9354,7 @@ include_instructions = false
 
 [profiles.chatty]
 include_permissions_instructions = true
+include_collaboration_mode_instructions = true
 include_environment_context = true
 "#,
     )?;
@@ -9361,6 +9367,7 @@ include_environment_context = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
     Ok(())

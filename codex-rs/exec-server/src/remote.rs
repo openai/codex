@@ -5,14 +5,13 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
-use crate::connection::JsonRpcConnection;
+use crate::relay::run_multiplexed_executor;
 use crate::server::ConnectionProcessor;
 
 pub const CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR: &str =
@@ -114,7 +113,7 @@ impl RemoteExecutorConfig {
         Self::with_bearer_token(base_url, executor_id, read_remote_bearer_token_from_env()?)
     }
 
-    fn with_bearer_token(
+    pub fn with_bearer_token(
         base_url: String,
         executor_id: String,
         bearer_token: String,
@@ -151,15 +150,7 @@ pub async fn run_remote_executor(
         match connect_async(response.url.as_str()).await {
             Ok((websocket, _)) => {
                 backoff = Duration::from_secs(1);
-                processor
-                    .run_connection(
-                        JsonRpcConnection::from_websocket(
-                            websocket,
-                            "remote exec-server websocket".to_string(),
-                        ),
-                        CancellationToken::new(),
-                    )
-                    .await;
+                run_multiplexed_executor(websocket, processor.clone()).await;
             }
             Err(err) => {
                 warn!("failed to connect remote exec-server websocket: {err}");

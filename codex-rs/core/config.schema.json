@@ -622,6 +622,9 @@
         "include_apps_instructions": {
           "type": "boolean"
         },
+        "include_collaboration_mode_instructions": {
+          "type": "boolean"
+        },
         "include_environment_context": {
           "type": "boolean"
         },
@@ -4356,6 +4359,10 @@
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_collaboration_mode_instructions": {
+      "description": "Whether to inject the `<collaboration_mode>` developer block.",
       "type": "boolean"
     },
     "include_environment_context": {
