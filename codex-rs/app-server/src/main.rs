@@ -64,6 +64,7 @@ fn main() -> anyhow::Result<()> {
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
+            /*strict_config*/ false,
             /*default_analytics_enabled*/ false,
             transport,
             session_source,
