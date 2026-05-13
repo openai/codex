@@ -104,6 +104,13 @@ impl TurnContext {
         self.permission_profile.clone()
     }
 
+    pub(crate) fn default_cwd(&self) -> &AbsolutePathBuf {
+        self.environments
+            .primary()
+            .map(|turn_environment| &turn_environment.cwd)
+            .unwrap_or(&self.config.cwd)
+    }
+
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
         self.permission_profile.file_system_sandbox_policy()
     }

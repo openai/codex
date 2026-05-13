@@ -525,8 +525,7 @@ impl NetworkApprovalService {
                     guardian_approval_id,
                     /*approval_id*/ None,
                     prompt_command,
-                    #[allow(deprecated)]
-                    turn_context.cwd.clone(),
+                    turn_context.default_cwd().clone(),
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,

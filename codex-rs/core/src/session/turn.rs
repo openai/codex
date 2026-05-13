@@ -366,9 +366,8 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    #[allow(deprecated)]
-    let display_root = get_git_repo_root(turn_context.cwd.as_path())
-        .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
+    let display_root = get_git_repo_root(turn_context.default_cwd().as_path())
+        .unwrap_or_else(|| turn_context.default_cwd().clone().into_path_buf());
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
         display_root,
     )));
@@ -700,8 +699,7 @@ async fn track_turn_resolved_config_analytics(
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
             permission_profile: turn_context.permission_profile(),
-            #[allow(deprecated)]
-            permission_profile_cwd: turn_context.cwd.to_path_buf(),
+            permission_profile_cwd: turn_context.default_cwd().to_path_buf(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
@@ -997,13 +995,12 @@ pub(crate) fn build_prompt(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(deprecated)]
 #[instrument(level = "trace",
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
         model = %turn_context.model_info.slug,
-        cwd = %turn_context.cwd.display()
+        cwd = %turn_context.default_cwd().display()
     )
 )]
 async fn run_sampling_request(
