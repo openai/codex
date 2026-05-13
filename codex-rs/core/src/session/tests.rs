@@ -1922,7 +1922,6 @@ async fn config_change_contributor_observes_effective_config_changes() {
 
     #[derive(Debug, PartialEq)]
     struct RecordedConfigChange {
-        thread_id: ThreadId,
         previous_model: Option<String>,
         new_model: Option<String>,
         previous_disabled_tools: Vec<ToolSuggestDisabledTool>,
@@ -1940,7 +1939,6 @@ async fn config_change_contributor_observes_effective_config_changes() {
             &self,
             session_store: &codex_extension_api::ExtensionData,
             thread_store: &codex_extension_api::ExtensionData,
-            thread_id: ThreadId,
             previous_config: &crate::config::Config,
             new_config: &crate::config::Config,
         ) {
@@ -1948,7 +1946,6 @@ async fn config_change_contributor_observes_effective_config_changes() {
                 .lock()
                 .expect("config change records lock")
                 .push(RecordedConfigChange {
-                    thread_id,
                     previous_model: previous_config.model.clone(),
                     new_model: new_config.model.clone(),
                     previous_disabled_tools: previous_config.tool_suggest.disabled_tools.clone(),
@@ -2021,7 +2018,6 @@ disabled_tools = [
     ];
     let expected = vec![
         RecordedConfigChange {
-            thread_id: session.conversation_id,
             previous_model: Some(original_model),
             new_model: Some(next_model.to_string()),
             previous_disabled_tools: original_disabled_tools.clone(),
@@ -2030,7 +2026,6 @@ disabled_tools = [
             saw_thread_store: true,
         },
         RecordedConfigChange {
-            thread_id: session.conversation_id,
             previous_model: Some(next_model.to_string()),
             new_model: Some(next_model.to_string()),
             previous_disabled_tools: original_disabled_tools,
