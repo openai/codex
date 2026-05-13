@@ -10,7 +10,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -207,9 +206,11 @@ fn spawn_one_shot_event_bridge(io: Codex, child_cancel: CancellationToken) -> Co
     let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
-        let mut shutdown_gate = OneShotShutdownGate::default();
         while let Ok(event) = io_for_bridge.next_event().await {
-            let should_shutdown = shutdown_gate.observe(&event.msg);
+            let should_shutdown = matches!(
+                event.msg,
+                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+            );
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
                 let _ = ops_tx
@@ -411,36 +412,6 @@ async fn forward_event_or_shutdown(
             shutdown_delegate(codex).await;
             false
         }
-    }
-}
-
-#[derive(Default)]
-struct OneShotShutdownGate {
-    turn_finished: bool,
-    mcp_startup_pending: bool,
-}
-
-impl OneShotShutdownGate {
-    fn observe(&mut self, msg: &EventMsg) -> bool {
-        match msg {
-            EventMsg::McpStartupUpdate(update)
-                if matches!(&update.status, McpStartupStatus::Starting) =>
-            {
-                self.mcp_startup_pending = true;
-            }
-            EventMsg::McpStartupComplete(_) => {
-                self.mcp_startup_pending = false;
-            }
-            EventMsg::TurnComplete(_) => {
-                self.turn_finished = true;
-            }
-            EventMsg::TurnAborted(_) => {
-                self.turn_finished = true;
-                self.mcp_startup_pending = false;
-            }
-            _ => {}
-        }
-        self.turn_finished && !self.mcp_startup_pending
     }
 }
 
