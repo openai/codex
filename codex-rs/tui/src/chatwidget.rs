@@ -2890,18 +2890,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn workspace_owner_usage_nudge_enabled(&self) -> bool {
-        self.config
-            .features
-            .enabled(Feature::WorkspaceOwnerUsageNudge)
-    }
-
     fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
-        if !self.workspace_owner_usage_nudge_enabled() {
-            self.on_error(message);
-            return;
-        }
-
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
             if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
                 match kind {
@@ -6919,9 +6908,7 @@ impl ChatWidget {
     }
 
     fn open_workspace_owner_nudge_prompt(&mut self, credit_type: AddCreditsNudgeCreditType) {
-        if !self.workspace_owner_usage_nudge_enabled()
-            || self.add_credits_nudge_email_in_flight.is_some()
-        {
+        if self.add_credits_nudge_email_in_flight.is_some() {
             return;
         }
 
@@ -6969,10 +6956,6 @@ impl ChatWidget {
         &mut self,
         credit_type: AddCreditsNudgeCreditType,
     ) -> bool {
-        if !self.workspace_owner_usage_nudge_enabled() {
-            return false;
-        }
-
         self.add_credits_nudge_email_in_flight = Some(credit_type);
         true
     }
@@ -6985,9 +6968,6 @@ impl ChatWidget {
             .add_credits_nudge_email_in_flight
             .take()
             .unwrap_or(AddCreditsNudgeCreditType::Credits);
-        if !self.workspace_owner_usage_nudge_enabled() {
-            return;
-        }
         let message = match (credit_type, result) {
             (AddCreditsNudgeCreditType::Credits, Ok(AddCreditsNudgeEmailStatus::Sent)) => {
                 "Workspace owner notified."

@@ -168,7 +168,11 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-trait AnyToolHandler: Send + Sync {
+pub(crate) trait AnyToolHandler: Send + Sync {
+    fn tool_name(&self) -> ToolName;
+
+    fn spec(&self) -> Option<ToolSpec>;
+
     fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
@@ -197,6 +201,14 @@ impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
 {
+    fn tool_name(&self) -> ToolName {
+        ToolHandler::tool_name(self)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        ToolHandler::spec(self)
+    }
+
     fn supports_parallel_tool_calls(&self) -> bool {
         ToolHandler::supports_parallel_tool_calls(self)
     }
@@ -531,24 +543,17 @@ impl ToolRegistry {
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
     specs: Vec<ToolSpec>,
-    code_mode_enabled: bool,
 }
 
 impl ToolRegistryBuilder {
-    pub fn new(code_mode_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
             specs: Vec::new(),
-            code_mode_enabled,
         }
     }
 
     pub(crate) fn push_spec(&mut self, spec: ToolSpec) {
-        let spec = if self.code_mode_enabled {
-            codex_tools::augment_tool_spec_for_code_mode(spec)
-        } else {
-            spec
-        };
         self.specs.push(spec);
     }
 
@@ -556,17 +561,32 @@ impl ToolRegistryBuilder {
     where
         H: ToolHandler + 'static,
     {
+        self.register_any_handler(handler);
+    }
+
+    pub(crate) fn register_any_handler(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ true);
+    }
+
+    pub(crate) fn register_any_handler_without_spec(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ false);
+    }
+
+    fn register_any_handler_internal(
+        &mut self,
+        handler: Arc<dyn AnyToolHandler>,
+        include_spec: bool,
+    ) {
         let name = handler.tool_name();
         if self.handlers.contains_key(&name) {
             error_or_panic(format!("handler for tool {name} already registered"));
             return;
         }
 
-        if let Some(spec) = handler.spec() {
+        if include_spec && let Some(spec) = handler.spec() {
             self.push_spec(spec);
         }
 
-        let handler: Arc<dyn AnyToolHandler> = handler;
         self.handlers.insert(name, handler);
     }
 

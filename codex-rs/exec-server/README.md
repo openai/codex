@@ -30,7 +30,65 @@ It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.
 
 Wire framing:
 
-- websocket: one JSON-RPC message per websocket text frame
+- local websocket: one JSON-RPC message per websocket frame
+- remote websocket: binary protobuf relay frames carrying JSON-RPC payloads
+
+## Remote Relay Message Format
+
+In remote mode, the harness and executor communicate through rendezvous using
+`codex.exec_server.relay.v1.RelayMessageFrame`; the checked-in schema is in
+`src/proto/codex.exec_server.relay.v1.proto`. The relay frame carries stream
+identity plus endpoint-owned reliability metadata:
+
+```text
+version
+stream_id
+body              // data | ack_frame | resume | reset | heartbeat
+ack               // highest contiguous peer segment seq received
+ack_bits          // bitset for peer segment seqs after ack
+seq               // data only: segment sequence number
+segment_index     // data only: 0-based index within message
+segment_count     // data only: number of segments in message
+payload           // data only: JSON-RPC message bytes or segment bytes
+next_seq          // resume only: next sender seq
+reason            // reset only: reset reason
+```
+
+`stream_id` identifies one virtual harness/executor JSON-RPC session on the
+executor websocket. The harness generates a UUIDv4 `stream_id`; the executor
+demuxes frames by `stream_id` and runs an independent `ConnectionProcessor` per
+stream.
+
+Use segment-level sequence numbers for reliability:
+
+```text
+seq = 0, 1, 2, 3, ...
+```
+
+Use contiguous segment sequence ranges to identify and stitch a segmented
+application message:
+
+```text
+message_start_seq = seq - segment_index
+segment_index = 0
+segment_count = 1
+```
+
+`message_start_seq` is derived by the receiver, not sent on the wire. For
+unsplit messages, `message_start_seq == seq`, `segment_index == 0`, and
+`segment_count == 1`.
+
+Use cumulative `ack` plus fixed-size `ack_bits` instead of variable ack ranges:
+
+```text
+ack = highest contiguous received segment seq
+bit i in ack_bits acknowledges seq = ack + 1 + i
+```
+
+Send `ack` and `ack_bits` redundantly on every outbound frame. Acks are not
+themselves acked. Acks, retries, duplicate suppression, segmentation, and
+reassembly are endpoint responsibilities; rendezvous only routes relay frames
+by `stream_id`.
 
 ## Lifecycle
 
