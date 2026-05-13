@@ -158,6 +158,8 @@ pub enum Feature {
     EnableMcpApps,
     /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
+    /// Route the host-owned apps MCP server through plugin-service.
+    NewAppsMcp,
     /// Enable the tool_search tool for apps.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
@@ -940,6 +942,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AppsMcpPathOverride,
         key: "apps_mcp_path_override",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::NewAppsMcp,
+        key: "new_apps_mcp",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

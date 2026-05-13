@@ -4601,14 +4601,17 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
         mcp_config.apps_mcp_path_override.as_deref(),
         Some("/custom/mcp")
     );
+    assert!(!mcp_config.new_apps_mcp_enabled);
 
     let _ = config.features.disable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(!mcp_config.apps_enabled);
 
     let _ = config.features.enable(Feature::Apps);
+    let _ = config.features.enable(Feature::NewAppsMcp);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
+    assert!(mcp_config.new_apps_mcp_enabled);
 
     Ok(())
 }
@@ -8766,6 +8769,61 @@ path = "/custom/mcp"
         config.apps_mcp_path_override.as_deref(),
         Some("/custom/mcp")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_loads_new_apps_mcp_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+
+[features]
+new_apps_mcp = true
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.features.enabled(Feature::NewAppsMcp));
+    assert_eq!(config.apps_mcp_path_override, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_preserves_apps_mcp_path_override_with_new_apps_mcp_feature() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+
+[features]
+new_apps_mcp = true
+
+[features.apps_mcp_path_override]
+path = "/custom/mcp"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.apps_mcp_path_override.as_deref(),
+        Some("/custom/mcp")
+    );
+    assert!(config.features.enabled(Feature::NewAppsMcp));
     Ok(())
 }
 

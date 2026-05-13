@@ -109,6 +109,8 @@ pub struct McpConfig {
     pub chatgpt_base_url: String,
     /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
+    /// Whether the host-owned apps MCP server should use the new plugin-service route.
+    pub new_apps_mcp_enabled: bool,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -364,10 +366,12 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
 }
 
 pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
-    codex_apps_mcp_url_for_base_url(
-        &config.chatgpt_base_url,
-        config.apps_mcp_path_override.as_deref(),
-    )
+    let apps_mcp_path_override = config
+        .apps_mcp_path_override
+        .as_deref()
+        .or(config.new_apps_mcp_enabled.then_some("/ps/mcp"));
+
+    codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url, apps_mcp_path_override)
 }
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.

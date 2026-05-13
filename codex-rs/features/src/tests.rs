@@ -130,6 +130,13 @@ fn remote_compaction_v2_is_under_development() {
 }
 
 #[test]
+fn new_apps_mcp_is_under_development() {
+    assert_eq!(Feature::NewAppsMcp.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::NewAppsMcp.default_enabled(), false);
+    assert_eq!(feature_for_key("new_apps_mcp"), Some(Feature::NewAppsMcp));
+}
+
+#[test]
 fn responses_websocket_response_processed_is_under_development() {
     assert_eq!(
         Feature::ResponsesWebsocketResponseProcessed.stage(),
