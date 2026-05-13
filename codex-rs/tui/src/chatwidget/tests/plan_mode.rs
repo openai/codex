@@ -1,6 +1,23 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn drain_app_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
+}
+
+fn assert_collaboration_override(events: &[AppEvent], expected: ModeKind) {
+    assert!(
+        events.iter().any(|event| match event {
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                collaboration_mode: Some(CollaborationMode { mode, .. }),
+                ..
+            }) => mode == &expected,
+            _ => false,
+        }),
+        "expected {expected:?} mode next-turn state override; events: {events:?}"
+    );
+}
+
 #[test]
 fn plan_mode_nudge_matches_only_standalone_plain_text_keyword() {
     assert!(contains_plan_keyword("plan"));
@@ -88,12 +105,14 @@ async fn plan_mode_nudge_dismissal_is_scoped_to_current_thread() {
 
 #[tokio::test]
 async fn plan_mode_nudge_shift_tab_uses_existing_mode_cycle_path() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
     chat.pre_draw_tick();
     assert!(chat.bottom_pane.plan_mode_nudge_visible());
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
     chat.pre_draw_tick();
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert!(!chat.bottom_pane.plan_mode_nudge_visible());
@@ -393,7 +412,8 @@ async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -489,7 +509,8 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -670,7 +691,8 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -1290,14 +1312,18 @@ async fn enter_submits_when_plan_stream_is_not_active() {
 
 #[tokio::test]
 async fn collab_mode_shift_tab_cycles_only_when_idle() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let initial = chat.current_collaboration_mode().clone();
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Default);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
@@ -1381,6 +1407,17 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            ..
+        })) => {}
+        other => panic!("expected collaboration OverrideTurnContext event, got {other:?}"),
+    }
     let selected_mask = match rx.try_recv() {
         Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
         other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
@@ -1432,12 +1469,14 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
     chat.dispatch_command(SlashCommand::Plan);
 
-    while let Ok(event) = rx.try_recv() {
-        assert!(
-            matches!(event, AppEvent::InsertHistoryCell(_)),
-            "plan should not emit a non-history app event: {event:?}"
-        );
-    }
+    let events = drain_app_events(&mut rx);
+    assert_collaboration_override(&events, ModeKind::Plan);
+    assert!(
+        events
+            .iter()
+            .all(|event| matches!(event, AppEvent::InsertHistoryCell(_) | AppEvent::CodexOp(_))),
+        "plan should not emit unrelated app events: {events:?}"
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }

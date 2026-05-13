@@ -12,6 +12,8 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
+use codex_protocol::ThreadId;
 
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -62,6 +64,12 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if let ServerNotification::ThreadTurnContextUpdated(notification) = notification {
+            self.handle_thread_turn_context_updated_notification(notification)
+                .await;
+            return;
+        }
+
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
                 if let Some(request) = self
@@ -137,6 +145,57 @@ impl App {
 
         self.chat_widget
             .handle_server_notification(notification, /*replay_kind*/ None);
+    }
+
+    pub(super) async fn handle_thread_turn_context_updated_notification(
+        &mut self,
+        notification: ThreadTurnContextUpdatedNotification,
+    ) {
+        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
+            tracing::warn!(
+                thread_id = notification.thread_id,
+                "ignoring turn context update with invalid thread_id"
+            );
+            return;
+        };
+
+        let update_session = |session: &mut crate::session_state::ThreadSessionState| {
+            session.model = notification.turn_context.model.clone();
+            session.model_provider_id = notification.turn_context.model_provider.clone();
+            session.service_tier = notification.turn_context.service_tier.clone();
+            session.cwd = notification.turn_context.cwd.clone();
+            session.approval_policy = notification.turn_context.approval_policy;
+            session.approvals_reviewer = notification.turn_context.approvals_reviewer.to_core();
+            session.permission_profile =
+                notification.turn_context.permission_profile.clone().into();
+            session.active_permission_profile = notification
+                .turn_context
+                .active_permission_profile
+                .clone()
+                .map(codex_protocol::models::ActivePermissionProfile::from);
+            session.reasoning_effort = notification.turn_context.effort;
+        };
+
+        if self.primary_thread_id == Some(thread_id)
+            && let Some(session) = self.primary_session_configured.as_mut()
+        {
+            update_session(session);
+        }
+        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let mut store = channel.store.lock().await;
+            if let Some(session) = store.session.as_mut() {
+                update_session(session);
+            }
+        }
+
+        if self.chat_widget.thread_id() != Some(thread_id) {
+            return;
+        }
+
+        self.chat_widget.handle_server_notification(
+            ServerNotification::ThreadTurnContextUpdated(notification),
+            /*replay_kind*/ None,
+        );
     }
 
     async fn handle_server_request_event(

@@ -59,6 +59,8 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ThreadTurnContext;
+use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -368,6 +370,84 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
     }
 
     panic!("expected approval action to submit a thread-scoped op");
+}
+
+#[tokio::test]
+async fn turn_context_updated_notification_reaches_active_thread_ui() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let cwd = test_path_buf("/tmp/project").abs();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+
+    app.handle_thread_turn_context_updated_notification(ThreadTurnContextUpdatedNotification {
+        thread_id: thread_id.to_string(),
+        turn_context: test_thread_turn_context("gpt-updated", cwd),
+    })
+    .await;
+
+    assert_eq!(app.chat_widget.current_model(), "gpt-updated");
+    assert_eq!(
+        app.chat_widget.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        app.chat_widget.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
+    assert_eq!(
+        app.primary_session_configured
+            .as_ref()
+            .map(|session| session.model.as_str()),
+        Some("gpt-updated")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_context_updated_notification_for_hidden_thread_updates_cache_only() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let active_thread_id = ThreadId::new();
+    let hidden_thread_id = ThreadId::new();
+    let active_cwd = test_path_buf("/tmp/active").abs();
+    let hidden_cwd = test_path_buf("/tmp/hidden").abs();
+    app.enqueue_primary_thread_session(
+        test_thread_session(active_thread_id, active_cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+    app.thread_event_channels.insert(
+        hidden_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(hidden_thread_id, hidden_cwd.to_path_buf()),
+            Vec::new(),
+        ),
+    );
+
+    app.handle_thread_turn_context_updated_notification(ThreadTurnContextUpdatedNotification {
+        thread_id: hidden_thread_id.to_string(),
+        turn_context: test_thread_turn_context("gpt-hidden", hidden_cwd),
+    })
+    .await;
+
+    assert_eq!(app.chat_widget.current_model(), "gpt-test");
+    let hidden_channel = app
+        .thread_event_channels
+        .get(&hidden_thread_id)
+        .expect("hidden thread channel should exist");
+    let hidden_store = hidden_channel.store.lock().await;
+    assert_eq!(
+        hidden_store
+            .session
+            .as_ref()
+            .map(|session| session.model.as_str()),
+        Some("gpt-hidden")
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -4111,6 +4191,33 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
     }
 }
 
+fn test_thread_turn_context(model: &str, cwd: AbsolutePathBuf) -> ThreadTurnContext {
+    ThreadTurnContext {
+        model: model.to_string(),
+        model_provider: "test-provider".to_string(),
+        service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+        cwd,
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+        sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+            network_access: false,
+        },
+        permission_profile: PermissionProfile::read_only().into(),
+        active_permission_profile: None,
+        effort: Some(ReasoningEffortConfig::High),
+        summary: None,
+        personality: None,
+        collaboration_mode: CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: model.to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                developer_instructions: None,
+            },
+        },
+    }
+}
+
 fn enable_terminal_resize_reflow(app: &mut App) {
     app.config
         .features
@@ -5333,6 +5440,84 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         assert_eq!(handled, true);
     })
     .await;
+}
+
+#[test]
+fn override_turn_context_updates_app_server_next_turn_state() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("test runtime");
+
+    runtime.block_on(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let op = AppCommand::override_turn_context(
+            /*cwd*/ None,
+            /*approval_policy*/ None,
+            /*approvals_reviewer*/ None,
+            /*permission_profile*/ None,
+            /*windows_sandbox_level*/ None,
+            Some("gpt-5.2".to_string()),
+            Some(Some(codex_protocol::openai_models::ReasoningEffort::Low)),
+            /*summary*/ None,
+            /*service_tier*/ None,
+            /*collaboration_mode*/ None,
+            /*personality*/ None,
+        );
+
+        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+            &mut app_server,
+            thread_id,
+            &op,
+        ))
+        .await
+        .expect("override should update app-server turn context");
+        assert_eq!(handled, true);
+
+        let current_cwd = app.chat_widget.config_ref().cwd.to_path_buf();
+        let response = app_server
+            .thread_turn_context_update(
+                thread_id,
+                /*cwd*/ None,
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
+                /*active_permission_profile*/ None,
+                current_cwd.as_path(),
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )
+            .await
+            .expect("thread/turnContext/update should return current state");
+        assert_eq!(response.turn_context.model, "gpt-5.2");
+        assert_eq!(
+            response.turn_context.effort,
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        );
+        app_server
+            .shutdown()
+            .await
+            .expect("shutdown should succeed");
+    })
 }
 
 #[tokio::test]

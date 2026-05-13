@@ -51,6 +51,9 @@ impl ChatWidget {
             ServerNotification::ThreadGoalCleared(notification) => {
                 self.on_thread_goal_cleared(notification.thread_id.as_str());
             }
+            ServerNotification::ThreadTurnContextUpdated(notification) => {
+                self.apply_thread_turn_context(notification.turn_context);
+            }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;
@@ -217,7 +220,6 @@ impl ChatWidget {
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
-            | ServerNotification::ThreadTurnContextUpdated(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
@@ -240,6 +242,68 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
+    }
+
+    fn apply_thread_turn_context(
+        &mut self,
+        turn_context: codex_app_server_protocol::ThreadTurnContext,
+    ) {
+        self.current_cwd = Some(turn_context.cwd.to_path_buf());
+        self.config.cwd = turn_context.cwd;
+        self.config.model_reasoning_summary = turn_context.summary;
+        self.config.personality = turn_context.personality;
+        self.effective_service_tier = turn_context.service_tier.clone();
+        self.config.service_tier = turn_context.service_tier;
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(turn_context.approval_policy.to_core())
+        {
+            tracing::warn!(%err, "failed to sync approval_policy from turn context update");
+            self.config.permissions.approval_policy =
+                Constrained::allow_only(turn_context.approval_policy.to_core());
+        }
+        let permission_profile: PermissionProfile = turn_context.permission_profile.into();
+        let active_permission_profile = turn_context
+            .active_permission_profile
+            .map(codex_protocol::models::ActivePermissionProfile::from);
+        if let Err(err) = self
+            .config
+            .permissions
+            .set_permission_profile_with_active_profile(
+                permission_profile.clone(),
+                active_permission_profile.clone(),
+            )
+        {
+            tracing::warn!(%err, "failed to sync permissions from turn context update");
+            self.config.permissions.permission_profile =
+                Constrained::allow_only(permission_profile);
+            self.config.permissions.active_permission_profile = active_permission_profile;
+        }
+        self.config.approvals_reviewer = turn_context.approvals_reviewer.to_core();
+        self.current_collaboration_mode = turn_context.collaboration_mode;
+        self.active_collaboration_mask = Some(CollaborationModeMask {
+            name: self
+                .current_collaboration_mode
+                .mode
+                .display_name()
+                .to_string(),
+            mode: Some(self.current_collaboration_mode.mode),
+            model: Some(turn_context.model),
+            reasoning_effort: Some(turn_context.effort),
+            developer_instructions: Some(
+                self.current_collaboration_mode
+                    .settings
+                    .developer_instructions
+                    .clone(),
+            ),
+        });
+        self.update_collaboration_mode_indicator();
+        self.refresh_plan_mode_nudge();
+        self.refresh_model_dependent_surfaces();
+        self.refresh_status_surfaces();
+        self.request_redraw();
     }
 
     pub(super) fn handle_turn_completed_notification(

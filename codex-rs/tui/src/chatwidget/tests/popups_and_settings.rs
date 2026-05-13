@@ -7,6 +7,28 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
+fn drain_app_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
+}
+
+fn assert_model_effort_override(
+    events: &[AppEvent],
+    expected_model: &str,
+    expected_effort: ReasoningEffortConfig,
+) {
+    assert!(
+        events.iter().any(|event| match event {
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                model: Some(model),
+                effort: Some(Some(effort)),
+                ..
+            }) => model == expected_model && effort == &expected_effort,
+            _ => false,
+        }),
+        "expected model/effort next-turn state override; events: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn realtime_error_closes_without_followup_closed_info() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -2387,6 +2409,28 @@ async fn model_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("model_selection_popup", popup);
 }
 
+#[test]
+fn quick_model_selection_emits_turn_context_override() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sender = AppEventSender::new(tx);
+    let actions = ChatWidget::model_selection_actions(
+        "codex-auto-balanced".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+        /*should_prompt_plan_mode_scope*/ false,
+    );
+
+    for action in actions {
+        action(&sender);
+    }
+
+    let events = drain_app_events(&mut rx);
+    assert_model_effort_override(
+        &events,
+        "codex-auto-balanced",
+        ReasoningEffortConfig::Medium,
+    );
+}
+
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
@@ -2562,7 +2606,8 @@ async fn alt_period_raises_reasoning_effort() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = drain_app_events(&mut rx);
+    assert_model_effort_override(&events, "gpt-5.4", ReasoningEffortConfig::High);
     assert!(
         events
             .iter()
@@ -2592,7 +2637,8 @@ async fn alt_comma_lowers_reasoning_effort() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = drain_app_events(&mut rx);
+    assert_model_effort_override(&events, "gpt-5.4", ReasoningEffortConfig::Low);
     assert!(
         events.iter().any(|event| matches!(
             event,
@@ -2711,6 +2757,11 @@ async fn single_reasoning_option_skips_selection() {
         events.push(ev);
     }
 
+    assert_model_effort_override(
+        &events,
+        "model-with-single-reasoning",
+        ReasoningEffortConfig::High,
+    );
     assert!(
         events
             .iter()

@@ -196,6 +196,41 @@ impl AppCommand {
         }
     }
 
+    pub(crate) fn override_model_and_effort(
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) -> Self {
+        Self::override_turn_context(
+            /*cwd*/ None,
+            /*approval_policy*/ None,
+            /*approvals_reviewer*/ None,
+            /*permission_profile*/ None,
+            /*windows_sandbox_level*/ None,
+            Some(model),
+            Some(effort),
+            /*summary*/ None,
+            /*service_tier*/ None,
+            /*collaboration_mode*/ None,
+            /*personality*/ None,
+        )
+    }
+
+    pub(crate) fn override_collaboration_mode(collaboration_mode: CollaborationMode) -> Self {
+        Self::override_turn_context(
+            /*cwd*/ None,
+            /*approval_policy*/ None,
+            /*approvals_reviewer*/ None,
+            /*permission_profile*/ None,
+            /*windows_sandbox_level*/ None,
+            /*model*/ None,
+            /*effort*/ None,
+            /*summary*/ None,
+            /*service_tier*/ None,
+            Some(collaboration_mode),
+            /*personality*/ None,
+        )
+    }
+
     pub(crate) fn exec_approval(
         id: String,
         turn_id: Option<String>,
