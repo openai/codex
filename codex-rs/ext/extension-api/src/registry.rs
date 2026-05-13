@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use crate::ApprovalInterceptorContributor;
+use crate::ApprovalReviewContributor;
+use crate::ApprovalReviewFuture;
 use crate::ContextContributor;
+use crate::ExtensionData;
 use crate::ThreadStartContributor;
 use crate::ToolContributor;
 use crate::TurnItemContributor;
@@ -12,14 +14,14 @@ pub struct ExtensionRegistryBuilder<C> {
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    approval_interceptor_contributors: Vec<Arc<dyn ApprovalInterceptorContributor>>,
+    approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
 impl<C> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             thread_start_contributors: Vec::new(),
-            approval_interceptor_contributors: Vec::new(),
+            approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             tool_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
@@ -33,12 +35,9 @@ impl<C> ExtensionRegistryBuilder<C> {
         Self::default()
     }
 
-    /// Registers one approval interceptor contributor.
-    pub fn approval_interceptor_contributor(
-        &mut self,
-        contributor: Arc<dyn ApprovalInterceptorContributor>,
-    ) {
-        self.approval_interceptor_contributors.push(contributor);
+    /// Registers one approval-review contributor.
+    pub fn approval_review_contributor(&mut self, contributor: Arc<dyn ApprovalReviewContributor>) {
+        self.approval_review_contributors.push(contributor);
     }
 
     /// Registers one thread-start contributor.
@@ -65,7 +64,7 @@ impl<C> ExtensionRegistryBuilder<C> {
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
             thread_start_contributors: self.thread_start_contributors,
-            approval_interceptor_contributors: self.approval_interceptor_contributors,
+            approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             tool_contributors: self.tool_contributors,
             turn_item_contributors: self.turn_item_contributors,
@@ -79,7 +78,7 @@ pub struct ExtensionRegistry<C> {
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    approval_interceptor_contributors: Vec<Arc<dyn ApprovalInterceptorContributor>>,
+    approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
 impl<C> ExtensionRegistry<C> {
@@ -88,9 +87,17 @@ impl<C> ExtensionRegistry<C> {
         &self.thread_start_contributors
     }
 
-    /// Returns the registered approval interceptor contributors.
-    pub fn approval_interceptor_contributors(&self) -> &[Arc<dyn ApprovalInterceptorContributor>] {
-        &self.approval_interceptor_contributors
+    /// Claims the first rendered approval-review prompt accepted by an
+    /// installed contributor.
+    pub fn approval_review<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> Option<ApprovalReviewFuture<'a>> {
+        self.approval_review_contributors
+            .iter()
+            .find_map(|contributor| contributor.contribute(session_store, thread_store, prompt))
     }
 
     /// Returns the registered prompt contributors.

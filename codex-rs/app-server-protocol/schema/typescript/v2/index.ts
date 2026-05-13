@@ -277,6 +277,8 @@ export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";
 export type { PluginReadParams } from "./PluginReadParams";
 export type { PluginReadResponse } from "./PluginReadResponse";
+export type { PluginShareCheckoutParams } from "./PluginShareCheckoutParams";
+export type { PluginShareCheckoutResponse } from "./PluginShareCheckoutResponse";
 export type { PluginShareContext } from "./PluginShareContext";
 export type { PluginShareDeleteParams } from "./PluginShareDeleteParams";
 export type { PluginShareDeleteResponse } from "./PluginShareDeleteResponse";

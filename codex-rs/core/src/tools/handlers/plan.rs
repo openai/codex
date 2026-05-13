@@ -3,6 +3,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -43,7 +44,7 @@ impl ToolOutput for PlanToolOutput {
     }
 }
 
-impl ToolHandler for PlanHandler {
+impl ToolExecutor<ToolInvocation> for PlanHandler {
     type Output = PlanToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -86,6 +87,8 @@ impl ToolHandler for PlanHandler {
         Ok(PlanToolOutput)
     }
 }
+
+impl ToolHandler for PlanHandler {}
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
     serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {

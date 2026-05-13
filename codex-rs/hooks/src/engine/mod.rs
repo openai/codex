@@ -106,6 +106,7 @@ pub(crate) struct ClaudeHooksEngine {
 impl ClaudeHooksEngine {
     pub(crate) fn new(
         enabled: bool,
+        bypass_hook_trust: bool,
         config_layer_stack: Option<&ConfigLayerStack>,
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
@@ -125,6 +126,7 @@ impl ClaudeHooksEngine {
             config_layer_stack,
             plugin_hook_sources,
             plugin_hook_load_warnings,
+            bypass_hook_trust,
         );
         Self {
             handlers: discovered.handlers,

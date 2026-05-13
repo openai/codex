@@ -1,11 +1,7 @@
 # codex-tools
 
-`codex-tools` is the host-side support crate for building, adapting, and
-planning tool sets outside `codex-core`.
-
-It is deliberately not the API that external tool owners should depend on.
-Crates that contribute ordinary function tools through extensions should use
-`codex-tool-api`, which owns only that small executable-tool seam.
+`codex-tools` is the shared support crate for building, adapting, planning, and
+executing model-visible tool sets outside `codex-core`.
 
 Today this crate owns the host-facing tool models and helpers that no longer
 need to live in `core/src/tools/spec.rs` or `core/src/client_common.rs`:
@@ -17,6 +13,8 @@ need to live in `core/src/tools/spec.rs` or `core/src/client_common.rs`:
   `ToolsConfig`, discoverable-tool models, and request-plugin-install helpers
 - host adapters such as schema sanitization, MCP/dynamic conversion, code-mode
   augmentation, and image-detail normalization
+- shared executable-tool contracts such as `ToolExecutor`, `ToolCall`, and
+  `ToolOutput`
 
 That extraction is the first step in a longer migration. The goal is not to
 move all of `core/src/tools` into this crate in one shot. Instead, the plan is
@@ -37,7 +35,6 @@ multiple consumers, for example:
 
 The corresponding non-goals are just as important:
 
-- do not become the extension-facing authoring API for executable tools
 - do not move `codex-core` orchestration here prematurely
 - do not pull `Session` / `TurnContext` / approval flow / runtime execution
   logic into this crate unless those dependencies have first been split into
@@ -48,7 +45,7 @@ The corresponding non-goals are just as important:
 
 The expected migration shape is:
 
-1. Keep ordinary contributed function-tool authoring in `codex-tool-api`.
+1. Keep extension-owned executable-tool authoring in `codex-extension-api`.
 2. Move host-side planning/adaptation helpers here when they no longer need to
    stay coupled to `codex-core`.
 3. Leave compatibility-sensitive adapters in `codex-core` while downstream

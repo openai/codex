@@ -323,7 +323,7 @@ impl ExternalAgentConfigRequestProcessor {
                 .thread
                 .update_thread_metadata(
                     ThreadMetadataPatch {
-                        name: Some(name),
+                        name: Some(Some(name)),
                         ..Default::default()
                     },
                     /*include_archived*/ false,
