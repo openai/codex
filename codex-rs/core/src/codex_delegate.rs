@@ -709,29 +709,44 @@ async fn handle_mcp_elicitation(
             rmcp::model::NumberOrString::Number(*value)
         }
     };
-    let response = tokio::select! {
-        biased;
-        _ = cancel_token.cancelled() => {
-            let response = codex_rmcp_client::ElicitationResponse {
-                action: codex_rmcp_client::ElicitationAction::Cancel,
-                content: None,
-                meta: None,
-            };
-            let _ = parent_session
-                .resolve_elicitation(server_name.clone(), request_id.clone(), response.clone())
-                .await;
-            Some(response)
+    let response = if parent_session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .elicitations_auto_deny()
+    {
+        // Xcode 26.4 cannot render delegated elicitations, so keep its auto-deny behavior.
+        Some(codex_rmcp_client::ElicitationResponse {
+            action: codex_rmcp_client::ElicitationAction::Decline,
+            content: None,
+            meta: None,
+        })
+    } else {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => {
+                let response = codex_rmcp_client::ElicitationResponse {
+                    action: codex_rmcp_client::ElicitationAction::Cancel,
+                    content: None,
+                    meta: None,
+                };
+                let _ = parent_session
+                    .resolve_elicitation(server_name.clone(), request_id.clone(), response.clone())
+                    .await;
+                Some(response)
+            }
+            response = parent_session.request_mcp_server_elicitation(
+                parent_ctx,
+                request_id,
+                McpServerElicitationRequestParams {
+                    thread_id: parent_session.conversation_id.to_string(),
+                    turn_id: Some(parent_ctx.sub_id.clone()),
+                    server_name: server_name.clone(),
+                    request,
+                },
+            ) => response,
         }
-        response = parent_session.request_mcp_server_elicitation(
-            parent_ctx,
-            request_id,
-            McpServerElicitationRequestParams {
-                thread_id: parent_session.conversation_id.to_string(),
-                turn_id: Some(parent_ctx.sub_id.clone()),
-                server_name: server_name.clone(),
-                request,
-            },
-        ) => response,
     }
     .unwrap_or(codex_rmcp_client::ElicitationResponse {
         action: codex_rmcp_client::ElicitationAction::Cancel,
