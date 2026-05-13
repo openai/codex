@@ -222,6 +222,7 @@ pub struct PluginReadOutcome {
 pub struct PluginDetail {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
     pub description: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
@@ -260,6 +261,7 @@ pub struct ConfiguredMarketplace {
 pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -1199,6 +1201,7 @@ impl PluginsManager {
                         let installed = installed_plugins.contains(&plugin_key);
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
+                        let mut local_version = plugin.local_version;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Ok(plugin_id) =
@@ -1206,6 +1209,7 @@ impl PluginsManager {
                             && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
+                            local_version = manifest.version.clone();
                             let marketplace_category = interface
                                 .as_ref()
                                 .and_then(|interface| interface.category.clone());
@@ -1223,6 +1227,7 @@ impl PluginsManager {
                             installed,
                             enabled,
                             name: plugin.name,
+                            local_version,
                             source: plugin.source,
                             policy: plugin.policy,
                             keywords: plugin.keywords,
@@ -1273,6 +1278,10 @@ impl PluginsManager {
                 ConfiguredMarketplacePlugin {
                     id: plugin_key.clone(),
                     name: plugin.plugin_id.plugin_name,
+                    local_version: plugin
+                        .manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.version.clone()),
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1319,6 +1328,7 @@ impl PluginsManager {
             return Ok(PluginDetail {
                 id: plugin_key,
                 name: plugin.name,
+                local_version: None,
                 description: Some(description),
                 source: plugin.source,
                 policy: plugin.policy,
@@ -1411,6 +1421,7 @@ impl PluginsManager {
         Ok(PluginDetail {
             id: plugin.id,
             name: plugin.name,
+            local_version: manifest.version.clone(),
             description,
             source: plugin.source,
             policy: plugin.policy,

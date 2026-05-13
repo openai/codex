@@ -55,6 +55,7 @@ pub use list::rollout_date_parts;
 pub use metadata::builder_from_items;
 pub use policy::EventPersistenceMode;
 pub use policy::is_persisted_rollout_item;
+pub use policy::persisted_rollout_items;
 pub use policy::should_persist_response_item_for_memories;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;

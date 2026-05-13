@@ -266,6 +266,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_profile_v2,
         sandbox_mode: sandbox_mode_cli_arg,
         dangerously_bypass_approvals_and_sandbox,
+        bypass_hook_trust,
         cwd,
         add_dir,
     } = shared;
@@ -330,7 +331,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
     let loader_overrides = LoaderOverrides {
         user_config_path,
-        user_config_profile: config_profile_v2.clone(),
+        user_config_profile: config_profile_v2.as_ref().map(ToString::to_string),
         ignore_user_config,
         ignore_user_and_project_exec_policy_rules: ignore_rules,
         ..Default::default()
@@ -434,6 +435,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
+        bypass_hook_trust: bypass_hook_trust.then_some(true),
         additional_writable_roots: add_dir,
     };
 

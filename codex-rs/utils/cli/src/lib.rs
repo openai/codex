@@ -8,4 +8,5 @@ pub use approval_mode_cli_arg::ApprovalModeCliArg;
 pub use config_override::CliConfigOverrides;
 pub use format_env_display::format_env_display;
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
+pub use shared_options::ProfileV2Name;
 pub use shared_options::SharedCliOptions;

@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::collections::VecDeque;
 
 #[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {

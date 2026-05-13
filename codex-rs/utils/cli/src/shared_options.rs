@@ -2,7 +2,69 @@
 
 use crate::SandboxModeCliArg;
 use clap::Args;
+use std::fmt;
+use std::ops::Deref;
 use std::path::PathBuf;
+use std::str::FromStr;
+
+/// Validated plain profile-v2 name used to select `$CODEX_HOME/<name>.config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileV2Name(String);
+
+impl ProfileV2Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct ProfileV2NameParseError {
+    value: String,
+}
+
+impl fmt::Display for ProfileV2NameParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid --profile-v2 value `{}`; pass a plain name such as `work`",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ProfileV2NameParseError {}
+
+impl FromStr for ProfileV2Name {
+    type Err = ProfileV2NameParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ProfileV2NameParseError {
+                value: value.to_string(),
+            });
+        }
+
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl Deref for ProfileV2Name {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for ProfileV2Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Args, Debug, Default)]
 pub struct SharedCliOptions {
@@ -35,7 +97,7 @@ pub struct SharedCliOptions {
 
     /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
     #[arg(long = "profile-v2")]
-    pub config_profile_v2: Option<String>,
+    pub config_profile_v2: Option<ProfileV2Name>,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
@@ -50,6 +112,11 @@ pub struct SharedCliOptions {
         default_value_t = false
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
+
+    /// Run enabled hooks without requiring persisted hook trust for this invocation.
+    /// DANGEROUS. Intended only for automation that already vets hook sources.
+    #[arg(long = "dangerously-bypass-hook-trust", default_value_t = false)]
+    pub bypass_hook_trust: bool,
 
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
@@ -73,6 +140,7 @@ impl SharedCliOptions {
             config_profile_v2,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
+            bypass_hook_trust,
             cwd,
             add_dir,
         } = self;
@@ -85,6 +153,7 @@ impl SharedCliOptions {
             config_profile_v2: root_config_profile_v2,
             sandbox_mode: root_sandbox_mode,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
+            bypass_hook_trust: root_bypass_hook_trust,
             cwd: root_cwd,
             add_dir: root_add_dir,
         } = root;
@@ -110,6 +179,9 @@ impl SharedCliOptions {
         if !self_selected_sandbox_mode {
             *dangerously_bypass_approvals_and_sandbox =
                 *root_dangerously_bypass_approvals_and_sandbox;
+        }
+        if !*bypass_hook_trust {
+            *bypass_hook_trust = *root_bypass_hook_trust;
         }
         if cwd.is_none() {
             cwd.clone_from(root_cwd);
@@ -138,6 +210,7 @@ impl SharedCliOptions {
             config_profile_v2,
             sandbox_mode,
             dangerously_bypass_approvals_and_sandbox,
+            bypass_hook_trust,
             cwd,
             add_dir,
         } = subcommand;
@@ -161,6 +234,9 @@ impl SharedCliOptions {
             self.sandbox_mode = sandbox_mode;
             self.dangerously_bypass_approvals_and_sandbox =
                 dangerously_bypass_approvals_and_sandbox;
+        }
+        if bypass_hook_trust {
+            self.bypass_hook_trust = true;
         }
         if let Some(cwd) = cwd {
             self.cwd = Some(cwd);

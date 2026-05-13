@@ -6,7 +6,7 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
+impl ToolExecutor<ToolInvocation> for Handler {
     type Output = SendInputResult;
 
     fn tool_name(&self) -> ToolName {
@@ -15,10 +15,6 @@ impl ToolHandler for Handler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_send_input_tool_v1())
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -89,6 +85,12 @@ impl ToolHandler for Handler {
         let submission_id = result?;
 
         Ok(SendInputResult { submission_id })
+    }
+}
+
+impl ToolHandler for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

@@ -16,9 +16,12 @@ use std::io::Write;
 use std::path::Path;
 use tracing::warn;
 
+mod checkout;
 mod local_paths;
 
 const REMOTE_PLUGIN_SHARE_MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
+
+pub use checkout::checkout_remote_plugin_share;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareSaveResult {

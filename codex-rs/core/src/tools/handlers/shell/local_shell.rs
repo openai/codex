@@ -1,4 +1,3 @@
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
 use crate::function_tool::FunctionCallError;
@@ -10,6 +9,7 @@ use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
@@ -31,7 +31,7 @@ impl LocalShellHandler {
     }
 }
 
-impl ToolHandler for LocalShellHandler {
+impl ToolExecutor<ToolInvocation> for LocalShellHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -46,16 +46,44 @@ impl ToolHandler for LocalShellHandler {
         self.include_spec
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::LocalShell { .. })
-    }
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            tracker,
+            call_id,
+            payload,
+            ..
+        } = invocation;
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::LocalShell { params } = &invocation.payload else {
-            return true;
+        let ToolPayload::LocalShell { params } = payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "unsupported payload for local_shell handler".to_string(),
+            ));
         };
 
-        !is_known_safe_command(&params.command)
+        let exec_params =
+            ShellHandler::to_exec_params(&params, turn.as_ref(), session.conversation_id);
+        run_exec_like(RunExecLikeArgs {
+            tool_name: ToolName::plain("local_shell"),
+            exec_params,
+            hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
+            additional_permissions: None,
+            prefix_rule: None,
+            session,
+            turn,
+            tracker,
+            call_id,
+            freeform: false,
+            shell_runtime_backend: ShellRuntimeBackend::Generic,
+        })
+        .await
+    }
+}
+
+impl ToolHandler for LocalShellHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::LocalShell { .. })
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -99,39 +127,5 @@ impl ToolHandler for LocalShellHandler {
             tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tracker,
-            call_id,
-            payload,
-            ..
-        } = invocation;
-
-        let ToolPayload::LocalShell { params } = payload else {
-            return Err(FunctionCallError::RespondToModel(
-                "unsupported payload for local_shell handler".to_string(),
-            ));
-        };
-
-        let exec_params =
-            ShellHandler::to_exec_params(&params, turn.as_ref(), session.conversation_id);
-        run_exec_like(RunExecLikeArgs {
-            tool_name: ToolName::plain("local_shell"),
-            exec_params,
-            hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
-            additional_permissions: None,
-            prefix_rule: None,
-            session,
-            turn,
-            tracker,
-            call_id,
-            freeform: false,
-            shell_runtime_backend: ShellRuntimeBackend::Generic,
-        })
-        .await
     }
 }

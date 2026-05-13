@@ -37,6 +37,7 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::ProfileV2Name;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -423,13 +424,17 @@ struct AppServerCommand {
     subcommand: Option<AppServerSubcommand>,
 
     /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `unix://`, `unix://PATH`, `off`.
+    /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
     #[arg(
         long = "listen",
         value_name = "URL",
         default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: codex_app_server::AppServerTransport,
+
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
 
     /// Controls whether analytics are enabled by default.
     ///
@@ -448,6 +453,9 @@ struct AppServerCommand {
     /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
     #[arg(long = "analytics-default-enabled")]
     analytics_default_enabled: bool,
+
+    #[command(flatten)]
+    auth: codex_app_server::AppServerWebsocketAuthArgs,
 }
 
 #[derive(Debug, Parser)]
@@ -506,10 +514,10 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Enable remote_control for future starts and a currently running managed daemon.
+    /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
-    /// Disable remote_control for future starts and a currently running managed daemon.
+    /// Disable remote control for future starts and a currently running managed daemon.
     DisableRemoteControl,
 
     /// Stop the local app server daemon.
@@ -532,7 +540,7 @@ struct AppServerProxyCommand {
 
 #[derive(Debug, Args)]
 struct AppServerBootstrapCommand {
-    /// Launch the managed app-server with remote_control enabled.
+    /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
 }
@@ -718,9 +726,9 @@ struct FeatureToggles {
 
 #[derive(Debug, Default, Parser, Clone)]
 struct InteractiveRemoteOptions {
-    /// Connect the TUI to a remote app server websocket endpoint.
+    /// Connect the TUI to a remote app server endpoint.
     ///
-    /// Accepted forms: `ws://host:port` or `wss://host:port`.
+    /// Accepted forms: `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`.
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 
@@ -807,7 +815,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
     if let Some(subcommand) = subcommand.as_ref() {
-        reject_profile_v2_for_subcommand(&interactive, subcommand)?;
+        profile_v2_for_subcommand(&interactive, subcommand)?;
     }
 
     match subcommand {
@@ -897,7 +905,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let AppServerCommand {
                 subcommand,
                 listen,
+                remote_control,
                 analytics_default_enabled,
+                auth,
             } = app_server_cli;
             reject_remote_mode_for_app_server_subcommand(
                 root_remote.as_deref(),
@@ -907,13 +917,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             match subcommand {
                 None => {
                     let transport = listen;
-                    codex_app_server::run_main_with_transport(
+                    let auth = auth.try_into_settings()?;
+                    let runtime_options = codex_app_server::AppServerRuntimeOptions {
+                        remote_control_enabled: remote_control,
+                        ..Default::default()
+                    };
+                    codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
                         LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
+                        auth,
+                        runtime_options,
                     )
                     .await?;
                 }
@@ -1357,29 +1374,26 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn reject_profile_v2_for_subcommand(
-    interactive: &TuiCli,
+fn profile_v2_for_subcommand<'a>(
+    interactive: &'a TuiCli,
     subcommand: &Subcommand,
-) -> anyhow::Result<()> {
-    if interactive.config_profile_v2.is_some() && !subcommand_supports_profile_v2(subcommand) {
-        anyhow::bail!(
-            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
-        );
-    }
-    Ok(())
-}
+) -> anyhow::Result<Option<&'a ProfileV2Name>> {
+    let Some(profile_v2) = interactive.config_profile_v2.as_ref() else {
+        return Ok(None);
+    };
 
-fn subcommand_supports_profile_v2(subcommand: &Subcommand) -> bool {
-    matches!(
-        subcommand,
+    match subcommand {
         Subcommand::Exec(_)
-            | Subcommand::Review(_)
-            | Subcommand::Resume(_)
-            | Subcommand::Fork(_)
-            | Subcommand::Debug(DebugCommand {
-                subcommand: DebugSubcommand::PromptInput(_)
-            })
-    )
+        | Subcommand::Review(_)
+        | Subcommand::Resume(_)
+        | Subcommand::Fork(_)
+        | Subcommand::Debug(DebugCommand {
+            subcommand: DebugSubcommand::PromptInput(_),
+        }) => Ok(Some(profile_v2)),
+        _ => anyhow::bail!(
+            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+        ),
+    }
 }
 
 async fn run_exec_server_command(
@@ -1440,12 +1454,17 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     Ok(())
 }
 
-fn loader_overrides_for_interactive(interactive: &TuiCli) -> anyhow::Result<LoaderOverrides> {
-    match interactive.config_profile_v2.as_deref() {
+fn loader_overrides_for_profile(
+    profile_v2: Option<&ProfileV2Name>,
+) -> anyhow::Result<LoaderOverrides> {
+    match profile_v2 {
         Some(profile_v2) => {
             let codex_home = find_codex_home()?;
             Ok(LoaderOverrides {
-                user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)?),
+                user_config_path: Some(resolve_profile_v2_config_path(
+                    &codex_home,
+                    profile_v2.as_str(),
+                )?),
                 user_config_profile: Some(profile_v2.to_string()),
                 ..Default::default()
             })
@@ -1496,7 +1515,7 @@ async fn run_debug_prompt_input_command(
     interactive: TuiCli,
     arg0_paths: Arg0DispatchPaths,
 ) -> anyhow::Result<()> {
-    let loader_overrides = loader_overrides_for_interactive(&interactive)?;
+    let loader_overrides = loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
     let shared = interactive.shared.into_inner();
     let mut cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -1529,6 +1548,7 @@ async fn run_debug_prompt_input_command(
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
         show_raw_agent_reasoning: shared.oss.then_some(true),
         ephemeral: Some(true),
+        bypass_hook_trust: shared.bypass_hook_trust.then_some(true),
         additional_writable_roots: shared.add_dir,
         ..Default::default()
     };
@@ -1596,7 +1616,7 @@ async fn run_debug_clear_memories_command(
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
-        .loader_overrides(loader_overrides_for_interactive(interactive)?)
+        .loader_overrides(loader_overrides_for_profile(/*profile_v2*/ None)?)
         .build()
         .await?;
 
@@ -1750,27 +1770,39 @@ async fn run_interactive_tui(
         }
     }
 
-    let normalized_remote = remote
+    let mut remote_endpoint = remote
         .as_deref()
-        .map(codex_tui::normalize_remote_addr)
+        .map(codex_tui::resolve_remote_addr)
         .transpose()
         .map_err(std::io::Error::other)?;
-    if remote_auth_token_env.is_some() && normalized_remote.is_none() {
-        return Ok(AppExitInfo::fatal(
-            "`--remote-auth-token-env` requires `--remote`.",
-        ));
+    if let Some(remote_auth_token_env) = remote_auth_token_env {
+        let Some(endpoint) = remote_endpoint.as_mut() else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires `--remote`.",
+            ));
+        };
+        if !codex_tui::remote_addr_supports_auth_token(endpoint) {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        }
+        let auth_token = read_remote_auth_token_from_env_var(&remote_auth_token_env)
+            .map_err(std::io::Error::other)?;
+        let codex_tui::RemoteAppServerEndpoint::WebSocket {
+            auth_token: slot, ..
+        } = endpoint
+        else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        };
+        *slot = Some(auth_token);
     }
-    let remote_auth_token = remote_auth_token_env
-        .as_deref()
-        .map(read_remote_auth_token_from_env_var)
-        .transpose()
-        .map_err(std::io::Error::other)?;
     codex_tui::run_main(
         interactive,
         arg0_paths,
         codex_config::LoaderOverrides::default(),
-        normalized_remote,
-        remote_auth_token,
+        remote_endpoint,
     )
     .await
 }
@@ -1941,28 +1973,47 @@ mod tests {
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
     }
 
-    fn profile_v2_validation_for_args(args: &[&str]) -> anyhow::Result<()> {
+    fn profile_v2_for_args(args: &[&str]) -> anyhow::Result<Option<String>> {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let Some(subcommand) = cli.subcommand.as_ref() else {
-            return Ok(());
+            return Ok(cli
+                .interactive
+                .config_profile_v2
+                .as_ref()
+                .map(std::string::ToString::to_string));
         };
-        reject_profile_v2_for_subcommand(&cli.interactive, subcommand)
+        Ok(profile_v2_for_subcommand(&cli.interactive, subcommand)?.map(ToString::to_string))
     }
 
     #[test]
     fn profile_v2_is_rejected_for_config_management_subcommands() {
         assert!(
-            profile_v2_validation_for_args(&["codex", "--profile-v2", "work", "features", "list"])
-                .is_err()
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "features", "list"]).is_err()
         );
     }
 
     #[test]
     fn profile_v2_is_allowed_for_runtime_subcommands() {
-        profile_v2_validation_for_args(&["codex", "--profile-v2", "work", "resume"])
-            .expect("resume supports profile-v2");
-        profile_v2_validation_for_args(&["codex", "--profile-v2", "work", "debug", "prompt-input"])
-            .expect("debug prompt-input supports profile-v2");
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "resume"])
+                .expect("resume supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "debug", "prompt-input"])
+                .expect("debug prompt-input supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+    }
+
+    #[test]
+    fn profile_v2_rejects_non_plain_names_at_parse_time() {
+        assert!(
+            MultitoolCli::try_parse_from(["codex", "--profile-v2", "nested/work", "resume"])
+                .is_err()
+        );
     }
 
     #[test]
@@ -2426,6 +2477,18 @@ mod tests {
     }
 
     #[test]
+    fn resume_merges_bypass_hook_trust_flag() {
+        let interactive = finalize_resume_from_args(
+            ["codex", "resume", "--dangerously-bypass-hook-trust"].as_ref(),
+        );
+
+        assert!(interactive.bypass_hook_trust);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
     fn fork_picker_logic_none_and_not_last() {
         let interactive = finalize_fork_from_args(["codex", "fork"].as_ref());
         assert!(interactive.fork_picker);
@@ -2463,6 +2526,7 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -2478,13 +2542,8 @@ mod tests {
 
     #[test]
     fn reject_remote_flag_for_remote_control() {
-        let cli = MultitoolCli::try_parse_from([
-            "codex",
-            "--remote",
-            "ws://127.0.0.1:1234",
-            "remote-control",
-        ])
-        .expect("parse");
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://", "remote-control"])
+            .expect("parse");
         assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
 
         let err = reject_remote_mode_for_subcommand(
@@ -2499,9 +2558,9 @@ mod tests {
 
     #[test]
     fn remote_flag_parses_for_interactive_root() {
-        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "ws://127.0.0.1:4500"])
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://codex.sock"])
             .expect("parse");
-        assert_eq!(cli.remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_eq!(cli.remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]
@@ -2523,14 +2582,14 @@ mod tests {
     #[test]
     fn remote_flag_parses_for_resume_subcommand() {
         let cli =
-            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "ws://127.0.0.1:4500"])
+            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "unix://codex.sock"])
                 .expect("parse");
         let Subcommand::Resume(ResumeCommand { remote, .. }) =
             cli.subcommand.expect("resume present")
         else {
             panic!("expected resume subcommand");
         };
-        assert_eq!(remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]
@@ -2605,14 +2664,16 @@ mod tests {
     }
 
     #[test]
-    fn app_server_listen_websocket_url_fails_to_parse() {
-        let parse_result = MultitoolCli::try_parse_from([
-            "codex",
-            "app-server",
-            "--listen",
-            "ws://127.0.0.1:4500",
-        ]);
-        assert!(parse_result.is_err());
+    fn app_server_listen_websocket_url_parses() {
+        let app_server = app_server_from_args(
+            ["codex", "app-server", "--listen", "ws://127.0.0.1:4500"].as_ref(),
+        );
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:4500".parse().expect("valid socket address"),
+            }
+        );
     }
 
     #[test]
@@ -2779,6 +2840,61 @@ mod tests {
         )
         .expect_err("app-server daemon version should reject --remote-auth-token-env");
         assert!(err.to_string().contains("app-server daemon version"));
+    }
+
+    #[test]
+    fn app_server_capability_token_flags_parse() {
+        let app_server = app_server_from_args(
+            [
+                "codex",
+                "app-server",
+                "--ws-auth",
+                "capability-token",
+                "--ws-token-file",
+                "/tmp/codex-token",
+            ]
+            .as_ref(),
+        );
+        assert_eq!(
+            app_server.auth.ws_auth,
+            Some(codex_app_server::WebsocketAuthCliMode::CapabilityToken)
+        );
+        assert_eq!(
+            app_server.auth.ws_token_file,
+            Some(PathBuf::from("/tmp/codex-token"))
+        );
+    }
+
+    #[test]
+    fn app_server_signed_bearer_flags_parse() {
+        let app_server = app_server_from_args(
+            [
+                "codex",
+                "app-server",
+                "--ws-auth",
+                "signed-bearer-token",
+                "--ws-shared-secret-file",
+                "/tmp/codex-secret",
+                "--ws-issuer",
+                "issuer",
+                "--ws-audience",
+                "audience",
+                "--ws-max-clock-skew-seconds",
+                "9",
+            ]
+            .as_ref(),
+        );
+        assert_eq!(
+            app_server.auth.ws_auth,
+            Some(codex_app_server::WebsocketAuthCliMode::SignedBearerToken)
+        );
+        assert_eq!(
+            app_server.auth.ws_shared_secret_file,
+            Some(PathBuf::from("/tmp/codex-secret"))
+        );
+        assert_eq!(app_server.auth.ws_issuer.as_deref(), Some("issuer"));
+        assert_eq!(app_server.auth.ws_audience.as_deref(), Some("audience"));
+        assert_eq!(app_server.auth.ws_max_clock_skew_seconds, Some(9));
     }
 
     #[test]
