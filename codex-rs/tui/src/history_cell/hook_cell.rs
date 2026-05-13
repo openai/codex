@@ -99,6 +99,12 @@ struct RunningHookGroupKey {
     status_message: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum HookPresentation {
+    Skip,
+    Render { entries: Vec<HookOutputEntry> },
+}
+
 /// Accumulator for adjacent running hooks that can share one status line.
 ///
 /// Grouping happens only while building display lines, the underlying runs stay separate so their
@@ -217,16 +223,18 @@ impl HookCell {
         let Some(index) = self.runs.iter().position(|existing| existing.id == run.id) else {
             return false;
         };
-        if hook_run_is_quiet_success(&run) {
-            if !self.runs[index]
-                .state
-                .complete_quiet_success(Instant::now())
-            {
-                self.runs.remove(index);
+        let presentation = hook_presentation(&run);
+        let HookPresentation::Render { entries } = presentation else {
+            if run.status == HookRunStatus::Completed {
+                if !self.runs[index]
+                    .state
+                    .complete_quiet_success(Instant::now())
+                {
+                    self.runs.remove(index);
+                }
             }
             return true;
-        }
-        let display_entries = hook_run_display_entries(&run);
+        };
         let HookRunSummary {
             event_name,
             status_message,
@@ -236,7 +244,7 @@ impl HookCell {
         let existing = &mut self.runs[index];
         existing.event_name = event_name;
         existing.status_message = status_message;
-        existing.state = HookRunState::completed(status, display_entries);
+        existing.state = HookRunState::completed(status, entries);
         true
     }
 
@@ -244,10 +252,9 @@ impl HookCell {
     ///
     /// This is used for replay/restoration paths where the final run summary is already known.
     pub(crate) fn add_completed_run(&mut self, run: HookRunSummary) {
-        if hook_run_is_quiet_success(&run) {
+        let HookPresentation::Render { entries } = hook_presentation(&run) else {
             return;
-        }
-        let display_entries = hook_run_display_entries(&run);
+        };
         let HookRunSummary {
             id,
             event_name,
@@ -259,7 +266,7 @@ impl HookCell {
             id,
             event_name,
             status_message,
-            state: HookRunState::completed(status, display_entries),
+            state: HookRunState::completed(status, entries),
         });
     }
 
@@ -682,39 +689,46 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 /// Returns true when a hook marked as hidden has no user-relevant consequence to render.
 pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
-    run.visibility_hint == HookVisibilityHint::Hidden
-        && match run.status {
-            HookRunStatus::Running => true,
-            HookRunStatus::Completed => !hook_run_has_display_entries(run),
-            HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => false,
+    matches!(hook_presentation(run), HookPresentation::Skip)
+}
+
+/// Chooses the transcript presentation for a hook run:
+///
+/// - Normal hooks render exactly as reported.
+/// - Hidden hooks stay silent while running.
+/// - Hidden hooks that complete with only model-only context stay out of the transcript.
+/// - Hidden hooks that complete with context plus user-facing output keep only the user-facing
+///   entries.
+/// - Hidden hooks that block, fail, or stop always render so the transcript still explains
+///   consequential hook behavior.
+fn hook_presentation(run: &HookRunSummary) -> HookPresentation {
+    if run.visibility_hint != HookVisibilityHint::Hidden {
+        return HookPresentation::Render {
+            entries: run.entries.clone(),
+        };
+    }
+
+    match run.status {
+        HookRunStatus::Running => HookPresentation::Skip,
+        HookRunStatus::Blocked | HookRunStatus::Failed | HookRunStatus::Stopped => {
+            HookPresentation::Render {
+                entries: run.entries.clone(),
+            }
         }
-}
-
-/// Returns true for hook completions that should be invisible in history.
-fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
-    run.status == HookRunStatus::Completed && !hook_run_has_display_entries(run)
-}
-
-fn hook_run_has_display_entries(run: &HookRunSummary) -> bool {
-    run.entries
-        .iter()
-        .any(|entry| hook_output_entry_should_display(run.visibility_hint, entry.kind))
-}
-
-/// Returns the hook entries that belong in the transcript for this run.
-fn hook_run_display_entries(run: &HookRunSummary) -> Vec<HookOutputEntry> {
-    run.entries
-        .iter()
-        .filter(|entry| hook_output_entry_should_display(run.visibility_hint, entry.kind))
-        .cloned()
-        .collect()
-}
-
-fn hook_output_entry_should_display(
-    visibility_hint: HookVisibilityHint,
-    kind: HookOutputEntryKind,
-) -> bool {
-    visibility_hint != HookVisibilityHint::Hidden || kind != HookOutputEntryKind::Context
+        HookRunStatus::Completed => {
+            let entries = run
+                .entries
+                .iter()
+                .filter(|entry| entry.kind != HookOutputEntryKind::Context)
+                .cloned()
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
+                HookPresentation::Skip
+            } else {
+                HookPresentation::Render { entries }
+            }
+        }
+    }
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {
@@ -877,11 +891,13 @@ mod tests {
         ];
         assert!(!hook_run_should_skip_render(&run));
         assert_eq!(
-            hook_run_display_entries(&run),
-            vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Warning,
-                text: "Review this hook result".to_string(),
-            }]
+            hook_presentation(&run),
+            HookPresentation::Render {
+                entries: vec![HookOutputEntry {
+                    kind: HookOutputEntryKind::Warning,
+                    text: "Review this hook result".to_string(),
+                }],
+            }
         );
     }
 
