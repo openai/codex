@@ -409,6 +409,7 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             approvals_reviewer: Some(ApprovalsReviewer::User),
