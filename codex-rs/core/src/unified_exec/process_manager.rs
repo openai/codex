@@ -386,7 +386,6 @@ impl UnifiedExecProcessManager {
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
-        emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
@@ -397,6 +396,7 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
+                emitter.emit(event_ctx, ToolEventStage::Begin).await;
                 let failure = match &err {
                     UnifiedExecError::Rejected { message } => ToolEventFailure::Rejected {
                         message: message.clone(),
@@ -414,6 +414,7 @@ impl UnifiedExecProcessManager {
                 return Err(err);
             }
         };
+        emitter.emit(event_ctx, ToolEventStage::Begin).await;
         if let Some(deferred) = deferred_network_approval.as_ref() {
             terminate_process_on_network_denial(
                 Arc::clone(&process),
