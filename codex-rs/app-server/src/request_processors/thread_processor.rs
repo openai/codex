@@ -802,6 +802,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -835,6 +836,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -1160,6 +1162,7 @@ impl ThreadRequestProcessor {
 
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
             config_snapshot.cwd.as_path(),
         );
         let active_permission_profile =
@@ -1175,7 +1178,7 @@ impl ThreadRequestProcessor {
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -1212,10 +1215,11 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
+        workspace_roots: Option<Vec<AbsolutePathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -1225,6 +1229,8 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
+            workspace_roots: workspace_roots
+                .map(|roots| roots.into_iter().map(|root| root.to_path_buf()).collect()),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -2349,6 +2355,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2384,6 +2391,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2505,6 +2513,7 @@ impl ThreadRequestProcessor {
                 let config_snapshot = codex_thread.config_snapshot().await;
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
+                    &config_snapshot.workspace_roots,
                     config_snapshot.cwd.as_path(),
                 );
                 let active_permission_profile = thread_response_active_permission_profile(
@@ -2525,7 +2534,7 @@ impl ThreadRequestProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
+                    workspace_roots: config_snapshot.workspace_roots,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -2985,6 +2994,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3050,6 +3060,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3168,6 +3179,7 @@ impl ThreadRequestProcessor {
         let config_snapshot = forked_thread.config_snapshot().await;
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
             config_snapshot.cwd.as_path(),
         );
         let active_permission_profile =
@@ -3183,7 +3195,7 @@ impl ThreadRequestProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
