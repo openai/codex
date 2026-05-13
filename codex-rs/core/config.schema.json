@@ -347,9 +347,6 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
-        "experimental_use_freeform_apply_patch": {
-          "type": "boolean"
-        },
         "experimental_use_unified_exec_tool": {
           "type": "boolean"
         },
@@ -428,9 +425,6 @@
               "type": "boolean"
             },
             "exec_permission_approvals": {
-              "type": "boolean"
-            },
-            "experimental_use_freeform_apply_patch": {
               "type": "boolean"
             },
             "experimental_use_unified_exec_tool": {
@@ -4078,9 +4072,6 @@
       ],
       "description": "Experimental / do not use. Selects the thread store implementation."
     },
-    "experimental_use_freeform_apply_patch": {
-      "type": "boolean"
-    },
     "experimental_use_unified_exec_tool": {
       "type": "boolean"
     },
@@ -4159,9 +4150,6 @@
           "type": "boolean"
         },
         "exec_permission_approvals": {
-          "type": "boolean"
-        },
-        "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
         "experimental_use_unified_exec_tool": {

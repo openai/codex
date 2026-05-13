@@ -294,7 +294,6 @@ pub struct FeatureOverrides {
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
     pub include_apply_patch_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
@@ -470,7 +469,6 @@ impl Features {
         for source in [base, profile] {
             LegacyFeatureToggles {
                 include_apply_patch_tool: source.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
