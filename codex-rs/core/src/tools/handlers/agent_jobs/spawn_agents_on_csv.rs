@@ -68,6 +68,7 @@ pub async fn handle(
     }
 
     let db = required_state_db(&session)?;
+    #[allow(deprecated)]
     let input_path = turn.resolve_path(Some(args.csv_path));
     let input_path_display = input_path.display().to_string();
     let csv_content = tokio::fs::read_to_string(&input_path)
@@ -141,7 +142,10 @@ pub async fn handle(
     let job_id = Uuid::new_v4().to_string();
     let output_csv_path = args.output_csv_path.map_or_else(
         || default_output_csv_path(&input_path, job_id.as_str()),
-        |path| turn.resolve_path(Some(path)),
+        |path| {
+            #[allow(deprecated)]
+            turn.resolve_path(Some(path))
+        },
     );
     let job_suffix = &job_id[..8];
     let job_name = format!("agent-job-{job_suffix}");

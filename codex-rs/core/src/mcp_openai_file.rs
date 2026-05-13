@@ -102,6 +102,7 @@ async fn build_uploaded_local_argument_value(
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
+    #[allow(deprecated)]
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
     let Some(auth) = auth else {
         return Err(
