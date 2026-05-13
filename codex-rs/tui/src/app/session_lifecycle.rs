@@ -633,7 +633,7 @@ impl App {
         }
 
         let current_cwd = self.config.cwd.to_path_buf();
-        let resume_cwd = if self.remote_app_server_url.is_some() {
+        let resume_cwd = if self.remote_app_server_endpoint.is_some() {
             current_cwd.clone()
         } else {
             match crate::session_resume::resolve_cwd_for_resume_or_fork(

@@ -21,6 +21,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistry;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -29,7 +30,7 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-impl ToolHandler for TestHandler {
+impl ToolExecutor<ToolInvocation> for TestHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> codex_tools::ToolName {
@@ -40,6 +41,8 @@ impl ToolHandler for TestHandler {
         Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
     }
 }
+
+impl ToolHandler for TestHandler {}
 
 #[tokio::test]
 async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> anyhow::Result<()> {

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -28,13 +29,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::tools::router::ToolRouterParams;
-use crate::tools::router::extension_tool_bundles;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
@@ -260,36 +257,6 @@ fn truncate_code_mode_result(
     truncate_function_output_items_with_policy(&items, policy)
 }
 
-pub(super) async fn build_enabled_tools(
-    exec: &ExecContext,
-) -> Vec<codex_code_mode::ToolDefinition> {
-    let router = build_nested_router(exec).await;
-    let specs = router.specs();
-    collect_code_mode_tool_definitions(&specs)
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "nested tool router construction reads through the session-owned manager guard"
-)]
-async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
-    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
-    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
-
-    ToolRouter::from_config(
-        &nested_tools_config,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: Some(listed_mcp_tools),
-            unavailable_called_tools: Vec::new(),
-            discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(exec.session.as_ref()),
-            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
-        },
-    )
-}
-
 async fn call_nested_tool(
     _exec: ExecContext,
     tool_runtime: ToolCallRuntime,
@@ -300,6 +267,7 @@ async fn call_nested_tool(
         cell_id,
         runtime_tool_call_id,
         tool_name,
+        tool_kind,
         input,
     } = invocation;
     if is_exec_tool_name(&tool_name) {
@@ -308,11 +276,10 @@ async fn call_nested_tool(
         )));
     }
 
-    let payload =
-        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        };
+    let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
+        Ok(payload) => payload,
+        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+    };
 
     let call = ToolCall {
         tool_name,
@@ -332,36 +299,14 @@ async fn call_nested_tool(
     Ok(result.code_mode_result())
 }
 
-fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
-    if matches!(spec, ToolSpec::Freeform(_)) {
-        codex_code_mode::CodeModeToolKind::Freeform
-    } else {
-        codex_code_mode::CodeModeToolKind::Function
-    }
-}
-
-fn tool_kind_for_name(
-    spec: Option<ToolSpec>,
-    tool_name: &ToolName,
-) -> Result<codex_code_mode::CodeModeToolKind, String> {
-    spec.as_ref()
-        .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
-}
-
 fn build_nested_tool_payload(
-    spec: Option<ToolSpec>,
+    tool_kind: CodeModeToolKind,
     tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(spec, tool_name)?;
-    match actual_kind {
-        codex_code_mode::CodeModeToolKind::Function => {
-            build_function_tool_payload(tool_name, input)
-        }
-        codex_code_mode::CodeModeToolKind::Freeform => {
-            build_freeform_tool_payload(tool_name, input)
-        }
+    match tool_kind {
+        CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
+        CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }
 }
 
@@ -394,5 +339,48 @@ fn build_freeform_tool_payload(
     match input {
         Some(JsonValue::String(input)) => Ok(ToolPayload::Custom { input }),
         _ => Err(format!("tool `{tool_name}` expects a string input")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_nested_tool_payload;
+    use crate::tools::context::ToolPayload;
+    use codex_code_mode::CodeModeToolKind;
+    use codex_tools::ToolName;
+    use serde_json::json;
+
+    #[test]
+    fn build_nested_tool_payload_uses_function_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Function,
+            &ToolName::plain("example"),
+            Some(json!({ "value": 1 })),
+        )
+        .expect("function payload should serialize");
+
+        match payload {
+            ToolPayload::Function { arguments } => {
+                assert_eq!(arguments, r#"{"value":1}"#.to_string());
+            }
+            other => panic!("expected function payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_nested_tool_payload_uses_freeform_kind() {
+        let payload = build_nested_tool_payload(
+            CodeModeToolKind::Freeform,
+            &ToolName::plain("example"),
+            Some(json!("hello")),
+        )
+        .expect("freeform payload should preserve string input");
+
+        match payload {
+            ToolPayload::Custom { input } => {
+                assert_eq!(input, "hello".to_string());
+            }
+            other => panic!("expected freeform payload, got {other:?}"),
+        }
     }
 }

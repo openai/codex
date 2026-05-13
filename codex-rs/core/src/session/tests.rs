@@ -71,7 +71,7 @@ use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UpdateGoalHandler;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
@@ -542,9 +542,8 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     ));
@@ -1802,6 +1801,121 @@ async fn recompute_token_usage_updates_model_context_window() {
 }
 
 #[tokio::test]
+async fn record_token_usage_info_notifies_extension_contributors() {
+    struct SessionTokenUsageMarker;
+    struct ThreadTokenUsageMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTokenUsage {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
+        token_usage: TokenUsageInfo,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TokenUsageRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTokenUsage>>>,
+    }
+
+    impl codex_extension_api::TokenUsageContributor for TokenUsageRecorder {
+        fn on_token_usage(
+            &self,
+            session_store: &codex_extension_api::ExtensionData,
+            thread_store: &codex_extension_api::ExtensionData,
+            turn_store: &codex_extension_api::ExtensionData,
+            token_usage: &TokenUsageInfo,
+        ) {
+            self.records
+                .lock()
+                .expect("token usage records lock")
+                .push(RecordedTokenUsage {
+                    session_level_id: session_store.level_id().to_string(),
+                    thread_level_id: thread_store.level_id().to_string(),
+                    turn_level_id: turn_store.level_id().to_string(),
+                    token_usage: token_usage.clone(),
+                    saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
+                    saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.token_usage_contributor(Arc::new(TokenUsageRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTokenUsageMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTokenUsageMarker);
+
+    let first_usage = TokenUsage {
+        input_tokens: 10,
+        cached_input_tokens: 2,
+        output_tokens: 20,
+        reasoning_output_tokens: 3,
+        total_tokens: 33,
+    };
+    let second_usage = TokenUsage {
+        input_tokens: 7,
+        cached_input_tokens: 1,
+        output_tokens: 8,
+        reasoning_output_tokens: 5,
+        total_tokens: 20,
+    };
+
+    session
+        .record_token_usage_info(&turn_context, Some(&first_usage))
+        .await;
+    session
+        .record_token_usage_info(&turn_context, Some(&second_usage))
+        .await;
+
+    let mut expected_total_usage = first_usage.clone();
+    expected_total_usage.add_assign(&second_usage);
+    let expected = vec![
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: first_usage.clone(),
+                last_token_usage: first_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: expected_total_usage,
+                last_token_usage: second_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+    ];
+    let actual = records
+        .lock()
+        .expect("token usage records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, actual);
+}
+
+#[tokio::test]
 async fn record_initial_history_reconstructs_forked_transcript() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
@@ -2837,10 +2951,6 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
-    assert!(!Arc::ptr_eq(
-        &updated.tool_call_gate,
-        &turn_context.tool_call_gate
-    ));
 }
 
 #[test]
@@ -3874,8 +3984,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5202,6 +5314,125 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
+    struct SessionStopMarker;
+    struct ThreadStopMarker;
+
+    struct ThreadStopRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        expected_thread_id: ThreadId,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert!(input.session_store.get::<SessionStopMarker>().is_some());
+            assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadStopRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionStopMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadStopMarker);
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    let session = Arc::new(session);
+    submission_loop(session, Arc::clone(&turn_context.config), rx_sub).await;
+
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lifecycle() {
+    struct LifecycleRecorder {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        expected_thread_id: ThreadId,
+        expected_turn_id: String,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("thread_stop");
+        }
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
+        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert_eq!(self.expected_turn_id, input.turn_store.level_id());
+            assert_eq!(TurnAbortReason::Interrupted, input.reason);
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("turn_abort");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::new(LifecycleRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+        expected_turn_id: turn_context.sub_id.clone(),
+    });
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(recorder.clone());
+    builder.turn_lifecycle_contributor(recorder);
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(
+            Arc::new(turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    submission_loop(Arc::clone(&session), session.get_config().await, rx_sub).await;
+
+    assert_eq!(
+        vec!["turn_abort", "thread_stop"],
+        *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
@@ -5594,8 +5825,10 @@ where
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -6119,21 +6352,25 @@ struct GitAttributionTestContributor;
 struct GitAttributionTestState;
 
 impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
-    fn contribute(
-        &self,
-        _session_store: &codex_extension_api::ExtensionData,
-        thread_store: &codex_extension_api::ExtensionData,
-    ) -> Vec<codex_extension_api::PromptFragment> {
-        thread_store
-            .get::<GitAttributionTestState>()
-            .is_some()
-            .then(|| {
-                codex_extension_api::PromptFragment::developer_policy(
-                    "git attribution extension enabled",
-                )
-            })
-            .into_iter()
-            .collect()
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a codex_extension_api::ExtensionData,
+        thread_store: &'a codex_extension_api::ExtensionData,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            thread_store
+                .get::<GitAttributionTestState>()
+                .is_some()
+                .then(|| {
+                    codex_extension_api::PromptFragment::developer_policy(
+                        "git attribution extension enabled",
+                    )
+                })
+                .into_iter()
+                .collect()
+        })
     }
 }
 
@@ -8611,9 +8848,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     );

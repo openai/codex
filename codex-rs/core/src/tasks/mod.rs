@@ -1,4 +1,5 @@
 mod compact;
+mod lifecycle;
 mod regular;
 mod review;
 mod user_shell;
@@ -355,6 +356,7 @@ impl Session {
                 turn_state.push_pending_input(item);
             }
         }
+        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
 
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -488,6 +490,9 @@ impl Session {
             }
         }
 
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+        }
         if (aborted_turn || reason == TurnAbortReason::Interrupted)
             && let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
@@ -532,6 +537,9 @@ impl Session {
         let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
         for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
+        }
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
@@ -733,6 +741,9 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        if should_clear_active_turn {
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
+        }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
