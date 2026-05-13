@@ -211,3 +211,7 @@ fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
     parts.extend(schema_properties);
     parts.join(" ")
 }
+
+#[cfg(test)]
+#[path = "dynamic_tests.rs"]
+mod tests;

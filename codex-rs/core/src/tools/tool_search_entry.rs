@@ -4,7 +4,7 @@ use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
     pub(crate) output: LoadableToolSpec,

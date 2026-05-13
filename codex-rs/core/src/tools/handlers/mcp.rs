@@ -248,6 +248,10 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
 }
 
 #[cfg(test)]
+#[path = "mcp_search_tests.rs"]
+mod search_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
