@@ -8,14 +8,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::backend::DEFAULT_LIST_MAX_RESULTS;
+use crate::DEFAULT_LIST_MAX_RESULTS;
+use crate::LIST_TOOL_NAME;
+use crate::MAX_LIST_RESULTS;
 use crate::backend::ListMemoriesRequest;
 use crate::backend::ListMemoriesResponse;
-use crate::backend::MAX_LIST_RESULTS;
 use crate::backend::MemoriesBackend;
-use crate::local::LocalMemoriesBackend;
 
-use super::LIST_TOOL_NAME;
 use super::backend_error_to_function_call;
 use super::clamp_max_results;
 use super::function_tool;
@@ -31,11 +30,14 @@ struct ListArgs {
 }
 
 #[derive(Clone)]
-pub(super) struct ListTool {
-    pub(super) backend: LocalMemoriesBackend,
+pub(super) struct ListTool<B> {
+    pub(super) backend: B,
 }
 
-impl ExtensionToolExecutor for ListTool {
+impl<B> ExtensionToolExecutor for ListTool<B>
+where
+    B: MemoriesBackend,
+{
     fn tool_name(&self) -> ToolName {
         ToolName::plain(LIST_TOOL_NAME)
     }

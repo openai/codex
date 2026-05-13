@@ -10,19 +10,18 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::backend::MemoriesBackend;
 use crate::backend::MemoriesBackendError;
-use crate::local::LocalMemoriesBackend;
 use crate::schema;
 
 mod list;
 mod read;
 mod search;
 
-const LIST_TOOL_NAME: &str = "memory_list";
-const READ_TOOL_NAME: &str = "memory_read";
-const SEARCH_TOOL_NAME: &str = "memory_search";
-
-pub(crate) fn memory_tools(backend: LocalMemoriesBackend) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+pub(crate) fn memory_tools<B>(backend: B) -> Vec<Arc<dyn ExtensionToolExecutor>>
+where
+    B: MemoriesBackend,
+{
     vec![
         Arc::new(list::ListTool {
             backend: backend.clone(),

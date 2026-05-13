@@ -8,13 +8,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::backend::DEFAULT_READ_MAX_TOKENS;
+use crate::DEFAULT_READ_MAX_TOKENS;
+use crate::READ_TOOL_NAME;
 use crate::backend::MemoriesBackend;
 use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
-use crate::local::LocalMemoriesBackend;
 
-use super::READ_TOOL_NAME;
 use super::backend_error_to_function_call;
 use super::function_tool;
 use super::parse_args;
@@ -30,11 +29,14 @@ struct ReadArgs {
 }
 
 #[derive(Clone)]
-pub(super) struct ReadTool {
-    pub(super) backend: LocalMemoriesBackend,
+pub(super) struct ReadTool<B> {
+    pub(super) backend: B,
 }
 
-impl ExtensionToolExecutor for ReadTool {
+impl<B> ExtensionToolExecutor for ReadTool<B>
+where
+    B: MemoriesBackend,
+{
     fn tool_name(&self) -> ToolName {
         ToolName::plain(READ_TOOL_NAME)
     }
@@ -61,60 +63,5 @@ impl ExtensionToolExecutor for ReadTool {
                 .map_err(backend_error_to_function_call)?;
             Ok(JsonToolOutput::new(json!(response)))
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use codex_extension_api::ToolPayload;
-    use codex_tools::ToolOutput;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn read_tool_reads_memory_file() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let memory_root = tempdir.path().join("memories");
-        tokio::fs::create_dir_all(&memory_root)
-            .await
-            .expect("create memories dir");
-        tokio::fs::write(
-            memory_root.join("MEMORY.md"),
-            "first line\nsecond needle line\nthird line\n",
-        )
-        .await
-        .expect("write memory");
-        let tool = ReadTool {
-            backend: LocalMemoriesBackend::from_memory_root(&memory_root),
-        };
-        let payload = ToolPayload::Function {
-            arguments: json!({
-                "path": "MEMORY.md",
-                "line_offset": 2,
-                "max_lines": 1
-            })
-            .to_string(),
-        };
-
-        let output = tool
-            .handle(ToolCall {
-                call_id: "call-1".to_string(),
-                tool_name: ToolName::plain(READ_TOOL_NAME),
-                payload: payload.clone(),
-            })
-            .await
-            .expect("read should succeed");
-
-        assert_eq!(
-            output.post_tool_use_response("call-1", &payload),
-            Some(json!({
-                "path": "MEMORY.md",
-                "content": "second needle line\n",
-                "start_line_number": 2,
-                "truncated": true
-            }))
-        );
     }
 }

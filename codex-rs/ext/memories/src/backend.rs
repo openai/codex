@@ -3,12 +3,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::future::Future;
 
-pub const DEFAULT_LIST_MAX_RESULTS: usize = 2_000;
-pub const MAX_LIST_RESULTS: usize = 2_000;
-pub const DEFAULT_SEARCH_MAX_RESULTS: usize = 200;
-pub const MAX_SEARCH_RESULTS: usize = 200;
-pub const DEFAULT_READ_MAX_TOKENS: usize = 20_000;
-
 /// Storage interface behind the memories MCP tools.
 ///
 /// Implementations should return paths relative to the memory store and enforce
