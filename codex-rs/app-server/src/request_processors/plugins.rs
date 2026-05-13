@@ -673,12 +673,6 @@ impl PluginRequestProcessor {
         }
 
         let plugins_input = config.plugins_config_input();
-        plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
-            &plugins_input,
-            auth.clone(),
-            &roots,
-            Some(self.effective_plugins_changed_callback()),
-        );
 
         let config_for_marketplace_listing = plugins_input.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -766,15 +760,22 @@ impl PluginRequestProcessor {
         };
 
         if config.features.enabled(Feature::RemotePlugin) {
-            let remote_plugin_service_config = RemotePluginServiceConfig {
-                chatgpt_base_url: config.chatgpt_base_url.clone(),
-            };
-            match codex_core_plugins::remote::fetch_remote_installed_marketplaces(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-            )
-            .await
+            let remote_marketplaces = if let Some(remote_marketplaces) =
+                plugins_manager.cached_remote_installed_marketplaces()
             {
+                Ok(remote_marketplaces)
+            } else {
+                let remote_plugin_service_config = RemotePluginServiceConfig {
+                    chatgpt_base_url: config.chatgpt_base_url.clone(),
+                };
+                codex_core_plugins::remote::fetch_remote_installed_marketplaces(
+                    &remote_plugin_service_config,
+                    auth.as_ref(),
+                )
+                .await
+            };
+
+            match remote_marketplaces {
                 Ok(remote_marketplaces) => {
                     for remote_marketplace in remote_marketplaces
                         .into_iter()

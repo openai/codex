@@ -597,6 +597,20 @@ impl PluginsManager {
         remote_installed_plugins_to_config(plugins, &self.store)
     }
 
+    pub fn cached_remote_installed_marketplaces(
+        &self,
+    ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let plugins = cache.as_ref()?;
+        Some(crate::remote::cached_remote_installed_marketplaces(
+            plugins,
+            &self.store,
+        ))
+    }
+
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
         let mut cache = match self.remote_installed_plugins_cache.write() {
             Ok(cache) => cache,

@@ -355,6 +355,10 @@ plugins = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        share_context: None,
     }]);
 
     let outcome = manager.plugins_for_config(&config).await;
@@ -384,10 +388,75 @@ remote_plugin = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        share_context: None,
     }]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
+}
+
+#[test]
+fn cached_remote_installed_marketplaces_read_cached_bundle_metadata() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_base = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear");
+    write_file(
+        &plugin_base.join("local/.codex-plugin/plugin.json"),
+        r##"{
+  "name": "linear",
+  "keywords": ["issues"],
+  "interface": {
+    "displayName": "Linear",
+    "shortDescription": "Track cached work",
+    "brandColor": "#111111"
+  }
+}"##,
+    );
+
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        share_context: None,
+    }]);
+
+    let marketplaces = manager
+        .cached_remote_installed_marketplaces()
+        .expect("remote installed cache should be present");
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, "chatgpt-global");
+    assert_eq!(marketplaces[0].display_name, "ChatGPT Plugins");
+    assert_eq!(marketplaces[0].plugins.len(), 1);
+    let plugin = &marketplaces[0].plugins[0];
+    assert_eq!(plugin.id, "linear@chatgpt-global");
+    assert_eq!(plugin.remote_plugin_id, "plugins~Plugin_linear");
+    assert_eq!(plugin.name, "linear");
+    assert_eq!(plugin.installed, true);
+    assert_eq!(plugin.enabled, true);
+    assert_eq!(plugin.keywords, vec!["issues".to_string()]);
+    assert_eq!(
+        plugin
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref()),
+        Some("Linear")
+    );
+    assert_eq!(
+        plugin
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.short_description.as_deref()),
+        Some("Track cached work")
+    );
 }
 
 #[tokio::test]

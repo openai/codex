@@ -1837,6 +1837,100 @@ async fn plugin_installed_fetches_remote_installed_rows_without_remote_catalog_l
 }
 
 #[tokio::test]
+async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        "linear",
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
+    let global_installed_body = remote_installed_plugin_body(&bundle_url, "1.2.3", true);
+    mount_remote_plugin_list(&server, "GLOBAL", &global_installed_body).await;
+    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let plugin_list_request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        })
+        .await?;
+    let _: PluginListResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(plugin_list_request_id)),
+        )
+        .await??,
+    )?;
+
+    let installed_path = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear/1.2.3/.codex-plugin/plugin.json");
+    wait_for_path_exists(&installed_path).await?;
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 7,
+    )
+    .await?;
+
+    let plugin_installed_request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let response: PluginInstalledResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(plugin_installed_request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "chatgpt-global");
+    assert_eq!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![("linear@chatgpt-global".to_string(), true, true)]
+    );
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 7,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

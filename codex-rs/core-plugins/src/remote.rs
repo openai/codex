@@ -1,3 +1,5 @@
+use crate::manifest::PluginManifestInterface;
+use crate::manifest::load_plugin_manifest;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -89,6 +91,10 @@ pub struct RemoteInstalledPlugin {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    pub install_policy: PluginInstallPolicy,
+    pub auth_policy: PluginAuthPolicy,
+    pub availability: PluginAvailability,
+    pub share_context: Option<RemotePluginShareContext>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -724,6 +730,86 @@ pub async fn fetch_remote_installed_marketplaces(
     Ok(marketplaces)
 }
 
+pub fn cached_remote_installed_marketplaces(
+    plugins: &[RemoteInstalledPlugin],
+    store: &PluginStore,
+) -> Vec<RemoteMarketplace> {
+    let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
+
+    for plugin in plugins {
+        let Ok(plugin_id) = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
+        else {
+            continue;
+        };
+        let Some(plugin_root) = store.active_plugin_root(&plugin_id) else {
+            continue;
+        };
+        let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
+            continue;
+        };
+
+        plugins_by_marketplace
+            .entry(plugin.marketplace_name.clone())
+            .or_default()
+            .push(RemotePluginSummary {
+                id: plugin_id.as_key(),
+                remote_plugin_id: plugin.id.clone(),
+                name: plugin.name.clone(),
+                share_context: plugin.share_context.clone(),
+                installed: true,
+                enabled: plugin.enabled,
+                install_policy: plugin.install_policy,
+                auth_policy: plugin.auth_policy,
+                availability: plugin.availability,
+                interface: manifest
+                    .interface
+                    .map(cached_remote_plugin_interface_to_info),
+                keywords: manifest.keywords,
+            });
+    }
+
+    [
+        (
+            REMOTE_GLOBAL_MARKETPLACE_NAME,
+            REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME,
+        ),
+        (
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME,
+        ),
+        (
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME,
+        ),
+        (
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(marketplace_name, display_name)| {
+        let mut marketplace_plugins = plugins_by_marketplace.remove(marketplace_name)?;
+        if marketplace_plugins.is_empty() {
+            return None;
+        }
+        marketplace_plugins.sort_by(|left, right| {
+            remote_plugin_display_name(left)
+                .to_ascii_lowercase()
+                .cmp(&remote_plugin_display_name(right).to_ascii_lowercase())
+                .then_with(|| {
+                    remote_plugin_display_name(left).cmp(remote_plugin_display_name(right))
+                })
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Some(RemoteMarketplace {
+            name: marketplace_name.to_string(),
+            display_name: display_name.to_string(),
+            plugins: marketplace_plugins,
+        })
+    })
+    .collect()
+}
+
 pub async fn fetch_remote_plugin_detail(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -1066,7 +1152,33 @@ fn remote_installed_plugin_to_info(
         id: plugin.id.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
+        install_policy: plugin.installation_policy,
+        auth_policy: plugin.authentication_policy,
+        availability: plugin.availability,
+        share_context: remote_plugin_share_context(plugin)?,
     })
+}
+
+fn cached_remote_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
+    PluginInterface {
+        display_name: interface.display_name,
+        short_description: interface.short_description,
+        long_description: interface.long_description,
+        developer_name: interface.developer_name,
+        category: interface.category,
+        capabilities: interface.capabilities,
+        website_url: interface.website_url,
+        privacy_policy_url: interface.privacy_policy_url,
+        terms_of_service_url: interface.terms_of_service_url,
+        default_prompt: interface.default_prompt,
+        brand_color: interface.brand_color,
+        composer_icon: interface.composer_icon,
+        composer_icon_url: None,
+        logo: interface.logo,
+        logo_url: None,
+        screenshots: interface.screenshots,
+        screenshot_urls: Vec::new(),
+    }
 }
 
 fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option<PluginInterface> {
