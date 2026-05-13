@@ -2217,6 +2217,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -3770,6 +3771,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 #[tokio::test]
 async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
+    #[allow(deprecated)]
     let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
@@ -3789,8 +3791,12 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let next_turn = session.new_default_turn().await;
 
     assert_eq!(session_cwd, updated_cwd);
-    assert_eq!(config.cwd, turn_context.cwd);
-    assert_eq!(next_turn.cwd, updated_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    #[allow(deprecated)]
+    let next_turn_cwd = next_turn.cwd.clone();
+    assert_eq!(config.cwd, turn_cwd);
+    assert_eq!(next_turn_cwd, updated_cwd);
     assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
@@ -3874,7 +3880,9 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
         .await
         .expect("absolute cwd with explicit environments should succeed");
 
-    assert_eq!(turn_context.cwd, absolute_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
     assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
@@ -4675,7 +4683,9 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         panic!("expected request_permissions event");
     };
     assert_eq!(request.call_id, call_id);
-    assert_eq!(request.cwd, Some(turn_context.cwd.clone()));
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(request.cwd, Some(turn_cwd));
 
     session
         .notify_request_permissions_response(&request.call_id, expected_response.clone())
@@ -5104,7 +5114,9 @@ async fn turn_environments_set_primary_environment() {
         &turn_environments.turn_environments[0].environment
     ));
     assert!(!turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 }
 
@@ -5135,7 +5147,9 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
         &turn_environment.environment,
         &turn_environments.turn_environments[0].environment
     ));
-    assert_eq!(turn_context.cwd, session_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
 }
 
@@ -5153,7 +5167,9 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd, session_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
     assert_eq!(turn_context.environments.turn_environments.len(), 0);
 }
@@ -5162,6 +5178,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let first_environment = turn_context.environments.turn_environments[0].clone();
+    #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
     turn_context
         .environments
@@ -5215,7 +5232,9 @@ async fn empty_turn_environments_clear_primary_environment() {
 
     assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd, session.get_config().await.cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
 }
 
@@ -7034,13 +7053,16 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 }
 
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
+    #[allow(deprecated)]
     let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &turn_context.sandbox_policy(),
         &turn_context.cwd,
     );
+    #[allow(deprecated)]
+    let cwd_display = turn_context.cwd.as_path().display().to_string();
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
-            pattern: format!("{}/**/*.env", turn_context.cwd.as_path().display()),
+            pattern: format!("{cwd_display}/**/*.env"),
         },
         access: FileSystemAccessMode::None,
     });
@@ -9386,6 +9408,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -9407,6 +9430,8 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let call_id = "test-call".to_string();
 
     let handler = ShellHandler::default();
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -9419,7 +9444,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": params.expiration.timeout_ms(),
                     "sandbox_permissions": params.sandbox_permissions,
                     "justification": params.justification.clone(),
@@ -9456,6 +9481,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
             file_system_sandbox_policy: &file_system_sandbox_policy,
+            #[allow(deprecated)]
             sandbox_cwd: turn_context.cwd.as_path(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,

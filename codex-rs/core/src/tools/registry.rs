@@ -332,6 +332,7 @@ impl ToolRegistry {
                 "sandbox_policy",
                 permission_profile_policy_tag(
                     &invocation.turn.permission_profile,
+                    #[allow(deprecated)]
                     invocation.turn.cwd.as_path(),
                 ),
             ),

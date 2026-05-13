@@ -1221,7 +1221,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.sub_id.clone(),
         session.get_tx_event(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeEnvironment::new(environment, turn_context.cwd.to_path_buf()),
+        codex_mcp::McpRuntimeEnvironment::new(environment, {
+            #[allow(deprecated)]
+            turn_context.cwd.to_path_buf()
+        }),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
@@ -2230,7 +2233,10 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .build()
         .await
         .expect("load project config");
-    turn_context.cwd = config.cwd.clone();
+    #[allow(deprecated)]
+    {
+        turn_context.cwd = config.cwd.clone();
+    }
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
@@ -2431,12 +2437,14 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
         .collect::<Vec<_>>();
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
     assert_eq!(
         inputs,
         vec![serde_json::json!({
             "session_id": session.session_id(),
             "turn_id": "turn_id",
-            "cwd": turn_context.cwd,
+            "cwd": turn_cwd,
             "transcript_path": null,
             "model": turn_context.model_info.slug,
             "permission_mode": "default",
@@ -2491,12 +2499,14 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
         .collect::<Vec<_>>();
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
     assert_eq!(
         inputs,
         vec![serde_json::json!({
             "session_id": session.session_id(),
             "turn_id": "turn_id",
-            "cwd": turn_context.cwd,
+            "cwd": turn_cwd,
             "transcript_path": null,
             "model": turn_context.model_info.slug,
             "permission_mode": "default",

@@ -699,6 +699,7 @@ pub async fn review(
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
+    #[allow(deprecated)]
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
             spawn_review_thread(

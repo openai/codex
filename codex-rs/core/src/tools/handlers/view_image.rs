@@ -282,7 +282,10 @@ mod tests {
         let (session, mut turn) = make_session_and_context().await;
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
-        turn.cwd = image_cwd.clone();
+        #[allow(deprecated)]
+        {
+            turn.cwd = image_cwd.clone();
+        }
         turn.environments
             .turn_environments
             .first_mut()

@@ -162,6 +162,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             )));
         };
 
+        #[allow(deprecated)]
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         let workdir = turn.resolve_path(params.workdir.clone());

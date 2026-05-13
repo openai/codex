@@ -48,6 +48,7 @@ impl ToolExecutor<ToolInvocation> for ContainerExecHandler {
             }
         };
 
+        #[allow(deprecated)]
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
         let params: ShellToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         let prefix_rule = params.prefix_rule.clone();

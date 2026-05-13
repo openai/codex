@@ -2088,6 +2088,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let expected_sandbox = turn.config.legacy_sandbox_policy();
+    #[allow(deprecated)]
     let mut expected_file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, &turn.cwd);
     expected_file_system_sandbox_policy
@@ -3767,15 +3768,20 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         ..ShellEnvironmentPolicy::default()
     };
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    turn.cwd = temp_dir.abs();
+    #[allow(deprecated)]
+    {
+        turn.cwd = temp_dir.abs();
+    }
     turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
+    #[allow(deprecated)]
+    let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
         &turn.config.permissions.permission_profile,
         turn.config.legacy_sandbox_policy(),
-        turn.cwd.as_path(),
+        turn_cwd.as_path(),
     );
     let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &turn.cwd);
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &turn_cwd);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
     let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
         SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
@@ -3798,7 +3804,10 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    expected.cwd = turn.cwd.clone();
+    #[allow(deprecated)]
+    {
+        expected.cwd = turn.cwd.clone();
+    }
     expected
         .permissions
         .approval_policy
@@ -3849,7 +3858,10 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    expected.cwd = turn.cwd.clone();
+    #[allow(deprecated)]
+    {
+        expected.cwd = turn.cwd.clone();
+    }
     expected
         .permissions
         .approval_policy

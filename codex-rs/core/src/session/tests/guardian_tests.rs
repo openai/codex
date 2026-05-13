@@ -308,6 +308,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "echo hi".to_string(),
             ]
         },
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -324,6 +325,8 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     };
 
     let handler = ShellHandler::default();
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -336,7 +339,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": params.expiration.timeout_ms(),
                     "sandbox_permissions": params.sandbox_permissions,
                     "additional_permissions": PermissionProfile {
@@ -453,6 +456,8 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
             "echo hi".to_string(),
         ]
     };
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -465,7 +470,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": command,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": 1_000_u64,
                 })
                 .to_string(),
@@ -616,6 +621,8 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
     let turn_context = Arc::new(turn_context_raw);
 
     let handler = ShellHandler::default();
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -633,7 +640,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
                         "echo hi",
                     ],
                     "timeout_ms": 1_000_u64,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                 })
                 .to_string(),
             },

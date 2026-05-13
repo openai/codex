@@ -116,6 +116,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 
     let request = codex_hooks::SessionStartRequest {
         session_id: sess.session_id().into(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -150,6 +151,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     let request = PreToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -209,6 +211,7 @@ pub(crate) async fn run_permission_request_hooks(
     let request = PermissionRequestRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -249,6 +252,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -276,6 +280,7 @@ pub(crate) async fn run_pre_compact_hooks(
     let request = codex_hooks::PreCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -313,6 +318,7 @@ pub(crate) async fn run_post_compact_hooks(
     let request = codex_hooks::PostCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -338,6 +344,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
     let request = UserPromptSubmitRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
