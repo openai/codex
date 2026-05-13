@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_extension_api::ContextContributionFuture;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -17,17 +18,19 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<()>) {
 struct StyleContributor;
 
 impl ContextContributor for StyleContributor {
-    fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment> {
-        contribution_counts(session_store).record_style();
-        contribution_counts(thread_store).record_style();
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> ContextContributionFuture<'a> {
+        Box::pin(async move {
+            contribution_counts(session_store).record_style();
+            contribution_counts(thread_store).record_style();
 
-        vec![PromptFragment::developer_policy(
-            "Prefer short answers unless the user asks for detail.",
-        )]
+            vec![PromptFragment::developer_policy(
+                "Prefer short answers unless the user asks for detail.",
+            )]
+        })
     }
 }
 
@@ -35,17 +38,19 @@ impl ContextContributor for StyleContributor {
 struct UsageContributor;
 
 impl ContextContributor for UsageContributor {
-    fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment> {
-        contribution_counts(session_store).record_usage();
-        contribution_counts(thread_store).record_usage();
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> ContextContributionFuture<'a> {
+        Box::pin(async move {
+            contribution_counts(session_store).record_usage();
+            contribution_counts(thread_store).record_usage();
 
-        vec![PromptFragment::developer_capability(
-            "This extension can contribute more than one prompt fragment.",
-        )]
+            vec![PromptFragment::developer_capability(
+                "This extension can contribute more than one prompt fragment.",
+            )]
+        })
     }
 }
 

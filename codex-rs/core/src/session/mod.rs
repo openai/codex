@@ -2694,11 +2694,15 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
-        for contributor in self.services.extensions.context_contributors() {
-            for fragment in contributor.contribute(
-                &self.services.session_extension_data,
-                &self.services.thread_extension_data,
-            ) {
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+        for contributor in context_contributors {
+            for fragment in contributor
+                .contribute(
+                    &self.services.session_extension_data,
+                    &self.services.thread_extension_data,
+                )
+                .await
+            {
                 match fragment.slot() {
                     PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
                         developer_sections.push(fragment.text().to_string());

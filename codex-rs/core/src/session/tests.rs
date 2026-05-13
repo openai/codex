@@ -6352,21 +6352,23 @@ struct GitAttributionTestContributor;
 struct GitAttributionTestState;
 
 impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
-    fn contribute(
-        &self,
-        _session_store: &codex_extension_api::ExtensionData,
-        thread_store: &codex_extension_api::ExtensionData,
-    ) -> Vec<codex_extension_api::PromptFragment> {
-        thread_store
-            .get::<GitAttributionTestState>()
-            .is_some()
-            .then(|| {
-                codex_extension_api::PromptFragment::developer_policy(
-                    "git attribution extension enabled",
-                )
-            })
-            .into_iter()
-            .collect()
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a codex_extension_api::ExtensionData,
+        thread_store: &'a codex_extension_api::ExtensionData,
+    ) -> codex_extension_api::ContextContributionFuture<'a> {
+        Box::pin(async move {
+            thread_store
+                .get::<GitAttributionTestState>()
+                .is_some()
+                .then(|| {
+                    codex_extension_api::PromptFragment::developer_policy(
+                        "git attribution extension enabled",
+                    )
+                })
+                .into_iter()
+                .collect()
+        })
     }
 }
 

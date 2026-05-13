@@ -24,13 +24,17 @@ pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
 
+/// Future returned by one prompt contribution.
+pub type ContextContributionFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>>;
+
 /// Extension contribution that adds prompt fragments during prompt assembly.
 pub trait ContextContributor: Send + Sync {
-    fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment>;
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> ContextContributionFuture<'a>;
 }
 
 /// Contributor for host-owned thread lifecycle gates.
