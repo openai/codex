@@ -56,7 +56,7 @@ impl ToolHandler for DynamicToolHandler {
         ToolSearchInfo::from_spec(
             self.search_text.clone(),
             self.spec()?,
-            None,
+            /*limit_bucket*/ None,
             Some(ToolSearchSourceInfo {
                 name: "Dynamic tools".to_string(),
                 description: Some("Tools provided by the current Codex thread.".to_string()),
