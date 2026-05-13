@@ -621,12 +621,12 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global_shared_read("plugin-list"),
+        serialization: global_shared_read("plugin-read"),
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
-        serialization: global_shared_read("plugin-list"),
+        serialization: global_shared_read("plugin-read"),
         response: v2::PluginReadResponse,
     },
     PluginSkillRead => "plugin/skill/read" {
@@ -1686,7 +1686,7 @@ mod tests {
         assert_eq!(
             plugin_list.serialization_scope(),
             Some(ClientRequestSerializationScope::GlobalSharedRead(
-                "plugin-list"
+                "plugin-read"
             ))
         );
 
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!(
             plugin_read.serialization_scope(),
             Some(ClientRequestSerializationScope::GlobalSharedRead(
-                "plugin-list"
+                "plugin-read"
             ))
         );
 
