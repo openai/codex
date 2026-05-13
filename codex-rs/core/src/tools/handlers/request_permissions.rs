@@ -15,6 +15,7 @@ use codex_tools::ToolSpec;
 
 pub struct RequestPermissionsHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
 

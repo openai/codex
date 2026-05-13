@@ -5,6 +5,7 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     type Output = CloseAgentResult;
 
@@ -16,11 +17,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         Some(create_close_agent_tool_v1())
     }
 
-    fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
-        Box::pin(handle_close_agent(invocation))
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_close_agent(invocation).await
     }
 }
 

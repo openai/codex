@@ -6,6 +6,7 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     type Output = SendInputResult;
 

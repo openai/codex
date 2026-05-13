@@ -60,6 +60,7 @@ impl DynamicToolHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     type Output = FunctionToolOutput;
 

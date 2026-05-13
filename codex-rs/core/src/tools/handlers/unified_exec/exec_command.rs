@@ -68,6 +68,7 @@ impl ExecCommandHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     type Output = ExecCommandToolOutput;
 

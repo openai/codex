@@ -3137,6 +3137,7 @@ dependencies = [
 name = "codex-memories-extension"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-features",
@@ -3729,6 +3730,7 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",

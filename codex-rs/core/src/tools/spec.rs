@@ -7,8 +7,9 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
-use crate::tools::registry::ToolRegistryBuilder;
-use crate::tools::spec_plan::build_tool_registry_builder;
+use crate::tools::registry::RegisteredTool;
+use crate::tools::spec_plan::collect_tool_executors;
+use crate::tools::spec_plan::hosted_model_tool_specs;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_extension_api::ExtensionToolExecutor;
 use codex_mcp::ToolInfo;
@@ -28,14 +29,19 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     }
 }
 
-pub(crate) fn build_specs_with_discoverable_tools(
+pub(crate) struct ToolRouterParts {
+    pub(crate) executors: Vec<Arc<dyn RegisteredTool>>,
+    pub(crate) hosted_specs: Vec<codex_tools::ToolSpec>,
+}
+
+pub(crate) fn collect_tool_router_parts(
     config: &ToolsConfig,
     mcp_tools: Option<Vec<ToolInfo>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_executors: &[Arc<dyn ExtensionToolExecutor>],
     dynamic_tools: &[DynamicToolSpec],
-) -> ToolRegistryBuilder {
+) -> ToolRouterParts {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let (min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms) =
@@ -61,7 +67,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 DEFAULT_WAIT_TIMEOUT_MS,
             )
         };
-    build_tool_registry_builder(
+    let executors = collect_tool_executors(
         config,
         ToolRegistryBuildParams {
             mcp_tools: mcp_tools.as_deref(),
@@ -76,7 +82,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 max_timeout_ms: max_wait_timeout_ms,
             },
         },
-    )
+    );
+    ToolRouterParts {
+        executors,
+        hosted_specs: hosted_model_tool_specs(config),
+    }
 }
 
 #[cfg(test)]

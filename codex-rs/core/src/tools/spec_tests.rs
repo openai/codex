@@ -3,7 +3,9 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
 use crate::tools::ToolRouter;
+use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::spec_plan::build_tool_registry_builder_from_executors;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
@@ -36,6 +38,7 @@ use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::*;
 
@@ -270,7 +273,7 @@ fn build_specs(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(
+    build_specs_with_inputs_for_test(
         config,
         mcp_tools,
         deferred_mcp_tools,
@@ -278,6 +281,25 @@ fn build_specs(
         /*extension_tool_executors*/ &[],
         dynamic_tools,
     )
+}
+
+fn build_specs_with_inputs_for_test(
+    config: &ToolsConfig,
+    mcp_tools: Option<Vec<ToolInfo>>,
+    deferred_mcp_tools: Option<Vec<ToolInfo>>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_executors: &[Arc<dyn codex_extension_api::ExtensionToolExecutor>],
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRegistryBuilder {
+    let parts = collect_tool_router_parts(
+        config,
+        mcp_tools,
+        deferred_mcp_tools,
+        discoverable_tools,
+        extension_tool_executors,
+        dynamic_tools,
+    );
+    build_tool_registry_builder_from_executors(config, parts.executors, parts.hosted_specs)
 }
 
 #[tokio::test]
@@ -803,7 +825,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             permission_profile: &PermissionProfile::Disabled,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         });
-        let (tools, _) = build_specs_with_discoverable_tools(
+        let (tools, _) = build_specs_with_inputs_for_test(
             &tools_config,
             /*mcp_tools*/ None,
             /*deferred_mcp_tools*/ None,

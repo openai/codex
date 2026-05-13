@@ -19,6 +19,7 @@ impl Handler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     type Output = WaitAgentResult;
 
