@@ -519,7 +519,6 @@ mod tests {
     use super::should_apply_network_block;
     use crate::cap::load_or_create_cap_sids;
     use crate::cap::workspace_write_cap_sid_for_root;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -673,34 +672,28 @@ mod tests {
         let codex_home = temp.path().join("codex-home");
         let workspace = temp.path().join("workspace");
         let active_root = temp.path().join("active-root");
-        let sandbox_root = codex_home.join(".sandbox");
         std::fs::create_dir_all(&codex_home).expect("create codex home");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         std::fs::create_dir_all(&active_root).expect("create active root");
-        std::fs::create_dir_all(&sandbox_root).expect("create sandbox root");
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::try_from(active_root.as_path()).expect("active root"),
-                AbsolutePathBuf::try_from(codex_home.as_path()).expect("codex home"),
-                AbsolutePathBuf::try_from(sandbox_root.as_path()).expect("sandbox root"),
-            ],
             network_access: false,
-            exclude_tmpdir_env_var: true,
+            exclude_tmpdir_env_var: false,
             exclude_slash_tmp: true,
         };
+        let env_map = HashMap::from([
+            (
+                "TEMP".to_string(),
+                active_root.to_string_lossy().into_owned(),
+            ),
+            ("TMP".to_string(), codex_home.to_string_lossy().into_owned()),
+        ]);
 
-        let roots = legacy_session_capability_roots(
-            &policy,
-            &workspace,
-            &workspace,
-            &HashMap::new(),
-            &codex_home,
-        );
+        let roots =
+            legacy_session_capability_roots(&policy, &workspace, &workspace, &env_map, &codex_home);
 
         assert!(roots.contains(&dunce::canonicalize(&workspace).expect("workspace")));
         assert!(roots.contains(&dunce::canonicalize(&active_root).expect("active root")));
         assert!(!roots.contains(&dunce::canonicalize(&codex_home).expect("codex home")));
-        assert!(!roots.contains(&dunce::canonicalize(&sandbox_root).expect("sandbox root")));
     }
 }

@@ -299,6 +299,7 @@ mod windows_impl {
     use std::collections::HashMap;
     use std::io;
     use std::path::Path;
+    use std::path::PathBuf;
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
