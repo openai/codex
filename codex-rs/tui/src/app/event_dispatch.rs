@@ -756,9 +756,6 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
             }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
-            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }

@@ -36,7 +36,6 @@ pub enum SlashCommand {
     Compact,
     Plan,
     Goal,
-    Collab,
     Agent,
     Side,
     Copy,
@@ -114,7 +113,6 @@ impl SlashCommand {
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
-            SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
@@ -224,7 +222,6 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
-            SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
