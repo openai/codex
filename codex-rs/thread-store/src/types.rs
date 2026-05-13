@@ -379,10 +379,25 @@ pub type ClearableField<T> = Option<Option<T>>;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitInfoPatch {
     /// Replacement commit SHA, clear request, or no-op.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
     pub sha: ClearableField<String>,
     /// Replacement branch name, clear request, or no-op.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
     pub branch: ClearableField<String>,
     /// Replacement origin URL, clear request, or no-op.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
     pub origin_url: ClearableField<String>,
 }
 
@@ -641,6 +656,38 @@ mod tests {
         assert_eq!(decoded.agent_nickname, Some(None));
         assert_eq!(decoded.agent_role, Some(None));
         assert_eq!(decoded.agent_path, Some(None));
+    }
+
+    #[test]
+    fn git_info_patch_round_trips_optional_clears() {
+        let patch = ThreadMetadataPatch {
+            git_info: Some(GitInfoPatch {
+                sha: None,
+                branch: Some(Some("main".to_string())),
+                origin_url: Some(None),
+            }),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&patch).expect("serialize patch");
+        assert_eq!(
+            value["git_info"],
+            json!({
+                "branch": "main",
+                "origin_url": null,
+            })
+        );
+
+        let decoded: ThreadMetadataPatch =
+            serde_json::from_value(value).expect("deserialize patch");
+        assert_eq!(
+            decoded.git_info,
+            Some(GitInfoPatch {
+                sha: None,
+                branch: Some(Some("main".to_string())),
+                origin_url: Some(None),
+            })
+        );
     }
 
     #[test]
