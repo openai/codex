@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use codex_extension_api::ExtensionData;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::turn::run_turn;
@@ -42,11 +41,11 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
+        let turn_extension_data = session.turn_extension_data();
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.

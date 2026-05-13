@@ -4,7 +4,6 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
-use codex_extension_api::ExtensionData;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +23,6 @@ impl SessionTask for CompactTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
     ) -> Option<String> {

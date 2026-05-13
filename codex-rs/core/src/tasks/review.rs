@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -60,7 +59,6 @@ impl SessionTask for ReviewTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _turn_extension_data: Arc<ExtensionData>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {

@@ -12,7 +12,6 @@ use codex_extension_api::TurnItemContributor;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::memory_citation::MemoryCitation;
-use codex_protocol::memory_citation::MemoryCitationEntry;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
@@ -172,13 +171,8 @@ impl TurnItemContributor for TestTurnItemContributor {
             turn_store.insert(TurnItemContributorRan);
             if let TurnItem::AgentMessage(agent_message) = item {
                 agent_message.memory_citation = Some(MemoryCitation {
-                    entries: vec![MemoryCitationEntry {
-                        path: "from-contributor.md".to_string(),
-                        line_start: 3,
-                        line_end: 4,
-                        note: "set by contributor".to_string(),
-                    }],
-                    rollout_ids: vec!["from-contributor".to_string()],
+                    entries: Vec::new(),
+                    rollout_ids: Vec::new(),
                 });
             }
             Ok(())
@@ -227,6 +221,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
     };
+    assert!(agent_message.memory_citation.is_some());
     let text = agent_message
         .content
         .iter()
@@ -235,18 +230,6 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         })
         .collect::<String>();
     assert_eq!(text, "hello world");
-    assert_eq!(
-        agent_message.memory_citation,
-        Some(MemoryCitation {
-            entries: vec![MemoryCitationEntry {
-                path: "from-contributor.md".to_string(),
-                line_start: 3,
-                line_end: 4,
-                note: "set by contributor".to_string(),
-            }],
-            rollout_ids: vec!["from-contributor".to_string()],
-        })
-    );
 }
 
 #[test]

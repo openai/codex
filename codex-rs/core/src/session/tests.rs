@@ -5182,7 +5182,6 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
-            _turn_extension_data: Arc<codex_extension_api::ExtensionData>,
             _input: Vec<UserInput>,
             _cancellation_token: CancellationToken,
         ) -> Option<String> {
@@ -7266,7 +7265,6 @@ impl SessionTask for NeverEndingTask {
         self: Arc<Self>,
         _session: Arc<SessionTaskContext>,
         _ctx: Arc<TurnContext>,
-        _turn_extension_data: Arc<codex_extension_api::ExtensionData>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
@@ -7296,7 +7294,6 @@ impl SessionTask for GuardianDeniedApprovalTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _turn_extension_data: Arc<codex_extension_api::ExtensionData>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
