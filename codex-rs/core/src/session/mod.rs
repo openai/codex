@@ -1360,6 +1360,7 @@ impl Session {
             )
         };
 
+        self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
             &next_cwd,
@@ -1370,7 +1371,6 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
-        self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
         Ok(())
     }
