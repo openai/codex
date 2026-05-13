@@ -343,7 +343,6 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
     let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
-        config.service_tier = None;
         return Ok(());
     };
     let model = config.model.clone().ok_or_else(|| {
