@@ -61,7 +61,7 @@ pub async fn checkout_remote_plugin_share(
         });
     }
 
-    let home = dirs::home_dir().ok_or_else(|| {
+    let home = crate::marketplace::home_dir().ok_or_else(|| {
         RemotePluginCatalogError::UnexpectedResponse(
             "could not determine home directory for personal plugin marketplace".to_string(),
         )
