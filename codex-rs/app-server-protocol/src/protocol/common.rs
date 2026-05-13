@@ -626,7 +626,7 @@ client_request_definitions! {
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
-        serialization: global("config"),
+        serialization: global_shared_read("plugin-list"),
         response: v2::PluginReadResponse,
     },
     PluginSkillRead => "plugin/skill/read" {
@@ -1685,6 +1685,21 @@ mod tests {
         };
         assert_eq!(
             plugin_list.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "plugin-list"
+            ))
+        );
+
+        let plugin_read = ClientRequest::PluginRead {
+            request_id: request_id(),
+            params: v2::PluginReadParams {
+                marketplace_path: Some(absolute_path("/tmp/marketplace")),
+                remote_marketplace_name: None,
+                plugin_name: "plugin-a".to_string(),
+            },
+        };
+        assert_eq!(
+            plugin_read.serialization_scope(),
             Some(ClientRequestSerializationScope::GlobalSharedRead(
                 "plugin-list"
             ))
