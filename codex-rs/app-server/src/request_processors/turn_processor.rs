@@ -52,6 +52,9 @@ struct ResolvedTurnContextOverrides {
     overrides: CodexThreadTurnContextOverrides,
 }
 
+const TURN_CONTEXT_APPLY_TIMEOUT: Duration = Duration::from_secs(5);
+const TURN_CONTEXT_APPLY_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -569,6 +572,30 @@ impl TurnRequestProcessor {
                 error
             })?;
 
+        if let Some(after_turn_context) = after_turn_context {
+            if before_turn_context != after_turn_context {
+                let started = Instant::now();
+                loop {
+                    let config_snapshot = thread.config_snapshot().await;
+                    if thread_turn_context_from_snapshot(&config_snapshot) == after_turn_context {
+                        break;
+                    }
+                    if started.elapsed() >= TURN_CONTEXT_APPLY_TIMEOUT {
+                        return Err(internal_error(
+                            "timed out waiting for turn context overrides to apply".to_string(),
+                        ));
+                    }
+                    tokio::time::sleep(TURN_CONTEXT_APPLY_POLL_INTERVAL).await;
+                }
+            }
+            self.maybe_emit_turn_context_updated(
+                &params.thread_id,
+                &before_turn_context,
+                after_turn_context,
+            )
+            .await;
+        }
+
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
             codex_memories_write::start_memories_startup_task(
@@ -579,14 +606,6 @@ impl TurnRequestProcessor {
                 thread.config().await,
                 &config_snapshot.session_source,
             );
-        }
-        if let Some(after_turn_context) = after_turn_context {
-            self.maybe_emit_turn_context_updated(
-                &params.thread_id,
-                &before_turn_context,
-                after_turn_context,
-            )
-            .await;
         }
 
         self.outgoing
