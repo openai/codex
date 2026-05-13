@@ -101,6 +101,10 @@ pub struct DoctorCommand {
     #[arg(long, default_value_t = false)]
     summary: bool,
 
+    /// Expand long lists in detailed human output.
+    #[arg(long, default_value_t = false)]
+    all: bool,
+
     /// Disable ANSI color in human output.
     #[arg(long, default_value_t = false)]
     no_color: bool,
@@ -2011,6 +2015,7 @@ fn human_output_options(command: &DoctorCommand) -> HumanOutputOptions {
     );
     HumanOutputOptions {
         show_details: !command.summary,
+        show_all: command.all,
         ascii: command.ascii,
         color_enabled,
     }

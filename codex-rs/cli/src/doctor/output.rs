@@ -5,16 +5,22 @@
 //! groups checks by concern, colors only status/actionable tokens, and redacts
 //! sensitive detail lines before showing them in detailed output.
 
+mod detail;
+
 use std::fmt::Write as _;
 
+use detail::HumanDetail;
+use detail::detail_lines;
 use owo_colors::OwoColorize;
+use owo_colors::XtermColors;
 
 use super::CheckStatus;
 use super::DoctorCheck;
 use super::DoctorReport;
 
 const NAME_WIDTH: usize = 12;
-const SEPARATOR_WIDTH: usize = 45;
+const DETAIL_LABEL_WIDTH: usize = 24;
+const SEPARATOR_WIDTH: usize = 61;
 
 const GROUPS: &[OutputGroup] = &[
     OutputGroup {
@@ -51,6 +57,7 @@ struct OutputGroup {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct HumanOutputOptions {
     pub(super) show_details: bool,
+    pub(super) show_all: bool,
     pub(super) ascii: bool,
     pub(super) color_enabled: bool,
 }
@@ -66,9 +73,18 @@ pub(super) fn render_human_report(report: &DoctorReport, options: HumanOutputOpt
         out,
         "{} {}",
         bold("Codex Doctor", options),
-        dim(&format!("v{}", report.codex_version), options)
+        dim(&header_suffix(report), options)
     );
     out.push('\n');
+
+    let notes = notes_for_report(report);
+    if !notes.is_empty() {
+        let _ = writeln!(out, "{}", bold("Notes", options));
+        for note in &notes {
+            write_note_row(&mut out, note, options);
+        }
+        out.push('\n');
+    }
 
     let mut wrote_group = false;
     for group in GROUPS {
@@ -111,20 +127,58 @@ fn checks_for_group<'a>(report: &'a DoctorReport, group: &OutputGroup) -> Vec<&'
 
 fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOptions) {
     let description = row_description(check, options);
+    let status = display_status(check);
     let _ = writeln!(
         out,
-        "  {} {:<NAME_WIDTH$} {}",
-        status_marker(check.status, options),
-        check.category,
-        style_description(&description, check.status, options)
+        "  {} {} {}",
+        status_marker(status, options),
+        bold(&format!("{:<NAME_WIDTH$}", check.category), options),
+        style_description(&description, status, options)
     );
 
     if options.show_details {
-        for detail in &check.details {
+        for detail in detail_lines(check, options) {
+            write_detail_line(out, detail, options);
+        }
+    }
+}
+
+fn write_note_row(out: &mut String, note: &DoctorNote, options: HumanOutputOptions) {
+    let _ = writeln!(
+        out,
+        "  {} {} {}",
+        status_marker(note.status, options),
+        bold(&format!("{:<NAME_WIDTH$}", note.name), options),
+        style_description(&note.summary, note.status, options)
+    );
+}
+
+fn write_detail_line(out: &mut String, detail: HumanDetail, options: HumanOutputOptions) {
+    match detail {
+        HumanDetail::Row { label, value } => {
+            let label = format!("{label:<DETAIL_LABEL_WIDTH$}");
             let _ = writeln!(
                 out,
-                "    - {}",
-                dim(&highlight_actions(&redact_detail(detail), options), options)
+                "      {} {}",
+                detail_label(&label, options),
+                detail_value(&value, options)
+            );
+        }
+        HumanDetail::Continuation(value) => {
+            let spacer = " ".repeat(DETAIL_LABEL_WIDTH);
+            let _ = writeln!(
+                out,
+                "      {} {}",
+                detail_label(&spacer, options),
+                detail_value(&value, options)
+            );
+        }
+        HumanDetail::Bullet(value) => {
+            let _ = writeln!(
+                out,
+                "    {} {}",
+                very_dim(if options.ascii { "-" } else { "·" }, options),
+                dim(&highlight_actions(&value, options), options)
             );
         }
     }
@@ -139,55 +193,121 @@ fn row_description(check: &DoctorCheck, options: HumanOutputOptions) -> String {
         return format!("{summary}{dash}{remediation}");
     }
 
-    check.summary.clone()
+    display_summary(check, options)
 }
 
-fn status_marker(status: CheckStatus, options: HumanOutputOptions) -> String {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayStatus {
+    Ok,
+    Update,
+    Note,
+    Warning,
+    Fail,
+    Idle,
+}
+
+struct DoctorNote {
+    status: DisplayStatus,
+    name: &'static str,
+    summary: String,
+}
+
+fn display_status(check: &DoctorCheck) -> DisplayStatus {
+    if check.category == "app-server"
+        && check.status == CheckStatus::Ok
+        && check
+            .details
+            .iter()
+            .any(|detail| detail == "status: not running")
+    {
+        return DisplayStatus::Idle;
+    }
+
+    match check.status {
+        CheckStatus::Ok => DisplayStatus::Ok,
+        CheckStatus::Warning => DisplayStatus::Warning,
+        CheckStatus::Fail => DisplayStatus::Fail,
+    }
+}
+
+fn status_marker(status: DisplayStatus, options: HumanOutputOptions) -> String {
     let marker = if options.ascii {
         match status {
-            CheckStatus::Ok => "[ok]",
-            CheckStatus::Warning => "[!!]",
-            CheckStatus::Fail => "[XX]",
+            DisplayStatus::Ok => "[ok]",
+            DisplayStatus::Update => "[up]",
+            DisplayStatus::Note | DisplayStatus::Warning => "[!!]",
+            DisplayStatus::Fail => "[XX]",
+            DisplayStatus::Idle => "[--]",
         }
     } else {
         match status {
-            CheckStatus::Ok => "✓",
-            CheckStatus::Warning => "⚠",
-            CheckStatus::Fail => "✗",
+            DisplayStatus::Ok => "✓",
+            DisplayStatus::Update => "↑",
+            DisplayStatus::Note | DisplayStatus::Warning => "⚠",
+            DisplayStatus::Fail => "✗",
+            DisplayStatus::Idle => "○",
         }
     };
 
     match status {
-        CheckStatus::Ok => green(marker, options),
-        CheckStatus::Warning => yellow(marker, options),
-        CheckStatus::Fail => red(marker, options),
+        DisplayStatus::Ok => green(marker, options),
+        DisplayStatus::Update => amber(marker, options),
+        DisplayStatus::Note | DisplayStatus::Warning => orange(marker, options),
+        DisplayStatus::Fail => red(marker, options),
+        DisplayStatus::Idle => dim(marker, options),
     }
 }
 
 fn style_description(
     description: &str,
-    status: CheckStatus,
+    status: DisplayStatus,
     options: HumanOutputOptions,
 ) -> String {
     let highlighted = highlight_actions(description, options);
     match status {
-        CheckStatus::Ok => dim(&highlighted, options),
-        CheckStatus::Warning => yellow(&highlighted, options),
-        CheckStatus::Fail => red(&highlighted, options),
+        DisplayStatus::Ok | DisplayStatus::Idle => dim(&highlighted, options),
+        DisplayStatus::Update => amber(&highlighted, options),
+        DisplayStatus::Note | DisplayStatus::Warning | DisplayStatus::Fail => highlighted,
     }
 }
 
 fn summary_line(report: &DoctorReport, options: HumanOutputOptions) -> String {
-    let counts = StatusCounts::from_checks(&report.checks);
+    let notes = notes_for_report(report);
+    let counts = StatusCounts::from_report(report, notes.len());
     let separator = dim(if options.ascii { " | " } else { " · " }, options);
     let status = overall_status_label(report.overall_status);
+    let mut parts = vec![count_label(counts.ok, "ok", DisplayStatus::Ok, options)];
+    if counts.idle > 0 {
+        parts.push(count_label(
+            counts.idle,
+            "idle",
+            DisplayStatus::Idle,
+            options,
+        ));
+    }
+    if counts.notes > 0 {
+        parts.push(count_label(
+            counts.notes,
+            "notes",
+            DisplayStatus::Note,
+            options,
+        ));
+    }
+    parts.push(count_label(
+        counts.warning,
+        "warn",
+        DisplayStatus::Warning,
+        options,
+    ));
+    parts.push(count_label(
+        counts.fail,
+        "fail",
+        DisplayStatus::Fail,
+        options,
+    ));
     format!(
-        "{}{}{}{}{} {}",
-        count_label(counts.ok, "ok", CheckStatus::Ok, options),
-        separator,
-        count_label(counts.warning, "warn", CheckStatus::Warning, options),
-        separator,
-        count_label(counts.fail, "fail", CheckStatus::Fail, options),
+        "{} {}",
+        parts.join(&separator),
         styled_overall_status(status, report.overall_status, options)
     )
 }
@@ -195,14 +315,16 @@ fn summary_line(report: &DoctorReport, options: HumanOutputOptions) -> String {
 fn count_label(
     count: usize,
     label: &str,
-    status: CheckStatus,
+    status: DisplayStatus,
     options: HumanOutputOptions,
 ) -> String {
     let count = dim(&count.to_string(), options);
     let label = match status {
-        CheckStatus::Ok => green(label, options),
-        CheckStatus::Warning => yellow(label, options),
-        CheckStatus::Fail => red(label, options),
+        DisplayStatus::Ok => green(label, options),
+        DisplayStatus::Update => amber(label, options),
+        DisplayStatus::Note | DisplayStatus::Warning => orange(label, options),
+        DisplayStatus::Fail => red(label, options),
+        DisplayStatus::Idle => dim(label, options),
     };
     format!("{count} {label}")
 }
@@ -231,9 +353,11 @@ fn write_footer(out: &mut String, options: HumanOutputOptions) {
     if options.show_details {
         let _ = writeln!(
             out,
-            "{} {}",
+            "{} {:<24} {} {}",
             cyan("--summary", options),
-            dim("compact output", options)
+            dim("compact output", options),
+            cyan("--all", options),
+            dim("expand truncated lists", options)
         );
     } else {
         let _ = writeln!(
@@ -244,13 +368,278 @@ fn write_footer(out: &mut String, options: HumanOutputOptions) {
                 options
             )
         );
+        let _ = writeln!(
+            out,
+            "{} {:<28} {} {}",
+            cyan("--all", options),
+            dim("expand truncated lists", options),
+            cyan("--json", options),
+            dim("redacted report", options)
+        );
+        return;
     }
     let _ = writeln!(
         out,
         "{} {}",
         cyan("--json", options),
-        dim("redacted support report", options)
+        dim("redacted report", options)
     );
+}
+
+fn header_suffix(report: &DoctorReport) -> String {
+    let version = format!("v{}", report.codex_version);
+    report
+        .checks
+        .iter()
+        .find(|check| check.category == "runtime")
+        .and_then(|check| detail::detail_value(check, "platform"))
+        .map_or(version.clone(), |platform| {
+            format!("{version} · {platform}")
+        })
+}
+
+fn notes_for_report(report: &DoctorReport) -> Vec<DoctorNote> {
+    let mut notes = Vec::new();
+    if let Some(check) = find_check(report, "updates") {
+        update_note(check, report)
+            .into_iter()
+            .for_each(|note| notes.push(note));
+    }
+    if let Some(check) = find_check(report, "state") {
+        rollout_note(check)
+            .into_iter()
+            .for_each(|note| notes.push(note));
+    }
+    if let Some(check) = find_check(report, "sandbox") {
+        sandbox_note(check)
+            .into_iter()
+            .for_each(|note| notes.push(note));
+    }
+    if let Some(check) = find_check(report, "mcp")
+        && check.status == CheckStatus::Warning
+    {
+        notes.push(DoctorNote {
+            status: DisplayStatus::Warning,
+            name: "mcp",
+            summary: "MCP configuration has optional issues".to_string(),
+        });
+    }
+    auth_reachability_note(report)
+        .into_iter()
+        .for_each(|note| notes.push(note));
+    notes
+}
+
+fn find_check<'a>(report: &'a DoctorReport, category: &str) -> Option<&'a DoctorCheck> {
+    report
+        .checks
+        .iter()
+        .find(|check| check.category == category)
+}
+
+fn update_note(check: &DoctorCheck, report: &DoctorReport) -> Option<DoctorNote> {
+    let status = detail::detail_value(check, "latest version status")?;
+    if !status.contains("newer version is available") {
+        return None;
+    }
+    let latest = detail::detail_value(check, "latest version")
+        .or_else(|| detail::detail_value(check, "cached latest version"))
+        .unwrap_or_else(|| "newer version".to_string());
+    let dismissed = detail::detail_value(check, "dismissed version");
+    let mut parenthetical = format!("current {}", report.codex_version);
+    if let Some(dismissed) = dismissed
+        && !detail::is_falsy(&dismissed)
+    {
+        parenthetical.push_str(&format!(", dismissed {dismissed}"));
+    }
+    Some(DoctorNote {
+        status: DisplayStatus::Update,
+        name: "updates",
+        summary: format!("{latest} available ({parenthetical})"),
+    })
+}
+
+fn rollout_note(check: &DoctorCheck) -> Option<DoctorNote> {
+    let active = detail::detail_value(check, "active rollout files")?;
+    let (files, bytes) = detail::rollout_files_and_bytes(&active)?;
+    if files < 1000 && bytes < 1024 * 1024 * 1024 {
+        return None;
+    }
+    Some(DoctorNote {
+        status: DisplayStatus::Warning,
+        name: "rollouts",
+        summary: format!(
+            "{} active files · {} on disk",
+            detail::format_count(files),
+            detail::format_bytes(bytes)
+        ),
+    })
+}
+
+fn sandbox_note(check: &DoctorCheck) -> Option<DoctorNote> {
+    let filesystem = detail::detail_value(check, "filesystem sandbox")?;
+    let network = detail::detail_value(check, "network sandbox")?;
+    if filesystem == "restricted" && network == "restricted" {
+        return None;
+    }
+    Some(DoctorNote {
+        status: DisplayStatus::Warning,
+        name: "sandbox",
+        summary: format!("filesystem {filesystem} · network {network}"),
+    })
+}
+
+fn auth_reachability_note(report: &DoctorReport) -> Option<DoctorNote> {
+    let websocket = find_check(report, "websocket")?;
+    let reachability = find_check(report, "reachability")?;
+    let auth_mode = detail::detail_value(websocket, "auth mode")?;
+    let reachability_mode = detail::detail_value(reachability, "reachability mode")?;
+    let auth_mode_lower = auth_mode.to_ascii_lowercase();
+    let reachability_mode_lower = reachability_mode.to_ascii_lowercase();
+    if auth_mode_lower.contains("chatgpt") && reachability_mode_lower.contains("api key") {
+        return Some(DoctorNote {
+            status: DisplayStatus::Warning,
+            name: "auth",
+            summary: "ChatGPT websocket auth but API-key reachability mode".to_string(),
+        });
+    }
+    None
+}
+
+fn display_summary(check: &DoctorCheck, _options: HumanOutputOptions) -> String {
+    match check.category.as_str() {
+        "runtime" => runtime_summary(check),
+        "install" if check.status == CheckStatus::Ok => "consistent".to_string(),
+        "search" => search_summary(check),
+        "terminal" => terminal_summary(check),
+        "state" => state_summary(check),
+        "config" if check.status == CheckStatus::Ok => "loaded".to_string(),
+        "mcp" => mcp_summary(check),
+        "sandbox" => sandbox_summary(check),
+        "network" => network_summary(check),
+        "websocket" => websocket_summary(check),
+        "app-server" => app_server_summary(check),
+        _ => check.summary.clone(),
+    }
+}
+
+fn runtime_summary(check: &DoctorCheck) -> String {
+    if detail::detail_value(check, "current executable")
+        .is_some_and(|path| path.contains("/target/debug/"))
+    {
+        return "local debug build".to_string();
+    }
+    detail::detail_value(check, "install method").unwrap_or_else(|| check.summary.clone())
+}
+
+fn search_summary(check: &DoctorCheck) -> String {
+    let provider = detail::detail_value(check, "search provider");
+    let command = detail::detail_value(check, "search command");
+    let readiness = detail::detail_value(check, "search command readiness");
+    match (readiness, provider, command) {
+        (Some(readiness), Some(provider), Some(command)) if check.status == CheckStatus::Ok => {
+            format!("{readiness} ({provider}, `{command}`)")
+        }
+        _ => check.summary.clone(),
+    }
+}
+
+fn terminal_summary(check: &DoctorCheck) -> String {
+    let mut parts = Vec::new();
+    if let Some(terminal) = detail::detail_value(check, "terminal") {
+        let version = detail::detail_value(check, "terminal version");
+        parts.push(version.map_or(terminal.clone(), |version| format!("{terminal} {version}")));
+    }
+    if let Some(multiplexer) = detail::detail_value(check, "multiplexer") {
+        parts.push(multiplexer);
+    }
+    if let Some(term) = detail::detail_value(check, "TERM") {
+        parts.push(format!("TERM={term}"));
+    }
+    if parts.is_empty() {
+        check.summary.clone()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn state_summary(check: &DoctorCheck) -> String {
+    let state_ok =
+        detail::detail_value(check, "state DB integrity").is_some_and(|value| value == "ok");
+    let log_ok = detail::detail_value(check, "log DB integrity").is_some_and(|value| value == "ok");
+    if state_ok && log_ok {
+        "databases healthy".to_string()
+    } else {
+        check.summary.clone()
+    }
+}
+
+fn mcp_summary(check: &DoctorCheck) -> String {
+    let Some(count) = detail::detail_value(check, "configured servers") else {
+        return check.summary.clone();
+    };
+    let disabled =
+        detail::detail_value(check, "disabled servers").unwrap_or_else(|| "0".to_string());
+    let transports = check
+        .details
+        .iter()
+        .filter_map(|detail| detail.split_once(" servers: "))
+        .filter(|(transport, _)| *transport != "configured" && *transport != "disabled")
+        .map(|(transport, count)| format!("{count} {transport}"))
+        .collect::<Vec<_>>();
+    if transports.is_empty() {
+        format!("{count} servers · {disabled} disabled")
+    } else {
+        format!(
+            "{} server ({}) · {} disabled",
+            count,
+            transports.join(", "),
+            disabled
+        )
+    }
+}
+
+fn sandbox_summary(check: &DoctorCheck) -> String {
+    let approval = detail::detail_value(check, "approval policy");
+    let filesystem = detail::detail_value(check, "filesystem sandbox");
+    let network = detail::detail_value(check, "network sandbox");
+    match (approval, filesystem, network) {
+        (Some(approval), Some(filesystem), Some(network)) => {
+            format!("{filesystem} fs + {network} network · approval {approval}")
+        }
+        _ => check.summary.clone(),
+    }
+}
+
+fn network_summary(check: &DoctorCheck) -> String {
+    detail::detail_value(check, "proxy env vars")
+        .map(|value| {
+            if value == "none" {
+                "no proxy env vars".to_string()
+            } else {
+                "proxy env vars present".to_string()
+            }
+        })
+        .unwrap_or_else(|| check.summary.clone())
+}
+
+fn websocket_summary(check: &DoctorCheck) -> String {
+    let status = detail::detail_value(check, "handshake status");
+    let timeout = detail::detail_value(check, "connect timeout")
+        .map(|value| value.replace("000 ms", "s").replace(" ms", "ms"));
+    match (status, timeout) {
+        (Some(status), Some(timeout)) => format!("{status} · {timeout} timeout"),
+        _ => check.summary.clone(),
+    }
+}
+
+fn app_server_summary(check: &DoctorCheck) -> String {
+    let status = detail::detail_value(check, "status");
+    let mode = detail::detail_value(check, "mode");
+    match (status, mode) {
+        (Some(status), Some(mode)) => format!("{status} ({mode} mode)"),
+        _ => check.summary.clone(),
+    }
 }
 
 fn separator(options: HumanOutputOptions) -> String {
@@ -381,18 +770,25 @@ fn redact_url_path(path: &str) -> String {
 #[derive(Default)]
 struct StatusCounts {
     ok: usize,
+    idle: usize,
+    notes: usize,
     warning: usize,
     fail: usize,
 }
 
 impl StatusCounts {
-    fn from_checks(checks: &[DoctorCheck]) -> Self {
-        let mut counts = Self::default();
-        for check in checks {
-            match check.status {
-                CheckStatus::Ok => counts.ok += 1,
-                CheckStatus::Warning => counts.warning += 1,
-                CheckStatus::Fail => counts.fail += 1,
+    fn from_report(report: &DoctorReport, notes: usize) -> Self {
+        let mut counts = Self {
+            notes,
+            ..Self::default()
+        };
+        for check in &report.checks {
+            match display_status(check) {
+                DisplayStatus::Ok => counts.ok += 1,
+                DisplayStatus::Idle => counts.idle += 1,
+                DisplayStatus::Warning => counts.warning += 1,
+                DisplayStatus::Fail => counts.fail += 1,
+                DisplayStatus::Update | DisplayStatus::Note => {}
             }
         }
         counts
@@ -415,36 +811,82 @@ fn dim(text: &str, options: HumanOutputOptions) -> String {
     }
 }
 
-fn green(text: &str, options: HumanOutputOptions) -> String {
-    if options.color_enabled {
-        text.green().to_string()
-    } else {
-        text.to_string()
-    }
+fn very_dim(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 238, options)
 }
 
-fn yellow(text: &str, options: HumanOutputOptions) -> String {
-    if options.color_enabled {
-        text.yellow().to_string()
-    } else {
-        text.to_string()
+fn detail_label(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 240, options)
+}
+
+fn detail_value(text: &str, options: HumanOutputOptions) -> String {
+    if !options.color_enabled {
+        return text.to_string();
     }
+    if text.contains("<redacted>") {
+        return color256(&text.italic().to_string(), /*code*/ 244, options);
+    }
+    if detail::is_falsy(text) || text.contains("(missing)") {
+        return color256(text, /*code*/ 240, options);
+    }
+    if looks_copyable(text) {
+        return cyan(text, options);
+    }
+    dim_units(&highlight_actions(text, options), options)
+}
+
+fn green(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 10, options)
+}
+
+fn amber(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 220, options)
+}
+
+fn orange(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 214, options)
 }
 
 fn red(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 196, options)
+}
+
+fn cyan(text: &str, options: HumanOutputOptions) -> String {
+    color256(text, /*code*/ 117, options)
+}
+
+fn color256(text: &str, code: u8, options: HumanOutputOptions) -> String {
     if options.color_enabled {
-        text.red().to_string()
+        text.color(XtermColors::from(code)).to_string()
     } else {
         text.to_string()
     }
 }
 
-fn cyan(text: &str, options: HumanOutputOptions) -> String {
-    if options.color_enabled {
-        text.cyan().to_string()
-    } else {
-        text.to_string()
-    }
+fn looks_copyable(text: &str) -> bool {
+    text.starts_with("http://")
+        || text.starts_with("https://")
+        || text.starts_with("wss://")
+        || text.starts_with("~/")
+        || text.starts_with('/')
+        || text.starts_with("./")
+        || text.starts_with("../")
+}
+
+fn dim_units(text: &str, options: HumanOutputOptions) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|token| {
+            let trimmed = token.trim_end();
+            let suffix = &token[trimmed.len()..];
+            let unit = trimmed.trim_end_matches([',', ')']);
+            let punctuation = &trimmed[unit.len()..];
+            if matches!(unit, "B" | "KB" | "MB" | "GB" | "TB" | "files" | "file") {
+                format!("{}{}{}", dim(unit, options), punctuation, suffix)
+            } else {
+                token.to_string()
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -456,6 +898,7 @@ mod tests {
     fn detailed_no_color_unicode_options() -> HumanOutputOptions {
         HumanOutputOptions {
             show_details: true,
+            show_all: false,
             ascii: false,
             color_enabled: false,
         }
@@ -464,6 +907,16 @@ mod tests {
     fn summary_no_color_unicode_options() -> HumanOutputOptions {
         HumanOutputOptions {
             show_details: false,
+            show_all: false,
+            ascii: false,
+            color_enabled: false,
+        }
+    }
+
+    fn detailed_all_no_color_unicode_options() -> HumanOutputOptions {
+        HumanOutputOptions {
+            show_details: true,
+            show_all: true,
             ascii: false,
             color_enabled: false,
         }
@@ -552,19 +1005,21 @@ mod tests {
     #[test]
     fn render_human_report_includes_details_by_default_without_color() {
         let rendered = render_human_report(&sample_report(), detailed_no_color_unicode_options());
-        let expected = "\
+        let expected = format!(
+            "\
 Codex Doctor v0.0.0
 
 Environment
   ✓ runtime      running local build on darwin-arm64
-  ✓ install      installation looks consistent
+  ✓ install      consistent
+      managed by               npm:no · bun:no · package root —
   ✓ search       search is OK (bundled)
   ⚠ terminal     narrow terminal
   ✓ state        state paths inspectable
 
 Configuration
   ✗ auth         token expired — Run `codex login`.
-    - OPENAI_API_KEY: <redacted>
+      OPENAI_API_KEY           <redacted>
 
 Updates
   ✓ updates      update configuration is locally consistent
@@ -577,24 +1032,27 @@ Connectivity
 Background Server
   ✓ app-server   background server is not running
 
-─────────────────────────────────────────────
+{}
 9 ok · 1 warn · 1 fail failed
 
---summary compact output
---json redacted support report
-";
+--summary compact output           --all expand truncated lists
+--json redacted report
+",
+            "─".repeat(SEPARATOR_WIDTH)
+        );
         assert_eq!(rendered, expected);
     }
 
     #[test]
     fn render_human_report_supports_summary_output_without_color() {
         let rendered = render_human_report(&sample_report(), summary_no_color_unicode_options());
-        let expected = "\
+        let expected = format!(
+            "\
 Codex Doctor v0.0.0
 
 Environment
   ✓ runtime      running local build on darwin-arm64
-  ✓ install      installation looks consistent
+  ✓ install      consistent
   ✓ search       search is OK (bundled)
   ⚠ terminal     narrow terminal
   ✓ state        state paths inspectable
@@ -613,12 +1071,14 @@ Connectivity
 Background Server
   ✓ app-server   background server is not running
 
-─────────────────────────────────────────────
+{}
 9 ok · 1 warn · 1 fail failed
 
 Run codex doctor without --summary for detailed diagnostics.
---json redacted support report
-";
+--all expand truncated lists       --json redacted report
+",
+            "─".repeat(SEPARATOR_WIDTH)
+        );
         assert_eq!(rendered, expected);
     }
 
@@ -628,6 +1088,7 @@ Run codex doctor without --summary for detailed diagnostics.
             &sample_report(),
             HumanOutputOptions {
                 show_details: false,
+                show_all: false,
                 ascii: true,
                 color_enabled: false,
             },
@@ -638,7 +1099,7 @@ Codex Doctor v0.0.0
 
 Environment
   [ok] runtime      running local build on darwin-arm64
-  [ok] install      installation looks consistent
+  [ok] install      consistent
   [ok] search       search is OK (bundled)
   [!!] terminal     narrow terminal
   [ok] state        state paths inspectable
@@ -661,7 +1122,7 @@ Background Server
 9 ok | 1 warn | 1 fail failed
 
 Run codex doctor without --summary for detailed diagnostics.
---json redacted support report
+--all expand truncated lists       --json redacted report
 ",
             "-".repeat(SEPARATOR_WIDTH)
         );
@@ -674,11 +1135,117 @@ Run codex doctor without --summary for detailed diagnostics.
             &sample_report(),
             HumanOutputOptions {
                 show_details: true,
+                show_all: false,
                 ascii: false,
                 color_enabled: false,
             },
         );
-        assert!(rendered.contains("    - OPENAI_API_KEY: <redacted>"));
+        assert!(rendered.contains("      OPENAI_API_KEY           <redacted>"));
+    }
+
+    #[test]
+    fn render_human_report_promotes_notes_without_changing_statuses() {
+        let report = DoctorReport {
+            schema_version: 1,
+            generated_at: "0s since unix epoch".to_string(),
+            overall_status: CheckStatus::Warning,
+            codex_version: "0.0.0".to_string(),
+            checks: vec![
+                DoctorCheck::new(
+                    "updates.status",
+                    "updates",
+                    CheckStatus::Ok,
+                    "update configuration is locally consistent",
+                )
+                .detail("latest version status: newer version is available")
+                .detail("latest version: 0.130.0")
+                .detail("dismissed version: 0.128.0"),
+                DoctorCheck::new(
+                    "state.paths",
+                    "state",
+                    CheckStatus::Ok,
+                    "state paths inspectable",
+                )
+                .detail("active rollout files: 1515 files, 2702146365 total bytes, 1783594 average bytes"),
+                DoctorCheck::new(
+                    "sandbox.helpers",
+                    "sandbox",
+                    CheckStatus::Ok,
+                    "sandbox configuration is readable",
+                )
+                .detail("filesystem sandbox: danger-full-access")
+                .detail("network sandbox: restricted")
+                .detail("approval policy: Never"),
+                DoctorCheck::new(
+                    "mcp.config",
+                    "mcp",
+                    CheckStatus::Warning,
+                    "MCP configuration has optional issues",
+                ),
+                DoctorCheck::new(
+                    "network.websocket_reachability",
+                    "websocket",
+                    CheckStatus::Ok,
+                    "Responses WebSocket handshake succeeded",
+                )
+                .detail("auth mode: chatgpt"),
+                DoctorCheck::new(
+                    "network.provider_reachability",
+                    "reachability",
+                    CheckStatus::Ok,
+                    "active provider endpoints are reachable over HTTP",
+                )
+                .detail("reachability mode: API key auth"),
+                DoctorCheck::new(
+                    "app_server.status",
+                    "app-server",
+                    CheckStatus::Ok,
+                    "background server is not running",
+                )
+                .detail("status: not running")
+                .detail("mode: ephemeral"),
+            ],
+        };
+
+        let rendered = render_human_report(&report, summary_no_color_unicode_options());
+
+        assert!(rendered.contains("Notes\n  ↑ updates"));
+        assert!(rendered.contains("0.130.0 available (current 0.0.0, dismissed 0.128.0)"));
+        assert!(rendered.contains("⚠ rollouts"));
+        assert!(rendered.contains("⚠ sandbox"));
+        assert!(rendered.contains("⚠ mcp"));
+        assert!(rendered.contains("⚠ auth"));
+        assert!(rendered.contains("○ app-server   not running (ephemeral mode)"));
+        assert!(rendered.contains("5 ok · 1 idle · 5 notes · 1 warn · 0 fail degraded"));
+    }
+
+    #[test]
+    fn render_human_report_expands_feature_flags_with_all() {
+        let report = DoctorReport {
+            schema_version: 1,
+            generated_at: "0s since unix epoch".to_string(),
+            overall_status: CheckStatus::Ok,
+            codex_version: "0.0.0".to_string(),
+            checks: vec![
+                DoctorCheck::new("config.load", "config", CheckStatus::Ok, "config loaded")
+                    .detail("model: gpt-5.5")
+                    .detail("model provider: openai")
+                    .detail("feature flags enabled: 3")
+                    .detail("enabled feature flags: shell_tool, memories, goals")
+                    .detail("feature flag overrides: memories=true"),
+            ],
+        };
+
+        let compact = render_human_report(&report, detailed_no_color_unicode_options());
+        let expanded = render_human_report(&report, detailed_all_no_color_unicode_options());
+
+        assert!(!compact.contains("enabled flags"));
+        assert!(
+            compact.contains(
+                "feature flags            3 enabled · 1 overridden (full list with --all)"
+            )
+        );
+        assert!(expanded.contains("enabled flags            shell_tool, memories, goals"));
     }
 
     #[test]
@@ -709,6 +1276,7 @@ Run codex doctor without --summary for detailed diagnostics.
             &sample_report(),
             HumanOutputOptions {
                 show_details: false,
+                show_all: false,
                 ascii: false,
                 color_enabled: true,
             },
