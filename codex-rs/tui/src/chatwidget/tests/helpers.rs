@@ -60,7 +60,18 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
         .expect("test project path registry")
         .iter()
     {
-        text = text.replace(isolated_project.to_string_lossy().as_ref(), "/tmp/project");
+        let isolated_project = isolated_project.to_string_lossy();
+        text = text.replace(isolated_project.as_ref(), "/tmp/project");
+        for isolated_prefix in truncated_path_variants(isolated_project.as_ref())
+            .into_iter()
+            .rev()
+        {
+            let unix_prefix: String = "/tmp/project"
+                .chars()
+                .take(isolated_prefix.chars().count())
+                .collect();
+            text = text.replace(&format!("{isolated_prefix}…"), &format!("{unix_prefix}…"));
+        }
     }
 
     for unix_path in ["/tmp/project", "/tmp/hooks.json"] {
