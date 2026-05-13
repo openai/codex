@@ -258,21 +258,38 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
     assert_eq!(
         cached,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some(connector_install_url("Google Calendar", "calendar")),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["calendar-plugin"]),
-        }]
+        vec![
+            AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
+            },
+            AppInfo {
+                id: "connector_openai_hidden".to_string(),
+                name: "Hidden".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Hidden", "connector_openai_hidden")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }
+        ]
     );
 }
 
@@ -1253,7 +1270,7 @@ fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
 }
 
 #[test]
-fn filter_disallowed_connectors_filters_openai_prefix() {
+fn filter_disallowed_connectors_allows_openai_prefix() {
     let filtered = filter_disallowed_connectors(
         vec![
             app("connector_openai_foo"),
@@ -1262,7 +1279,14 @@ fn filter_disallowed_connectors_filters_openai_prefix() {
         ],
         "codex_cli",
     );
-    assert_eq!(filtered, vec![app("gamma")]);
+    assert_eq!(
+        filtered,
+        vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma")
+        ]
+    );
 }
 
 #[test]
@@ -1279,7 +1303,7 @@ fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
 }
 
 #[test]
-fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
+fn first_party_chat_originator_filters_target_connector_ids() {
     let filtered = filter_disallowed_connectors(
         vec![
             app("connector_openai_foo"),
@@ -1290,7 +1314,10 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
     );
     assert_eq!(
         filtered,
-        vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+        vec![
+            app("connector_openai_foo"),
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c")
+        ]
     );
 }
 

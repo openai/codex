@@ -596,8 +596,8 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
         create_test_tool_with_connector(
             CODEX_APPS_MCP_SERVER_NAME,
             "blocked_tool",
-            "connector_openai_hidden",
-            Some("Hidden"),
+            "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
+            Some("Blocked"),
         ),
         create_test_tool_with_connector(
             CODEX_APPS_MCP_SERVER_NAME,
