@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_extension_api::ContextContributionFuture;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -21,7 +20,7 @@ impl ContextContributor for GitAttributionExtension {
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-    ) -> ContextContributionFuture<'a> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(config_store) = thread_store.get::<GitAttributionConfig>() else {
                 return Vec::new();
