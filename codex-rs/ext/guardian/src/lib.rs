@@ -52,8 +52,10 @@ where
     S: Send + Sync,
 {
     fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+        let forked_from_thread_id = ThreadId::from_string(input.thread_store.level_id())
+            .expect("thread extension data level id should be a valid ThreadId");
         input.thread_store.insert(GuardianThreadContext {
-            forked_from_thread_id: input.thread_id,
+            forked_from_thread_id,
         });
     }
 }

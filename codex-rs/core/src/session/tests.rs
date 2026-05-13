@@ -1807,8 +1807,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 
     #[derive(Debug, PartialEq, Eq)]
     struct RecordedTokenUsage {
-        thread_id: ThreadId,
-        turn_id: String,
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
         token_usage: TokenUsageInfo,
         saw_session_store: bool,
         saw_thread_store: bool,
@@ -1823,16 +1824,16 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             &self,
             session_store: &codex_extension_api::ExtensionData,
             thread_store: &codex_extension_api::ExtensionData,
-            thread_id: ThreadId,
-            turn_id: &str,
+            turn_store: &codex_extension_api::ExtensionData,
             token_usage: &TokenUsageInfo,
         ) {
             self.records
                 .lock()
                 .expect("token usage records lock")
                 .push(RecordedTokenUsage {
-                    thread_id,
-                    turn_id: turn_id.to_string(),
+                    session_level_id: session_store.level_id().to_string(),
+                    thread_level_id: thread_store.level_id().to_string(),
+                    turn_level_id: turn_store.level_id().to_string(),
                     token_usage: token_usage.clone(),
                     saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
                     saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
@@ -1882,8 +1883,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
     expected_total_usage.add_assign(&second_usage);
     let expected = vec![
         RecordedTokenUsage {
-            thread_id: session.conversation_id,
-            turn_id: turn_context.sub_id.clone(),
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
                 total_token_usage: first_usage.clone(),
                 last_token_usage: first_usage,
@@ -1893,8 +1895,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             saw_thread_store: true,
         },
         RecordedTokenUsage {
-            thread_id: session.conversation_id,
-            turn_id: turn_context.sub_id.clone(),
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
                 total_token_usage: expected_total_usage,
                 last_token_usage: second_usage,
@@ -3981,8 +3984,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5320,7 +5325,10 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
 
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
         fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
-            assert_eq!(self.expected_thread_id, input.thread_id);
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
             assert!(input.session_store.get::<SessionStopMarker>().is_some());
             assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -5362,7 +5370,10 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
         fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
-            assert_eq!(self.expected_thread_id, input.thread_id);
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
             self.calls
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -5372,8 +5383,11 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 
     impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
         fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
-            assert_eq!(self.expected_thread_id, input.thread_id);
-            assert_eq!(self.expected_turn_id, input.turn_id);
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert_eq!(self.expected_turn_id, input.turn_store.level_id());
             assert_eq!(TurnAbortReason::Interrupted, input.reason);
             self.calls
                 .lock()
@@ -5811,8 +5825,10 @@ where
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),

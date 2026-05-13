@@ -92,6 +92,7 @@ pub struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) server_model_warning_emitted: AtomicBool,
@@ -274,6 +275,7 @@ impl TurnContext {
             truncation_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            extension_data: Arc::clone(&self.extension_data),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
             server_model_warning_emitted: AtomicBool::new(
@@ -535,6 +537,7 @@ impl Session {
             network.is_some(),
         ));
         let (current_date, timezone) = local_time_context();
+        let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -572,6 +575,7 @@ impl Session {
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
+            extension_data,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             server_model_warning_emitted: AtomicBool::new(false),

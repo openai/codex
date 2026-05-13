@@ -635,7 +635,6 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
 fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
-            thread_id: sess.conversation_id,
             session_store: &sess.services.session_extension_data,
             thread_store: &sess.services.thread_extension_data,
         });

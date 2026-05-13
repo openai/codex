@@ -2869,8 +2869,7 @@ impl Session {
                     contributor.on_token_usage(
                         &self.services.session_extension_data,
                         &self.services.thread_extension_data,
-                        self.conversation_id,
-                        &turn_context.sub_id,
+                        turn_context.extension_data.as_ref(),
                         token_info,
                     );
                 }

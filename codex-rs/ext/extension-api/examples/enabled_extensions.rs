@@ -13,9 +13,9 @@ fn main() {
     let registry = builder.build();
 
     // 2. The host decides which stores are shared.
-    let session_store = ExtensionData::new();
-    let first_thread_store = ExtensionData::new();
-    let second_thread_store = ExtensionData::new();
+    let session_store = ExtensionData::new("session");
+    let first_thread_store = ExtensionData::new("thread-1");
+    let second_thread_store = ExtensionData::new("thread-2");
 
     // 3. Reusing the same session store shares session state across threads.
     let first_thread_fragments = contribute_prompt(&registry, &session_store, &first_thread_store);

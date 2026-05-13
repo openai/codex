@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -79,8 +78,7 @@ pub trait TokenUsageContributor: Send + Sync {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-        _thread_id: ThreadId,
-        _turn_id: &str,
+        _turn_store: &ExtensionData,
         _token_usage: &TokenUsageInfo,
     ) {
     }
