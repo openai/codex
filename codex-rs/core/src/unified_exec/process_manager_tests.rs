@@ -248,6 +248,7 @@ async fn startup_failure_emits_begin_then_failed_end() {
         codex_exec_server::Environment::create_for_tests(Some("not-a-websocket-url".to_string()))
             .expect("remote test environment"),
     );
+    #[allow(deprecated)]
     let request = ExecCommandRequest {
         command: vec!["echo".to_string(), "hello".to_string()],
         hook_command: String::new(),
