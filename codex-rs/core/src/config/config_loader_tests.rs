@@ -18,6 +18,7 @@ use codex_config::RequirementSource;
 use codex_config::SessionThreadConfig;
 use codex_config::StaticThreadConfigLoader;
 use codex_config::ThreadConfigSource;
+use codex_config::config_error_from_ignored_toml_fields;
 use codex_config::config_error_from_toml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -133,7 +134,8 @@ async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<(
 #[tokio::test]
 async fn returns_config_error_for_invalid_user_config_toml() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "model = \"gpt-4\"\ninvalid = [";
+    let contents = r#"model = "gpt-4"
+invalid = ["#;
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
@@ -161,7 +163,8 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
-        "model = \"from-user-config\"\ninvalid = [",
+        r#"model = "from-user-config"
+invalid = ["#,
     )
     .expect("write config");
 
@@ -219,7 +222,8 @@ async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io:
 async fn returns_config_error_for_invalid_managed_config_toml() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
-    let contents = "model = \"gpt-4\"\ninvalid = [";
+    let contents = r#"model = "gpt-4"
+invalid = ["#;
     std::fs::write(&managed_path, contents).expect("write managed config");
 
     let overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone());
@@ -336,10 +340,151 @@ command = "python3 /tmp/user-hook.py"
     Ok(())
 }
 
+#[tokio::test]
+async fn strict_config_rejects_unknown_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"model = "gpt-5"
+unknown_key = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    let expected_config_error =
+        config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+            .expect("unknown field error");
+    assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "foo".to_string(),
+            TomlValue::String("bar".to_string()),
+        )])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key_with_relative_path_override() {
+    let tmp = tempdir().expect("tempdir");
+    let instructions_path = tmp.path().join("instructions.md");
+    std::fs::write(&instructions_path, "instructions").expect("write instructions");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![
+            (
+                "model_instructions_file".to_string(),
+                TomlValue::String("instructions.md".to_string()),
+            ),
+            ("foo".to_string(), TomlValue::String("bar".to_string())),
+        ])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![("features.foo".to_string(), TomlValue::Boolean(true))])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `features.foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"[features]
+foo = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    assert_eq!(
+        config_error.message,
+        "unknown configuration field `features.foo`"
+    );
+    assert_eq!(config_error.range.start.line, 2);
+    assert_eq!(config_error.range.start.column, 1);
+}
+
+#[test]
+fn strict_config_points_to_unknown_nested_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"[mcp_servers.local]
+command = "echo"
+unknown_key = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let error = config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+        .expect("unknown field error");
+
+    assert_eq!(
+        error.message,
+        "unknown configuration field `mcp_servers.local.unknown_key`"
+    );
+    assert_eq!(error.range.start.line, 3);
+    assert_eq!(error.range.start.column, 1);
+}
 #[test]
 fn schema_error_points_to_feature_value() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "[features]\ncollaboration_modes = \"true\"";
+    let contents = r#"[features]
+collaboration_modes = "true""#;
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
@@ -716,7 +861,12 @@ async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()
     let tmp = tempdir()?;
     let managed_path = tmp.path().join("managed_config.toml");
 
-    tokio::fs::write(&managed_path, "approval_policy = \"on-request\"\n").await?;
+    tokio::fs::write(
+        &managed_path,
+        r#"approval_policy = "on-request"
+"#,
+    )
+    .await?;
 
     let mut loader_overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
     loader_overrides.macos_managed_config_requirements_base64 = Some(
@@ -1201,11 +1351,17 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let managed_config_path = tmp.path().join("managed_config.toml");
-    tokio::fs::write(&managed_config_path, "approval_policy = \"never\"\n").await?;
+    tokio::fs::write(
+        &managed_config_path,
+        r#"approval_policy = "never"
+"#,
+    )
+    .await?;
     let system_requirements_path = tmp.path().join("requirements.toml");
     tokio::fs::write(
         &system_requirements_path,
-        "allowed_sandbox_modes = [\"read-only\"]\n",
+        r#"allowed_sandbox_modes = ["read-only"]
+"#,
     )
     .await?;
 
@@ -1391,12 +1547,14 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        r#"foo = "root"
+"#,
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        r#"foo = "child"
+"#,
     )
     .await?;
 
@@ -1867,7 +2025,12 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let home_dir = tmp.path().join("home");
     let codex_home = home_dir.join(".codex");
     tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"foo = "user"
+"#,
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
@@ -1909,7 +2072,12 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
     tokio::fs::create_dir_all(&nested_dot_codex).await?;
     tokio::fs::create_dir_all(project_root.join(".git")).await?;
-    tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
+    tokio::fs::write(
+        nested_dot_codex.join(CONFIG_TOML_FILE),
+        r#"foo = "child"
+"#,
+    )
+    .await?;
 
     tokio::fs::create_dir_all(&project_dot_codex).await?;
     make_config_for_test(
@@ -1923,7 +2091,10 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
     let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
     tokio::fs::write(
         &user_config_path,
-        format!("foo = \"user\"\n{user_config_contents}"),
+        format!(
+            r#"foo = "user"
+{user_config_contents}"#
+        ),
     )
     .await?;
 
@@ -1948,7 +2119,11 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
 
-    let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
+    let child_config: TomlValue = toml::from_str(
+        r#"foo = "child"
+"#,
+    )
+    .expect("parse child config");
     let expected_project_layer = ConfigLayerEntry::new(
         ConfigLayerSource::Project {
             dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
@@ -1972,7 +2147,9 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\nprofile = \"ignored\"\n",
+        r#"foo = "child"
+profile = "ignored"
+"#,
     )
     .await?;
 
@@ -1991,7 +2168,10 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
     tokio::fs::write(
         &untrusted_config_path,
-        format!("foo = \"user\"\n{untrusted_config_contents}"),
+        format!(
+            r#"foo = "user"
+{untrusted_config_contents}"#
+        ),
     )
     .await?;
 
@@ -2037,7 +2217,8 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
     tokio::fs::write(
         codex_home_unknown.join(CONFIG_TOML_FILE),
-        "foo = \"user\"\n",
+        r#"foo = "user"
+"#,
     )
     .await?;
 
@@ -2207,7 +2388,8 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"project\"\n",
+        r#"foo = "project"
+"#,
     )
     .await?;
     std::os::unix::fs::symlink(&project_root, &alias_root)?;
@@ -2378,9 +2560,21 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             )
             .await?;
             let config_contents = tokio::fs::read_to_string(&config_path).await?;
-            tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
+            tokio::fs::write(
+                &config_path,
+                format!(
+                    r#"foo = "user"
+{config_contents}"#
+                ),
+            )
+            .await?;
         } else {
-            tokio::fs::write(&config_path, "foo = \"user\"\n").await?;
+            tokio::fs::write(
+                &config_path,
+                r#"foo = "user"
+"#,
+            )
+            .await?;
         }
 
         let layers = load_config_layers_state(
@@ -2537,12 +2731,14 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        r#"foo = "root"
+"#,
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        r#"foo = "child"
+"#,
     )
     .await?;
 

@@ -21,7 +21,11 @@ use crate::project_root_markers::default_project_root_markers;
 use crate::project_root_markers::project_root_markers_from_config;
 use crate::state::ConfigLayerEntry;
 use crate::state::ConfigLayerStack;
+use crate::state::ConfigLoadOptions;
 use crate::state::LoaderOverrides;
+use crate::strict_config::config_error_from_ignored_toml_value_fields;
+use crate::strict_config::ignored_toml_value_field;
+use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -104,10 +108,14 @@ pub async fn load_config_layers_state(
     codex_home: &Path,
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
-    overrides: LoaderOverrides,
+    options: impl Into<ConfigLoadOptions>,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let ConfigLoadOptions {
+        loader_overrides: overrides,
+        strict_config,
+    } = options.into();
     let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
@@ -140,7 +148,8 @@ pub async fn load_config_layers_state(
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
     let loaded_config_layers =
-        layer_io::load_config_layers_internal(fs, codex_home, overrides.clone()).await?;
+        layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
+            .await?;
     if !ignore_managed_requirements {
         load_requirements_from_legacy_scheme(
             &mut config_requirements_toml,
@@ -168,6 +177,9 @@ pub async fn load_config_layers_state(
             .as_ref()
             .map(AbsolutePathBuf::as_path)
             .unwrap_or(codex_home);
+        if strict_config {
+            validate_cli_overrides_strictly(&cli_overrides_layer, base_dir)?;
+        }
         Some(resolve_relative_paths_in_config_toml(
             cli_overrides_layer,
             base_dir,
@@ -177,16 +189,20 @@ pub async fn load_config_layers_state(
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = system_config_toml_file_with_overrides(&overrides)?;
-    let system_layer =
-        load_config_toml_for_required_layer(fs, &system_config_toml_file, |config_toml| {
+    let system_layer = load_config_toml_for_required_layer(
+        fs,
+        &system_config_toml_file,
+        strict_config,
+        |config_toml| {
             ConfigLayerEntry::new(
                 ConfigLayerSource::System {
                     file: system_config_toml_file.clone(),
                 },
                 config_toml,
             )
-        })
-        .await?;
+        },
+    )
+    .await?;
     layers.push(system_layer);
 
     // Add a layer for $CODEX_HOME/config.toml so folder-derived resources such
@@ -201,7 +217,7 @@ pub async fn load_config_layers_state(
             TomlValue::Table(toml::map::Map::new()),
         )
     } else {
-        load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
+        load_config_toml_for_required_layer(fs, &user_file, strict_config, |config_toml| {
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
                     file: user_file.clone(),
@@ -268,6 +284,7 @@ pub async fn load_config_layers_state(
             &project_trust_context.project_root,
             &project_trust_context,
             codex_home,
+            strict_config,
         )
         .await?;
         layers.extend(project_layers.layers);
@@ -359,15 +376,11 @@ fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigL
 async fn load_config_toml_for_required_layer(
     fs: &dyn ExecutorFileSystem,
     toml_file: &AbsolutePathBuf,
+    strict_config: bool,
     create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
 ) -> io::Result<ConfigLayerEntry> {
     let toml_value = match fs.read_file_text(toml_file, /*sandbox*/ None).await {
         Ok(contents) => {
-            let config: TomlValue = toml::from_str(&contents).map_err(|err| {
-                let config_error =
-                    config_error_from_toml(toml_file.as_path(), &contents, err.clone());
-                io_error_from_config_error(io::ErrorKind::InvalidData, config_error, Some(err))
-            })?;
             let config_parent = toml_file.as_path().parent().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -377,6 +390,19 @@ async fn load_config_toml_for_required_layer(
                     ),
                 )
             })?;
+            let config: TomlValue = toml::from_str(&contents).map_err(|err| {
+                let config_error =
+                    config_error_from_toml(toml_file.as_path(), &contents, err.clone());
+                io_error_from_config_error(io::ErrorKind::InvalidData, config_error, Some(err))
+            })?;
+            if strict_config {
+                validate_config_toml_strictly(
+                    toml_file.as_path(),
+                    &contents,
+                    &config,
+                    config_parent,
+                )?;
+            }
             resolve_relative_paths_in_config_toml(config, config_parent)
         }
         Err(e) => {
@@ -395,6 +421,51 @@ async fn load_config_toml_for_required_layer(
     }?;
 
     Ok(create_entry(toml_value))
+}
+
+fn validate_config_toml_strictly(
+    toml_file: &Path,
+    contents: &str,
+    value: &TomlValue,
+    base_dir: &Path,
+) -> io::Result<()> {
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    if let Some(config_error) = config_error_from_ignored_toml_value_fields::<ConfigToml>(
+        toml_file,
+        contents,
+        value.clone(),
+    ) {
+        Err(io_error_from_config_error(
+            io::ErrorKind::InvalidData,
+            config_error,
+            /*source*/ None,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_cli_overrides_strictly(
+    cli_overrides_layer: &TomlValue,
+    base_dir: &Path,
+) -> io::Result<()> {
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(cli_overrides_layer.clone())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+        ));
+    }
+
+    if let Some(ignored_path) = unknown_feature_toml_value_field(cli_overrides_layer) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+        ));
+    }
+
+    Ok(())
 }
 
 /// If available, apply requirements from the platform system
@@ -998,6 +1069,7 @@ async fn load_project_layers(
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
     codex_home: &Path,
+    strict_config: bool,
 ) -> io::Result<LoadedProjectLayers> {
     let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
     let codex_home_normalized =
@@ -1063,6 +1135,14 @@ async fn load_project_layers(
                     }
                 };
                 let mut config = config;
+                if disabled_reason.is_none() && strict_config {
+                    validate_config_toml_strictly(
+                        config_file.as_path(),
+                        &contents,
+                        &config,
+                        dot_codex_abs.as_path(),
+                    )?;
+                }
                 let ignored_project_config_keys = sanitize_project_config(&mut config);
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
