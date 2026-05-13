@@ -10,8 +10,9 @@ const REDACTED_PAYLOAD: &str = "[redacted]";
 const CHATGPT_REMOTE_CLIENT_NAMES: &[&str] =
     &["codex_chatgpt_android_remote", "codex_chatgpt_ios_remote"];
 
-pub(super) fn should_redact_thread_resume_payloads(client_name: Option<&str>) -> bool {
-    client_name.is_some_and(|client_name| CHATGPT_REMOTE_CLIENT_NAMES.contains(&client_name))
+pub(super) fn should_redact_thread_resume_payloads(app_server_client_name: Option<&str>) -> bool {
+    app_server_client_name
+        .is_some_and(|client_name| CHATGPT_REMOTE_CLIENT_NAMES.contains(&client_name))
 }
 
 pub(super) fn redact_thread_resume_payloads(thread: &mut Thread) {

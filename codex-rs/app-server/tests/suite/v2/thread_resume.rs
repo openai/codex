@@ -1,3 +1,8 @@
+use super::connection_handling_websocket::connect_websocket;
+use super::connection_handling_websocket::read_response_for_id;
+use super::connection_handling_websocket::send_initialize_request;
+use super::connection_handling_websocket::send_request;
+use super::connection_handling_websocket::spawn_websocket_server;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
@@ -386,47 +391,117 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<()> {
     for client_name in ["codex_chatgpt_android_remote", "codex_chatgpt_ios_remote"] {
         let remote_thread = resume_redaction_fixture(Some(client_name)).await?;
-        let remote_turn = remote_thread
-            .turns
-            .first()
-            .expect("remote resume should include a turn");
-        let remote_mcp_item = remote_turn
-            .items
-            .iter()
-            .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
-            .expect("remote resume should include redacted MCP item");
-        let ThreadItem::McpToolCall {
-            arguments,
-            result,
-            error,
-            ..
-        } = remote_mcp_item
-        else {
-            unreachable!("matched MCP item");
-        };
-        assert_eq!(arguments, &json!("[redacted]"));
-        let result = result.as_ref().expect("redacted MCP result");
-        assert_eq!(
-            result.content,
-            vec![json!({
-                "type": "text",
-                "text": "[redacted]",
-            })]
-        );
-        assert_eq!(result.structured_content, None);
-        assert_eq!(result.meta, None);
-        assert_eq!(error, &None);
-        assert!(
-            !remote_turn
-                .items
-                .iter()
-                .any(|item| matches!(item, ThreadItem::ImageGeneration { .. })),
-            "remote resume should drop image generation items for {client_name}"
-        );
+        assert_resume_payloads_redacted(&remote_thread, client_name);
     }
 
     let normal_thread = resume_redaction_fixture(Some("some_other_client")).await?;
-    let normal_turn = normal_thread
+    assert_resume_payloads_not_redacted(&normal_thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_redaction_uses_connection_identity_not_process_originator() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    append_resume_redaction_history(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        &conversation_id,
+    )?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let result = async {
+        let mut first_client = connect_websocket(bind_addr).await?;
+        send_initialize_request(&mut first_client, /*id*/ 1, "some_other_client").await?;
+        read_response_for_id(&mut first_client, /*id*/ 1).await?;
+
+        let mut remote_client = connect_websocket(bind_addr).await?;
+        send_initialize_request(
+            &mut remote_client,
+            /*id*/ 2,
+            "codex_chatgpt_ios_remote",
+        )
+        .await?;
+        read_response_for_id(&mut remote_client, /*id*/ 2).await?;
+
+        send_request(
+            &mut remote_client,
+            "thread/resume",
+            /*id*/ 3,
+            Some(serde_json::to_value(ThreadResumeParams {
+                thread_id: conversation_id,
+                ..Default::default()
+            })?),
+        )
+        .await?;
+        let resume_resp = read_response_for_id(&mut remote_client, /*id*/ 3).await?;
+        let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+        assert_resume_payloads_redacted(&thread, "codex_chatgpt_ios_remote");
+        Ok(())
+    }
+    .await;
+
+    process.kill().await?;
+    result
+}
+
+fn assert_resume_payloads_redacted(thread: &codex_app_server_protocol::Thread, client_name: &str) {
+    let turn = thread
+        .turns
+        .first()
+        .expect("remote resume should include a turn");
+    let mcp_item = turn
+        .items
+        .iter()
+        .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
+        .expect("remote resume should include redacted MCP item");
+    let ThreadItem::McpToolCall {
+        arguments,
+        result,
+        error,
+        ..
+    } = mcp_item
+    else {
+        unreachable!("matched MCP item");
+    };
+    assert_eq!(arguments, &json!("[redacted]"));
+    let result = result.as_ref().expect("redacted MCP result");
+    assert_eq!(
+        result.content,
+        vec![json!({
+            "type": "text",
+            "text": "[redacted]",
+        })]
+    );
+    assert_eq!(result.structured_content, None);
+    assert_eq!(result.meta, None);
+    assert_eq!(error, &None);
+    assert!(
+        !turn
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::ImageGeneration { .. })),
+        "remote resume should drop image generation items for {client_name}"
+    );
+}
+
+fn assert_resume_payloads_not_redacted(thread: &codex_app_server_protocol::Thread) {
+    let normal_turn = thread
         .turns
         .first()
         .expect("normal resume should include a turn");
@@ -467,8 +542,6 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
         )),
         "normal resume should keep image generation items"
     );
-
-    Ok(())
 }
 
 async fn resume_redaction_fixture(
