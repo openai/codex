@@ -458,7 +458,7 @@ mod tests {
                 "runtime.provenance",
                 "runtime",
                 CheckStatus::Ok,
-                "running local on darwin-arm64",
+                "running local build on darwin-arm64",
             ),
             DoctorCheck::new(
                 "installation",
@@ -517,10 +517,10 @@ mod tests {
                 "background server is not running",
             ),
             DoctorCheck::new(
-                "network.openai_reachability",
+                "network.provider_reachability",
                 "reachability",
                 CheckStatus::Ok,
-                "OpenAI endpoints are reachable over HTTP",
+                "active provider endpoints are reachable over HTTP",
             ),
         ];
         DoctorReport {
@@ -539,7 +539,7 @@ mod tests {
 Codex Doctor v0.0.0
 
 Environment
-  ✓ runtime      running local on darwin-arm64
+  ✓ runtime      running local build on darwin-arm64
   ✓ install      installation looks consistent
   ✓ search       search is OK (bundled)
   ⚠ terminal     narrow terminal
@@ -554,7 +554,7 @@ Updates
 Connectivity
   ✓ network      network environment readable
   ✓ websocket    Responses WebSocket handshake succeeded
-  ✓ reachability OpenAI endpoints are reachable over HTTP
+  ✓ reachability active provider endpoints are reachable over HTTP
 
 Background Server
   ✓ app-server   background server is not running
@@ -583,7 +583,7 @@ Still having issues? Run codex doctor --verbose for more details.
 Codex Doctor v0.0.0
 
 Environment
-  [ok] runtime      running local on darwin-arm64
+  [ok] runtime      running local build on darwin-arm64
   [ok] install      installation looks consistent
   [ok] search       search is OK (bundled)
   [!!] terminal     narrow terminal
@@ -598,7 +598,7 @@ Updates
 Connectivity
   [ok] network      network environment readable
   [ok] websocket    Responses WebSocket handshake succeeded
-  [ok] reachability OpenAI endpoints are reachable over HTTP
+  [ok] reachability active provider endpoints are reachable over HTTP
 
 Background Server
   [ok] app-server   background server is not running

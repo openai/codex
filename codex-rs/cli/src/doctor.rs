@@ -35,6 +35,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
+use codex_features::FEATURES;
 use codex_install_context::InstallContext;
 use codex_install_context::StandalonePlatform;
 use codex_login::AuthDotJson;
@@ -243,7 +244,7 @@ async fn build_report(
             checks.push(timed_check_async(|| mcp_check(config)).await);
             checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
             checks.push(timed_check(terminal_check));
-            checks.push(timed_check(|| state_check(config)));
+            checks.push(timed_check_async(|| state_check(config)).await);
             checks.push(timed_check(|| background_server_check(config)));
         }
         Err(err) => {
@@ -263,11 +264,11 @@ async fn build_report(
         }
     }
 
-    let openai_reachability_mode = config_result
+    let reachability_plan = config_result
         .as_ref()
-        .map(openai_reachability_mode)
-        .unwrap_or(OpenAiReachabilityMode::Chatgpt);
-    checks.push(timed_check_async(|| openai_reachability_check(openai_reachability_mode)).await);
+        .map(provider_reachability_plan)
+        .unwrap_or_else(|_| default_reachability_plan());
+    checks.push(timed_check_async(|| provider_reachability_check(reachability_plan)).await);
 
     let overall_status = overall_status(&checks);
     DoctorReport {
@@ -598,6 +599,18 @@ fn normalize_path_for_compare(path: &Path) -> String {
     }
 }
 
+fn display_list<T: AsRef<str>>(items: &[T]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 fn codex_path_entries() -> Vec<String> {
     #[cfg(windows)]
     let result = run_command("where", ["codex"]);
@@ -644,6 +657,7 @@ fn config_check(config: &Config) -> DoctorCheck {
     details.push(format!("log dir: {}", config.log_dir.display()));
     details.push(format!("sqlite home: {}", config.sqlite_home.display()));
     details.push(format!("mcp servers: {}", config.mcp_servers.get().len()));
+    feature_flag_details(config, &mut details);
     config_toml_details(config, &mut details);
 
     let status = if config.startup_warnings.is_empty() {
@@ -659,6 +673,36 @@ fn config_check(config: &Config) -> DoctorCheck {
     };
 
     DoctorCheck::new("config.load", "config", status, "config loaded").details(details)
+}
+
+fn feature_flag_details(config: &Config, details: &mut Vec<String>) {
+    let features = config.features.get();
+    let enabled_features = FEATURES
+        .iter()
+        .filter(|spec| features.enabled(spec.id))
+        .map(|spec| spec.key)
+        .collect::<Vec<_>>();
+    let overrides = FEATURES
+        .iter()
+        .filter(|spec| features.enabled(spec.id) != spec.default_enabled)
+        .map(|spec| format!("{}={}", spec.key, features.enabled(spec.id)))
+        .collect::<Vec<_>>();
+    details.push(format!("feature flags enabled: {}", enabled_features.len()));
+    details.push(format!(
+        "enabled feature flags: {}",
+        display_list(&enabled_features)
+    ));
+    details.push(format!(
+        "feature flag overrides: {}",
+        display_list(&overrides)
+    ));
+    for usage in features.legacy_feature_usages() {
+        details.push(format!(
+            "legacy feature flag: {} -> {}",
+            usage.alias,
+            usage.feature.key()
+        ));
+    }
 }
 
 fn config_toml_details(config: &Config, details: &mut Vec<String>) {
@@ -1211,22 +1255,153 @@ fn multiplexer_name(multiplexer: &Multiplexer) -> String {
     }
 }
 
-fn state_check(config: &Config) -> DoctorCheck {
+async fn state_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
     path_readiness(&mut details, "CODEX_HOME", &config.codex_home);
     path_readiness(&mut details, "log dir", &config.log_dir);
     path_readiness(&mut details, "sqlite home", &config.sqlite_home);
     let state_db = codex_state::state_db_path(&config.sqlite_home);
+    let log_db = codex_state::logs_db_path(&config.sqlite_home);
     path_readiness(&mut details, "state DB", &state_db);
+    path_readiness(&mut details, "log DB", &log_db);
+    let mut integrity_failures = Vec::new();
+    sqlite_integrity_detail(&mut details, &mut integrity_failures, "state DB", &state_db).await;
+    sqlite_integrity_detail(&mut details, &mut integrity_failures, "log DB", &log_db).await;
+    rollout_stats_details(&mut details, &config.codex_home);
     standalone_release_cache_details(&mut details);
 
-    DoctorCheck::new(
-        "state.paths",
-        "state",
-        CheckStatus::Ok,
-        "state paths are inspectable",
-    )
-    .details(details)
+    let status = if integrity_failures.is_empty() {
+        CheckStatus::Ok
+    } else {
+        CheckStatus::Fail
+    };
+    let summary = if status == CheckStatus::Ok {
+        "state paths and databases are inspectable"
+    } else {
+        "state database integrity check failed"
+    };
+    let mut check = DoctorCheck::new("state.paths", "state", status, summary).details(details);
+    if status == CheckStatus::Fail {
+        check = check
+            .remediation("Back up CODEX_HOME, then remove or repair the affected SQLite database.");
+    }
+    check
+}
+
+async fn sqlite_integrity_detail(
+    details: &mut Vec<String>,
+    integrity_failures: &mut Vec<String>,
+    label: &str,
+    path: &Path,
+) {
+    if !path.is_file() {
+        details.push(format!("{label} integrity: skipped (missing)"));
+        return;
+    }
+
+    match codex_state::sqlite_integrity_check(path).await {
+        Ok(rows) if rows.iter().all(|row| row == "ok") => {
+            details.push(format!("{label} integrity: ok"));
+        }
+        Ok(rows) => {
+            let message = format!("{label} integrity: {}", rows.join("; "));
+            integrity_failures.push(message.clone());
+            details.push(message);
+        }
+        Err(err) => {
+            let message = format!("{label} integrity: {err}");
+            integrity_failures.push(message.clone());
+            details.push(message);
+        }
+    }
+}
+
+fn rollout_stats_details(details: &mut Vec<String>, codex_home: &Path) {
+    let active = collect_rollout_stats(&codex_home.join("sessions"));
+    let archived = collect_rollout_stats(&codex_home.join("archived_sessions"));
+    push_rollout_stats_detail(details, "active rollout files", active);
+    push_rollout_stats_detail(details, "archived rollout files", archived);
+}
+
+fn push_rollout_stats_detail(details: &mut Vec<String>, label: &str, stats: RolloutStats) {
+    match stats.error {
+        Some(error) => details.push(format!("{label}: scan failed ({error})")),
+        None => details.push(format!(
+            "{label}: {} files, {} total bytes, {} average bytes",
+            stats.files,
+            stats.total_bytes,
+            stats.average_bytes()
+        )),
+    }
+}
+
+#[derive(Default)]
+struct RolloutStats {
+    files: u64,
+    total_bytes: u64,
+    error: Option<String>,
+}
+
+impl RolloutStats {
+    fn average_bytes(&self) -> u64 {
+        if self.files == 0 {
+            0
+        } else {
+            self.total_bytes / self.files
+        }
+    }
+}
+
+fn collect_rollout_stats(root: &Path) -> RolloutStats {
+    let mut stats = RolloutStats::default();
+    collect_rollout_stats_inner(root, &mut stats);
+    stats
+}
+
+fn collect_rollout_stats_inner(path: &Path, stats: &mut RolloutStats) {
+    if stats.error.is_some() {
+        return;
+    }
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            stats.error = Some(err.to_string());
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                stats.error = Some(err.to_string());
+                return;
+            }
+        };
+        let path = entry.path();
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                stats.error = Some(err.to_string());
+                return;
+            }
+        };
+        if metadata.is_dir() {
+            collect_rollout_stats_inner(&path, stats);
+        } else if metadata.is_file() && is_rollout_file(&path) {
+            stats.files += 1;
+            stats.total_bytes = stats.total_bytes.saturating_add(metadata.len());
+        }
+    }
+}
+
+fn is_rollout_file(path: &Path) -> bool {
+    path.extension() == Some(OsStr::new("jsonl"))
+        && path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with("rollout-"))
 }
 
 async fn websocket_reachability_check(
@@ -1455,93 +1630,166 @@ fn fallback_state_check() -> DoctorCheck {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReachabilityPlan {
+    description: String,
+    endpoints: Vec<ReachabilityEndpoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReachabilityEndpoint {
+    label: String,
+    url: String,
+    required: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OpenAiReachabilityMode {
+enum ProviderAuthReachabilityMode {
     NotRequired,
     ApiKey,
     Chatgpt,
 }
 
-impl OpenAiReachabilityMode {
+impl ProviderAuthReachabilityMode {
     fn description(self) -> &'static str {
         match self {
-            Self::NotRequired => "not required by active model provider",
+            Self::NotRequired => "provider auth",
             Self::ApiKey => "API key auth",
             Self::Chatgpt => "ChatGPT auth",
         }
     }
 }
 
-fn openai_reachability_mode(config: &Config) -> OpenAiReachabilityMode {
+fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
     let stored_auth =
         load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode)
             .ok()
             .flatten();
-    openai_reachability_mode_from_auth(
+    let mode = provider_auth_reachability_mode_from_auth(
         config.model_provider.requires_openai_auth,
         env_var_present,
         stored_auth.as_ref(),
+    );
+    provider_reachability_plan_from_parts(
+        mode,
+        &config.model_provider_id,
+        config.model_provider.base_url.as_deref(),
+        &config.chatgpt_base_url,
     )
 }
 
-fn openai_reachability_mode_from_auth(
+fn default_reachability_plan() -> ReachabilityPlan {
+    provider_reachability_plan_from_parts(
+        ProviderAuthReachabilityMode::Chatgpt,
+        "openai",
+        /*provider_base_url*/ None,
+        "https://chatgpt.com/backend-api/",
+    )
+}
+
+fn provider_auth_reachability_mode_from_auth(
     requires_openai_auth: bool,
     env_var_present: impl Fn(&str) -> bool,
     stored_auth: Option<&AuthDotJson>,
-) -> OpenAiReachabilityMode {
+) -> ProviderAuthReachabilityMode {
     if !requires_openai_auth {
-        return OpenAiReachabilityMode::NotRequired;
+        return ProviderAuthReachabilityMode::NotRequired;
     }
     if env_var_present(OPENAI_API_KEY_ENV_VAR) || env_var_present(CODEX_API_KEY_ENV_VAR) {
-        return OpenAiReachabilityMode::ApiKey;
+        return ProviderAuthReachabilityMode::ApiKey;
     }
     if env_var_present(CODEX_ACCESS_TOKEN_ENV_VAR) {
-        return OpenAiReachabilityMode::Chatgpt;
+        return ProviderAuthReachabilityMode::Chatgpt;
     }
     match stored_auth.map(stored_auth_mode_value) {
-        Some(codex_app_server_protocol::AuthMode::ApiKey) => OpenAiReachabilityMode::ApiKey,
+        Some(codex_app_server_protocol::AuthMode::ApiKey) => ProviderAuthReachabilityMode::ApiKey,
         Some(
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
             | codex_app_server_protocol::AuthMode::AgentIdentity,
         )
-        | None => OpenAiReachabilityMode::Chatgpt,
+        | None => ProviderAuthReachabilityMode::Chatgpt,
     }
 }
 
-async fn openai_reachability_check(mode: OpenAiReachabilityMode) -> DoctorCheck {
+fn provider_reachability_plan_from_parts(
+    mode: ProviderAuthReachabilityMode,
+    provider_id: &str,
+    provider_base_url: Option<&str>,
+    chatgpt_base_url: &str,
+) -> ReachabilityPlan {
     let endpoints = match mode {
-        OpenAiReachabilityMode::ApiKey => vec![("https://api.openai.com/", true)],
-        OpenAiReachabilityMode::Chatgpt => vec![
-            ("https://api.openai.com/", true),
-            ("https://chatgpt.com/", true),
-        ],
-        OpenAiReachabilityMode::NotRequired => vec![
-            ("https://api.openai.com/", false),
-            ("https://chatgpt.com/", false),
-        ],
+        ProviderAuthReachabilityMode::ApiKey => vec![ReachabilityEndpoint {
+            label: format!("{provider_id} API"),
+            url: provider_base_url
+                .unwrap_or("https://api.openai.com/v1")
+                .to_string(),
+            required: true,
+        }],
+        ProviderAuthReachabilityMode::Chatgpt => vec![ReachabilityEndpoint {
+            label: "ChatGPT".to_string(),
+            url: chatgpt_base_url.to_string(),
+            required: true,
+        }],
+        ProviderAuthReachabilityMode::NotRequired => provider_base_url
+            .map(|url| {
+                vec![ReachabilityEndpoint {
+                    label: format!("{provider_id} API"),
+                    url: url.to_string(),
+                    required: true,
+                }]
+            })
+            .unwrap_or_default(),
     };
-    let mut details = vec![format!("reachability mode: {}", mode.description())];
+    ReachabilityPlan {
+        description: mode.description().to_string(),
+        endpoints,
+    }
+}
+
+async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
+    let mut details = vec![format!("reachability mode: {}", plan.description)];
+    if plan.endpoints.is_empty() {
+        details.push("active provider endpoint: none configured".to_string());
+        return DoctorCheck::new(
+            "network.provider_reachability",
+            "reachability",
+            CheckStatus::Ok,
+            "active provider has no HTTP endpoint to probe",
+        )
+        .details(details);
+    }
+
     let mut failures = Vec::new();
     let mut optional_failures = Vec::new();
-    for (url, required) in endpoints {
-        match http_probe_url(url).await {
-            Ok(status) => details.push(format!("{url}: reachable ({status})")),
+    for endpoint in plan.endpoints {
+        match http_probe_url(&endpoint.url).await {
+            Ok(status) => details.push(format!(
+                "{}: {} reachable ({status})",
+                endpoint.label, endpoint.url
+            )),
             Err(err) => {
-                let requirement = if required { "required" } else { "optional" };
-                details.push(format!("{url}: {err} ({requirement})"));
-                if required {
-                    failures.push(url);
+                let requirement = if endpoint.required {
+                    "required"
                 } else {
-                    optional_failures.push(url);
+                    "optional"
+                };
+                details.push(format!(
+                    "{}: {} {err} ({requirement})",
+                    endpoint.label, endpoint.url
+                ));
+                if endpoint.required {
+                    failures.push(endpoint.url);
+                } else {
+                    optional_failures.push(endpoint.url);
                 }
             }
         }
     }
 
-    let (status, summary) = openai_reachability_outcome(failures.len(), optional_failures.len());
+    let (status, summary) = provider_reachability_outcome(failures.len(), optional_failures.len());
     let mut check = DoctorCheck::new(
-        "network.openai_reachability",
+        "network.provider_reachability",
         "reachability",
         status,
         summary,
@@ -1553,19 +1801,22 @@ async fn openai_reachability_check(mode: OpenAiReachabilityMode) -> DoctorCheck 
     check
 }
 
-fn openai_reachability_outcome(
+fn provider_reachability_outcome(
     required_failures: usize,
     optional_failures: usize,
 ) -> (CheckStatus, &'static str) {
     match (required_failures, optional_failures) {
-        (0, 0) => (CheckStatus::Ok, "OpenAI endpoints are reachable over HTTP"),
+        (0, 0) => (
+            CheckStatus::Ok,
+            "active provider endpoints are reachable over HTTP",
+        ),
         (0, _) => (
             CheckStatus::Warning,
-            "OpenAI endpoints are unreachable but not required by the active provider",
+            "optional provider endpoints are unreachable over HTTP",
         ),
         (_, _) => (
             CheckStatus::Fail,
-            "one or more required OpenAI endpoints are unreachable over HTTP",
+            "one or more required provider endpoints are unreachable over HTTP",
         ),
     }
 }
@@ -2064,7 +2315,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_reachability_mode_uses_api_key_auth() {
+    fn provider_reachability_mode_uses_api_key_auth() {
         let api_key_auth = AuthDotJson {
             auth_mode: Some(codex_app_server_protocol::AuthMode::ApiKey),
             openai_api_key: Some("sk-test".to_string()),
@@ -2074,39 +2325,107 @@ mod tests {
         };
 
         assert_eq!(
-            openai_reachability_mode_from_auth(
+            provider_auth_reachability_mode_from_auth(
                 /*requires_openai_auth*/ true,
                 |_| false,
                 Some(&api_key_auth),
             ),
-            OpenAiReachabilityMode::ApiKey
+            ProviderAuthReachabilityMode::ApiKey
         );
         assert_eq!(
-            openai_reachability_mode_from_auth(
+            provider_auth_reachability_mode_from_auth(
                 /*requires_openai_auth*/ true,
                 |name| name == OPENAI_API_KEY_ENV_VAR,
                 /*stored_auth*/ None,
             ),
-            OpenAiReachabilityMode::ApiKey
+            ProviderAuthReachabilityMode::ApiKey
         );
     }
 
     #[test]
-    fn openai_reachability_warns_when_openai_is_not_required() {
+    fn provider_reachability_uses_active_provider_endpoint() {
         assert_eq!(
-            openai_reachability_outcome(/*required_failures*/ 0, /*optional_failures*/ 1,),
+            provider_reachability_plan_from_parts(
+                ProviderAuthReachabilityMode::NotRequired,
+                "azure",
+                Some("https://example.openai.azure.com/openai/v1"),
+                "https://chatgpt.com/backend-api/",
+            ),
+            ReachabilityPlan {
+                description: "provider auth".to_string(),
+                endpoints: vec![ReachabilityEndpoint {
+                    label: "azure API".to_string(),
+                    url: "https://example.openai.azure.com/openai/v1".to_string(),
+                    required: true,
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn provider_reachability_api_key_does_not_require_chatgpt() {
+        let plan = provider_reachability_plan_from_parts(
+            ProviderAuthReachabilityMode::ApiKey,
+            "openai",
+            /*provider_base_url*/ None,
+            "https://chatgpt.com/backend-api/",
+        );
+
+        assert_eq!(
+            plan.endpoints,
+            vec![ReachabilityEndpoint {
+                label: "openai API".to_string(),
+                url: "https://api.openai.com/v1".to_string(),
+                required: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn provider_reachability_outcome_reports_required_failures() {
+        assert_eq!(
+            provider_reachability_outcome(
+                /*required_failures*/ 0, /*optional_failures*/ 1,
+            ),
             (
                 CheckStatus::Warning,
-                "OpenAI endpoints are unreachable but not required by the active provider",
+                "optional provider endpoints are unreachable over HTTP",
             )
         );
         assert_eq!(
-            openai_reachability_outcome(/*required_failures*/ 1, /*optional_failures*/ 0,),
+            provider_reachability_outcome(
+                /*required_failures*/ 1, /*optional_failures*/ 0,
+            ),
             (
                 CheckStatus::Fail,
-                "one or more required OpenAI endpoints are unreachable over HTTP",
+                "one or more required provider endpoints are unreachable over HTTP",
             )
         );
+    }
+
+    #[test]
+    fn collect_rollout_stats_counts_nested_rollout_files() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let nested = temp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("05")
+            .join("13");
+        std::fs::create_dir_all(&nested).expect("create nested rollout dir");
+        std::fs::write(
+            nested.join("rollout-2026-05-13T00-00-00-test.jsonl"),
+            "12345",
+        )
+        .expect("write rollout file");
+        std::fs::write(nested.join("not-a-rollout.jsonl"), "ignored").expect("write ignored jsonl");
+
+        let stats = collect_rollout_stats(&temp.path().join("sessions"));
+
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.total_bytes, 5);
+        assert_eq!(stats.average_bytes(), 5);
+        assert_eq!(stats.error, None);
     }
 
     #[tokio::test]

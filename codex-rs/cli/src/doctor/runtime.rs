@@ -120,7 +120,7 @@ fn install_method_name(context: &InstallContext) -> &'static str {
         InstallContext::Npm => "npm",
         InstallContext::Bun => "bun",
         InstallContext::Brew => "brew",
-        InstallContext::Other => "local",
+        InstallContext::Other => "local build",
     }
 }
 
