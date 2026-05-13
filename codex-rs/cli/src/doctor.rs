@@ -34,6 +34,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
@@ -124,6 +125,7 @@ const TMUX_OPTION_NAMES: &[&str] = &[
     "focus-events",
 ];
 const NARROW_TERMINAL_COLUMNS: u16 = 80;
+const NARROW_TERMINAL_ROWS: u16 = 24;
 
 /// Options for building a local Codex diagnostic report.
 ///
@@ -187,8 +189,58 @@ struct DoctorCheck {
     status: CheckStatus,
     summary: String,
     details: Vec<String>,
+    issues: Vec<DoctorIssue>,
     remediation: Option<String>,
     duration_ms: u64,
+}
+
+/// Structured cause/remedy metadata for a non-ok doctor check.
+///
+/// Human output uses issues to make warnings and failures self-explanatory:
+/// the row headline says what is wrong, matching detail rows show measured vs.
+/// expected values, and remedies are printed as explicit next actions.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorIssue {
+    severity: CheckStatus,
+    cause: String,
+    measured: Option<String>,
+    expected: Option<String>,
+    remedy: Option<String>,
+    fields: Vec<String>,
+}
+
+impl DoctorIssue {
+    fn new(severity: CheckStatus, cause: impl Into<String>) -> Self {
+        Self {
+            severity,
+            cause: cause.into(),
+            measured: None,
+            expected: None,
+            remedy: None,
+            fields: Vec::new(),
+        }
+    }
+
+    fn measured(mut self, measured: impl Into<String>) -> Self {
+        self.measured = Some(measured.into());
+        self
+    }
+
+    fn expected(mut self, expected: impl Into<String>) -> Self {
+        self.expected = Some(expected.into());
+        self
+    }
+
+    fn remedy(mut self, remedy: impl Into<String>) -> Self {
+        self.remedy = Some(remedy.into());
+        self
+    }
+
+    fn field(mut self, field: impl Into<String>) -> Self {
+        self.fields.push(field.into());
+        self
+    }
 }
 
 impl DoctorCheck {
@@ -204,6 +256,7 @@ impl DoctorCheck {
             status,
             summary: summary.into(),
             details: Vec::new(),
+            issues: Vec::new(),
             remediation: None,
             duration_ms: 0,
         }
@@ -221,6 +274,11 @@ impl DoctorCheck {
 
     fn remediation(mut self, remediation: impl Into<String>) -> Self {
         self.remediation = Some(remediation.into());
+        self
+    }
+
+    fn issue(mut self, issue: DoctorIssue) -> Self {
+        self.issues.push(issue);
         self
     }
 }
@@ -407,7 +465,10 @@ async fn load_config(
         ..config_overrides_from_interactive(interactive, arg0_paths)
     };
 
-    Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides)
+    ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .build()
         .await
         .context("failed to load Codex config")
 }
@@ -471,9 +532,23 @@ struct JsonDoctorCheck {
     summary: String,
     details: BTreeMap<String, JsonDetailValue>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    issues: Vec<JsonDoctorIssue>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     notes: Vec<String>,
     remediation: Option<String>,
     duration_ms: u64,
+}
+
+/// One redacted issue in the JSON support report.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonDoctorIssue {
+    severity: CheckStatus,
+    cause: String,
+    measured: Option<String>,
+    expected: Option<String>,
+    remedy: Option<String>,
+    fields: Vec<String>,
 }
 
 /// JSON detail value that preserves repeated detail keys without inventing names.
@@ -521,9 +596,25 @@ fn redacted_json_check(check: &DoctorCheck) -> JsonDoctorCheck {
         status: check.status,
         summary: check.summary.clone(),
         details,
+        issues: check.issues.iter().map(redacted_json_issue).collect(),
         notes,
         remediation: check.remediation.as_deref().map(redact_detail),
         duration_ms: check.duration_ms,
+    }
+}
+
+fn redacted_json_issue(issue: &DoctorIssue) -> JsonDoctorIssue {
+    JsonDoctorIssue {
+        severity: issue.severity,
+        cause: redact_detail(&issue.cause),
+        measured: issue.measured.as_deref().map(redact_detail),
+        expected: issue.expected.as_deref().map(redact_detail),
+        remedy: issue.remedy.as_deref().map(redact_detail),
+        fields: issue
+            .fields
+            .iter()
+            .map(|field| redact_detail(field))
+            .collect(),
     }
 }
 
@@ -1512,32 +1603,61 @@ fn terminal_check_from_inputs(inputs: TerminalCheckInputs) -> DoctorCheck {
     push_presence_env_values(&mut details, &inputs, REMOTE_TERMINAL_ENV_VARS);
     details.extend(inputs.tmux_details.iter().cloned());
 
-    let narrow_terminal = is_narrow_terminal(&inputs);
     let locale_warning = locale.as_deref().is_some_and(is_non_utf8_locale);
-    let mut warnings = Vec::new();
+    let mut issues = Vec::new();
     if matches!(name, TerminalName::Dumb) {
-        warnings.push("terminal reports TERM=dumb");
+        issues.push(
+            DoctorIssue::new(
+                CheckStatus::Fail,
+                "TERM=dumb - colors and cursor control are disabled",
+            )
+            .measured("TERM=dumb")
+            .expected("TERM=xterm-256color or another real terminal type")
+            .remedy("set TERM to a real value, for example xterm-256color")
+            .field("TERM"),
+        );
     }
     if locale_warning {
-        warnings.push("terminal locale is not UTF-8");
+        let measured = locale.unwrap_or_else(|| "unknown".to_string());
+        issues.push(
+            DoctorIssue::new(
+                CheckStatus::Warning,
+                "locale is not UTF-8 - unicode glyphs may render incorrectly",
+            )
+            .measured(measured)
+            .expected("UTF-8 locale, for example en_US.UTF-8")
+            .remedy("export LANG=en_US.UTF-8 or another UTF-8 locale")
+            .field("effective locale"),
+        );
     }
     if terminfo_warning {
-        warnings.push("terminfo path is not readable");
+        issues.push(
+            DoctorIssue::new(
+                CheckStatus::Fail,
+                "TERMINFO unreadable - terminal capabilities are unknown",
+            )
+            .expected("readable terminfo file or directory")
+            .remedy("check that $TERMINFO points to a readable directory")
+            .field("TERMINFO")
+            .field("TERMINFO_DIRS entry"),
+        );
     }
-    if narrow_terminal {
-        warnings.push("narrow terminal may wrap output");
-    }
+    issues.extend(terminal_size_issues(&inputs));
 
-    let status = if warnings.is_empty() {
-        CheckStatus::Ok
-    } else {
-        CheckStatus::Warning
-    };
-    let summary = warnings
+    let status = issues
+        .iter()
+        .map(|issue| issue.severity)
+        .max()
+        .unwrap_or(CheckStatus::Ok);
+    let summary = issues
         .first()
-        .copied()
+        .map(|issue| issue.cause.as_str())
         .unwrap_or("terminal metadata was detected");
-    DoctorCheck::new("terminal.env", "terminal", status, summary).details(details)
+    let mut check = DoctorCheck::new("terminal.env", "terminal", status, summary).details(details);
+    for issue in issues {
+        check = check.issue(issue);
+    }
+    check
 }
 
 fn terminal_name(info: &TerminalInfo) -> &'static str {
@@ -1702,16 +1822,71 @@ fn is_non_utf8_locale(locale: &str) -> bool {
     !(locale.contains("utf-8") || locale.contains("utf8"))
 }
 
-fn is_narrow_terminal(inputs: &TerminalCheckInputs) -> bool {
-    let actual_width_is_narrow = matches!(
-        &inputs.terminal_size,
-        Ok((columns, _)) if *columns > 0 && *columns < NARROW_TERMINAL_COLUMNS
-    );
-    let declared_width_is_narrow = inputs
+fn terminal_size_issues(inputs: &TerminalCheckInputs) -> Vec<DoctorIssue> {
+    let mut issues = Vec::new();
+    if let Ok((columns, rows)) = inputs.terminal_size {
+        if columns > 0 && columns < NARROW_TERMINAL_COLUMNS {
+            issues.push(
+                DoctorIssue::new(
+                    CheckStatus::Warning,
+                    format!("width {columns} cols - output may wrap (recommended >=80)"),
+                )
+                .measured(format!("{columns} x {rows}"))
+                .expected(format!(">= {NARROW_TERMINAL_COLUMNS} columns"))
+                .remedy("resize the window to at least 80 columns")
+                .field("terminal size"),
+            );
+        }
+        if rows > 0 && rows < NARROW_TERMINAL_ROWS {
+            issues.push(
+                DoctorIssue::new(
+                    CheckStatus::Warning,
+                    format!("height {rows} rows - content may scroll off (recommended >=24)"),
+                )
+                .measured(format!("{columns} x {rows}"))
+                .expected(format!(">= {NARROW_TERMINAL_ROWS} rows"))
+                .remedy("resize the window to at least 24 rows")
+                .field("terminal size"),
+            );
+        }
+    }
+
+    if let Some(columns) = inputs
         .env_value("COLUMNS")
         .and_then(|columns| columns.parse::<u16>().ok())
-        .is_some_and(|columns| columns > 0 && columns < NARROW_TERMINAL_COLUMNS);
-    actual_width_is_narrow || declared_width_is_narrow
+        && columns > 0
+        && columns < NARROW_TERMINAL_COLUMNS
+    {
+        issues.push(
+            DoctorIssue::new(
+                CheckStatus::Warning,
+                format!("COLUMNS={columns} - output may wrap (recommended >=80)"),
+            )
+            .measured(format!("{columns} columns"))
+            .expected(format!(">= {NARROW_TERMINAL_COLUMNS} columns"))
+            .remedy("resize the window to at least 80 columns")
+            .field("COLUMNS"),
+        );
+    }
+    if let Some(rows) = inputs
+        .env_value("LINES")
+        .and_then(|rows| rows.parse::<u16>().ok())
+        && rows > 0
+        && rows < NARROW_TERMINAL_ROWS
+    {
+        issues.push(
+            DoctorIssue::new(
+                CheckStatus::Warning,
+                format!("LINES={rows} - content may scroll off (recommended >=24)"),
+            )
+            .measured(format!("{rows} rows"))
+            .expected(format!(">= {NARROW_TERMINAL_ROWS} rows"))
+            .remedy("resize the window to at least 24 rows")
+            .field("LINES"),
+        );
+    }
+
+    issues
 }
 
 fn tmux_diagnostic_details() -> Vec<String> {
@@ -2725,6 +2900,16 @@ mod tests {
                 .detail("duplicate: one")
                 .detail("duplicate: two")
                 .detail("freeform note")
+                .issue(
+                    DoctorIssue::new(
+                        CheckStatus::Warning,
+                        "remote https://user:pass@example.com/mcp?x=abc is unreachable",
+                    )
+                    .measured("https://user:pass@example.com/mcp?x=abc")
+                    .expected("reachable MCP endpoint")
+                    .remedy("Check https://user:pass@example.com/help?x=abc.")
+                    .field("optional reachability failed"),
+                )
                 .remediation("Open https://user:pass@example.com/help?x=abc."),
             ],
         };
@@ -2750,6 +2935,14 @@ mod tests {
         assert_eq!(
             json["checks"]["mcp.config"]["notes"],
             serde_json::json!(["freeform note"])
+        );
+        assert_eq!(
+            json["checks"]["mcp.config"]["issues"][0]["measured"],
+            "https://example.com/mcp"
+        );
+        assert_eq!(
+            json["checks"]["mcp.config"]["issues"][0]["remedy"],
+            "Check https://example.com/help."
         );
     }
 
@@ -3229,8 +3422,16 @@ mod tests {
 
         let check = terminal_check_from_inputs(inputs);
 
-        assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.summary, "terminal reports TERM=dumb");
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert_eq!(
+            check.summary,
+            "TERM=dumb - colors and cursor control are disabled"
+        );
+        assert_eq!(check.issues.len(), 1);
+        assert_eq!(
+            check.issues[0].remedy.as_deref(),
+            Some("set TERM to a real value, for example xterm-256color")
+        );
     }
 
     #[test]
@@ -3241,7 +3442,15 @@ mod tests {
         let check = terminal_check_from_inputs(inputs);
 
         assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.summary, "narrow terminal may wrap output");
+        assert_eq!(
+            check.summary,
+            "width 79 cols - output may wrap (recommended >=80)"
+        );
+        assert_eq!(check.issues[0].expected.as_deref(), Some(">= 80 columns"));
+        assert_eq!(
+            check.issues[0].remedy.as_deref(),
+            Some("resize the window to at least 80 columns")
+        );
     }
 
     #[test]
@@ -3252,8 +3461,12 @@ mod tests {
         let check = terminal_check_from_inputs(inputs);
 
         assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.summary, "narrow terminal may wrap output");
+        assert_eq!(
+            check.summary,
+            "COLUMNS=60 - output may wrap (recommended >=80)"
+        );
         assert!(check.details.contains(&"COLUMNS: 60".to_string()));
+        assert_eq!(check.issues[0].fields, vec!["COLUMNS".to_string()]);
     }
 
     #[test]
@@ -3264,8 +3477,15 @@ mod tests {
         let check = terminal_check_from_inputs(inputs);
 
         assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.summary, "terminal locale is not UTF-8");
+        assert_eq!(
+            check.summary,
+            "locale is not UTF-8 - unicode glyphs may render incorrectly"
+        );
         assert!(check.details.contains(&"effective locale: C".to_string()));
+        assert_eq!(
+            check.issues[0].remedy.as_deref(),
+            Some("export LANG=en_US.UTF-8 or another UTF-8 locale")
+        );
     }
 
     #[test]
@@ -3277,13 +3497,20 @@ mod tests {
 
         let check = terminal_check_from_inputs(inputs);
 
-        assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.summary, "terminfo path is not readable");
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert_eq!(
+            check.summary,
+            "TERMINFO unreadable - terminal capabilities are unknown"
+        );
         assert!(
             check
                 .details
                 .iter()
                 .any(|detail| detail.starts_with("TERMINFO: ") && detail.ends_with(" (missing)"))
+        );
+        assert_eq!(
+            check.issues[0].remedy.as_deref(),
+            Some("check that $TERMINFO points to a readable directory")
         );
     }
 

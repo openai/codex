@@ -156,13 +156,28 @@ fn write_note_row(out: &mut String, note: &DoctorNote, options: HumanOutputOptio
 
 fn write_detail_line(out: &mut String, detail: HumanDetail, options: HumanOutputOptions) {
     match detail {
-        HumanDetail::Row { label, value } => {
+        HumanDetail::Row {
+            label,
+            value,
+            expected,
+        } => {
+            let is_issue = expected.is_some();
             let label = format!("{label:<DETAIL_LABEL_WIDTH$}");
+            let value = if let Some(expected) = expected {
+                format!(
+                    "{} {}",
+                    detail_value(&value, options),
+                    dim(&format!("(expected {expected})"), options)
+                )
+            } else {
+                detail_value(&value, options)
+            };
             let _ = writeln!(
                 out,
-                "      {} {}",
+                "    {} {} {}",
+                detail_marker(is_issue, options),
                 detail_label(&label, options),
-                detail_value(&value, options)
+                value
             );
         }
         HumanDetail::Continuation(value) => {
@@ -182,10 +197,23 @@ fn write_detail_line(out: &mut String, detail: HumanDetail, options: HumanOutput
                 dim(&highlight_actions(&value, options), options)
             );
         }
+        HumanDetail::Remedy(value) => {
+            let marker = if options.ascii { "->" } else { "→" };
+            let _ = writeln!(
+                out,
+                "    {} {}",
+                orange(marker, options),
+                highlight_actions(&value, options)
+            );
+        }
     }
 }
 
 fn row_description(check: &DoctorCheck, options: HumanOutputOptions) -> String {
+    if matches!(check.status, CheckStatus::Warning | CheckStatus::Fail) && !check.issues.is_empty()
+    {
+        return issue_summary(check);
+    }
     if matches!(check.status, CheckStatus::Warning | CheckStatus::Fail)
         && let Some(remediation) = &check.remediation
     {
@@ -195,6 +223,23 @@ fn row_description(check: &DoctorCheck, options: HumanOutputOptions) -> String {
     }
 
     display_summary(check, options)
+}
+
+fn issue_summary(check: &DoctorCheck) -> String {
+    match check.issues.as_slice() {
+        [] => check.summary.clone(),
+        [issue] => issue.cause.clone(),
+        issues => format!(
+            "{} issues - {}",
+            issues.len(),
+            issues
+                .iter()
+                .take(2)
+                .map(|issue| issue.cause.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,7 +254,7 @@ enum DisplayStatus {
 
 struct DoctorNote {
     status: DisplayStatus,
-    name: &'static str,
+    name: String,
     summary: String,
 }
 
@@ -275,6 +320,13 @@ fn style_description(
         DisplayStatus::Update => amber(&highlighted, options),
         DisplayStatus::Note | DisplayStatus::Warning | DisplayStatus::Fail => highlighted,
     }
+}
+
+fn detail_marker(is_issue: bool, options: HumanOutputOptions) -> String {
+    if !is_issue {
+        return " ".to_string();
+    }
+    orange(if options.ascii { ">" } else { "▸" }, options)
 }
 
 fn style_note_summary(note: &DoctorNote, options: HumanOutputOptions) -> String {
@@ -451,15 +503,9 @@ fn notes_for_report(report: &DoctorReport) -> Vec<DoctorNote> {
             .into_iter()
             .for_each(|note| notes.push(note));
     }
-    if let Some(check) = find_check(report, "mcp")
-        && check.status == CheckStatus::Warning
-    {
-        notes.push(DoctorNote {
-            status: DisplayStatus::Warning,
-            name: "mcp",
-            summary: "MCP configuration has optional issues".to_string(),
-        });
-    }
+    non_ok_notes(report)
+        .into_iter()
+        .for_each(|note| notes.push(note));
     auth_reachability_note(report)
         .into_iter()
         .for_each(|note| notes.push(note));
@@ -490,7 +536,7 @@ fn update_note(check: &DoctorCheck, report: &DoctorReport) -> Option<DoctorNote>
     }
     Some(DoctorNote {
         status: DisplayStatus::Update,
-        name: "updates",
+        name: "updates".to_string(),
         summary: format!("{latest} available ({parenthetical})"),
     })
 }
@@ -503,7 +549,7 @@ fn rollout_note(check: &DoctorCheck) -> Option<DoctorNote> {
     }
     Some(DoctorNote {
         status: DisplayStatus::Warning,
-        name: "rollouts",
+        name: "rollouts".to_string(),
         summary: format!(
             "{} active files · {} on disk",
             detail::format_count(files),
@@ -520,9 +566,32 @@ fn sandbox_note(check: &DoctorCheck) -> Option<DoctorNote> {
     }
     Some(DoctorNote {
         status: DisplayStatus::Warning,
-        name: "sandbox",
+        name: "sandbox".to_string(),
         summary: format!("filesystem {filesystem} · network {network}"),
     })
+}
+
+fn non_ok_notes(report: &DoctorReport) -> Vec<DoctorNote> {
+    report
+        .checks
+        .iter()
+        .filter(|check| matches!(check.status, CheckStatus::Warning | CheckStatus::Fail))
+        .map(|check| DoctorNote {
+            status: display_status(check),
+            name: check.category.clone(),
+            summary: actionable_note_summary(check),
+        })
+        .collect()
+}
+
+fn actionable_note_summary(check: &DoctorCheck) -> String {
+    if !check.issues.is_empty() {
+        return issue_summary(check);
+    }
+    if let Some(remediation) = &check.remediation {
+        return format!("{} - {remediation}", check.summary);
+    }
+    check.summary.clone()
 }
 
 fn auth_reachability_note(report: &DoctorReport) -> Option<DoctorNote> {
@@ -535,7 +604,7 @@ fn auth_reachability_note(report: &DoctorReport) -> Option<DoctorNote> {
     if auth_mode_lower.contains("chatgpt") && reachability_mode_lower.contains("api key") {
         return Some(DoctorNote {
             status: DisplayStatus::Warning,
-            name: "auth",
+            name: "auth".to_string(),
             summary: "mixed auth signals: ChatGPT login plus API key env var; HTTP reachability uses API-key mode".to_string(),
         });
     }
@@ -1108,6 +1177,11 @@ mod tests {
             "\
 Codex Doctor v0.0.0
 
+Notes
+   ⚠ terminal     narrow terminal
+   ✗ auth         token expired - Run `codex login`.
+─────────────────────────────────────────────────────────────
+
 Environment
   ✓ runtime      running local build on darwin-arm64
   ✓ install      consistent
@@ -1132,7 +1206,7 @@ Background Server
   ✓ app-server   background server is not running
 
 {}
-9 ok · 1 warn · 1 fail failed
+9 ok · 2 notes · 1 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report
@@ -1148,6 +1222,11 @@ Background Server
         let expected = format!(
             "\
 Codex Doctor v0.0.0
+
+Notes
+   ⚠ terminal     narrow terminal
+   ✗ auth         token expired - Run `codex login`.
+─────────────────────────────────────────────────────────────
 
 Environment
   ✓ runtime      running local build on darwin-arm64
@@ -1171,7 +1250,7 @@ Background Server
   ✓ app-server   background server is not running
 
 {}
-9 ok · 1 warn · 1 fail failed
+9 ok · 2 notes · 1 warn · 1 fail failed
 
 Run codex doctor without --summary for detailed diagnostics.
 --all expand truncated lists       --json redacted report
@@ -1196,6 +1275,11 @@ Run codex doctor without --summary for detailed diagnostics.
             "\
 Codex Doctor v0.0.0
 
+Notes
+   [!!] terminal     narrow terminal
+   [XX] auth         token expired - Run `codex login`.
+-------------------------------------------------------------
+
 Environment
   [ok] runtime      running local build on darwin-arm64
   [ok] install      consistent
@@ -1218,7 +1302,7 @@ Background Server
   [ok] app-server   background server is not running
 
 {}
-9 ok | 1 warn | 1 fail failed
+9 ok | 2 notes | 1 warn | 1 fail failed
 
 Run codex doctor without --summary for detailed diagnostics.
 --all expand truncated lists       --json redacted report
@@ -1240,6 +1324,45 @@ Run codex doctor without --summary for detailed diagnostics.
             },
         );
         assert!(rendered.contains("      OPENAI_API_KEY           present"));
+    }
+
+    #[test]
+    fn render_human_report_explains_terminal_warning_issue() {
+        let report = DoctorReport {
+            schema_version: 1,
+            generated_at: "0s since unix epoch".to_string(),
+            overall_status: CheckStatus::Warning,
+            codex_version: "0.0.0".to_string(),
+            checks: vec![
+                DoctorCheck::new(
+                    "terminal.env",
+                    "terminal",
+                    CheckStatus::Warning,
+                    "width 79 cols - output may wrap (recommended >=80)",
+                )
+                .detail("terminal: Ghostty")
+                .detail("terminal version: 1.3.1")
+                .detail("terminal size: 79x26")
+                .issue(
+                    super::super::DoctorIssue::new(
+                        CheckStatus::Warning,
+                        "width 79 cols - output may wrap (recommended >=80)",
+                    )
+                    .expected(">= 80 columns")
+                    .remedy("resize the window to at least 80 columns")
+                    .field("terminal size"),
+                ),
+            ],
+        };
+
+        let rendered = render_human_report(&report, detailed_no_color_unicode_options());
+
+        assert!(
+            rendered.contains("⚠ terminal     width 79 cols - output may wrap (recommended >=80)")
+        );
+        assert!(rendered.contains("▸ terminal size            79x26 (expected >= 80 columns)"));
+        assert!(rendered.contains("→ resize the window to at least 80 columns"));
+        assert!(!rendered.contains("⚠ terminal     Ghostty 1.3.1"));
     }
 
     #[test]

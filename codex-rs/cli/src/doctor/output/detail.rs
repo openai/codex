@@ -6,6 +6,7 @@
 //! truncating long paths for terminal output, grouping repeated values, and
 //! keeping the `--all` expansion behavior out of check construction.
 
+use std::collections::BTreeSet;
 use std::env;
 
 use super::DoctorCheck;
@@ -17,9 +18,14 @@ const PATH_LIMIT: usize = 48;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum HumanDetail {
-    Row { label: String, value: String },
+    Row {
+        label: String,
+        value: String,
+        expected: Option<String>,
+    },
     Continuation(String),
     Bullet(String),
+    Remedy(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,10 +43,13 @@ pub(super) fn detail_lines(check: &DoctorCheck, options: HumanOutputOptions) -> 
         "state" => state_details(&parsed),
         _ => generic_details(&parsed),
     };
-    details
+    let mut details = details
         .into_iter()
+        .map(|detail| attach_issue_metadata(detail, check))
         .map(|detail| humanize_detail(detail, options))
-        .collect()
+        .collect::<Vec<_>>();
+    details.extend(issue_remedies(check));
+    details
 }
 
 pub(super) fn detail_value(check: &DoctorCheck, label: &str) -> Option<String> {
@@ -176,6 +185,7 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
                 package_root.to_string()
             }
         ),
+        expected: None,
     });
 
     let path_entries = numbered_values(parsed, "PATH codex #");
@@ -189,6 +199,7 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
         out.push(HumanDetail::Row {
             label: format!("PATH entries ({total})"),
             value: path_entries[0].clone(),
+            expected: None,
         });
         out.extend(
             path_entries
@@ -231,6 +242,7 @@ fn config_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<H
         out.push(HumanDetail::Row {
             label: "model".to_string(),
             value,
+            expected: None,
         });
     }
     push_row_if_present(&mut out, parsed, "cwd", "cwd");
@@ -247,6 +259,7 @@ fn config_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<H
         out.push(HumanDetail::Row {
             label: "legacy alias".to_string(),
             value: detail.value.clone(),
+            expected: None,
         });
     }
 
@@ -290,6 +303,7 @@ fn state_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
             out.push(HumanDetail::Row {
                 label: label.to_string(),
                 value: rollout_summary(value).unwrap_or_else(|| value.to_string()),
+                expected: None,
             });
         }
     }
@@ -323,6 +337,7 @@ fn generic_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
                 HumanDetail::Row {
                     label: display_label(&detail.label),
                     value: detail.value.clone(),
+                    expected: None,
                 }
             }
         })
@@ -347,6 +362,7 @@ fn push_feature_flags(
     out.push(HumanDetail::Row {
         label: "feature flags".to_string(),
         value: format!("{enabled_count} enabled · {override_count} overridden{hint}"),
+        expected: None,
     });
 
     if !overrides.is_empty() {
@@ -383,6 +399,7 @@ fn push_list_row(
     out.push(HumanDetail::Row {
         label: label.to_string(),
         value,
+        expected: None,
     });
 }
 
@@ -398,6 +415,7 @@ fn push_database_row(out: &mut Vec<HumanDetail>, parsed: &[ParsedDetail], label:
     out.push(HumanDetail::Row {
         label: label.to_string(),
         value,
+        expected: None,
     });
 }
 
@@ -411,6 +429,7 @@ fn push_row_if_present(
         out.push(HumanDetail::Row {
             label: display_label.to_string(),
             value: value.to_string(),
+            expected: None,
         });
     }
 }
@@ -438,6 +457,7 @@ fn push_remaining(
             out.push(HumanDetail::Row {
                 label: display_label(&detail.label),
                 value: detail.value.clone(),
+                expected: None,
             });
         }
     }
@@ -445,15 +465,63 @@ fn push_remaining(
 
 fn humanize_detail(detail: HumanDetail, options: HumanOutputOptions) -> HumanDetail {
     match detail {
-        HumanDetail::Row { label, value } => HumanDetail::Row {
+        HumanDetail::Row {
+            label,
+            value,
+            expected,
+        } => HumanDetail::Row {
             label,
             value: humanize_value(&value, options),
+            expected,
         },
         HumanDetail::Continuation(value) => {
             HumanDetail::Continuation(humanize_value(&value, options))
         }
         HumanDetail::Bullet(value) => HumanDetail::Bullet(humanize_value(&value, options)),
+        HumanDetail::Remedy(value) => HumanDetail::Remedy(value),
     }
+}
+
+fn attach_issue_metadata(detail: HumanDetail, check: &DoctorCheck) -> HumanDetail {
+    let HumanDetail::Row {
+        label,
+        value,
+        expected,
+    } = detail
+    else {
+        return detail;
+    };
+    let expected = expected.or_else(|| issue_expected_for_label(check, &label));
+    HumanDetail::Row {
+        label,
+        value,
+        expected,
+    }
+}
+
+fn issue_expected_for_label(check: &DoctorCheck, label: &str) -> Option<String> {
+    check
+        .issues
+        .iter()
+        .find(|issue| {
+            issue
+                .fields
+                .iter()
+                .any(|field| display_label(field) == label || field == label)
+        })
+        .and_then(|issue| issue.expected.clone())
+}
+
+fn issue_remedies(check: &DoctorCheck) -> Vec<HumanDetail> {
+    let mut seen = BTreeSet::new();
+    check
+        .issues
+        .iter()
+        .filter_map(|issue| issue.remedy.as_ref())
+        .filter(|remedy| seen.insert((*remedy).clone()))
+        .cloned()
+        .map(HumanDetail::Remedy)
+        .collect()
 }
 
 fn humanize_value(value: &str, _options: HumanOutputOptions) -> String {

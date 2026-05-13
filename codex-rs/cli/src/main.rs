@@ -1707,7 +1707,8 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::Resume(_))
-        | Some(Subcommand::Fork(_)) => None,
+        | Some(Subcommand::Fork(_))
+        | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
