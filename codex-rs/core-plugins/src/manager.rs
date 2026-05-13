@@ -844,7 +844,7 @@ impl PluginsManager {
         });
     }
 
-    fn cached_remote_marketplaces(
+    fn prune_and_get_cached_remote_marketplaces(
         &self,
         cache_key: &RemoteMarketplacesCacheKey,
     ) -> Option<Vec<RemoteMarketplace>> {
@@ -935,7 +935,7 @@ impl PluginsManager {
     ) -> Result<Vec<RemoteMarketplace>, RemotePluginCatalogError> {
         let cache_key = remote_marketplaces_cache_key(config, auth, sources);
         loop {
-            if let Some(marketplaces) = self.cached_remote_marketplaces(&cache_key) {
+            if let Some(marketplaces) = self.prune_and_get_cached_remote_marketplaces(&cache_key) {
                 return Ok(marketplaces);
             }
 
