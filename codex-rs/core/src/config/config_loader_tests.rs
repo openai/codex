@@ -527,9 +527,10 @@ writable_roots = ["~/code"]
 
     let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
     match &config.legacy_sandbox_policy() {
-        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+        SandboxPolicy::WorkspaceWrite { .. } => {
             assert_eq!(
-                writable_roots
+                config
+                    .workspace_roots
                     .iter()
                     .filter(|root| **root == expected_root)
                     .count(),
@@ -593,7 +594,6 @@ allowed_sandbox_modes = ["read-only"]
             .permission_profile
             .can_set(&PermissionProfile::from_legacy_sandbox_policy(
                 &SandboxPolicy::WorkspaceWrite {
-                    writable_roots: Vec::new(),
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
