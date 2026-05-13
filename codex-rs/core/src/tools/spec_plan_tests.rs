@@ -2265,9 +2265,8 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
-    assert!(description.starts_with(
-        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
-    ));
+    assert!(description.starts_with("Run JavaScript code to orchestrate/compose tool calls"));
+    assert!(!description.contains("do not attempt to use any other tools directly"));
     assert!(description.contains("### `update_plan`"));
     assert!(description.contains("### `view_image`"));
 }

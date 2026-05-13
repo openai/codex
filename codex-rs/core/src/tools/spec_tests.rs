@@ -1441,6 +1441,11 @@ async fn code_mode_only_can_expose_multi_agent_v2_as_normal_tools() {
     };
     assert!(!exec.description.contains("spawn_agent"));
     assert!(!exec.description.contains("wait_agent"));
+    assert!(
+        !exec
+            .description
+            .contains("do not attempt to use any other tools directly")
+    );
 
     let spawn_agent = find_tool(&model_visible_specs, "spawn_agent");
     let ToolSpec::Function(spawn_agent) = spawn_agent else {
