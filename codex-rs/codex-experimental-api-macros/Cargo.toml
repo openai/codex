@@ -6,6 +6,8 @@ license.workspace = true
 
 [lib]
 proc-macro = true
+test = false
+doctest = false
 
 [dependencies]
 proc-macro2 = "1"

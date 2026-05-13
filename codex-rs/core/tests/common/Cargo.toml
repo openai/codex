@@ -6,6 +6,7 @@ license.workspace = true
 
 [lib]
 path = "lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -17,6 +18,7 @@ base64 = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-hooks = { workspace = true }

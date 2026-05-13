@@ -25,8 +25,15 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AcceptedLineFingerprint {
+    pub path_hash: String,
+    pub line_hash: String,
+}
 
 #[derive(Clone)]
 pub struct TrackEventsContext {
@@ -296,7 +303,17 @@ pub(crate) enum AnalyticsFact {
         request: Box<ServerRequest>,
     },
     ServerResponse {
+        completed_at_ms: u64,
         response: Box<ServerResponse>,
+    },
+    EffectivePermissionsApprovalResponse {
+        completed_at_ms: u64,
+        request_id: RequestId,
+        response: Box<RequestPermissionsResponse>,
+    },
+    ServerRequestAborted {
+        completed_at_ms: u64,
+        request_id: RequestId,
     },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or

@@ -1,6 +1,11 @@
 use super::*;
 
 #[cfg(test)]
+use chrono::DateTime;
+#[cfg(test)]
+use chrono::Utc;
+
+#[cfg(test)]
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -203,6 +208,7 @@ pub(super) fn thread_response_sandbox_policy(
     sandbox_policy.into()
 }
 
+#[cfg(test)]
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -229,6 +235,7 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
     ThreadStartedNotification { thread }
 }
 
+#[cfg(test)]
 pub(crate) fn summary_to_thread(
     summary: ConversationSummary,
     fallback_cwd: &AbsolutePathBuf,
@@ -257,6 +264,7 @@ pub(crate) fn summary_to_thread(
         AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
             .unwrap_or_else(|err| {
                 warn!(
+                    conversation_id = %conversation_id,
                     path = %path.display(),
                     "failed to normalize thread cwd while summarizing thread: {err}"
                 );
@@ -274,7 +282,7 @@ pub(crate) fn summary_to_thread(
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
         status: ThreadStatus::NotLoaded,
-        path: Some(path),
+        path: (!path.as_os_str().is_empty()).then_some(path),
         cwd,
         cli_version,
         agent_nickname: source.get_nickname(),

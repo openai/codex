@@ -24,3 +24,6 @@ which = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[lib]
+doctest = false

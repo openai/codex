@@ -188,12 +188,17 @@ use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
+use super::mentions_v2::MentionV2Popup;
+use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
-use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
+use super::slash_commands::ServiceTierCommand;
+use super::slash_commands::SlashCommandItem;
+use super::slash_commands::find_slash_command;
+use super::slash_commands::has_slash_command_prefix;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::key_hint::KeyBindingListExt;
@@ -276,6 +281,8 @@ pub enum InputResult {
     /// Callers that dispatch this variant are also responsible for resolving any pending local
     /// command-history entry that the composer staged before clearing the visible input.
     Command(SlashCommand),
+    /// A bare model service-tier command parsed by the composer.
+    ServiceTierCommand(ServiceTierCommand),
     /// An inline slash command and its trimmed argument text.
     ///
     /// The `TextElement` ranges are rebased into the argument string, while any pending local
@@ -399,7 +406,9 @@ pub(crate) struct ChatComposer {
     ide_context_active: bool,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
-    fast_command_enabled: bool,
+    service_tier_commands_enabled: bool,
+    service_tier_commands: Vec<ServiceTierCommand>,
+    mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
@@ -460,6 +469,7 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+    MentionV2(MentionV2Popup),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -489,7 +499,7 @@ impl ChatComposer {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             connectors_enabled: self.connectors_enabled,
             plugins_command_enabled: self.plugins_command_enabled,
-            fast_command_enabled: self.fast_command_enabled,
+            service_tier_commands_enabled: self.service_tier_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
@@ -580,7 +590,9 @@ impl ChatComposer {
             ide_context_active: false,
             connectors_enabled: false,
             plugins_command_enabled: false,
-            fast_command_enabled: false,
+            service_tier_commands_enabled: false,
+            service_tier_commands: Vec::new(),
+            mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
@@ -655,6 +667,11 @@ impl ChatComposer {
         self.plugins_command_enabled = enabled;
     }
 
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.mentions_v2_enabled = enabled;
+        self.sync_popups();
+    }
+
     /// Toggle composer-side image paste handling.
     ///
     /// This only affects whether image-like paste content is converted into attachments; the
@@ -693,8 +710,13 @@ impl ChatComposer {
         self.connectors_enabled = enabled;
     }
 
-    pub fn set_fast_command_enabled(&mut self, enabled: bool) {
-        self.fast_command_enabled = enabled;
+    pub fn set_service_tier_commands_enabled(&mut self, enabled: bool) {
+        self.service_tier_commands_enabled = enabled;
+    }
+
+    pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
+        self.service_tier_commands = commands;
+        self.sync_popups();
     }
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
@@ -778,6 +800,14 @@ impl ChatComposer {
         self.windows_degraded_sandbox_active = enabled;
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 4] {
+        self.layout_areas_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
+    }
+
+    fn layout_areas_with_textarea_right_reserve(
+        &self,
+        area: Rect,
+        textarea_right_reserve: u16,
+    ) -> [Rect; 4] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
@@ -792,6 +822,9 @@ impl ChatComposer {
             ActivePopup::Skill(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
+            ActivePopup::MentionV2(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -800,7 +833,7 @@ impl ChatComposer {
             /*top*/ 1,
             LIVE_PREFIX_COLS,
             /*bottom*/ 1,
-            /*right*/ 1,
+            /*right*/ 1u16.saturating_add(textarea_right_reserve),
         ));
         let remote_images_height = self
             .remote_images_lines(textarea_rect.width)
@@ -830,7 +863,15 @@ impl ChatComposer {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled {
+        self.cursor_pos_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
+    }
+
+    pub(crate) fn cursor_pos_with_textarea_right_reserve(
+        &self,
+        area: Rect,
+        textarea_right_reserve: u16,
+    ) -> Option<(u16, u16)> {
+        if !self.input_enabled || self.selected_remote_image_index.is_some() {
             return None;
         }
 
@@ -838,7 +879,8 @@ impl ChatComposer {
             return Some(pos);
         }
 
-        let [_, _, textarea_rect, _] = self.layout_areas(area);
+        let [_, _, textarea_rect, _] =
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
@@ -1596,7 +1638,11 @@ impl ChatComposer {
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
-        let current_opt = Self::current_at_token(&self.textarea);
+        let current_opt = if self.mentions_v2_enabled {
+            self.current_mentions_v2_token()
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let Some(current_token) = current_opt else {
             return;
         };
@@ -1605,8 +1651,14 @@ impl ChatComposer {
             return;
         }
 
-        if let ActivePopup::File(popup) = &mut self.active_popup {
-            popup.set_matches(&query, matches);
+        match &mut self.active_popup {
+            ActivePopup::File(popup) => {
+                popup.set_matches(&query, matches);
+            }
+            ActivePopup::MentionV2(popup) => {
+                popup.set_file_matches(&query, matches);
+            }
+            _ => {}
         }
     }
 
@@ -1693,6 +1745,7 @@ impl ChatComposer {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
+            ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         self.reset_vim_mode_after_successful_dispatch(&result.0);
@@ -1762,24 +1815,22 @@ impl ChatComposer {
                 // before applying completion.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
-                let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
-                });
-                if let Some(cmd) = selected_cmd {
-                    if cmd == SlashCommand::Skills {
-                        self.stage_selected_slash_command_history(cmd);
+                if let Some(selected_cmd) = popup.selected_item() {
+                    let selected_command_text = format!("/{}", selected_cmd.command());
+                    if let CommandItem::Builtin(cmd) = selected_cmd
+                        && cmd == SlashCommand::Skills
+                    {
+                        self.stage_selected_slash_command_history(&CommandItem::Builtin(cmd));
                         self.textarea.set_text_clearing_elements("");
                         self.is_bash_mode = false;
                         return (InputResult::Command(cmd), true);
                     }
 
-                    let selected_command_text = format!("/{}", cmd.command());
                     let starts_with_cmd =
                         first_line.trim_start().starts_with(&selected_command_text);
                     if !starts_with_cmd {
                         self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                            .set_text_clearing_elements(&format!("{selected_command_text} "));
                         if !self.textarea.text().is_empty() {
                             self.textarea.set_cursor(self.textarea.text().len());
                         }
@@ -1800,17 +1851,13 @@ impl ChatComposer {
                 // while the slash-command popup is active.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
-                let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
-                });
-                if let Some(cmd) = selected_cmd {
-                    let starts_with_cmd = first_line
-                        .trim_start()
-                        .starts_with(&format!("/{}", cmd.command()));
+                if let Some(selected_cmd) = popup.selected_item() {
+                    let selected_command_text = format!("/{}", selected_cmd.command());
+                    let starts_with_cmd =
+                        first_line.trim_start().starts_with(&selected_command_text);
                     if !starts_with_cmd {
                         self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                            .set_text_clearing_elements(&format!("{selected_command_text} "));
                         self.is_bash_mode = false;
                     }
                     if !self.textarea.text().is_empty() {
@@ -1825,11 +1872,18 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    let CommandItem::Builtin(cmd) = sel;
-                    self.stage_selected_slash_command_history(cmd);
+                    self.stage_selected_slash_command_history(&sel);
                     self.textarea.set_text_clearing_elements("");
                     self.is_bash_mode = false;
-                    return (InputResult::Command(cmd), true);
+                    return (
+                        match sel {
+                            CommandItem::Builtin(cmd) => InputResult::Command(cmd),
+                            CommandItem::ServiceTier(command) => {
+                                InputResult::ServiceTierCommand(command)
+                            }
+                        },
+                        true,
+                    );
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
@@ -2133,6 +2187,103 @@ impl ChatComposer {
         result
     }
 
+    fn handle_key_event_with_mentions_v2_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::MentionV2(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        let mut selected: Option<MentionV2Selection> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.previous_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.next_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = self.current_mentions_v2_token() {
+                    self.dismissed_mention_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                selected = popup.selected();
+                close_popup = true;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some(selected) = selected {
+                match selected {
+                    MentionV2Selection::File(path) => {
+                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                    }
+                    MentionV2Selection::Tool { insert_text, path } => {
+                        self.insert_selected_mention(&insert_text, path.as_deref());
+                    }
+                }
+            }
+            self.active_popup = ActivePopup::None;
+        }
+
+        result
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png")
@@ -2140,6 +2291,45 @@ impl ChatComposer {
             || lower.ends_with(".jpeg")
             || lower.ends_with(".gif")
             || lower.ends_with(".webp")
+    }
+
+    fn insert_selected_file_path(&mut self, selected_path: &str) {
+        if Self::is_image_path(selected_path) {
+            let path_buf = PathBuf::from(selected_path);
+            match image::image_dimensions(&path_buf) {
+                Ok((width, height)) => {
+                    tracing::debug!("selected image dimensions={}x{}", width, height);
+                    let cursor_offset = self.textarea.cursor();
+                    let text = self.textarea.text();
+                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                    let before_cursor = &text[..safe_cursor];
+                    let after_cursor = &text[safe_cursor..];
+
+                    let start_idx = before_cursor
+                        .char_indices()
+                        .rfind(|(_, c)| c.is_whitespace())
+                        .map(|(idx, c)| idx + c.len_utf8())
+                        .unwrap_or(0);
+                    let end_rel_idx = after_cursor
+                        .char_indices()
+                        .find(|(_, c)| c.is_whitespace())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(after_cursor.len());
+                    let end_idx = safe_cursor + end_rel_idx;
+
+                    self.textarea.replace_range(start_idx..end_idx, "");
+                    self.textarea.set_cursor(start_idx);
+                    self.attach_image(path_buf);
+                    self.textarea.insert_str(" ");
+                }
+                Err(err) => {
+                    tracing::trace!("image dimensions lookup failed: {err}");
+                    self.insert_selected_path(selected_path);
+                }
+            }
+        } else {
+            self.insert_selected_path(selected_path);
+        }
     }
 
     fn trim_text_elements(
@@ -2397,6 +2587,13 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
+    fn current_mentions_v2_token(&self) -> Option<String> {
+        if !self.mentions_v2_enabled {
+            return None;
+        }
+        Self::current_prefixed_token(&self.textarea, '@', /*allow_empty*/ true)
+    }
+
     fn current_mention_token(&self) -> Option<String> {
         if !self.mentions_enabled() {
             return None;
@@ -2624,10 +2821,13 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    slash_commands::find_builtin_command(name, self.builtin_command_flags())
-                        .is_some();
-                if !is_builtin {
+                let is_known = find_slash_command(
+                    name,
+                    self.builtin_command_flags(),
+                    &self.service_tier_commands,
+                )
+                .is_some();
+                if !is_known {
                     let message = format!(
                         r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
                     );
@@ -2705,6 +2905,7 @@ impl ChatComposer {
             InputResult::Submitted { .. }
                 | InputResult::Queued { .. }
                 | InputResult::Command(_)
+                | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
         ) {
             self.textarea.enter_vim_normal_mode();
@@ -2845,21 +3046,28 @@ impl ChatComposer {
         if !rest.is_empty() {
             return None;
         }
-        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
-        if cmd.supports_inline_args()
+        let command = find_slash_command(
+            name,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+        )?;
+        if command.supports_inline_args()
             && parse_slash_name(text).is_some_and(|(_, full_rest, _)| !full_rest.is_empty())
         {
             return None;
         }
-        if self.reject_slash_command_if_unavailable(cmd) {
-            self.stage_slash_command_history(cmd);
+        if self.reject_slash_command_if_unavailable(&command) {
+            self.stage_slash_command_history(&command);
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
-        self.stage_slash_command_history(cmd);
+        self.stage_slash_command_history(&command);
         self.textarea.set_text_clearing_elements("");
         self.is_bash_mode = false;
-        Some(InputResult::Command(cmd))
+        Some(match command {
+            SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
+            SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
+        })
     }
 
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
@@ -2878,23 +3086,30 @@ impl ChatComposer {
             return None;
         }
 
-        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
+        let command = find_slash_command(
+            name,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+        )?;
 
-        if !cmd.supports_inline_args() {
+        if !command.supports_inline_args() {
             return None;
         }
-        if self.reject_slash_command_if_unavailable(cmd) {
-            self.stage_slash_command_history(cmd);
+        if self.reject_slash_command_if_unavailable(&command) {
+            self.stage_slash_command_history(&command);
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
 
-        self.stage_slash_command_history(cmd);
+        self.stage_slash_command_history(&command);
 
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
         let trimmed_rest = rest.trim();
         args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
+        let SlashCommandItem::Builtin(cmd) = command else {
+            return None;
+        };
         Some(InputResult::CommandWithArgs(
             cmd,
             trimmed_rest.to_string(),
@@ -2928,13 +3143,13 @@ impl ChatComposer {
         Some((trimmed_rest.to_string(), args_elements))
     }
 
-    fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
-        if !self.is_task_running || cmd.available_during_task() {
+    fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
+        if !self.is_task_running || command.available_during_task() {
             return false;
         }
         let message = format!(
             "'/{}' is disabled while a task is in progress.",
-            cmd.command()
+            command.command()
         );
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::new_error_event(message),
@@ -2965,8 +3180,8 @@ impl ChatComposer {
     /// Staging snapshots the rich composer state before the textarea is cleared. `ChatWidget`
     /// commits the staged entry after dispatch so command recall follows the submitted text, not
     /// the command outcome.
-    fn stage_slash_command_history(&mut self, cmd: SlashCommand) {
-        if cmd == SlashCommand::Clear {
+    fn stage_slash_command_history(&mut self, command: &SlashCommandItem) {
+        if matches!(command, SlashCommandItem::Builtin(SlashCommand::Clear)) {
             return;
         }
         self.stage_slash_command_history_text(self.textarea.text().trim().to_string());
@@ -2976,11 +3191,11 @@ impl ChatComposer {
     ///
     /// Popup filtering text can be partial, so recording the selected command avoids recalling
     /// `/di` after the user actually accepted `/diff`.
-    fn stage_selected_slash_command_history(&mut self, cmd: SlashCommand) {
-        if cmd == SlashCommand::Clear {
+    fn stage_selected_slash_command_history(&mut self, command: &CommandItem) {
+        if matches!(command, CommandItem::Builtin(SlashCommand::Clear)) {
             return;
         }
-        self.stage_slash_command_history_text(format!("/{}", cmd.command()));
+        self.stage_slash_command_history_text(format!("/{}", command.command()));
     }
 
     /// Store the provided command text and the current composer adornments in the pending slot.
@@ -3611,7 +3826,12 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let file_token = Self::current_at_token(&self.textarea);
+        let mentions_v2_token = self.current_mentions_v2_token();
+        let file_token = if self.mentions_v2_enabled {
+            None
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let browsing_history = self
             .history
             .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
@@ -3631,6 +3851,7 @@ impl ChatComposer {
         let allow_command_popup = self.slash_commands_enabled()
             && !self.is_bash_mode
             && file_token.is_none()
+            && mentions_v2_token.is_none()
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
@@ -3642,6 +3863,11 @@ impl ChatComposer {
             }
             self.dismissed_file_popup_token = None;
             self.dismissed_mention_popup_token = None;
+            return;
+        }
+
+        if let Some(token) = mentions_v2_token {
+            self.sync_mentions_v2_popup(token);
             return;
         }
 
@@ -3669,7 +3895,7 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_)
+            ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::MentionV2(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -3738,7 +3964,12 @@ impl ChatComposer {
     }
 
     fn is_known_slash_name(&self, name: &str) -> bool {
-        slash_commands::find_builtin_command(name, self.builtin_command_flags()).is_some()
+        find_slash_command(
+            name,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+        )
+        .is_some()
     }
 
     /// If the cursor is currently within a slash command on the first line,
@@ -3780,7 +4011,11 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        slash_commands::has_builtin_prefix(name, self.builtin_command_flags())
+        has_slash_command_prefix(
+            name,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+        )
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3826,23 +4061,26 @@ impl ChatComposer {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let plugins_command_enabled = self.plugins_command_enabled;
-                    let fast_command_enabled = self.fast_command_enabled;
+                    let service_tier_commands_enabled = self.service_tier_commands_enabled;
                     let goal_command_enabled = self.goal_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
-                    let mut command_popup = CommandPopup::new(CommandPopupFlags {
-                        collaboration_modes_enabled,
-                        connectors_enabled,
-                        plugins_command_enabled,
-                        fast_command_enabled,
-                        goal_command_enabled,
-                        personality_command_enabled,
-                        realtime_conversation_enabled,
-                        audio_device_selection_enabled,
-                        windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
-                        side_conversation_active: self.side_conversation_active,
-                    });
+                    let mut command_popup = CommandPopup::new(
+                        CommandPopupFlags {
+                            collaboration_modes_enabled,
+                            connectors_enabled,
+                            plugins_command_enabled,
+                            service_tier_commands_enabled,
+                            goal_command_enabled,
+                            personality_command_enabled,
+                            realtime_conversation_enabled,
+                            audio_device_selection_enabled,
+                            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+                            side_conversation_active: self.side_conversation_active,
+                        },
+                        self.service_tier_commands.clone(),
+                    );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -3915,6 +4153,41 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn sync_mentions_v2_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        } else {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+            self.current_file_query = Some(query.clone());
+        }
+
+        let candidates = super::mentions_v2::build_search_catalog(
+            self.skills.as_deref(),
+            self.plugins.as_deref(),
+        );
+
+        match &mut self.active_popup {
+            ActivePopup::MentionV2(popup) => {
+                popup.set_query(&query);
+                popup.set_candidates(candidates);
+            }
+            _ => {
+                let mut popup = MentionV2Popup::new(candidates);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::MentionV2(popup);
+            }
+        }
+
+        self.dismissed_mention_popup_token = None;
     }
 
     fn mention_items(&self) -> Vec<MentionItem> {
@@ -4203,17 +4476,7 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
 
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled || self.selected_remote_image_index.is_some() {
-            return None;
-        }
-
-        if let Some(pos) = self.history_search_cursor_pos(area) {
-            return Some(pos);
-        }
-
-        let [_, _, textarea_rect, _] = self.layout_areas(area);
-        let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        self.cursor_pos_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
     }
 
     fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
@@ -4225,6 +4488,20 @@ impl Renderable for ChatComposer {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
+        self.desired_height_with_textarea_right_reserve(width, /*textarea_right_reserve*/ 0)
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_with_mask(area, buf, /*mask_char*/ None);
+    }
+}
+
+impl ChatComposer {
+    pub(crate) fn desired_height_with_textarea_right_reserve(
+        &self,
+        width: u16,
+        textarea_right_reserve: u16,
+    ) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
@@ -4232,7 +4509,8 @@ impl Renderable for ChatComposer {
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        let inner_width = width.saturating_sub(COLS_WITH_MARGIN);
+        let inner_width =
+            width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
         let remote_images_height: u16 = self
             .remote_images_lines(inner_width)
             .len()
@@ -4248,18 +4526,27 @@ impl Renderable for ChatComposer {
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
+                ActivePopup::MentionV2(c) => c.calculate_required_height(width),
             }
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_with_mask(area, buf, /*mask_char*/ None);
     }
 }
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
+        self.render_with_mask_and_textarea_right_reserve(
+            area, buf, mask_char, /*textarea_right_reserve*/ 0,
+        );
+    }
+
+    pub(crate) fn render_with_mask_and_textarea_right_reserve(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mask_char: Option<char>,
+        textarea_right_reserve: u16,
+    ) {
         let [composer_rect, remote_images_rect, textarea_rect, popup_rect] =
-            self.layout_areas(area);
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -4268,6 +4555,9 @@ impl ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::Skill(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::MentionV2(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -7548,6 +7838,9 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "model")
                 }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected model command, got service tier {command:?}")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -7601,10 +7894,99 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "resume")
                 }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected resume command, got service tier {command:?}")
+                }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
         }
+    }
+
+    #[test]
+    fn slash_popup_pets_for_pet_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'e', 't']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_pet", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_pets_for_pet_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'p', 'e', 't']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "pets")
+                }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected pets command, got service tier {command:?}")
+                }
+                None => panic!("no selected command for '/pet'"),
+            },
+            _ => panic!("slash popup not active after typing '/pet'"),
+        }
+    }
+
+    #[test]
+    fn service_tier_slash_command_dispatches_from_catalog_name() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_service_tier_commands_enabled(/*enabled*/ true);
+        composer.set_service_tier_commands(vec![ServiceTierCommand {
+            id: "priority".to_string(),
+            name: "fast".to_string(),
+            description: "Fastest inference with increased plan usage".to_string(),
+        }]);
+        type_chars_humanlike(&mut composer, &['/', 'f', 'a', 's', 't']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::ServiceTierCommand(ServiceTierCommand {
+                id: "priority".to_string(),
+                name: "fast".to_string(),
+                description: "Fastest inference with increased plan usage".to_string(),
+            })
+        );
     }
 
     fn flush_after_paste_burst(composer: &mut ChatComposer) -> bool {
@@ -7663,6 +8045,9 @@ mod tests {
             }
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/init'")
+            }
+            InputResult::ServiceTierCommand(command) => {
+                panic!("expected init command, got service tier {command:?}")
             }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -7833,7 +8218,7 @@ mod tests {
 
         assert_queued_slash("/compact");
         assert_queued_slash("/review check regressions");
-        assert_queued_slash("/fast on");
+        assert_queued_slash("/fast");
         assert_queued_slash("/does-not-exist");
     }
 
@@ -8110,6 +8495,9 @@ mod tests {
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
+            InputResult::ServiceTierCommand(command) => {
+                panic!("expected diff command, got service tier {command:?}")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
@@ -8303,6 +8691,9 @@ mod tests {
             }
             InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/mention'")
+            }
+            InputResult::ServiceTierCommand(command) => {
+                panic!("expected mention command, got service tier {command:?}")
             }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")

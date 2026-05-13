@@ -55,9 +55,9 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::extension_tool_bundles;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
-use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::backoff;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -68,6 +68,7 @@ use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
+use codex_git_utils::get_git_repo_root;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -195,10 +196,10 @@ pub(crate) async fn run_turn(
         {
             Ok(mcp_tools) => mcp_tools,
             Err(_) if turn_context.apps_enabled() => return None,
-            Err(_) => HashMap::new(),
+            Err(_) => Vec::new(),
         }
     } else {
-        HashMap::new()
+        Vec::new()
     };
     let available_connectors = if turn_context.apps_enabled() {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
@@ -240,6 +241,7 @@ pub(crate) async fn run_turn(
         turn_context.as_ref(),
         &cancellation_token,
         &mentioned_skills,
+        Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
 
@@ -364,7 +366,11 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let display_root = get_git_repo_root(turn_context.cwd.as_path())
+        .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
+    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
+        display_root,
+    )));
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -516,7 +522,7 @@ pub(crate) async fn run_turn(
                     }
                     .to_string();
                     let stop_request = codex_hooks::StopRequest {
-                        session_id: sess.conversation_id,
+                        session_id: sess.session_id().into(),
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,
@@ -566,7 +572,7 @@ pub(crate) async fn run_turn(
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {
-                            session_id: sess.conversation_id,
+                            session_id: sess.session_id().into(),
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -1238,41 +1244,13 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    let unavailable_called_tools = if turn_context
-        .config
-        .features
-        .enabled(Feature::UnavailableDummyTools)
-    {
-        let exposed_tool_names = mcp_tools
-            .iter()
-            .chain(deferred_mcp_tools.iter())
-            .flat_map(|tools| tools.keys().map(String::as_str))
-            .collect::<HashSet<_>>();
-        collect_unavailable_called_tools(input, &exposed_tool_names)
-    } else {
-        Vec::new()
-    };
-
-    let parallel_mcp_server_names = turn_context
-        .config
-        .mcp_servers
-        .get()
-        .iter()
-        .filter_map(|(server_name, server_config)| {
-            server_config
-                .supports_parallel_tool_calls
-                .then_some(server_name.clone())
-        })
-        .collect::<HashSet<_>>();
-
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
-            parallel_mcp_server_names,
             discoverable_tools,
+            extension_tool_bundles: extension_tool_bundles(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     )))
@@ -1510,7 +1488,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
@@ -1878,6 +1855,7 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut should_emit_turn_diff = false;
+    let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -2104,7 +2082,8 @@ async fn try_run_sampling_request(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(&turn_context, snapshot).await;
+                sess.record_rate_limits_info(snapshot).await;
+                should_emit_token_count = true;
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
@@ -2122,8 +2101,9 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.update_token_usage_info(&turn_context, token_usage.as_ref())
+                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
+                should_emit_token_count = true;
                 should_emit_turn_diff = true;
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
@@ -2251,16 +2231,24 @@ async fn try_run_sampling_request(
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
+    if should_emit_token_count {
+        // A tool call such as request_user_input can intentionally pause the turn. Emit token
+        // counts only after pending tools resolve so clients do not see progress events while the
+        // turn is waiting on the user. This also needs to happen before returning cancellation so
+        // token usage already recorded from the completed response is still persisted.
+        sess.send_token_count_event(&turn_context).await;
+    }
+
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
     }
 
     if should_emit_turn_diff {
         let unified_diff = {
-            let mut tracker = turn_diff_tracker.lock().await;
+            let tracker = turn_diff_tracker.lock().await;
             tracker.get_unified_diff()
         };
-        if let Ok(Some(unified_diff)) = unified_diff {
+        if let Some(unified_diff) = unified_diff {
             let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
             sess.clone().send_event(&turn_context, msg).await;
         }

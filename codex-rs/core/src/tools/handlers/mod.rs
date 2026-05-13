@@ -1,22 +1,34 @@
 pub(crate) mod agent_jobs;
+pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
+pub(crate) mod apply_patch_spec;
 mod dynamic;
+pub(crate) mod extension_tools;
 mod goal;
+pub(crate) mod goal_spec;
 mod mcp;
 mod mcp_resource;
+pub(crate) mod mcp_resource_spec;
 pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
+pub(crate) mod multi_agents_spec;
 pub(crate) mod multi_agents_v2;
 mod plan;
+pub(crate) mod plan_spec;
 mod request_permissions;
 mod request_plugin_install;
+pub(crate) mod request_plugin_install_spec;
 mod request_user_input;
+pub(crate) mod request_user_input_spec;
 mod shell;
+pub(crate) mod shell_spec;
 mod test_sync;
+pub(crate) mod test_sync_spec;
 mod tool_search;
-mod unavailable_tool;
+pub(crate) mod tool_search_spec;
 pub(crate) mod unified_exec;
 mod view_image;
+pub(crate) mod view_image_spec;
 
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -24,6 +36,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
@@ -52,21 +65,62 @@ pub use request_user_input::RequestUserInputHandler;
 pub use shell::ContainerExecHandler;
 pub use shell::LocalShellHandler;
 pub use shell::ShellCommandHandler;
+pub(crate) use shell::ShellCommandHandlerOptions;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
-pub use unavailable_tool::UnavailableToolHandler;
-pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::ExecCommandHandler;
+pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 
-fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
+pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
+    })
+}
+
+fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
+    updated_input
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "hook returned updatedInput without string field `command`".to_string(),
+            )
+        })
+}
+
+fn rewrite_function_arguments(
+    arguments: &str,
+    tool_name: &str,
+    rewrite: impl FnOnce(&mut Map<String, Value>),
+) -> Result<String, FunctionCallError> {
+    let mut arguments: Value = parse_arguments(arguments)?;
+    let Value::Object(arguments) = &mut arguments else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool_name} arguments must be an object"
+        )));
+    };
+    rewrite(arguments);
+    serde_json::to_string(&arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {tool_name} arguments: {err}"
+        ))
+    })
+}
+
+fn rewrite_function_string_argument(
+    arguments: &str,
+    tool_name: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<String, FunctionCallError> {
+    rewrite_function_arguments(arguments, tool_name, |arguments| {
+        arguments.insert(field_name.to_string(), Value::String(value.to_string()));
     })
 }
 

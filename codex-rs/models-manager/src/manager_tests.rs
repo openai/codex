@@ -296,6 +296,21 @@ async fn get_model_info_matches_namespaced_suffix() {
 }
 
 #[tokio::test]
+async fn get_model_info_matches_hyphenated_provider_namespace_suffix() {
+    let config = ModelsManagerConfig::default();
+    let remote = remote_model("gpt-image", "Image", /*priority*/ 0);
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote],
+    });
+    let namespaced_model = "openai-codex/gpt-image".to_string();
+
+    let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+    assert_eq!(model_info.slug, namespaced_model);
+    assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
 async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();

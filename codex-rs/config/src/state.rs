@@ -66,6 +66,7 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
 }
 
 impl ConfigLayerEntry {
@@ -77,6 +78,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -88,6 +90,7 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -103,6 +106,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
+            hooks_config_folder_override: None,
         }
     }
 
@@ -112,6 +116,14 @@ impl ConfigLayerEntry {
 
     pub fn raw_toml(&self) -> Option<&str> {
         self.raw_toml.as_deref()
+    }
+
+    pub(crate) fn with_hooks_config_folder_override(
+        mut self,
+        hooks_config_folder_override: Option<AbsolutePathBuf>,
+    ) -> Self {
+        self.hooks_config_folder_override = hooks_config_folder_override;
+        self
     }
 
     pub fn metadata(&self) -> ConfigLayerMetadata {
@@ -141,6 +153,18 @@ impl ConfigLayerEntry {
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
         }
+    }
+
+    /// Returns the `.codex/` folder that should be used for hook declarations.
+    ///
+    /// Project layers normally use their own config folder. Linked Git worktrees
+    /// can instead point hook discovery at the matching folder from the root
+    /// checkout while the rest of the project config still comes from the
+    /// worktree.
+    pub fn hooks_config_folder(&self) -> Option<AbsolutePathBuf> {
+        self.hooks_config_folder_override
+            .clone()
+            .or_else(|| self.config_folder())
     }
 }
 
@@ -237,28 +261,32 @@ impl ConfigLayerStack {
     /// replaced; otherwise, it is inserted into the stack at the appropriate
     /// position based on precedence rules.
     pub fn with_user_config(&self, config_toml: &AbsolutePathBuf, user_config: TomlValue) -> Self {
-        let user_layer = ConfigLayerEntry::new(
+        self.with_user_layer(Some(ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: config_toml.clone(),
             },
             user_config,
-        );
+        )))
+    }
 
+    /// Returns a new stack with the user layer copied from `other`, preserving
+    /// every non-user layer already present in this stack.
+    pub fn with_user_layer_from(&self, other: &Self) -> Self {
+        self.with_user_layer(other.get_user_layer().cloned())
+    }
+
+    fn with_user_layer(&self, user_layer: Option<ConfigLayerEntry>) -> Self {
         let mut layers = self.layers.clone();
-        match self.user_layer_index {
-            Some(index) => {
+        let user_layer_index = match (self.user_layer_index, user_layer) {
+            (Some(index), Some(user_layer)) => {
                 layers[index] = user_layer;
-                Self {
-                    layers,
-                    user_layer_index: self.user_layer_index,
-                    requirements: self.requirements.clone(),
-                    requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                    startup_warnings: self.startup_warnings.clone(),
-                }
+                Some(index)
             }
-            None => {
+            (Some(index), None) => {
+                layers.remove(index);
+                None
+            }
+            (None, Some(user_layer)) => {
                 let user_layer_index = match layers
                     .iter()
                     .position(|layer| layer.name.precedence() > user_layer.name.precedence())
@@ -272,16 +300,18 @@ impl ConfigLayerStack {
                         layers.len() - 1
                     }
                 };
-                Self {
-                    layers,
-                    user_layer_index: Some(user_layer_index),
-                    requirements: self.requirements.clone(),
-                    requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                    startup_warnings: self.startup_warnings.clone(),
-                }
+                Some(user_layer_index)
             }
+            (None, None) => None,
+        };
+        Self {
+            layers,
+            user_layer_index,
+            requirements: self.requirements.clone(),
+            requirements_toml: self.requirements_toml.clone(),
+            ignore_user_and_project_exec_policy_rules: self
+                .ignore_user_and_project_exec_policy_rules,
+            startup_warnings: self.startup_warnings.clone(),
         }
     }
 

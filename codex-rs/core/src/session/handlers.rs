@@ -255,8 +255,11 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
-            sess.refresh_mcp_servers_if_requested(&current_context)
-                .await;
+            sess.refresh_mcp_servers_if_requested(
+                &current_context,
+                Some(sess.mcp_elicitation_reviewer()),
+            )
+            .await;
             let accepted_items = items.clone();
             sess.spawn_task(
                 Arc::clone(&current_context),
@@ -679,7 +682,8 @@ pub async fn review(
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
         .await;
-    sess.refresh_mcp_servers_if_requested(&turn_context).await;
+    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
+        .await;
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
             spawn_review_thread(

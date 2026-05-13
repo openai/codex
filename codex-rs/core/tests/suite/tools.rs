@@ -1,16 +1,12 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::types::McpServerConfig;
-use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
@@ -33,13 +29,10 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
-use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
-use serial_test::serial;
-use tempfile::TempDir;
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -56,24 +49,6 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn ev_namespaced_function_call(
-    call_id: &str,
-    namespace: &str,
-    name: &str,
-    arguments: &str,
-) -> Value {
-    json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "function_call",
-            "call_id": call_id,
-            "namespace": namespace,
-            "name": name,
-            "arguments": arguments,
-        }
-    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -207,149 +182,6 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial(mcp_test_value)]
-async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let historical_call_id = "historical-mcp-call";
-    let retry_call_id = "retry-mcp-call";
-    let server_name = "rmcp";
-    let unavailable_tool_namespace = "mcp__rmcp__";
-    let unavailable_tool_name = "echo";
-    let unavailable_tool_display_name = "mcp__rmcp__echo";
-    let server = start_mock_server().await;
-    let rmcp_test_server_bin = match stdio_server_bin() {
-        Ok(bin) => bin,
-        Err(err) => {
-            eprintln!("test_stdio_server binary not available, skipping test: {err}");
-            return Ok(());
-        }
-    };
-    let codex_home = Arc::new(TempDir::new()?);
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_home(Arc::clone(&codex_home))
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::UnavailableDummyTools)
-                .expect("unavailable dummy tools should be enabled for this test");
-            let mut servers = config.mcp_servers.get().clone();
-            servers.insert(
-                server_name.to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
-                        command: rmcp_test_server_bin,
-                        args: Vec::new(),
-                        env: Some(HashMap::new()),
-                        env_vars: Vec::new(),
-                        cwd: None,
-                    },
-                    experimental_environment: None,
-                    enabled: true,
-                    required: false,
-                    supports_parallel_tool_calls: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth_resource: None,
-                    tools: HashMap::new(),
-                },
-            );
-            config
-                .mcp_servers
-                .set(servers)
-                .expect("test mcp servers should accept any configuration");
-        });
-    let test = builder.build(&server).await?;
-
-    let first_turn_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_namespaced_function_call(
-                    historical_call_id,
-                    unavailable_tool_namespace,
-                    unavailable_tool_name,
-                    r#"{"message":"ping"}"#,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "rmcp echo tool completed"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    test.submit_turn("call the rmcp echo tool").await?;
-    let rollout_path = test.codex.rollout_path().context("rollout path")?;
-    assert_eq!(first_turn_mock.requests().len(), 2);
-    drop(test);
-
-    let retry_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-3"),
-                ev_namespaced_function_call(
-                    retry_call_id,
-                    unavailable_tool_namespace,
-                    unavailable_tool_name,
-                    r#"{"message":"ping again"}"#,
-                ),
-                ev_completed("resp-3"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-4"),
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-4"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut resume_builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config
-            .features
-            .enable(Feature::UnavailableDummyTools)
-            .expect("unavailable dummy tools should be enabled for this test");
-    });
-    let test = resume_builder
-        .resume(&server, codex_home, rollout_path)
-        .await?;
-
-    test.submit_turn("retry the rmcp echo tool").await?;
-
-    let requests = retry_mock.requests();
-    assert_eq!(requests.len(), 2);
-    let first_request_tools = tool_names(&requests[0].body_json());
-    assert!(
-        first_request_tools
-            .iter()
-            .any(|name| name == unavailable_tool_display_name),
-        "historical unavailable MCP call should add a placeholder tool; got {first_request_tools:?}"
-    );
-    let output_text = requests[1]
-        .function_call_output_text(retry_call_id)
-        .context("placeholder tool output present")?;
-    assert!(output_text.contains("not currently available"));
-    assert!(
-        !output_text.contains("unsupported call"),
-        "placeholder handler should answer instead of falling back to unsupported call: {output_text}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -433,15 +265,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         .function_call_output_content_and_success(call_id_success)
         .and_then(|(content, _)| content)
         .expect("success output string");
-    let output_json: Value = serde_json::from_str(&success_output)?;
-    assert_eq!(
-        output_json["metadata"]["exit_code"].as_i64(),
-        Some(0),
-        "expected exit code 0 after rerunning without escalation",
+    assert_regex_match(
+        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nshell ok\n?$",
+        &success_output,
     );
-    let stdout = output_json["output"].as_str().unwrap_or_default();
-    let stdout_pattern = r"(?s)^shell ok\n?$";
-    assert_regex_match(stdout_pattern, stdout);
 
     Ok(())
 }
@@ -772,6 +599,20 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
             "timeout output missing `command timed out`: {stdout}"
         );
     } else {
+        let normalized_output = output_str
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .trim_end_matches('\n')
+            .to_string();
+
+        let shell_output_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n(?:.*)?$";
+        if Regex::new(shell_output_pattern)
+            .expect("shell timeout output regex should compile")
+            .is_match(&normalized_output)
+        {
+            return Ok(());
+        }
+
         // Fallback: accept the signal classification path to deflake the test.
         let signal_pattern = r"(?is)^execution error:.*signal.*$";
         assert_regex_match(signal_pattern, output_str);

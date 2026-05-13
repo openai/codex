@@ -4,6 +4,14 @@
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
+    },
+    "PluginListMarketplaceKind": {
+      "enum": [
+        "local",
+        "workspace-directory",
+        "shared-with-me"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -11,6 +19,16 @@
       "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
       "items": {
         "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "marketplaceKinds": {
+      "description": "Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus the default remote catalog when enabled by feature flag.",
+      "items": {
+        "$ref": "#/definitions/PluginListMarketplaceKind"
       },
       "type": [
         "array",

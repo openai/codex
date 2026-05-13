@@ -14,8 +14,8 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
-use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -35,7 +35,6 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -53,6 +52,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -64,7 +64,6 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeEnvironment;
-use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -75,7 +74,6 @@ use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
-use codex_protocol::ToolName;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -113,6 +111,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -132,6 +131,8 @@ use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
@@ -140,12 +141,15 @@ use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use rmcp::model::UrlElicitationCapability;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -281,8 +285,6 @@ use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills_watcher::SkillsWatcher;
-use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::PendingRequestPermissions;
@@ -306,8 +308,8 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
+use codex_mcp::effective_mcp_servers_from_configured;
 use codex_mcp::host_owned_codex_apps_enabled;
-use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -352,10 +354,10 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_readiness::ReadinessFlag;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
 
@@ -390,7 +392,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) skills_watcher: Arc<SkillsWatcher>,
+    pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -409,8 +411,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
-    pub(crate) state_db: Option<state_db::StateDbHandle>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -454,7 +456,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager,
-            skills_watcher,
+            extensions,
             conversation_history,
             session_source,
             thread_source,
@@ -469,8 +471,8 @@ impl Codex {
             parent_trace: _,
             environment_selections,
             analytics_events_client,
-            state_db,
             thread_store,
+            attestation_provider,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -558,7 +560,15 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db.clone();
+                    let state_db_ctx = if config.ephemeral {
+                        None
+                    } else if let Some(local_store) =
+                        thread_store.as_any().downcast_ref::<LocalThreadStore>()
+                    {
+                        local_store.state_db().await
+                    } else {
+                        None
+                    };
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -642,13 +652,13 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
-            skills_watcher,
+            extensions,
             agent_control,
             environment_manager,
             analytics_events_client,
-            state_db,
             thread_store,
             parent_rollout_thread_trace,
+            attestation_provider,
         )
         .await
         .map_err(|e| {
@@ -777,6 +787,11 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
+    pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        let state = self.session.state.lock().await;
+        state.session_configuration.environments.clone()
+    }
+
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
@@ -822,24 +837,33 @@ pub(crate) fn session_loop_termination_from_handle(
     .shared()
 }
 
-async fn thread_title_from_state_db(
-    state_db: Option<&state_db::StateDbHandle>,
-    codex_home: &AbsolutePathBuf,
+async fn thread_title_from_thread_store(
+    live_thread: Option<&LiveThread>,
+    thread_store: &Arc<dyn ThreadStore>,
     conversation_id: ThreadId,
 ) -> Option<String> {
-    if let Some(metadata) = state_db
-        && let Some(metadata) = metadata.get_thread(conversation_id).await.ok().flatten()
-    {
-        let title = metadata.title.trim();
-        if !title.is_empty() && metadata.first_user_message.as_deref().map(str::trim) != Some(title)
-        {
-            return Some(title.to_string());
+    let thread = match live_thread {
+        Some(live_thread) => {
+            live_thread
+                .read_thread(
+                    /*include_archived*/ true, /*include_history*/ false,
+                )
+                .await
+        }
+        None => {
+            thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id: conversation_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
         }
     }
-    find_thread_name_by_id(codex_home, &conversation_id)
-        .await
-        .ok()
-        .flatten()
+    .ok()?;
+
+    let title = thread.name.as_deref()?.trim();
+    (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
 }
 
 impl Session {
@@ -999,29 +1023,6 @@ impl Session {
 
     pub(crate) fn set_out_of_band_elicitation_pause_state(&self, paused: bool) {
         self.out_of_band_elicitation_paused.send_replace(paused);
-    }
-
-    fn start_skills_watcher_listener(self: &Arc<Self>) {
-        let mut rx = self.services.skills_watcher.subscribe();
-        let weak_sess = Arc::downgrade(self);
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
-                        let Some(sess) = weak_sess.upgrade() else {
-                            break;
-                        };
-                        let event = Event {
-                            id: sess.next_internal_sub_id(),
-                            msg: EventMsg::SkillsUpdateAvailable,
-                        };
-                        sess.send_event_raw(event).await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-        });
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1308,7 +1309,7 @@ impl Session {
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
-            self.state_db(),
+            self.services.state_db.clone(),
         );
     }
 
@@ -1392,10 +1393,49 @@ impl Session {
         state.session_configuration.provider.clone()
     }
 
+    pub(crate) async fn refresh_runtime_config(&self, next_config: Config) {
+        // Refresh only the user layer from the incoming snapshot. Preserve thread-local
+        // layers such as request/session overrides that were present when this session
+        // was created.
+        let config = {
+            let mut state = self.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_layer_from(&next_config.config_layer_stack);
+            config.tool_suggest =
+                resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
+            let config = Arc::new(config);
+            state.session_configuration.original_config_do_not_use = Arc::clone(&config);
+            config
+        };
+        self.services.skills_manager.clear_cache();
+        self.services.plugins_manager.clear_cache();
+        let hooks = build_hooks_for_config(
+            config.as_ref(),
+            self.services.plugins_manager.as_ref(),
+            self.services.user_shell.as_ref(),
+        )
+        .await;
+
+        let state = self.state.lock().await;
+        // A newer refresh may have updated the config while this hook build was in flight.
+        // Only publish hooks derived from the current config snapshot.
+        if Arc::ptr_eq(
+            &state.session_configuration.original_config_do_not_use,
+            &config,
+        ) {
+            self.services.hooks.store(Arc::new(hooks));
+        }
+    }
+
     pub(crate) async fn reload_user_config_layer(&self) {
         // Refresh layer-backed runtime state for an existing session, including enabled plugin,
         // skill, and hook state. Derived config fields such as feature gates and legacy notify
         // settings remain session-static.
+        //
+        // Prefer `refresh_runtime_config()` when the host can already provide a materialized
+        // config snapshot. This file-based path exists for legacy local reload flows.
         let config_toml_path = {
             let state = self.state.lock().await;
             state
@@ -1421,36 +1461,17 @@ impl Session {
             }
         };
 
-        let config = {
-            let mut state = self.state.lock().await;
+        let next_config = {
+            let state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.config_layer_stack = config
                 .config_layer_stack
                 .with_user_config(&config_toml_path, user_config);
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
-            let config = Arc::new(config);
-            state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             config
         };
-        self.services.skills_manager.clear_cache();
-        self.services.plugins_manager.clear_cache();
-        let hooks = build_hooks_for_config(
-            config.as_ref(),
-            self.services.plugins_manager.as_ref(),
-            self.services.user_shell.as_ref(),
-        )
-        .await;
-
-        let state = self.state.lock().await;
-        // A newer reload may have updated the config while this hook build was in flight.
-        // Only publish hooks derived from the current config snapshot.
-        if Arc::ptr_eq(
-            &state.session_configuration.original_config_do_not_use,
-            &config,
-        ) {
-            self.services.hooks.store(Arc::new(hooks));
-        }
+        self.refresh_runtime_config(next_config).await;
     }
 
     async fn build_settings_update_items(
@@ -1920,6 +1941,7 @@ impl Session {
             call_id,
             approval_id,
             turn_id: turn_context.sub_id.clone(),
+            started_at_ms: now_unix_timestamp_ms(),
             command,
             cwd,
             reason,
@@ -1966,6 +1988,7 @@ impl Session {
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
+            started_at_ms: now_unix_timestamp_ms(),
             changes,
             reason,
             grant_root,
@@ -2129,6 +2152,7 @@ impl Session {
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
             call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
+            started_at_ms: now_unix_timestamp_ms(),
             reason: args.reason,
             permissions: requested_permissions,
             cwd: Some(cwd),
@@ -2411,22 +2435,6 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
-    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        self.services
-            .session_telemetry
-            .counter("codex.model_warning", /*inc*/ 1, &[]);
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("Warning: {}", message.into()),
-            }],
-            phase: None,
-        };
-
-        self.record_conversation_items(ctx, &[item]).await;
-    }
-
     async fn maybe_warn_on_server_model_mismatch(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -2463,8 +2471,6 @@ impl Session {
             }),
         )
         .await;
-        self.record_model_warning(warning_message, turn_context)
-            .await;
         true
     }
 
@@ -2553,6 +2559,7 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
+        let mut separate_developer_sections = Vec::<String>::new();
         let (
             reference_context_item,
             previous_turn_settings,
@@ -2614,8 +2621,9 @@ impl Session {
             developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
+        if turn_context.config.include_collaboration_mode_instructions
+            && let Some(collab_instructions) =
+                CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
             developer_sections.push(collab_instructions.render());
         }
@@ -2690,12 +2698,23 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
-            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
-                turn_context.config.commit_attribution.as_deref(),
-            )
-        {
-            developer_sections.push(commit_message_instruction);
+        for contributor in self.services.extensions.context_contributors() {
+            for fragment in contributor.contribute(
+                &self.services.session_extension_data,
+                &self.services.thread_extension_data,
+            ) {
+                match fragment.slot() {
+                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
+                        developer_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::ContextualUser => {
+                        contextual_user_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::SeparateDeveloper => {
+                        separate_developer_sections.push(fragment.text().to_string());
+                    }
+                }
+            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(
@@ -2707,13 +2726,14 @@ impl Session {
             );
         }
         if turn_context.config.include_environment_context {
+            let shell = self.user_shell();
             let subagents = self
                 .services
                 .agent_control
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context)
+                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
                     .render(),
             );
@@ -2727,6 +2747,13 @@ impl Session {
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
             items.push(developer_message);
+        }
+        for section in separate_developer_sections {
+            if let Some(developer_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![section])
+            {
+                items.push(developer_message);
+            }
         }
         if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
             && let Some(usage_hint_message) =
@@ -2824,11 +2851,20 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
+        self.record_token_usage_info(turn_context, token_usage)
+            .await;
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn record_token_usage_info(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+    ) {
         if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
             state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
@@ -2869,11 +2905,15 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        self.record_rate_limits_info(new_rate_limits).await;
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn record_rate_limits_info(&self, new_rate_limits: RateLimitSnapshot) {
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
@@ -2904,7 +2944,7 @@ impl Session {
         state.set_server_reasoning_included(included);
     }
 
-    async fn send_token_count_event(&self, turn_context: &TurnContext) {
+    pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
         let (info, rate_limits) = {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()

@@ -185,17 +185,25 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
     }
 }
 
-pub async fn run_stdio_server(codex_home: &AbsolutePathBuf) -> anyhow::Result<()> {
+pub async fn run_server<T, E, A>(codex_home: &AbsolutePathBuf, transport: T) -> anyhow::Result<()>
+where
+    T: rmcp::transport::IntoTransport<rmcp::RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     let backend = LocalMemoriesBackend::from_codex_home(codex_home);
     tokio::fs::create_dir_all(backend.root())
         .await
         .with_context(|| format!("create memories root at {}", backend.root().display()))?;
     MemoriesMcpServer::new(backend)
-        .serve((tokio::io::stdin(), tokio::io::stdout()))
+        .serve(transport)
         .await?
         .waiting()
         .await?;
     Ok(())
+}
+
+pub async fn run_stdio_server(codex_home: &AbsolutePathBuf) -> anyhow::Result<()> {
+    run_server(codex_home, (tokio::io::stdin(), tokio::io::stdout())).await
 }
 
 fn list_tool() -> Tool {

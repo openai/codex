@@ -18,9 +18,11 @@ use crate::metrics::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::SSE_EVENT_DURATION_METRIC;
+use crate::metrics::STARTUP_PHASE_DURATION_METRIC;
 use crate::metrics::SessionMetricTagValues;
 use crate::metrics::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::TOOL_CALL_DURATION_METRIC;
+use crate::metrics::TURN_TTFT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
@@ -62,6 +64,12 @@ const RESPONSES_API_ENGINE_IAPI_TTFT_FIELD: &str = "engine_iapi_ttft_total_ms";
 const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total_ms";
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
+
+fn trace_field_value<'a>(fields: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find_map(|(field_key, value)| (*field_key == key).then_some(*value))
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthEnvTelemetryMetadata {
@@ -181,6 +189,45 @@ impl SessionTelemetry {
         if let Err(e) = res {
             tracing::warn!("metrics duration [{name}] failed: {e}");
         }
+    }
+
+    /// Records a coarse startup phase for production latency breakdowns.
+    pub fn record_startup_phase(
+        &self,
+        phase: &'static str,
+        duration: Duration,
+        status: Option<&'static str>,
+    ) {
+        let tags = match status {
+            Some(status) => vec![("phase", phase), ("status", status)],
+            None => vec![("phase", phase)],
+        };
+        self.record_duration(STARTUP_PHASE_DURATION_METRIC, duration, &tags);
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.startup_phase",
+                startup.phase = phase,
+                startup.status = status,
+                duration_ms = %duration.as_millis(),
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    /// Records time to first token as both a metric and a production telemetry event.
+    pub fn record_turn_ttft(&self, duration: Duration) {
+        self.record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.turn_ttft",
+                duration_ms = %duration.as_millis(),
+            },
+            log: {},
+            trace: {},
+        );
     }
 
     pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {
@@ -902,8 +949,7 @@ impl SessionTelemetry {
         call_id: &str,
         arguments: &str,
         extra_tags: &[(&str, &str)],
-        mcp_server: Option<&str>,
-        mcp_server_origin: Option<&str>,
+        extra_trace_fields: &[(&str, &str)],
         f: F,
     ) -> Result<(String, bool), E>
     where
@@ -928,8 +974,7 @@ impl SessionTelemetry {
             success,
             output.as_ref(),
             extra_tags,
-            mcp_server,
-            mcp_server_origin,
+            extra_trace_fields,
         );
 
         result
@@ -969,8 +1014,7 @@ impl SessionTelemetry {
         success: bool,
         output: &str,
         extra_tags: &[(&str, &str)],
-        mcp_server: Option<&str>,
-        mcp_server_origin: Option<&str>,
+        extra_trace_fields: &[(&str, &str)],
     ) {
         let success_str = if success { "true" } else { "false" };
         let mut tags = Vec::with_capacity(2 + extra_tags.len());
@@ -979,8 +1023,9 @@ impl SessionTelemetry {
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
-        let mcp_server = mcp_server.unwrap_or("");
-        let mcp_server_origin = mcp_server_origin.unwrap_or("");
+        let mcp_server = trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("");
+        let mcp_server_origin =
+            trace_field_value(extra_trace_fields, "mcp_server_origin").unwrap_or("");
         log_event!(
             self,
             event.name = "codex.tool_result",

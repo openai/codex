@@ -6,9 +6,11 @@ use super::PermissionProfileSelectionParams;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadItem;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
+use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::Personality;
@@ -1005,6 +1007,9 @@ pub struct ThreadTurnsListParams {
     /// Optional turn pagination direction; defaults to descending.
     #[ts(optional = nullable)]
     pub sort_direction: Option<SortDirection>,
+    /// How much item detail to include for each returned turn; defaults to summary.
+    #[ts(optional = nullable)]
+    pub items_view: Option<TurnItemsView>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1019,6 +1024,36 @@ pub struct ThreadTurnsListResponse {
     /// This is only populated when the page contains at least one turn.
     /// Use it with the opposite `sortDirection` to include the anchor turn again
     /// and catch updates to that turn.
+    pub backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnsItemsListParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional item page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional item pagination direction; defaults to ascending.
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnsItemsListResponse {
+    pub data: Vec<ThreadItem>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// This is only populated when the page contains at least one item.
     pub backwards_cursor: Option<String>,
 }
 

@@ -9,6 +9,7 @@ mod transcript;
 use crate::app_server_session::AppServerSession;
 use crate::color::blend;
 use crate::color::is_light;
+use crate::git_action_directives::parse_assistant_markdown;
 use crate::keymap::PagerKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
@@ -780,7 +781,7 @@ async fn load_transcript_preview(
             }),
             ThreadItem::AgentMessage { text, .. } => Some(TranscriptPreviewLine {
                 speaker: TranscriptPreviewSpeaker::Assistant,
-                text: text.clone(),
+                text: parse_assistant_markdown(text).visible_markdown,
             }),
             _ => None,
         })

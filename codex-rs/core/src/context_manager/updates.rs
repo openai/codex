@@ -29,7 +29,7 @@ fn build_environment_update_item(
 
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next);
+    let next_context = EnvironmentContext::from_turn_context(next, shell);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
@@ -73,6 +73,10 @@ fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
 ) -> Option<String> {
+    if !next.config.include_collaboration_mode_instructions {
+        return None;
+    }
+
     let prev = previous?;
     if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
         // If the next mode has empty developer instructions, this returns None and we emit no

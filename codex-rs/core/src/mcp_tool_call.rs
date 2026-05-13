@@ -54,6 +54,20 @@ use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_TOOL_APPROVAL_KIND_KEY;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL;
+use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY;
+use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY;
+use codex_protocol::mcp_approval_meta::CONNECTOR_NAME_KEY as MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY;
+use codex_protocol::mcp_approval_meta::PERSIST_ALWAYS as MCP_TOOL_APPROVAL_PERSIST_ALWAYS;
+use codex_protocol::mcp_approval_meta::PERSIST_KEY as MCP_TOOL_APPROVAL_PERSIST_KEY;
+use codex_protocol::mcp_approval_meta::PERSIST_SESSION as MCP_TOOL_APPROVAL_PERSIST_SESSION;
+use codex_protocol::mcp_approval_meta::SOURCE_CONNECTOR as MCP_TOOL_APPROVAL_SOURCE_CONNECTOR;
+use codex_protocol::mcp_approval_meta::SOURCE_KEY as MCP_TOOL_APPROVAL_SOURCE_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_PARAMS_DISPLAY_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_TOOL_APPROVAL_TOOL_TITLE_KEY;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpInvocation;
@@ -310,9 +324,8 @@ async fn handle_approved_mcp_tool_call(
     request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
 ) -> HandledMcpToolCall {
-    maybe_mark_thread_memory_mode_polluted(sess, turn_context).await;
-
     let server = invocation.server.clone();
+    maybe_mark_thread_memory_mode_polluted(sess, turn_context, &server).await;
     let tool_name = invocation.tool.clone();
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
@@ -451,6 +464,7 @@ fn mcp_tool_call_span(
 ) -> Span {
     let transport = match fields.server_origin {
         Some("stdio") => "stdio",
+        Some("in_process") => "in_process",
         Some(_) => "streamable_http",
         None => "",
     };
@@ -738,8 +752,21 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     Ok(meta)
 }
 
-async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
+async fn maybe_mark_thread_memory_mode_polluted(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+) {
     if !turn_context.config.memories.disable_on_external_context {
+        return;
+    }
+    let pollutes_memory = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_pollutes_memory(server);
+    if !pollutes_memory {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(
@@ -1097,20 +1124,6 @@ pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this se
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
-const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
-const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
-const MCP_TOOL_APPROVAL_PERSIST_KEY: &str = "persist";
-const MCP_TOOL_APPROVAL_PERSIST_SESSION: &str = "session";
-const MCP_TOOL_APPROVAL_PERSIST_ALWAYS: &str = "always";
-const MCP_TOOL_APPROVAL_SOURCE_KEY: &str = "source";
-const MCP_TOOL_APPROVAL_SOURCE_CONNECTOR: &str = "connector";
-const MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: &str = "connector_id";
-const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: &str = "connector_name";
-const MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: &str = "connector_description";
-const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
-const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
-const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
-const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
 const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT: &str = "mcp_tool_call__default";
 const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW: &str = "mcp_tool_call__always_allow";
 
@@ -1477,7 +1490,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .list_all_tools()
         .await;
     let tool_info = tools
-        .into_values()
+        .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
@@ -1572,7 +1585,7 @@ async fn lookup_mcp_app_usage_metadata(
         .list_all_tools()
         .await;
 
-    tools.into_values().find_map(|tool_info| {
+    tools.into_iter().find_map(|tool_info| {
         if tool_info.server_name == server && tool_info.tool.name == tool_name {
             Some(McpAppUsageMetadata {
                 connector_id: tool_info.connector_id,

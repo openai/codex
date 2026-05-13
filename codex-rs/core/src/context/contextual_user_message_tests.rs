@@ -27,6 +27,18 @@ fn detects_subagent_notification_fragment_case_insensitively() {
 }
 
 #[test]
+fn detects_goal_context_fragment() {
+    let text = GoalContext {
+        prompt: "Continue working toward the active thread goal.".to_string(),
+    }
+    .render();
+
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text
+    }));
+}
+
+#[test]
 fn ignores_regular_user_text() {
     assert!(!is_contextual_user_fragment(&ContentItem::InputText {
         text: "hello".to_string(),

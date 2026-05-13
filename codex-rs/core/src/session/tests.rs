@@ -407,6 +407,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
     )
     .new_session()
 }
@@ -541,9 +542,8 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     ));
@@ -915,7 +915,7 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -981,7 +981,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1025,7 +1025,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         session: Arc::clone(&session),
         turn: Arc::clone(&turn),
         call_id: "probe-call".to_string(),
-        tool_name: "probe".to_string(),
+        tool_name: codex_tools::ToolName::plain("probe"),
     };
 
     orchestrator
@@ -1056,7 +1056,7 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let (session, _codex_home) = make_session_with_config(move |config| {
+    let session = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1083,7 +1083,7 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let (session, rx, _codex_home) = make_session_with_config_and_rx(move |config| {
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1213,7 +1213,7 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 
 #[tokio::test]
 async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
-    let (session, _codex_home) = make_session_with_config(|config| {
+    let session = make_session_with_config(|config| {
         config
             .features
             .enable(Feature::CodexHooks)
@@ -1284,6 +1284,79 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable Codex hooks");
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home)?;
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    #[derive(serde::Serialize)]
+    struct NormalizedHookIdentity {
+        event_name: &'static str,
+        #[serde(flatten)]
+        group: codex_config::MatcherGroup,
+    }
+    let trusted_hash = {
+        let identity = NormalizedHookIdentity {
+            event_name: "session_start",
+            group: codex_config::MatcherGroup {
+                matcher: None,
+                hooks: vec![codex_config::HookHandlerConfig::Command {
+                    command: "python3 /tmp/user.py".to_string(),
+                    command_windows: None,
+                    timeout_sec: Some(600),
+                    r#async: false,
+                    status_message: None,
+                }],
+            },
+        };
+        let identity = codex_config::TomlValue::try_from(identity)?;
+        codex_config::version_for_toml(&identity)
+    };
+    let hook_key = format!("{}:session_start:0:0", config_toml_path.display());
+    let trusted_user_config: codex_config::TomlValue = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "python3 /tmp/user.py",
+                }],
+            }],
+            "state": {
+                hook_key: {
+                    "trusted_hash": trusted_hash,
+                },
+            },
+        },
+    }))?;
+    std::fs::write(&config_toml_path, toml::to_string(&trusted_user_config)?)?;
+
+    let request = codex_hooks::SessionStartRequest {
+        session_id: session.conversation_id,
+        cwd: session.get_config().await.cwd.clone(),
+        transcript_path: None,
+        model: "gpt-5.2".to_string(),
+        permission_mode: "default".to_string(),
+        source: codex_hooks::SessionStartSource::Startup,
+    };
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+
+    let next_config = load_latest_config_for_session(&session).await;
+    session.refresh_runtime_config(next_config).await;
+
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_updates_effective_tool_suggest_config() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1303,6 +1376,62 @@ disabled_tools = [
     session.reload_user_config_layer().await;
 
     let config = session.get_config().await;
+    assert_eq!(
+        config.tool_suggest.disabled_tools,
+        vec![
+            ToolSuggestDisabledTool::connector("calendar"),
+            ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn refresh_runtime_config_updates_runtime_refreshable_fields_and_keeps_session_static_settings()
+ {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[apps.calendar]
+enabled = false
+destructive_enabled = false
+
+[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " calendar " },
+  { type = "plugin", id = "slack@openai-curated" },
+]
+"#,
+    )
+    .expect("write user config");
+
+    let original = session.get_config().await;
+    let mut next_config = load_latest_config_for_session(&session).await;
+    next_config.model = Some("gpt-5.4".to_string());
+    next_config.notify = Some(vec!["echo".to_string()]);
+
+    session.refresh_runtime_config(next_config).await;
+
+    let config = session.get_config().await;
+    let apps_toml = config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|table| table.get("apps"))
+        .cloned()
+        .expect("apps table");
+    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
+        .expect("deserialize apps config");
+    let app = apps
+        .apps
+        .get("calendar")
+        .expect("calendar app config exists");
+
+    assert!(!app.enabled);
+    assert_eq!(app.destructive_enabled, Some(false));
+    assert_eq!(config.model, original.model);
+    assert_eq!(config.notify, original.notify);
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
@@ -2707,10 +2836,6 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
-    assert!(!Arc::ptr_eq(
-        &updated.tool_call_gate,
-        &turn_context.tool_call_gate
-    ));
 }
 
 #[test]
@@ -3052,13 +3177,15 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 fn turn_environments_for_tests(
     environment: &Arc<codex_exec_server::Environment>,
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
-) -> Vec<TurnEnvironment> {
-    vec![TurnEnvironment {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: Arc::clone(environment),
-        cwd: cwd.clone(),
-        shell: "bash".to_string(),
-    }]
+) -> crate::environment_selection::ResolvedTurnEnvironments {
+    crate::environment_selection::ResolvedTurnEnvironments {
+        turn_environments: vec![TurnEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            environment: Arc::clone(environment),
+            cwd: cwd.clone(),
+            shell: None,
+        }],
+    }
 }
 
 #[tokio::test]
@@ -3594,21 +3721,16 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(SkillsWatcher::noop()),
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await;
 
@@ -3711,7 +3833,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -3747,7 +3868,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        skills_watcher,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -3755,13 +3878,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id.into(),
@@ -3773,6 +3892,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -3807,7 +3927,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
+        turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -3841,18 +3961,24 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
 async fn make_session_with_config(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<(Arc<Session>, tempfile::TempDir)> {
-    let (session, _rx_event, codex_home) = make_session_with_config_and_rx(mutator).await?;
-    Ok((session, codex_home))
+) -> anyhow::Result<Arc<Session>> {
+    let (session, _rx_event) = make_session_with_config_and_rx(mutator).await?;
+    Ok(session)
+}
+
+async fn load_latest_config_for_session(session: &Session) -> Config {
+    let config = session.get_config().await;
+    ConfigBuilder::default()
+        .codex_home(config.codex_home.to_path_buf())
+        .fallback_cwd(Some(config.cwd.to_path_buf()))
+        .build()
+        .await
+        .expect("load latest config for session")
 }
 
 async fn make_session_with_config_and_rx(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<(
-    Arc<Session>,
-    async_channel::Receiver<Event>,
-    tempfile::TempDir,
-)> {
+) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     mutator(&mut config);
@@ -3935,25 +4061,20 @@ async fn make_session_with_config_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(SkillsWatcher::noop()),
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
-    Ok((session, rx_event, codex_home))
+    Ok((session, rx_event))
 }
 
 async fn make_session_with_history_source_and_agent_control_and_rx(
@@ -4043,21 +4164,23 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(SkillsWatcher::noop()),
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .expect("state db should initialize"),
+            Some(
+                codex_state::StateRuntime::init(
+                    config.sqlite_home.clone(),
+                    config.model_provider_id.clone(),
+                )
+                .await
+                .expect("state db should initialize"),
+            ),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
     )
     .await?;
 
@@ -4784,7 +4907,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
@@ -4803,7 +4926,7 @@ async fn primary_environment_uses_first_turn_environment() {
             environment_id: "second".to_string(),
             environment: Arc::clone(&first_environment.environment),
             cwd: second_cwd.clone(),
-            shell: "bash".to_string(),
+            shell: None,
         });
 
     assert_eq!(
@@ -4846,7 +4969,7 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
@@ -5306,10 +5429,44 @@ async fn make_session_and_context_with_auth_and_config_and_rx<F>(
 where
     F: FnOnce(&mut Config),
 {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    make_session_and_context_with_auth_config_home_and_rx(
+        auth,
+        dynamic_tools,
+        codex_home.path(),
+        configure_config,
+    )
+    .await
+}
+
+async fn make_session_and_context_with_auth_config_home_and_rx<F>(
+    auth: CodexAuth,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    codex_home: &Path,
+    configure_config: F,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+)
+where
+    F: FnOnce(&mut Config),
+{
     let (tx_event, rx_event) = async_channel::unbounded();
-    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
-    let mut config = build_test_config(codex_home.as_path()).await;
+    let mut config = build_test_config(codex_home).await;
     configure_config(&mut config);
+    let state_db = if config.features.enabled(Feature::Goals) {
+        Some(
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .expect("goal tests should initialize sqlite state db"),
+        )
+    } else {
+        None
+    };
     let config = Arc::new(config);
     let thread_id = ThreadId::default();
     let auth_manager = AuthManager::from_auth_for_testing(auth);
@@ -5396,13 +5553,6 @@ where
             .expect("create environment"),
     );
 
-    let state_db = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
-    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -5438,16 +5588,19 @@ where
         skills_manager,
         plugins_manager,
         mcp_manager,
-        skills_watcher,
+        extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        session_extension_data: codex_extension_api::ExtensionData::new(),
+        thread_extension_data: codex_extension_api::ExtensionData::new(),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
-        state_db: Some(state_db.clone()),
+        state_db: state_db.clone(),
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             state_db,
         )),
+        attestation_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id.into(),
@@ -5459,6 +5612,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+            /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -5493,7 +5647,7 @@ where
         model_info,
         &models_manager,
         /*network*/ None,
-        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
+        turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -5544,10 +5698,13 @@ async fn make_goal_session_and_context_with_rx() -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
+    tempfile::TempDir,
 ) {
-    let (session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let (session, turn_context, rx) = make_session_and_context_with_auth_config_home_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
+        codex_home.path(),
         |config| {
             config
                 .features
@@ -5557,14 +5714,14 @@ async fn make_goal_session_and_context_with_rx() -> (
     )
     .await;
     upsert_goal_test_thread(session.as_ref()).await;
-    (session, turn_context, rx)
+    (session, turn_context, rx, codex_home)
 }
 
 async fn upsert_goal_test_thread(session: &Session) {
     let config = session.get_config().await;
-    let state_db = goal_test_state_db(session)
-        .await
-        .expect("goal test state db should initialize");
+    let state_db = session
+        .state_db()
+        .expect("goal test session should have a state db");
     let mut builder = codex_state::ThreadMetadataBuilder::new(
         session.conversation_id,
         config
@@ -5620,7 +5777,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
 
     session
-        .refresh_mcp_servers_if_requested(&turn_context)
+        .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
     assert!(old_token.is_cancelled());
@@ -5633,34 +5790,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
-}
-
-#[tokio::test]
-async fn record_model_warning_appends_user_message() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let features = Features::with_defaults().into();
-    session.features = features;
-
-    session
-        .record_model_warning("too many unified exec processes", &turn_context)
-        .await;
-
-    let history = session.clone_history().await;
-    let history_items = history.raw_items();
-    let last = history_items.last().expect("warning recorded");
-
-    match last {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            assert_eq!(
-                content,
-                &vec![ContentItem::InputText {
-                    text: "Warning: too many unified exec processes".to_string(),
-                }]
-            );
-        }
-        other => panic!("expected user message, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -5744,9 +5873,50 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
         .into_iter()
         .find(|text| text.contains("<environment_context>"))
         .expect("environment update item should be emitted");
-    assert!(environment_update.contains("<network enabled=\"true\">"));
-    assert!(environment_update.contains("<allowed>api.example.com</allowed>"));
-    assert!(environment_update.contains("<denied>blocked.example.com</denied>"));
+    assert!(environment_update.contains(
+        "<network enabled=\"true\"><allowed>api.example.com</allowed><denied>blocked.example.com</denied></network>"
+    ));
+}
+
+#[tokio::test]
+async fn environment_context_uses_session_shell_when_environment_shell_is_absent() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    session.services.user_shell = Arc::new(crate::shell::Shell {
+        shell_type: crate::shell::ShellType::PowerShell,
+        shell_path: PathBuf::from("powershell"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    });
+    for environment in &mut turn_context.environments.turn_environments {
+        environment.shell = None;
+    }
+
+    let session_shell = session.user_shell();
+    let environment_context = crate::context::EnvironmentContext::from_turn_context(
+        &turn_context,
+        session_shell.as_ref(),
+    )
+    .render();
+    assert!(
+        environment_context.contains("<shell>powershell</shell>"),
+        "{environment_context}"
+    );
+
+    let primary_environment = turn_context
+        .environments
+        .turn_environments
+        .first_mut()
+        .expect("primary environment");
+    primary_environment.shell = Some("cmd".to_string());
+
+    let environment_context = crate::context::EnvironmentContext::from_turn_context(
+        &turn_context,
+        session_shell.as_ref(),
+    )
+    .render();
+    assert!(
+        environment_context.contains("<shell>cmd</shell>"),
+        "{environment_context}"
+    );
 }
 
 #[tokio::test]
@@ -5938,6 +6108,73 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     )
     .await;
     (session, turn_context)
+}
+
+struct GitAttributionTestContributor;
+struct GitAttributionTestState;
+
+impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+    fn contribute(
+        &self,
+        _session_store: &codex_extension_api::ExtensionData,
+        thread_store: &codex_extension_api::ExtensionData,
+    ) -> Vec<codex_extension_api::PromptFragment> {
+        thread_store
+            .get::<GitAttributionTestState>()
+            .is_some()
+            .then(|| {
+                codex_extension_api::PromptFragment::developer_policy(
+                    "git attribution extension enabled",
+                )
+            })
+            .into_iter()
+            .collect()
+    }
+}
+
+fn git_attribution_test_registry()
+-> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    Arc::new(builder.build())
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_git_attribution_from_extensions() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+    session
+        .services
+        .thread_extension_data
+        .insert(GitAttributionTestState);
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "expected git attribution developer text, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.extensions = git_attribution_test_registry();
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_messages = developer_message_texts(&initial_context);
+
+    assert!(
+        !developer_messages
+            .iter()
+            .flatten()
+            .any(|text| *text == "git attribution extension enabled"),
+        "did not expect git attribution developer text, got {developer_messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -7388,7 +7625,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 
 #[tokio::test]
 async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7437,7 +7674,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
-    let _responses = mount_sse_sequence(
+    let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -7499,6 +7736,25 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
         }
     })
     .await??;
+
+    let continuation_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("<goal_context>"))
+        .expect("expected a goal continuation request");
+    let body = continuation_request.body_json();
+    let goal_context_message = body["input"]
+        .as_array()
+        .expect("input should be an array")
+        .iter()
+        .find(|item| item.to_string().contains("<goal_context>"))
+        .expect("goal context message should be present");
+    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
+    assert!(
+        goal_context_message
+            .to_string()
+            .contains("Continue working toward the active thread goal.")
+    );
 
     Ok(())
 }
@@ -7652,7 +7908,7 @@ async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHand
 
 #[tokio::test]
 async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
-    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7700,10 +7956,12 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
-    assert_eq!("developer", role);
+    assert_eq!("user", role);
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected one text span in budget-limit steering message, got {content:#?}");
     };
+    assert!(text.starts_with("<goal_context>"));
+    assert!(text.trim_end().ends_with("</goal_context>"));
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
     assert!(sess.active_turn.lock().await.is_some());
@@ -7752,7 +8010,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_goal_mutation_accounts_active_turn_before_status_change() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -7783,12 +8041,13 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
 
-    let previous_status = goal.status;
+    let previous_goal = goal.clone();
     let goal_id = goal.goal_id.clone();
     let updated_goal = state_db
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
+                objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
                 expected_goal_id: Some(goal_id),
@@ -7799,7 +8058,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
         external_set: ExternalGoalSet {
             goal: updated_goal,
-            previous_status: ExternalGoalPreviousStatus::Existing(previous_status),
+            previous_status: ExternalGoalPreviousStatus::from(&previous_goal),
         },
     })
     .await?;
@@ -7818,8 +8077,72 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+    let old_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+    let new_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Write a concise benchmark summary",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        external_set: ExternalGoalSet {
+            goal: new_goal,
+            previous_status: ExternalGoalPreviousStatus::from(&old_goal),
+        },
+    })
+    .await?;
+
+    let pending_input = sess.get_pending_input().await;
+    assert!(
+        pending_input.iter().any(|item| {
+            matches!(
+                item,
+                ResponseInputItem::Message { role, content, .. }
+                    if role == "user"
+                        && content.iter().any(|content| matches!(
+                            content,
+                            ContentItem::InputText { text }
+                                if text.starts_with("<goal_context>")
+                                    && text.trim_end().ends_with("</goal_context>")
+                                    && text.contains("The active thread goal objective was edited")
+                                    && text.contains("Write a concise benchmark summary")
+                        ))
+            )
+        }),
+        "expected objective-updated steering prompt in pending input: {pending_input:?}"
+    );
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -8283,9 +8606,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     );
@@ -8297,8 +8619,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         input: "{}".to_string(),
     };
 
-    let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
-        .await
+    let call = ToolRouter::build_tool_call(item.clone())
         .expect("build tool call")
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -8486,7 +8807,7 @@ async fn sample_rollout(
 
 #[tokio::test]
 async fn create_goal_tool_rejects_existing_goal() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = CreateGoalHandler;
 
@@ -8548,7 +8869,7 @@ async fn create_goal_tool_rejects_existing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_rejects_pausing_goal() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;
@@ -8609,7 +8930,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_marks_goal_complete() {
-    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
+    let (session, turn_context, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let create_handler = CreateGoalHandler;
     let update_handler = UpdateGoalHandler;
@@ -8716,7 +9037,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let tool_name = "shell";
     let call_id = "test-call".to_string();
 
-    let handler = ShellHandler;
+    let handler = ShellHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -8791,7 +9112,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = ExecCommandHandler;
+    let handler = ExecCommandHandler::default();
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

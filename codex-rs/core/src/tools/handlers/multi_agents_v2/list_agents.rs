@@ -1,5 +1,7 @@
 use super::*;
 use crate::agent::control::ListedAgent;
+use crate::tools::handlers::multi_agents_spec::create_list_agents_tool;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
@@ -10,8 +12,8 @@ impl ToolHandler for Handler {
         ToolName::plain("list_agents")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_list_agents_tool())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

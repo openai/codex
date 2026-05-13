@@ -83,7 +83,7 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
+        extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         thread_source: Some(ThreadSource::Subagent),
@@ -98,8 +98,8 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_trace: None,
         environment_selections: parent_ctx.environments.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
-        state_db: parent_session.services.state_db.clone(),
         thread_store: Arc::clone(&parent_session.services.thread_store),
+        attestation_provider: parent_session.services.attestation_provider.clone(),
     }))
     .or_cancel(&cancel_token)
     .await??;

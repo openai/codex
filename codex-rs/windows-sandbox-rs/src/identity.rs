@@ -1,6 +1,10 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
+use crate::setup::SandboxNetworkIdentity;
+use crate::setup::SandboxUserRecord;
+use crate::setup::SandboxUsersFile;
+use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
 use crate::setup::offline_proxy_settings_from_env;
@@ -8,15 +12,11 @@ use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
-use crate::setup::SandboxNetworkIdentity;
-use crate::setup::SandboxUserRecord;
-use crate::setup::SandboxUsersFile;
-use crate::setup::SetupMarker;
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use anyhow::anyhow;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -139,6 +139,7 @@ pub fn require_logon_sandbox_creds(
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
@@ -150,8 +151,7 @@ pub fn require_logon_sandbox_creds(
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
-    let desired_offline_proxy_settings =
-        offline_proxy_settings_from_env(env_map, network_identity);
+    let desired_offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -167,8 +167,9 @@ pub fn require_logon_sandbox_creds(
             } else {
                 let selected = select_identity(network_identity, codex_home)?;
                 if selected.is_none() {
-                    setup_reason =
-                        Some("sandbox users missing or incompatible with marker version".to_string());
+                    setup_reason = Some(
+                        "sandbox users missing or incompatible with marker version".to_string(),
+                    );
                 }
                 selected
             }
@@ -201,6 +202,7 @@ pub fn require_logon_sandbox_creds(
                 read_roots: Some(needed_read.clone()),
                 read_roots_include_platform_defaults,
                 write_roots: Some(needed_write.clone()),
+                deny_read_paths: Some(deny_read_paths_override.to_vec()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
         )?;
@@ -220,6 +222,7 @@ pub fn require_logon_sandbox_creds(
             read_roots: Some(needed_read),
             read_roots_include_platform_defaults,
             write_roots: Some(needed_write),
+            deny_read_paths: Some(deny_read_paths_override.to_vec()),
             deny_write_paths: Some(deny_write_paths_override.to_vec()),
         },
     )?;

@@ -1,6 +1,8 @@
 use super::*;
 use crate::agent::control::render_input_preview;
+use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
@@ -11,8 +13,8 @@ impl ToolHandler for Handler {
         ToolName::plain("send_input")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_send_input_tool_v1())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {

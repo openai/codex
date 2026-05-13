@@ -60,6 +60,18 @@ const PLUGIN_ROW_PREFIX_WIDTH: usize = 6;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct PluginListFetchState {
+    pub(super) cache_cwd: Option<PathBuf>,
+    pub(super) in_flight_cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PluginInstallAuthFlowState {
+    plugin_display_name: String,
+    next_app_index: usize,
+}
+
 struct DelayedLoadingHeader {
     started_at: Instant,
     frame_requester: FrameRequester,
@@ -474,7 +486,7 @@ impl ChatWidget {
                             self.plugin_install_apps_needing_auth.len()
                         )),
                     );
-                    self.plugin_install_auth_flow = Some(super::PluginInstallAuthFlowState {
+                    self.plugin_install_auth_flow = Some(PluginInstallAuthFlowState {
                         plugin_display_name,
                         next_app_index: 0,
                     });
@@ -1729,6 +1741,12 @@ impl ChatWidget {
             ..Default::default()
         });
         items.push(SelectionItem {
+            name: "Hooks".to_string(),
+            description: Some(plugin_hook_summary(plugin)),
+            is_disabled: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
             name: "Apps".to_string(),
             description: Some(plugin_app_summary(plugin)),
             is_disabled: true,
@@ -2137,6 +2155,29 @@ fn plugin_app_summary(plugin: &PluginDetail) -> String {
             .apps
             .iter()
             .map(|app| app.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn plugin_hook_summary(plugin: &PluginDetail) -> String {
+    if plugin.hooks.is_empty() {
+        "No plugin hooks.".to_string()
+    } else {
+        let mut event_counts = Vec::<(codex_app_server_protocol::HookEventName, usize)>::new();
+        for hook in &plugin.hooks {
+            if let Some((_, handler_count)) = event_counts
+                .iter_mut()
+                .find(|(event_name, _)| *event_name == hook.event_name)
+            {
+                *handler_count += 1;
+            } else {
+                event_counts.push((hook.event_name, 1));
+            }
+        }
+        event_counts
+            .into_iter()
+            .map(|(event_name, handler_count)| format!("{event_name:?} ({handler_count})"))
             .collect::<Vec<_>>()
             .join(", ")
     }

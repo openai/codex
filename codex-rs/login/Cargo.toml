@@ -52,3 +52,6 @@ regex-lite = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }
+
+[lib]
+doctest = false

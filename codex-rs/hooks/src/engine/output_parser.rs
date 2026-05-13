@@ -17,6 +17,7 @@ pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
     pub invalid_reason: Option<String>,
 }
 
@@ -60,12 +61,26 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PreCompactOutput {
+    pub universal: UniversalOutput,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StatelessHookOutput {
+    pub universal: UniversalOutput,
+    pub invalid_reason: Option<String>,
+}
+
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PermissionRequestDecisionWire;
+use crate::schema::PostCompactCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
+use crate::schema::PreCompactCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
@@ -125,11 +140,24 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     } else {
         None
     };
+    let updated_input = if invalid_reason.is_none() {
+        hook_specific_output.and_then(|output| {
+            matches!(
+                output.permission_decision,
+                Some(PreToolUsePermissionDecisionWire::Allow)
+            )
+            .then(|| output.updated_input.clone())
+            .flatten()
+        })
+    } else {
+        None
+    };
 
     Some(PreToolUseOutput {
         universal,
         block_reason,
         additional_context,
+        updated_input,
         invalid_reason,
     })
 }
@@ -188,6 +216,24 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
         invalid_block_reason,
         additional_context,
         invalid_reason,
+    })
+}
+
+pub(crate) fn parse_pre_compact(stdout: &str) -> Option<PreCompactOutput> {
+    let wire: PreCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    Some(PreCompactOutput {
+        universal,
+        invalid_reason: None,
+    })
+}
+
+pub(crate) fn parse_post_compact(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PostCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason: None,
     })
 }
 
@@ -259,6 +305,11 @@ where
         return None;
     }
     serde_json::from_value(value).ok()
+}
+
+pub(crate) fn looks_like_json(stdout: &str) -> bool {
+    let trimmed = stdout.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
 }
 
 fn invalid_block_message(event_name: &str) -> String {
@@ -340,12 +391,19 @@ fn unsupported_post_tool_use_hook_specific_output(
 fn unsupported_pre_tool_use_hook_specific_output(
     output: &crate::schema::PreToolUseHookSpecificOutputWire,
 ) -> Option<String> {
-    if output.updated_input.is_some() {
-        Some("PreToolUse hook returned unsupported updatedInput".to_string())
+    if output.updated_input.is_some()
+        && !matches!(
+            output.permission_decision,
+            Some(PreToolUsePermissionDecisionWire::Allow)
+        )
+    {
+        Some("PreToolUse hook returned updatedInput without permissionDecision:allow".to_string())
     } else {
         match output.permission_decision {
             Some(PreToolUsePermissionDecisionWire::Allow) => {
-                Some("PreToolUse hook returned unsupported permissionDecision:allow".to_string())
+                output.updated_input.is_none().then(|| {
+                    "PreToolUse hook returned unsupported permissionDecision:allow".to_string()
+                })
             }
             Some(PreToolUsePermissionDecisionWire::Ask) => {
                 Some("PreToolUse hook returned unsupported permissionDecision:ask".to_string())

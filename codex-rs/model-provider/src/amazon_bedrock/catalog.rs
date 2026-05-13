@@ -1,21 +1,24 @@
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::SPEED_TIER_FAST;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 
 const GPT_OSS_CONTEXT_WINDOW: i64 = 128_000;
 const GPT_5_4_CONTEXT_WINDOW: i64 = 272_000;
 const GPT_5_4_MAX_CONTEXT_WINDOW: i64 = 1_000_000;
-const GPT_5_4_CMB_MODEL_ID: &str = "openai.gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
@@ -37,7 +40,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
 
 fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
     ModelInfo {
-        slug: GPT_5_4_CMB_MODEL_ID.to_string(),
+        slug: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
         display_name: "gpt-5.4".to_string(),
         description: Some("Strong model for everyday coding.".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
@@ -46,8 +49,12 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
-        additional_speed_tiers: vec!["fast".to_string()],
-        service_tiers: Vec::new(),
+        additional_speed_tiers: Vec::new(),
+        service_tiers: vec![ModelServiceTier {
+            id: ServiceTier::Fast.request_value().to_string(),
+            name: SPEED_TIER_FAST.to_string(),
+            description: "Fastest inference with increased plan usage".to_string(),
+        }],
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
@@ -56,7 +63,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         default_reasoning_summary: ReasoningSummary::None,
         support_verbosity: true,
         default_verbosity: Some(Verbosity::Medium),
-        apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+        apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
         web_search_tool_type: WebSearchToolType::TextAndImage,
         truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
         supports_parallel_tool_calls: true,
@@ -148,7 +155,7 @@ mod tests {
         let catalog = static_model_catalog();
 
         assert_eq!(catalog.models.len(), 3);
-        assert_eq!(catalog.models[0].slug, GPT_5_4_CMB_MODEL_ID);
+        assert_eq!(catalog.models[0].slug, AMAZON_BEDROCK_GPT_5_4_MODEL_ID);
         assert_eq!(catalog.models[1].slug, "openai.gpt-oss-120b");
         assert_eq!(catalog.models[2].slug, "openai.gpt-oss-20b");
     }
@@ -159,7 +166,7 @@ mod tests {
         let cmb_model = catalog
             .models
             .iter()
-            .find(|model| model.slug == GPT_5_4_CMB_MODEL_ID)
+            .find(|model| model.slug == AMAZON_BEDROCK_GPT_5_4_MODEL_ID)
             .expect("Bedrock catalog should include GPT-5.4 CMB");
 
         assert_eq!(

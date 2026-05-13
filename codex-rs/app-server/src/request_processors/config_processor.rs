@@ -6,7 +6,6 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::transport::RemoteControlHandle;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -39,20 +38,19 @@ use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::ThreadManager;
-use codex_features::Feature;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::protocol::Op;
 use serde_json::json;
 use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "apps",
     "memories",
+    "mentions_v2",
     "plugins",
     "remote_control",
     "tool_search",
@@ -67,7 +65,6 @@ pub(crate) struct ConfigRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     analytics_events_client: AnalyticsEventsClient,
-    remote_control_handle: Option<RemoteControlHandle>,
 }
 
 impl ConfigRequestProcessor {
@@ -77,7 +74,6 @@ impl ConfigRequestProcessor {
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         analytics_events_client: AnalyticsEventsClient,
-        remote_control_handle: Option<RemoteControlHandle>,
     ) -> Self {
         Self {
             outgoing,
@@ -85,7 +81,6 @@ impl ConfigRequestProcessor {
             auth_manager,
             thread_manager,
             analytics_events_client,
-            remote_control_handle,
         }
     }
 
@@ -187,21 +182,6 @@ impl ConfigRequestProcessor {
     pub(crate) async fn handle_config_mutation(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
-        let Some(remote_control_handle) = &self.remote_control_handle else {
-            return;
-        };
-
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => {
-                remote_control_handle.set_enabled(config.features.enabled(Feature::RemoteControl));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "failed to load config for remote control enablement refresh after config mutation: {}",
-                    error.message
-                );
-            }
-        }
     }
 
     async fn handle_config_mutation_result<T>(
@@ -378,14 +358,22 @@ impl ConfigRequestProcessor {
     }
 
     async fn reload_user_config(&self) {
+        let next_config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to rebuild user config for runtime refresh: {}",
+                    err.message
+                );
+                return;
+            }
+        };
         let thread_ids = self.thread_manager.list_thread_ids().await;
         for thread_id in thread_ids {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 continue;
             };
-            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
-                tracing::warn!("failed to request user config reload: {err}");
-            }
+            thread.refresh_runtime_config(next_config.clone()).await;
         }
     }
 
@@ -441,6 +429,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -462,6 +451,8 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_tool_use,
         permission_request,
         post_tool_use,
+        pre_compact,
+        post_compact,
         session_start,
         user_prompt_submit,
         stop,
@@ -473,6 +464,8 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_tool_use: map_hook_matcher_groups_to_api(pre_tool_use),
         permission_request: map_hook_matcher_groups_to_api(permission_request),
         post_tool_use: map_hook_matcher_groups_to_api(post_tool_use),
+        pre_compact: map_hook_matcher_groups_to_api(pre_compact),
+        post_compact: map_hook_matcher_groups_to_api(post_compact),
         session_start: map_hook_matcher_groups_to_api(session_start),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
         stop: map_hook_matcher_groups_to_api(stop),
@@ -503,11 +496,13 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
     match handler {
         CoreHookHandlerConfig::Command {
             command,
+            command_windows,
             timeout_sec,
             r#async,
             status_message,
         } => ConfiguredHookHandler::Command {
             command,
+            command_windows,
             timeout_sec,
             r#async,
             status_message,
@@ -616,4 +611,22 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
         "config_write_error_code": code,
     }));
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_requirements_toml_to_api;
+    use codex_config::ConfigRequirementsToml;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn requirements_api_includes_allow_managed_hooks_only() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_managed_hooks_only: Some(true),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.hooks, None);
+    }
 }

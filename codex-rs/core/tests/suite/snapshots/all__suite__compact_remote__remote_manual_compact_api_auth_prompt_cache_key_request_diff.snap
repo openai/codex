@@ -2,7 +2,7 @@
 source: core/tests/suite/compact_remote.rs
 expression: "context_snapshot::format_request_body_diff_snapshot(scenario,\n\"Last Normal /responses Request\", &normal_request,\n\"Remote /responses/compact Request\", &compact_request,\n&ContextSnapshotOptions::default(),)"
 ---
-Scenario: After five varied API-key-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.
+Scenario: After five varied API-key-auth turns, remote manual compaction omits service_tier, reuses prompt_cache_key, and still omits responses-only fields.
 
 --- Last Normal /responses Request
 +++ Remote /responses/compact Request
@@ -38,6 +38,7 @@ Scenario: After five varied API-key-auth turns, remote manual compaction reuses 
 +      ],
 +      "role": "assistant",
 +      "type": "message"
+-  "service_tier": "priority",
 -  "store": false,
 -  "stream": true,
 -  "tool_choice": "auto",

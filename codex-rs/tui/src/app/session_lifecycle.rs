@@ -617,10 +617,7 @@ impl App {
 
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
-        config.service_tier = self
-            .chat_widget
-            .configured_service_tier()
-            .map(|service_tier| service_tier.request_value().to_string());
+        config.service_tier = self.chat_widget.configured_service_tier();
         config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         config
     }
@@ -636,7 +633,7 @@ impl App {
         }
 
         let current_cwd = self.config.cwd.to_path_buf();
-        let resume_cwd = if self.remote_app_server_url.is_some() {
+        let resume_cwd = if self.remote_app_server_endpoint.is_some() {
             current_cwd.clone()
         } else {
             match crate::session_resume::resolve_cwd_for_resume_or_fork(

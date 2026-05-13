@@ -12,10 +12,13 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::PluginShareContext;
 use codex_app_server_protocol::PluginShareDeleteResponse;
+use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginShareListItem;
 use codex_app_server_protocol::PluginShareListResponse;
 use codex_app_server_protocol::PluginSharePrincipal;
+use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginSharePrincipalType;
 use codex_app_server_protocol::PluginShareSaveResponse;
 use codex_app_server_protocol::PluginShareUpdateTargetsResponse;
@@ -159,8 +162,11 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    remote_plugin_id: Some("plugins_123".to_string()),
+                    local_version: None,
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -170,7 +176,6 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: Some(expected_plugin_path),
             }],
         }
@@ -217,15 +222,17 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
         .and(body_json(json!({
             "file_id": "file_123",
             "etag": "\"upload_etag_123\"",
-            "discoverability": "PRIVATE",
+            "discoverability": "UNLISTED",
             "share_targets": [
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
                 },
                 {
                     "principal_type": "workspace",
-                    "principal_id": "workspace-1",
+                    "principal_id": "account-123",
+                    "role": "reader",
                 },
             ],
         })))
@@ -245,15 +252,12 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
             "plugin/share/save",
             Some(json!({
                 "pluginPath": expected_plugin_path,
-                "discoverability": "PRIVATE",
+                "discoverability": "UNLISTED",
                 "shareTargets": [
                     {
                         "principalType": "user",
                         "principalId": "user-1",
-                    },
-                    {
-                        "principalType": "workspace",
-                        "principalId": "workspace-1",
+                        "role": "editor",
                     },
                 ],
             })),
@@ -273,6 +277,184 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_save_rejects_listed_discoverability() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = TempDir::new()?;
+    let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/save",
+            Some(json!({
+                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+                "discoverability": "LISTED",
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "discoverability LISTED is not supported for plugin/share/save; use UNLISTED or PRIVATE"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_save_rejects_when_plugin_sharing_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = TempDir::new()?;
+    let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api"
+
+[features]
+plugins = true
+remote_plugin = true
+plugin_sharing = false
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/save",
+            Some(json!({
+                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(error.error.message, "plugin sharing is disabled");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("wiremock should record requests")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_rejects_workspace_targets_from_client() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = TempDir::new()?;
+    let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/save",
+            Some(json!({
+                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+                "discoverability": "UNLISTED",
+                "shareTargets": [
+                    {
+                        "principalType": "workspace",
+                        "principalId": "account-123",
+                        "role": "reader",
+                    },
+                ],
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "shareTargets cannot include workspace principals; use discoverability UNLISTED for workspace link access"
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/updateTargets",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+                "discoverability": "UNLISTED",
+                "shareTargets": [
+                    {
+                        "principalType": "workspace",
+                        "principalId": "account-123",
+                        "role": "reader",
+                    },
+                ],
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "shareTargets cannot include workspace principals; use discoverability UNLISTED for workspace link access"
     );
     Ok(())
 }
@@ -306,6 +488,7 @@ async fn plugin_share_save_rejects_access_policy_for_existing_plugin() -> Result
                     {
                         "principalType": "user",
                         "principalId": "user-1",
+                        "role": "reader",
                     },
                 ],
             })),
@@ -321,7 +504,7 @@ async fn plugin_share_save_rejects_access_policy_for_existing_plugin() -> Result
     assert_eq!(error.error.code, -32600);
     assert_eq!(
         error.error.message,
-        "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share targets"
+        "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share settings"
     );
     Ok(())
 }
@@ -383,8 +566,11 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    remote_plugin_id: Some("plugins_123".to_string()),
+                    local_version: None,
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -394,7 +580,6 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: None,
             }],
         }
@@ -417,14 +602,21 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
     )?;
 
     Mock::given(method("PUT"))
-        .and(path("/backend-api/public/plugins/plugins_123/shares"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .and(body_json(json!({
+            "discoverability": "UNLISTED",
             "targets": [
                 {
                     "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account-123",
+                    "role": "reader",
                 },
             ],
         })))
@@ -432,10 +624,24 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
             "principals": [
                 {
                     "principal_type": "user",
+                    "principal_id": "owner-1",
+                    "role": "owner",
+                    "name": "Owner",
+                },
+                {
+                    "principal_type": "user",
                     "principal_id": "user-1",
+                    "role": "editor",
                     "name": "Gavin",
                 },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account-123",
+                    "role": "reader",
+                    "name": "Workspace",
+                },
             ],
+            "discoverability": "UNLISTED",
         })))
         .expect(1)
         .mount(&server)
@@ -448,10 +654,12 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
             "plugin/share/updateTargets",
             Some(json!({
                 "remotePluginId": "plugins_123",
+                "discoverability": "UNLISTED",
                 "shareTargets": [
                     {
                         "principalType": "user",
                         "principalId": "user-1",
+                        "role": "editor",
                     },
                 ],
             })),
@@ -468,11 +676,27 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
     assert_eq!(
         response,
         PluginShareUpdateTargetsResponse {
-            principals: vec![PluginSharePrincipal {
-                principal_type: PluginSharePrincipalType::User,
-                principal_id: "user-1".to_string(),
-                name: "Gavin".to_string(),
-            }],
+            principals: vec![
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "owner-1".to_string(),
+                    role: PluginSharePrincipalRole::Owner,
+                    name: "Owner".to_string(),
+                },
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-1".to_string(),
+                    role: PluginSharePrincipalRole::Editor,
+                    name: "Gavin".to_string(),
+                },
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::Workspace,
+                    principal_id: "account-123".to_string(),
+                    role: PluginSharePrincipalRole::Reader,
+                    name: "Workspace".to_string(),
+                },
+            ],
+            discoverability: codex_app_server_protocol::PluginShareDiscoverability::Unlisted,
         }
     );
     Ok(())
@@ -563,8 +787,11 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    remote_plugin_id: Some("plugins_123".to_string()),
+                    local_version: None,
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -574,7 +801,6 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                     interface: Some(expected_plugin_interface()),
                     keywords: Vec::new(),
                 },
-                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
                 local_plugin_path: None,
             }],
         }
@@ -602,10 +828,26 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "discoverability": "PRIVATE",
         "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+        "share_principals": [
+            {
+                "principal_type": "user",
+                "principal_id": "user-owner__account-123",
+                "role": "owner",
+                "name": "Owner"
+            },
+            {
+                "principal_type": "user",
+                "principal_id": "user-reader__account-123",
+                "role": "reader",
+                "name": "Reader"
+            }
+        ],
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
+            "version": "0.1.0",
             "display_name": "Demo Plugin",
             "description": "Demo plugin description",
             "interface": {
@@ -652,6 +894,31 @@ fn expected_plugin_interface() -> PluginInterface {
         logo_url: None,
         screenshots: Vec::new(),
         screenshot_urls: Vec::new(),
+    }
+}
+
+fn expected_share_context(plugin_id: &str) -> PluginShareContext {
+    PluginShareContext {
+        remote_plugin_id: plugin_id.to_string(),
+        remote_version: Some("0.1.0".to_string()),
+        discoverability: Some(PluginShareDiscoverability::Private),
+        share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
+        creator_account_user_id: None,
+        creator_name: None,
+        share_principals: Some(vec![
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-owner__account-123".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Owner".to_string(),
+            },
+            PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-reader__account-123".to_string(),
+                role: PluginSharePrincipalRole::Reader,
+                name: "Reader".to_string(),
+            },
+        ]),
     }
 }
 
