@@ -17,7 +17,8 @@ use crate::backend::MemoriesBackend;
 
 use super::backend_error_to_function_call;
 use super::clamp_max_results;
-use super::function_tool;
+use super::memory_function_tool;
+use super::memory_tool_name;
 use super::parse_args;
 
 #[derive(Deserialize, JsonSchema)]
@@ -39,11 +40,11 @@ where
     B: MemoriesBackend,
 {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(LIST_TOOL_NAME)
+        memory_tool_name(LIST_TOOL_NAME)
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(function_tool::<ListArgs, ListMemoriesResponse>(
+        Some(memory_function_tool::<ListArgs, ListMemoriesResponse>(
             LIST_TOOL_NAME,
             "List immediate files and directories under a path in the Codex memories store.",
         ))

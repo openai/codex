@@ -18,12 +18,10 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
-use crate::tools::handlers::extension_tools::ExtensionToolHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
-use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ToolName;
@@ -669,17 +667,6 @@ impl ToolRegistryBuilder {
         }
 
         self.handlers.insert(name, handler);
-    }
-
-    pub fn register_extension_tool_executor(&mut self, executor: Arc<dyn ExtensionToolExecutor>) {
-        let tool_name = executor.tool_name();
-        if self.handlers.contains_key(&tool_name) {
-            warn!("Skipping extension tool `{tool_name}`: handler already registered");
-            return;
-        }
-
-        let handler: Arc<dyn RegisteredTool> = Arc::new(ExtensionToolHandler::new(executor));
-        self.register_tool_internal(handler, /*include_spec*/ true);
     }
 
     pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {

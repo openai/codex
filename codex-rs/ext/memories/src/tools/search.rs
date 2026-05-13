@@ -18,7 +18,8 @@ use crate::backend::SearchMemoriesResponse;
 
 use super::backend_error_to_function_call;
 use super::clamp_max_results;
-use super::function_tool;
+use super::memory_function_tool;
+use super::memory_tool_name;
 use super::parse_args;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -47,11 +48,11 @@ where
     B: MemoriesBackend,
 {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(SEARCH_TOOL_NAME)
+        memory_tool_name(SEARCH_TOOL_NAME)
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(function_tool::<SearchArgs, SearchMemoriesResponse>(
+        Some(memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
             SEARCH_TOOL_NAME,
             "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
         ))
