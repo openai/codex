@@ -6,6 +6,9 @@ use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
+use crate::tools::handlers::FilesCopyHandler;
+use crate::tools::handlers::FilesExportForToolHandler;
+use crate::tools::handlers::FilesMaterializeHandler;
 use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -331,6 +334,16 @@ fn collect_handler_tools(
         .any(|tool| tool == "test_sync_tool")
     {
         handlers.push(Arc::new(TestSyncHandler));
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "code_mode_files")
+    {
+        handlers.push(Arc::new(FilesMaterializeHandler));
+        handlers.push(Arc::new(FilesCopyHandler));
+        handlers.push(Arc::new(FilesExportForToolHandler));
     }
 
     if config.environment_mode.has_environment() {
