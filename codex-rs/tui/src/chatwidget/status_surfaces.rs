@@ -12,7 +12,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
-use codex_utils_sandbox_summary::summarize_permission_profile;
+use codex_utils_sandbox_summary::summarize_config_permission_profile;
 
 use super::status_state::TerminalTitleStatusKind;
 
@@ -902,7 +902,7 @@ fn permissions_display(config: &Config) -> String {
     }
 
     let permission_profile = config.permissions.permission_profile();
-    let summary = summarize_permission_profile(&permission_profile, config.cwd.as_path());
+    let summary = summarize_config_permission_profile(config);
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")
     {

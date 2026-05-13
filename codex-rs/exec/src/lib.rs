@@ -24,8 +24,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
@@ -81,8 +79,8 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -211,6 +209,7 @@ struct ExecRunArgs {
     prompt: Option<String>,
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
+    workspace_roots_explicit: bool,
 }
 
 fn exec_root_span() -> tracing::Span {
@@ -268,6 +267,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cwd,
         add_dir,
     } = shared;
+    let workspace_roots_explicit = !add_dir.is_empty();
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -425,6 +425,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral: ephemeral.then_some(true),
         bypass_hook_trust: bypass_hook_trust.then_some(true),
         additional_writable_roots: add_dir,
+        workspace_roots: None,
     };
 
     let config = ConfigBuilder::default()
@@ -552,6 +553,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         prompt,
         skip_git_repo_check,
         stderr_with_ansi,
+        workspace_roots_explicit,
     })
     .instrument(exec_span)
     .await
@@ -574,6 +576,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         prompt,
         skip_git_repo_check,
         stderr_with_ansi,
+        workspace_roots_explicit,
     } = args;
 
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
@@ -694,7 +697,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadResume {
                     request_id: request_ids.next(),
-                    params: thread_resume_params_from_config(&config, thread_id),
+                    params: thread_resume_params_from_config(
+                        &config,
+                        thread_id,
+                        workspace_roots_explicit,
+                    ),
                 },
                 "thread/resume",
             )
@@ -749,7 +756,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
         && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+            codex_core::config::system_bwrap_warning(config.permissions.permission_profile_ref())
     {
         event_processor.process_warning(message);
     }
@@ -779,6 +786,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         responsesapi_client_metadata: None,
                         environments: None,
                         cwd: Some(default_cwd),
+                        workspace_roots: None,
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
                         sandbox_policy: None,
@@ -942,7 +950,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            config.permissions.permission_profile_ref(),
             config.cwd.as_path(),
         )
     });
@@ -950,6 +958,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -960,51 +969,36 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: String,
+    workspace_roots_explicit: bool,
+) -> ThreadResumeParams {
     let permissions = permissions_selection_from_config(config);
-    let sandbox = permissions.is_none().then(|| {
-        sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
-            config.cwd.as_path(),
-        )
-    });
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        workspace_roots: workspace_roots_explicit.then(|| config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox: sandbox.flatten(),
+        sandbox: None,
         permissions,
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
     }
 }
 
-fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfileSelectionParams> {
+fn permissions_selection_from_config(config: &Config) -> Option<String> {
     config
         .permissions
         .active_permission_profile()
         .map(permissions_selection_from_active_profile)
 }
 
-fn permissions_selection_from_active_profile(
-    active: ActivePermissionProfile,
-) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
-        .collect::<Vec<_>>();
-    PermissionProfileSelectionParams::Profile {
-        id: active.id,
-        modifications: (!modifications.is_empty()).then_some(modifications),
-    }
+fn permissions_selection_from_active_profile(active: ActivePermissionProfile) -> String {
+    active.id
 }
 
 fn sandbox_mode_from_permission_profile(
@@ -1064,7 +1058,7 @@ where
 
 fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
-    config: &Config,
+    _config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.session_id,
@@ -1076,20 +1070,21 @@ fn session_configured_from_thread_start_response(
         response.service_tier.clone(),
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response
-            .permission_profile
-            .clone()
-            .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+        permission_profile_from_thread_response(&response.sandbox, &response.cwd),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
+        workspace_roots_from_thread_response(
+            &response.sandbox,
+            &response.cwd,
+            &response.workspace_roots,
+        ),
         response.reasoning_effort,
     )
 }
 
 fn session_configured_from_thread_resume_response(
     response: &ThreadResumeResponse,
-    config: &Config,
+    _config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.session_id,
@@ -1101,15 +1096,74 @@ fn session_configured_from_thread_resume_response(
         response.service_tier.clone(),
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response
-            .permission_profile
-            .clone()
-            .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+        permission_profile_from_thread_response(&response.sandbox, &response.cwd),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
+        workspace_roots_from_thread_response(
+            &response.sandbox,
+            &response.cwd,
+            &response.workspace_roots,
+        ),
         response.reasoning_effort,
     )
+}
+
+fn permission_profile_from_thread_response(
+    sandbox: &codex_app_server_protocol::SandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> PermissionProfile {
+    match sandbox {
+        codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            legacy_writable_roots: _,
+        } => PermissionProfile::workspace_write_with(
+            &[],
+            if *network_access {
+                NetworkSandboxPolicy::Enabled
+            } else {
+                NetworkSandboxPolicy::Restricted
+            },
+            *exclude_tmpdir_env_var,
+            *exclude_slash_tmp,
+        ),
+        codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+        | codex_app_server_protocol::SandboxPolicy::ReadOnly { .. }
+        | codex_app_server_protocol::SandboxPolicy::ExternalSandbox { .. } => {
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd.as_path())
+        }
+    }
+}
+
+fn workspace_roots_from_thread_response(
+    sandbox: &codex_app_server_protocol::SandboxPolicy,
+    cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
+) -> Vec<AbsolutePathBuf> {
+    if !workspace_roots.is_empty() || sandbox.legacy_writable_roots().is_empty() {
+        return workspace_roots.to_vec();
+    }
+
+    match sandbox {
+        codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+            let mut roots = Vec::with_capacity(1 + sandbox.legacy_writable_roots().len());
+            push_unique_workspace_root(&mut roots, cwd.clone());
+            for root in sandbox.legacy_writable_roots() {
+                push_unique_workspace_root(&mut roots, root.clone());
+            }
+            roots
+        }
+        codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+        | codex_app_server_protocol::SandboxPolicy::ReadOnly { .. }
+        | codex_app_server_protocol::SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
+    }
+}
+
+fn push_unique_workspace_root(roots: &mut Vec<AbsolutePathBuf>, root: AbsolutePathBuf) {
+    if !roots.iter().any(|existing| existing == &root) {
+        roots.push(root);
+    }
 }
 
 fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
@@ -1138,6 +1192,7 @@ fn session_configured_from_thread_response(
     permission_profile: PermissionProfile,
     active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
+    workspace_roots: Vec<AbsolutePathBuf>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = SessionId::from_string(session_id)
@@ -1159,6 +1214,7 @@ fn session_configured_from_thread_response(
         permission_profile,
         active_permission_profile,
         cwd,
+        workspace_roots,
         reasoning_effort,
         initial_messages: None,
         network_proxy: None,
