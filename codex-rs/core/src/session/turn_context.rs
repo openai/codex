@@ -193,6 +193,13 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
+        let mut request_user_input_available_modes =
+            self.tools_config.request_user_input_available_modes.clone();
+        if features.enabled(Feature::DefaultModeRequestUserInput)
+            && !request_user_input_available_modes.contains(&ModeKind::Default)
+        {
+            request_user_input_available_modes.push(ModeKind::Default);
+        }
         let provider_capabilities = self.provider.capabilities();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -215,7 +222,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_request_user_input_config(
             self.tools_config.request_user_input_tool_enabled,
-            self.tools_config.request_user_input_available_modes.clone(),
+            request_user_input_available_modes,
         )
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_environment_mode(self.tools_config.environment_mode)
