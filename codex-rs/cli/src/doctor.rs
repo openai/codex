@@ -30,6 +30,7 @@ use anyhow::Context;
 use clap::Parser;
 use codex_api::ApiError;
 use codex_api::ResponsesWebsocketClient;
+use codex_api::is_azure_responses_provider;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -2319,6 +2320,7 @@ struct ReachabilityEndpoint {
     label: String,
     url: String,
     required: bool,
+    route_probe_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2351,7 +2353,10 @@ fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
     provider_reachability_plan_from_parts(
         mode,
         &config.model_provider_id,
+        &config.model_provider.name,
         config.model_provider.base_url.as_deref(),
+        config.model_provider.query_params.as_ref(),
+        config.model_provider.is_amazon_bedrock(),
         &config.chatgpt_base_url,
     )
 }
@@ -2360,7 +2365,10 @@ fn default_reachability_plan() -> ReachabilityPlan {
     provider_reachability_plan_from_parts(
         ProviderAuthReachabilityMode::Chatgpt,
         "openai",
+        "OpenAI",
         /*provider_base_url*/ None,
+        /*provider_query_params*/ None,
+        /*is_amazon_bedrock*/ false,
         "https://chatgpt.com/backend-api/",
     )
 }
@@ -2393,9 +2401,20 @@ fn provider_auth_reachability_mode_from_auth(
 fn provider_reachability_plan_from_parts(
     mode: ProviderAuthReachabilityMode,
     provider_id: &str,
+    provider_name: &str,
     provider_base_url: Option<&str>,
+    provider_query_params: Option<&HashMap<String, String>>,
+    is_amazon_bedrock: bool,
     chatgpt_base_url: &str,
 ) -> ReachabilityPlan {
+    let provider_route_probe_url = provider_base_url
+        .or_else(|| {
+            (mode == ProviderAuthReachabilityMode::ApiKey).then_some("https://api.openai.com/v1")
+        })
+        .and_then(|url| {
+            should_probe_models_route(provider_name, url, is_amazon_bedrock)
+                .then(|| provider_url_for_path(url, "models", provider_query_params))
+        });
     let endpoints = match mode {
         ProviderAuthReachabilityMode::ApiKey => vec![ReachabilityEndpoint {
             label: format!("{provider_id} API"),
@@ -2403,11 +2422,13 @@ fn provider_reachability_plan_from_parts(
                 .unwrap_or("https://api.openai.com/v1")
                 .to_string(),
             required: true,
+            route_probe_url: provider_route_probe_url,
         }],
         ProviderAuthReachabilityMode::Chatgpt => vec![ReachabilityEndpoint {
             label: "ChatGPT".to_string(),
             url: chatgpt_base_url.to_string(),
             required: true,
+            route_probe_url: None,
         }],
         ProviderAuthReachabilityMode::NotRequired => provider_base_url
             .map(|url| {
@@ -2415,6 +2436,7 @@ fn provider_reachability_plan_from_parts(
                     label: format!("{provider_id} API"),
                     url: url.to_string(),
                     required: true,
+                    route_probe_url: provider_route_probe_url,
                 }]
             })
             .unwrap_or_default(),
@@ -2423,6 +2445,40 @@ fn provider_reachability_plan_from_parts(
         description: mode.description().to_string(),
         endpoints,
     }
+}
+
+fn should_probe_models_route(provider_name: &str, base_url: &str, is_amazon_bedrock: bool) -> bool {
+    !is_amazon_bedrock && !is_azure_responses_provider(provider_name, Some(base_url))
+}
+
+fn provider_url_for_path(
+    base_url: &str,
+    path: &str,
+    query_params: Option<&HashMap<String, String>>,
+) -> String {
+    let base = base_url.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    let mut url = if path.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}/{path}")
+    };
+
+    if let Some(params) = query_params
+        && !params.is_empty()
+    {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        url.push(separator);
+        url.push_str(
+            &params
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("&"),
+        );
+    }
+
+    url
 }
 
 async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
@@ -2440,10 +2496,13 @@ async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
 
     let mut failures = Vec::new();
     let mut optional_failures = Vec::new();
+    let mut route_failures = Vec::new();
+    let mut route_warnings = Vec::new();
+    let mut issues = Vec::new();
     for endpoint in plan.endpoints {
         match http_probe_url(&endpoint.url).await {
             Ok(status) => details.push(format!(
-                "{}: {} reachable ({status})",
+                "{} base URL: {} reachable ({status})",
                 endpoint.label, endpoint.url
             )),
             Err(err) => {
@@ -2453,7 +2512,7 @@ async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
                     "optional"
                 };
                 details.push(format!(
-                    "{}: {} {err} ({requirement})",
+                    "{} base URL: {} {err} ({requirement})",
                     endpoint.label, endpoint.url
                 ));
                 if endpoint.required {
@@ -2461,11 +2520,68 @@ async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
                 } else {
                     optional_failures.push(endpoint.url);
                 }
+                continue;
+            }
+        }
+
+        let Some(route_probe_url) = endpoint.route_probe_url.as_deref() else {
+            continue;
+        };
+        match provider_route_probe_url(route_probe_url).await {
+            RouteProbeOutcome::Ok(status) => {
+                details.push(format!(
+                    "{} route probe: {route_probe_url} route exists ({status})",
+                    endpoint.label,
+                ));
+            }
+            RouteProbeOutcome::Warning(status) => {
+                details.push(format!(
+                    "{} route probe: {route_probe_url} returned {status} (warning)",
+                    endpoint.label,
+                ));
+                route_warnings.push(route_probe_url.to_string());
+            }
+            RouteProbeOutcome::Fail(status) => {
+                details.push(format!(
+                    "{} route probe: {route_probe_url} returned {status} (required)",
+                    endpoint.label,
+                ));
+                route_failures.push(route_probe_url.to_string());
+                issues.push(
+                    DoctorIssue::new(
+                        CheckStatus::Fail,
+                        "provider base URL route returned 404 - verify the configured API prefix",
+                    )
+                    .measured(format!("{route_probe_url} returned {status}"))
+                    .expected("GET /models returns 2xx, 401, or 403")
+                    .remedy("Set base_url to the provider API root, for example https://api.openai.com/v1")
+                    .field("route probe"),
+                );
+            }
+            RouteProbeOutcome::TransportError(err) => {
+                details.push(format!(
+                    "{} route probe: {route_probe_url} {err} (required)",
+                    endpoint.label,
+                ));
+                route_failures.push(route_probe_url.to_string());
+                issues.push(
+                    DoctorIssue::new(
+                        CheckStatus::Fail,
+                        "provider route probe could not connect - verify network access to the provider API",
+                    )
+                    .measured(format!("{route_probe_url} {err}"))
+                    .expected("GET /models completes")
+                    .remedy("Check proxy, VPN, firewall, DNS, and custom CA configuration.")
+                    .field("route probe"),
+                );
             }
         }
     }
 
-    let (status, summary) = provider_reachability_outcome(failures.len(), optional_failures.len());
+    let (status, summary) = provider_reachability_outcome(
+        failures.len() + route_failures.len(),
+        optional_failures.len() + route_warnings.len(),
+    );
     let mut check = DoctorCheck::new(
         "network.provider_reachability",
         "reachability",
@@ -2473,24 +2589,45 @@ async fn provider_reachability_check(plan: ReachabilityPlan) -> DoctorCheck {
         summary,
     )
     .details(details);
+    for issue in issues {
+        check = check.issue(issue);
+    }
     if status != CheckStatus::Ok {
         check = check.remediation("Check proxy, VPN, firewall, DNS, and custom CA configuration.");
     }
     check
 }
 
+enum RouteProbeOutcome {
+    Ok(String),
+    Warning(String),
+    Fail(String),
+    TransportError(String),
+}
+
+async fn provider_route_probe_url(url: &str) -> RouteProbeOutcome {
+    match http_get_probe_status_with_timeout(url, Duration::from_secs(3)).await {
+        Ok(status) if (200..300).contains(&status) || matches!(status, 401 | 403) => {
+            RouteProbeOutcome::Ok(format!("HTTP {status}"))
+        }
+        Ok(404) => RouteProbeOutcome::Fail("HTTP 404".to_string()),
+        Ok(status) => RouteProbeOutcome::Warning(format!("HTTP {status}")),
+        Err(err) => RouteProbeOutcome::TransportError(err),
+    }
+}
+
 fn provider_reachability_outcome(
     required_failures: usize,
-    optional_failures: usize,
+    warnings: usize,
 ) -> (CheckStatus, &'static str) {
-    match (required_failures, optional_failures) {
+    match (required_failures, warnings) {
         (0, 0) => (
             CheckStatus::Ok,
             "active provider endpoints are reachable over HTTP",
         ),
         (0, _) => (
             CheckStatus::Warning,
-            "optional provider endpoints are unreachable over HTTP",
+            "provider endpoint checks returned warnings",
         ),
         (_, _) => (
             CheckStatus::Fail,
@@ -2538,6 +2675,12 @@ async fn http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<Str
 }
 
 async fn http_get_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
+    http_get_probe_status_with_timeout(url, timeout)
+        .await
+        .map(|status| format!("HTTP {status}"))
+}
+
+async fn http_get_probe_status_with_timeout(url: &str, timeout: Duration) -> Result<u16, String> {
     let response = build_reqwest_client()
         .get(url)
         .timeout(timeout)
@@ -2554,7 +2697,7 @@ async fn http_get_probe_url_with_timeout(url: &str, timeout: Duration) -> Result
                 err.to_string()
             }
         })?;
-    Ok(format!("HTTP {}", response.status().as_u16()))
+    Ok(response.status().as_u16())
 }
 
 fn stdio_command_resolves(
@@ -2763,6 +2906,13 @@ mod tests {
                 .expect("events lock")
                 .push("settle".to_string());
         }
+    }
+
+    fn respond_once(listener: &TcpListener, response: &[u8]) {
+        let (mut stream, _) = listener.accept().expect("accept probe request");
+        let mut request = [0; 1024];
+        let _ = stream.read(&mut request);
+        stream.write_all(response).expect("write response");
     }
 
     #[test]
@@ -3138,7 +3288,10 @@ mod tests {
             provider_reachability_plan_from_parts(
                 ProviderAuthReachabilityMode::NotRequired,
                 "azure",
+                "azure",
                 Some("https://example.openai.azure.com/openai/v1"),
+                /*provider_query_params*/ None,
+                /*is_amazon_bedrock*/ false,
                 "https://chatgpt.com/backend-api/",
             ),
             ReachabilityPlan {
@@ -3147,9 +3300,53 @@ mod tests {
                     label: "azure API".to_string(),
                     url: "https://example.openai.azure.com/openai/v1".to_string(),
                     required: true,
+                    route_probe_url: None,
                 }],
             }
         );
+    }
+
+    #[test]
+    fn provider_reachability_adds_models_route_probe_for_openai_compatible_base_urls() {
+        let query_params = HashMap::from([("api-version".to_string(), "2026-01-01".to_string())]);
+
+        assert_eq!(
+            provider_reachability_plan_from_parts(
+                ProviderAuthReachabilityMode::NotRequired,
+                "custom",
+                "Custom",
+                Some("https://example.com/openai/v1/"),
+                Some(&query_params),
+                /*is_amazon_bedrock*/ false,
+                "https://chatgpt.com/backend-api/",
+            ),
+            ReachabilityPlan {
+                description: "provider auth".to_string(),
+                endpoints: vec![ReachabilityEndpoint {
+                    label: "custom API".to_string(),
+                    url: "https://example.com/openai/v1/".to_string(),
+                    required: true,
+                    route_probe_url: Some(
+                        "https://example.com/openai/v1/models?api-version=2026-01-01".to_string()
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn provider_reachability_skips_route_probe_for_bedrock() {
+        let plan = provider_reachability_plan_from_parts(
+            ProviderAuthReachabilityMode::NotRequired,
+            "amazon-bedrock",
+            "Amazon Bedrock",
+            Some("https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"),
+            /*provider_query_params*/ None,
+            /*is_amazon_bedrock*/ true,
+            "https://chatgpt.com/backend-api/",
+        );
+
+        assert_eq!(plan.endpoints[0].route_probe_url, None);
     }
 
     #[test]
@@ -3157,7 +3354,10 @@ mod tests {
         let plan = provider_reachability_plan_from_parts(
             ProviderAuthReachabilityMode::ApiKey,
             "openai",
+            "OpenAI",
             /*provider_base_url*/ None,
+            /*provider_query_params*/ None,
+            /*is_amazon_bedrock*/ false,
             "https://chatgpt.com/backend-api/",
         );
 
@@ -3167,6 +3367,7 @@ mod tests {
                 label: "openai API".to_string(),
                 url: "https://api.openai.com/v1".to_string(),
                 required: true,
+                route_probe_url: Some("https://api.openai.com/v1/models".to_string()),
             }]
         );
     }
@@ -3174,22 +3375,95 @@ mod tests {
     #[test]
     fn provider_reachability_outcome_reports_required_failures() {
         assert_eq!(
-            provider_reachability_outcome(
-                /*required_failures*/ 0, /*optional_failures*/ 1,
-            ),
+            provider_reachability_outcome(/*required_failures*/ 0, /*warnings*/ 1,),
             (
                 CheckStatus::Warning,
-                "optional provider endpoints are unreachable over HTTP",
+                "provider endpoint checks returned warnings",
             )
         );
         assert_eq!(
-            provider_reachability_outcome(
-                /*required_failures*/ 1, /*optional_failures*/ 0,
-            ),
+            provider_reachability_outcome(/*required_failures*/ 1, /*warnings*/ 0,),
             (
                 CheckStatus::Fail,
                 "one or more required provider endpoints are unreachable over HTTP",
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_reachability_route_404_fails_bad_base_url_path() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            respond_once(
+                &listener,
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            respond_once(
+                &listener,
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let plan = provider_reachability_plan_from_parts(
+            ProviderAuthReachabilityMode::ApiKey,
+            "openai",
+            "OpenAI",
+            Some(&format!("http://{addr}/xxxx")),
+            /*provider_query_params*/ None,
+            /*is_amazon_bedrock*/ false,
+            "https://chatgpt.com/backend-api/",
+        );
+
+        let check = provider_reachability_check(plan).await;
+        server.join().expect("probe server thread should finish");
+
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.contains("route probe:") && detail.contains("HTTP 404"))
+        );
+        assert_eq!(check.issues.len(), 1);
+        assert_eq!(
+            check.issues[0].remedy.as_deref(),
+            Some("Set base_url to the provider API root, for example https://api.openai.com/v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_reachability_route_401_keeps_reachability_ok() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            respond_once(
+                &listener,
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            respond_once(
+                &listener,
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let plan = provider_reachability_plan_from_parts(
+            ProviderAuthReachabilityMode::ApiKey,
+            "openai",
+            "OpenAI",
+            Some(&format!("http://{addr}/v1")),
+            /*provider_query_params*/ None,
+            /*is_amazon_bedrock*/ false,
+            "https://chatgpt.com/backend-api/",
+        );
+
+        let check = provider_reachability_check(plan).await;
+        server.join().expect("probe server thread should finish");
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.contains("route exists (HTTP 401)"))
         );
     }
 
