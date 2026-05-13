@@ -44,7 +44,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
-use crate::stream_events_utils::finalize_non_tool_response_item;
+use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -1759,20 +1759,22 @@ async fn handle_assistant_item_done_in_plan_mode(
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
         let mut final_memory_citation = None;
-        if let Some(finalized_turn_item) = finalize_non_tool_response_item(
+        if let Some(turn_item) = handle_non_tool_response_item(
             sess,
             turn_context,
-            turn_store,
+            TurnItemContributorPolicy::Run(turn_store),
             item,
             /*plan_mode*/ true,
         )
         .await
         {
-            final_memory_citation = finalized_turn_item.memory_citation;
+            if let TurnItem::AgentMessage(agent_message) = &turn_item {
+                final_memory_citation = agent_message.memory_citation.clone();
+            }
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
-                finalized_turn_item.item,
+                turn_item,
                 previously_active_item,
                 state,
             )
@@ -2023,6 +2025,7 @@ async fn try_run_sampling_request(
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
+                    TurnItemContributorPolicy::Skip,
                     &item,
                     plan_mode,
                 )

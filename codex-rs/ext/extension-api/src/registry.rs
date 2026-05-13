@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::ApprovalReviewContributor;
 use crate::ApprovalReviewFuture;
-use crate::AssistantMessageAnnotationContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
+use crate::TurnItemContributor;
 use crate::TurnLifecycleContributor;
 
 /// Mutable registry used while hosts register typed runtime contributions.
@@ -17,7 +17,7 @@ pub struct ExtensionRegistryBuilder<C> {
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
-    assistant_message_annotation_contributors: Vec<Arc<dyn AssistantMessageAnnotationContributor>>,
+    turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
@@ -30,7 +30,7 @@ impl<C> Default for ExtensionRegistryBuilder<C> {
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             tool_contributors: Vec::new(),
-            assistant_message_annotation_contributors: Vec::new(),
+            turn_item_contributors: Vec::new(),
         }
     }
 }
@@ -74,13 +74,9 @@ impl<C> ExtensionRegistryBuilder<C> {
         self.tool_contributors.push(contributor);
     }
 
-    /// Registers one ordered assistant-message annotation contributor.
-    pub fn assistant_message_annotation_contributor(
-        &mut self,
-        contributor: Arc<dyn AssistantMessageAnnotationContributor>,
-    ) {
-        self.assistant_message_annotation_contributors
-            .push(contributor);
+    /// Registers one ordered turn-item contributor.
+    pub fn turn_item_contributor(&mut self, contributor: Arc<dyn TurnItemContributor>) {
+        self.turn_item_contributors.push(contributor);
     }
 
     /// Finishes construction and returns the immutable registry.
@@ -92,8 +88,7 @@ impl<C> ExtensionRegistryBuilder<C> {
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             tool_contributors: self.tool_contributors,
-            assistant_message_annotation_contributors: self
-                .assistant_message_annotation_contributors,
+            turn_item_contributors: self.turn_item_contributors,
         }
     }
 }
@@ -105,7 +100,7 @@ pub struct ExtensionRegistry<C> {
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
-    assistant_message_annotation_contributors: Vec<Arc<dyn AssistantMessageAnnotationContributor>>,
+    turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
@@ -148,11 +143,9 @@ impl<C> ExtensionRegistry<C> {
         &self.tool_contributors
     }
 
-    /// Returns the registered assistant-message annotation contributors.
-    pub fn assistant_message_annotation_contributors(
-        &self,
-    ) -> &[Arc<dyn AssistantMessageAnnotationContributor>] {
-        &self.assistant_message_annotation_contributors
+    /// Returns the registered ordered turn-item contributors.
+    pub fn turn_item_contributors(&self) -> &[Arc<dyn TurnItemContributor>] {
+        &self.turn_item_contributors
     }
 }
 

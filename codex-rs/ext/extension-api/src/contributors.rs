@@ -2,8 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use codex_protocol::ThreadId;
-use codex_protocol::memory_citation::MemoryCitation;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
 
@@ -111,42 +110,20 @@ pub trait ApprovalReviewContributor: Send + Sync {
     ) -> Option<ApprovalReviewFuture<'a>>;
 }
 
-/// Final annotations contributed for one assistant-authored message.
-#[derive(Debug, Default)]
-pub struct AssistantMessageAnnotations {
-    /// Citation metadata to attach to the final assistant message. `None`
-    /// leaves the citation parsed by the host unchanged.
-    pub memory_citation: Option<MemoryCitation>,
-}
+/// Future returned by one ordered turn-item contribution.
+pub type TurnItemContributionFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
-/// Inputs passed to assistant-message annotation contributors.
-pub struct AssistantMessageAnnotationInput<'a> {
-    pub thread_id: ThreadId,
-    pub turn_id: &'a str,
-    pub session_store: &'a ExtensionData,
-    pub thread_store: &'a ExtensionData,
-    pub turn_store: &'a ExtensionData,
-    pub raw_response_item: &'a ResponseItem,
-    pub visible_text: &'a str,
-    pub parsed_memory_citation: Option<&'a MemoryCitation>,
-    pub plan_mode: bool,
-}
-
-/// Future returned by one assistant-message annotation contribution.
-pub type AssistantMessageAnnotationFuture<'a> = std::pin::Pin<
-    Box<dyn Future<Output = Result<AssistantMessageAnnotations, String>> + Send + 'a>,
->;
-
-/// Ordered annotation contribution for final assistant messages.
+/// Ordered post-processing contribution for one parsed turn item.
 ///
-/// Implementations are called exactly once for each completed assistant
-/// message, after hidden markup has been stripped and before the item is
-/// emitted. Use this for metadata such as memory citations; do not mutate
-/// turn-item content through this hook. Contributors run in registry order;
-/// when multiple contributors return a citation, the last citation wins.
-pub trait AssistantMessageAnnotationContributor: Send + Sync {
+/// Implementations may mutate the item before it is emitted and may use the
+/// explicitly exposed thread- and turn-lifetime stores when they need durable
+/// extension-private state.
+pub trait TurnItemContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
-        input: AssistantMessageAnnotationInput<'a>,
-    ) -> AssistantMessageAnnotationFuture<'a>;
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> TurnItemContributionFuture<'a>;
 }
