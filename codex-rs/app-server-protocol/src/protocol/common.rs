@@ -799,6 +799,18 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureEnablementSetResponse,
     },
+    #[experimental("remoteControl/enable")]
+    RemoteControlEnable => "remoteControl/enable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlEnableResponse,
+    },
+    #[experimental("remoteControl/disable")]
+    RemoteControlDisable => "remoteControl/disable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlDisableResponse,
+    },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
@@ -2925,6 +2937,27 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("environment/add"));
+    }
+
+    #[test]
+    fn remote_control_runtime_methods_are_marked_experimental() {
+        let enable_request = ClientRequest::RemoteControlEnable {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        let disable_request = ClientRequest::RemoteControlDisable {
+            request_id: RequestId::Integer(2),
+            params: None,
+        };
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&enable_request),
+            Some("remoteControl/enable")
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&disable_request),
+            Some("remoteControl/disable")
+        );
     }
 
     #[test]

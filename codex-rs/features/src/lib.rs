@@ -428,6 +428,9 @@ impl Features {
                 "js_repl_tools_only" => {
                     continue;
                 }
+                "remote_control" => {
+                    continue;
+                }
                 "image_detail_original" => {
                     continue;
                 }
@@ -1125,7 +1128,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteControl,
         key: "remote_control",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

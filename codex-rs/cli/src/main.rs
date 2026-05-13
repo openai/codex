@@ -454,6 +454,10 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -532,10 +536,10 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Enable remote_control for future starts and a currently running managed daemon.
+    /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
-    /// Disable remote_control for future starts and a currently running managed daemon.
+    /// Disable remote control for future starts and a currently running managed daemon.
     DisableRemoteControl,
 
     /// Stop the local app server daemon.
@@ -558,7 +562,7 @@ struct AppServerProxyCommand {
 
 #[derive(Debug, Args)]
 struct AppServerBootstrapCommand {
-    /// Launch the managed app-server with remote_control enabled.
+    /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
 }
@@ -930,6 +934,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 subcommand,
                 strict_config: app_server_strict_config,
                 listen,
+                remote_control,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -944,6 +949,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
+                    let runtime_options = codex_app_server::AppServerRuntimeOptions {
+                        remote_control_enabled: remote_control,
+                        ..Default::default()
+                    };
                     codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
@@ -953,7 +962,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
-                        codex_app_server::AppServerRuntimeOptions::default(),
+                        runtime_options,
                     )
                     .await?;
                 }
@@ -2571,6 +2580,7 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -2582,6 +2592,12 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_remote_control_flag_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "--remote-control"].as_ref());
+        assert!(app_server.remote_control);
     }
 
     #[test]
