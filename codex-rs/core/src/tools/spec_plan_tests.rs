@@ -25,7 +25,6 @@ use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec_plan_types::ToolNamespace;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
@@ -2400,26 +2399,6 @@ fn build_specs_with_discoverable_tools(
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ToolSpec>, ToolRegistry) {
-    build_specs_with_optional_tool_namespaces(
-        config,
-        mcp_tools,
-        deferred_mcp_tools,
-        /*tool_namespaces*/ None,
-        discoverable_tools,
-        extension_tool_bundles,
-        dynamic_tools,
-    )
-}
-
-fn build_specs_with_optional_tool_namespaces(
-    config: &ToolsConfig,
-    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
-    discoverable_tools: Option<Vec<DiscoverableTool>>,
-    extension_tool_bundles: &[codex_tool_api::ToolBundle],
-    dynamic_tools: &[DynamicToolSpec],
-) -> (Vec<ToolSpec>, ToolRegistry) {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
@@ -2431,7 +2410,6 @@ fn build_specs_with_optional_tool_namespaces(
         ToolRegistryBuildParams {
             mcp_tools: mcp_tool_inputs.as_deref(),
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-            tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),
             extension_tool_bundles,
             dynamic_tools,

@@ -7,7 +7,6 @@ use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan::build_tool_registry_builder;
-use crate::tools::spec_plan_types::ToolNamespace;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -19,7 +18,6 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -30,29 +28,6 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
         ShellType::PowerShell => ToolUserShellType::PowerShell,
         ShellType::Sh => ToolUserShellType::Sh,
         ShellType::Cmd => ToolUserShellType::Cmd,
-    }
-}
-
-struct McpToolPlanInputs {
-    mcp_tools: Vec<ToolInfo>,
-    tool_namespaces: HashMap<String, ToolNamespace>,
-}
-
-fn map_mcp_tools_for_plan(mcp_tools: &[ToolInfo]) -> McpToolPlanInputs {
-    McpToolPlanInputs {
-        mcp_tools: mcp_tools.to_vec(),
-        tool_namespaces: mcp_tools
-            .iter()
-            .map(|tool| {
-                (
-                    tool.callable_namespace.clone(),
-                    ToolNamespace {
-                        name: tool.callable_namespace.clone(),
-                        description: tool.namespace_description.clone(),
-                    },
-                )
-            })
-            .collect(),
     }
 }
 
@@ -69,7 +44,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
-    let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let min_wait_timeout_ms = if config.multi_agent_v2 {
@@ -95,13 +69,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let mut builder = build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
-            mcp_tools: mcp_tool_plan_inputs
-                .as_ref()
-                .map(|inputs| inputs.mcp_tools.as_slice()),
+            mcp_tools: mcp_tools.as_deref(),
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-            tool_namespaces: mcp_tool_plan_inputs
-                .as_ref()
-                .map(|inputs| &inputs.tool_namespaces),
             discoverable_tools: discoverable_tools.as_deref(),
             extension_tool_bundles,
             dynamic_tools,

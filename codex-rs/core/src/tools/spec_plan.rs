@@ -84,45 +84,13 @@ pub fn build_tool_registry_builder(
         .collect::<HashSet<_>>();
     let handlers = collect_handler_tools(config, params);
 
-    if config.code_mode_enabled {
-        let namespace_descriptions = params
-            .tool_namespaces
-            .into_iter()
-            .flatten()
-            .map(|(namespace, detail)| {
-                (
-                    namespace.clone(),
-                    codex_code_mode::ToolNamespaceDescription {
-                        name: detail.name.clone(),
-                        description: detail.description.clone().unwrap_or_default(),
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut code_mode_nested_tool_specs = handlers
-            .iter()
-            .filter_map(|handler| handler.spec())
-            .collect::<Vec<_>>();
-        code_mode_nested_tool_specs.extend(
-            params
-                .extension_tool_bundles
-                .iter()
-                .filter_map(|bundle| extension_tool_spec(bundle.spec()).ok()),
-        );
-        let mut enabled_tools =
-            collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
-        enabled_tools
-            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
-            create_code_mode_tool(
-                &enabled_tools,
-                &namespace_descriptions,
-                config.code_mode_only_enabled,
-                config.search_tool && !all_deferred_tools.is_empty(),
-            ),
-            code_mode_nested_tool_specs,
-        )));
-        builder.register_handler(Arc::new(CodeModeWaitHandler));
+    for handler in build_code_mode_handlers(
+        config,
+        &handlers,
+        params.extension_tool_bundles,
+        config.search_tool && !all_deferred_tools.is_empty(),
+    ) {
+        builder.register_any_handler(handler);
     }
 
     let mut non_deferred_specs = Vec::new();
@@ -196,6 +164,45 @@ pub fn build_tool_registry_builder(
     builder
 }
 
+fn build_code_mode_handlers(
+    config: &ToolsConfig,
+    handlers: &[Arc<dyn AnyToolHandler>],
+    extension_tool_bundles: &[codex_tool_api::ToolBundle],
+    deferred_tools_available: bool,
+) -> Vec<Arc<dyn AnyToolHandler>> {
+    if !config.code_mode_enabled {
+        return vec![];
+    }
+
+    let mut code_mode_nested_tool_specs = handlers
+        .iter()
+        .filter_map(|handler| handler.spec())
+        .collect::<Vec<_>>();
+    code_mode_nested_tool_specs.extend(
+        extension_tool_bundles
+            .iter()
+            .filter_map(|bundle| extension_tool_spec(bundle.spec()).ok()),
+    );
+    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+    let mut enabled_tools =
+        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+    enabled_tools
+        .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+
+    vec![
+        Arc::new(CodeModeExecuteHandler::new(
+            create_code_mode_tool(
+                &enabled_tools,
+                &namespace_descriptions,
+                config.code_mode_only_enabled,
+                deferred_tools_available,
+            ),
+            code_mode_nested_tool_specs,
+        )),
+        Arc::new(CodeModeWaitHandler),
+    ]
+}
+
 fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     let mut merged_specs = Vec::with_capacity(specs.len());
     let mut namespace_indices = BTreeMap::<String, usize>::new();
@@ -240,6 +247,28 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     }
 
     merged_specs
+}
+
+fn code_mode_namespace_descriptions(
+    specs: &[ToolSpec],
+) -> BTreeMap<String, codex_code_mode::ToolNamespaceDescription> {
+    let mut namespace_descriptions = BTreeMap::new();
+    for spec in specs {
+        let ToolSpec::Namespace(namespace) = spec else {
+            continue;
+        };
+
+        let entry = namespace_descriptions
+            .entry(namespace.name.clone())
+            .or_insert_with(|| codex_code_mode::ToolNamespaceDescription {
+                name: namespace.name.clone(),
+                description: namespace.description.clone(),
+            });
+        if entry.description.trim().is_empty() && !namespace.description.trim().is_empty() {
+            entry.description = namespace.description.clone();
+        }
+    }
+    namespace_descriptions
 }
 
 fn collect_handler_tools(
