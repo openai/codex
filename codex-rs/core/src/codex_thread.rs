@@ -59,6 +59,7 @@ pub struct ThreadConfigSnapshot {
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub cwd: AbsolutePathBuf,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
@@ -68,11 +69,15 @@ pub struct ThreadConfigSnapshot {
 
 impl ThreadConfigSnapshot {
     pub fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
+        let permission_profile = self
+            .permission_profile
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots);
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile,
+            &permission_profile,
             &file_system_sandbox_policy,
-            self.permission_profile.network_sandbox_policy(),
+            permission_profile.network_sandbox_policy(),
             self.cwd.as_path(),
         )
     }
@@ -82,6 +87,7 @@ impl ThreadConfigSnapshot {
 #[derive(Clone, Default)]
 pub struct CodexThreadTurnContextOverrides {
     pub cwd: Option<PathBuf>,
+    pub workspace_roots: Option<Vec<PathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -256,8 +262,26 @@ impl CodexThread {
         &self,
         overrides: CodexThreadTurnContextOverrides,
     ) -> ConstraintResult<()> {
+        let updates = self.turn_context_updates_from_overrides(overrides).await;
+        self.codex.session.validate_settings(&updates).await
+    }
+
+    /// Apply persistent thread context overrides immediately.
+    pub async fn update_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<()> {
+        let updates = self.turn_context_updates_from_overrides(overrides).await;
+        self.codex.session.update_settings(updates).await
+    }
+
+    async fn turn_context_updates_from_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadTurnContextOverrides {
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -281,8 +305,9 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -294,8 +319,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.
