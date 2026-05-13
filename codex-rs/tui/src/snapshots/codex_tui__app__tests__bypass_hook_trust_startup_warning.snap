@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+⚠ `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without
+  review for this invocation.

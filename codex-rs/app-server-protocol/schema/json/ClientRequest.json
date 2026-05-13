@@ -2015,6 +2015,17 @@
       ],
       "type": "object"
     },
+    "PluginShareCheckoutParams": {
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remotePluginId"
+      ],
+      "type": "object"
+    },
     "PluginShareDeleteParams": {
       "properties": {
         "remotePluginId": {
@@ -5073,6 +5084,30 @@
         "params"
       ],
       "title": "Plugin/share/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/checkout"
+          ],
+          "title": "Plugin/share/checkoutRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareCheckoutParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/checkoutRequest",
       "type": "object"
     },
     {

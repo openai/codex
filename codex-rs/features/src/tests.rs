@@ -287,8 +287,8 @@ fn auth_elicitation_is_under_development() {
 }
 
 #[test]
-fn remote_control_is_under_development() {
-    assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
+fn remote_control_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::RemoteControl.stage(), Stage::Removed);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
 }
 

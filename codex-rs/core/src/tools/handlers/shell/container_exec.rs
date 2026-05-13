@@ -1,5 +1,4 @@
 use codex_protocol::models::ShellToolCallParams;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
 use crate::function_tool::FunctionCallError;
@@ -31,16 +30,6 @@ impl ToolHandler for ContainerExecHandler {
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
-        };
-
-        serde_json::from_str::<ShellToolCallParams>(arguments)
-            .map(|params| !is_known_safe_command(&params.command))
-            .unwrap_or(true)
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

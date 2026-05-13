@@ -163,6 +163,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     let mut config = Config {
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
+        bypass_hook_trust: false,
         model,
         service_tier: None,
         review_model: None,
@@ -191,6 +192,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         guardian_policy_config: None,
         include_permissions_instructions: false,
         include_apps_instructions: false,
+        include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
         include_environment_context: false,
         compact_prompt: None,

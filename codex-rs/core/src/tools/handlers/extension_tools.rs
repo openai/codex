@@ -83,10 +83,6 @@ impl ToolHandler for BundledToolHandler {
         self.arguments_from_payload(payload).is_some()
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         let arguments = self.arguments_from_payload(&invocation.payload)?;
         Some(PreToolUsePayload {
@@ -189,7 +185,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exposes_generic_hook_payloads_and_is_conservatively_mutating() {
+    async fn exposes_generic_hook_payloads() {
         let bundle = codex_tool_api::ToolBundle::new(
             codex_tool_api::FunctionToolSpec {
                 name: "extension_echo".to_string(),
@@ -225,7 +221,6 @@ mod tests {
             value: json!({ "ok": true }),
         };
 
-        assert!(ToolHandler::is_mutating(&handler, &invocation).await);
         assert_eq!(
             ToolHandler::pre_tool_use_payload(&handler, &invocation),
             Some(PreToolUsePayload {
