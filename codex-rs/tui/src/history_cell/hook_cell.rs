@@ -695,6 +695,8 @@ pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
 /// Chooses the transcript presentation for a hook run:
 ///
 /// - Normal hooks render exactly as reported.
+/// - Hooks that complete without entries stay quiet, preserving the pre-existing "quiet success"
+///   behavior.
 /// - Hidden hooks stay silent while running.
 /// - Hidden hooks that complete with only model-only context stay out of the transcript.
 /// - Hidden hooks that complete with context plus user-facing output keep only the user-facing
@@ -702,6 +704,10 @@ pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
 /// - Hidden hooks that block, fail, or stop always render so the transcript still explains
 ///   consequential hook behavior.
 fn hook_presentation(run: &HookRunSummary) -> HookPresentation {
+    if run.status == HookRunStatus::Completed && run.entries.is_empty() {
+        return HookPresentation::Skip;
+    }
+
     if run.visibility_hint != HookVisibilityHint::Hidden {
         return HookPresentation::Render {
             entries: run.entries.clone(),
@@ -863,6 +869,15 @@ mod tests {
             text: "Context only".to_string(),
         }];
         assert!(hook_run_should_skip_render(&run));
+    }
+
+    #[test]
+    fn default_hook_keeps_empty_completion_quiet() {
+        let mut run = hook_run_summary("hook-1");
+        run.status = HookRunStatus::Completed;
+
+        assert!(hook_run_should_skip_render(&run));
+        assert_eq!(hook_presentation(&run), HookPresentation::Skip);
     }
 
     #[test]
