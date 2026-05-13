@@ -6,6 +6,7 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -125,6 +126,11 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    /// Returns the session telemetry handle for thread-scoped production instrumentation.
+    pub fn session_telemetry(&self) -> SessionTelemetry {
+        self.codex.session.services.session_telemetry.clone()
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }
@@ -132,6 +138,21 @@ impl CodexThread {
     /// Wait until the underlying session loop has terminated.
     pub async fn wait_until_terminated(&self) {
         self.codex.session_loop_termination.clone().await;
+    }
+
+    pub(crate) fn emit_thread_resume_lifecycle(&self) {
+        for contributor in self
+            .codex
+            .session
+            .services
+            .extensions
+            .thread_lifecycle_contributors()
+        {
+            contributor.on_thread_resume(codex_extension_api::ThreadResumeInput {
+                session_store: &self.codex.session.services.session_extension_data,
+                thread_store: &self.codex.session.services.thread_extension_data,
+            });
+        }
     }
 
     pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {

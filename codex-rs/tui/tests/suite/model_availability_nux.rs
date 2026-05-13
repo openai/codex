@@ -4,11 +4,14 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_models_manager::bundled_models_response;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use serde_json::Value as JsonValue;
 use tempfile::tempdir;
 use tokio::select;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 #[tokio::test]
 async fn resume_startup_does_not_consume_model_availability_nux_count() -> Result<()> {
@@ -16,6 +19,7 @@ async fn resume_startup_does_not_consume_model_availability_nux_count() -> Resul
     if cfg!(windows) {
         return Ok(());
     }
+    skip_if_no_network!(Ok(()));
 
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempdir()?;
@@ -68,8 +72,14 @@ trust_level = "trusted"
     );
     std::fs::write(codex_home.path().join("config.toml"), config_contents)?;
 
-    let fixture_path =
-        codex_utils_cargo_bin::find_resource!("../core/tests/cli_responses_fixture.sse")?;
+    let server = MockServer::start().await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-seed-session"),
+        responses::ev_assistant_message("msg-seed-session", "seed session response"),
+        responses::ev_completed("resp-seed-session"),
+    ]);
+    let _response_mock = responses::mount_sse_once(&server, sse).await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
     let codex = if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
         path
     } else {
@@ -85,12 +95,13 @@ trust_level = "trusted"
     let exec_output = std::process::Command::new(&codex)
         .arg("exec")
         .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(&openai_base_url_config)
         .arg("-C")
         .arg(&repo_root)
         .arg("seed session for resume")
         .env("CODEX_HOME", codex_home.path())
         .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", fixture_path)
         .output()
         .context("failed to execute codex exec")?;
     anyhow::ensure!(
@@ -114,6 +125,8 @@ trust_level = "trusted"
         repo_root.display().to_string(),
         "-c".to_string(),
         "analytics.enabled=false".to_string(),
+        "-c".to_string(),
+        openai_base_url_config,
     ];
 
     let spawned = codex_utils_pty::spawn_pty_process(

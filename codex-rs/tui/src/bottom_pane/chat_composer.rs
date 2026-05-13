@@ -188,6 +188,8 @@ use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
+use super::mentions_v2::MentionV2Popup;
+use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
@@ -406,13 +408,13 @@ pub(crate) struct ChatComposer {
     plugins_command_enabled: bool,
     service_tier_commands_enabled: bool,
     service_tier_commands: Vec<ServiceTierCommand>,
+    mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
-    is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_hyperlink_url: Option<String>,
     status_line_enabled: bool,
@@ -466,6 +468,7 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+    MentionV2(MentionV2Popup),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,16 +591,13 @@ impl ChatComposer {
             plugins_command_enabled: false,
             service_tier_commands_enabled: false,
             service_tier_commands: Vec::new(),
+            mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
-            is_zellij: matches!(
-                codex_terminal_detection::terminal_info().multiplexer,
-                Some(codex_terminal_detection::Multiplexer::Zellij {})
-            ),
             status_line_value: None,
             status_line_hyperlink_url: None,
             status_line_enabled: false,
@@ -660,6 +660,11 @@ impl ChatComposer {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.plugins_command_enabled = enabled;
+    }
+
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.mentions_v2_enabled = enabled;
+        self.sync_popups();
     }
 
     /// Toggle composer-side image paste handling.
@@ -790,6 +795,14 @@ impl ChatComposer {
         self.windows_degraded_sandbox_active = enabled;
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 4] {
+        self.layout_areas_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
+    }
+
+    fn layout_areas_with_textarea_right_reserve(
+        &self,
+        area: Rect,
+        textarea_right_reserve: u16,
+    ) -> [Rect; 4] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
@@ -804,6 +817,9 @@ impl ChatComposer {
             ActivePopup::Skill(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
+            ActivePopup::MentionV2(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -812,7 +828,7 @@ impl ChatComposer {
             /*top*/ 1,
             LIVE_PREFIX_COLS,
             /*bottom*/ 1,
-            /*right*/ 1,
+            /*right*/ 1u16.saturating_add(textarea_right_reserve),
         ));
         let remote_images_height = self
             .remote_images_lines(textarea_rect.width)
@@ -842,7 +858,15 @@ impl ChatComposer {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled {
+        self.cursor_pos_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
+    }
+
+    pub(crate) fn cursor_pos_with_textarea_right_reserve(
+        &self,
+        area: Rect,
+        textarea_right_reserve: u16,
+    ) -> Option<(u16, u16)> {
+        if !self.input_enabled || self.selected_remote_image_index.is_some() {
             return None;
         }
 
@@ -850,7 +874,8 @@ impl ChatComposer {
             return Some(pos);
         }
 
-        let [_, _, textarea_rect, _] = self.layout_areas(area);
+        let [_, _, textarea_rect, _] =
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
@@ -1608,7 +1633,11 @@ impl ChatComposer {
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
-        let current_opt = Self::current_at_token(&self.textarea);
+        let current_opt = if self.mentions_v2_enabled {
+            self.current_mentions_v2_token()
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let Some(current_token) = current_opt else {
             return;
         };
@@ -1617,8 +1646,14 @@ impl ChatComposer {
             return;
         }
 
-        if let ActivePopup::File(popup) = &mut self.active_popup {
-            popup.set_matches(&query, matches);
+        match &mut self.active_popup {
+            ActivePopup::File(popup) => {
+                popup.set_matches(&query, matches);
+            }
+            ActivePopup::MentionV2(popup) => {
+                popup.set_file_matches(&query, matches);
+            }
+            _ => {}
         }
     }
 
@@ -1705,6 +1740,7 @@ impl ChatComposer {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
+            ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         self.reset_vim_mode_after_successful_dispatch(&result.0);
@@ -2146,6 +2182,103 @@ impl ChatComposer {
         result
     }
 
+    fn handle_key_event_with_mentions_v2_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::MentionV2(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        let mut selected: Option<MentionV2Selection> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.previous_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.next_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = self.current_mentions_v2_token() {
+                    self.dismissed_mention_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                selected = popup.selected();
+                close_popup = true;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some(selected) = selected {
+                match selected {
+                    MentionV2Selection::File(path) => {
+                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                    }
+                    MentionV2Selection::Tool { insert_text, path } => {
+                        self.insert_selected_mention(&insert_text, path.as_deref());
+                    }
+                }
+            }
+            self.active_popup = ActivePopup::None;
+        }
+
+        result
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png")
@@ -2153,6 +2286,45 @@ impl ChatComposer {
             || lower.ends_with(".jpeg")
             || lower.ends_with(".gif")
             || lower.ends_with(".webp")
+    }
+
+    fn insert_selected_file_path(&mut self, selected_path: &str) {
+        if Self::is_image_path(selected_path) {
+            let path_buf = PathBuf::from(selected_path);
+            match image::image_dimensions(&path_buf) {
+                Ok((width, height)) => {
+                    tracing::debug!("selected image dimensions={}x{}", width, height);
+                    let cursor_offset = self.textarea.cursor();
+                    let text = self.textarea.text();
+                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                    let before_cursor = &text[..safe_cursor];
+                    let after_cursor = &text[safe_cursor..];
+
+                    let start_idx = before_cursor
+                        .char_indices()
+                        .rfind(|(_, c)| c.is_whitespace())
+                        .map(|(idx, c)| idx + c.len_utf8())
+                        .unwrap_or(0);
+                    let end_rel_idx = after_cursor
+                        .char_indices()
+                        .find(|(_, c)| c.is_whitespace())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(after_cursor.len());
+                    let end_idx = safe_cursor + end_rel_idx;
+
+                    self.textarea.replace_range(start_idx..end_idx, "");
+                    self.textarea.set_cursor(start_idx);
+                    self.attach_image(path_buf);
+                    self.textarea.insert_str(" ");
+                }
+                Err(err) => {
+                    tracing::trace!("image dimensions lookup failed: {err}");
+                    self.insert_selected_path(selected_path);
+                }
+            }
+        } else {
+            self.insert_selected_path(selected_path);
+        }
     }
 
     fn trim_text_elements(
@@ -2408,6 +2580,13 @@ impl ChatComposer {
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
+    }
+
+    fn current_mentions_v2_token(&self) -> Option<String> {
+        if !self.mentions_v2_enabled {
+            return None;
+        }
+        Self::current_prefixed_token(&self.textarea, '@', /*allow_empty*/ true)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -3642,7 +3821,12 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let file_token = Self::current_at_token(&self.textarea);
+        let mentions_v2_token = self.current_mentions_v2_token();
+        let file_token = if self.mentions_v2_enabled {
+            None
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let browsing_history = self
             .history
             .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
@@ -3662,6 +3846,7 @@ impl ChatComposer {
         let allow_command_popup = self.slash_commands_enabled()
             && !self.is_bash_mode
             && file_token.is_none()
+            && mentions_v2_token.is_none()
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
@@ -3673,6 +3858,11 @@ impl ChatComposer {
             }
             self.dismissed_file_popup_token = None;
             self.dismissed_mention_popup_token = None;
+            return;
+        }
+
+        if let Some(token) = mentions_v2_token {
+            self.sync_mentions_v2_popup(token);
             return;
         }
 
@@ -3700,7 +3890,7 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_)
+            ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::MentionV2(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -3958,6 +4148,41 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn sync_mentions_v2_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        } else {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+            self.current_file_query = Some(query.clone());
+        }
+
+        let candidates = super::mentions_v2::build_search_catalog(
+            self.skills.as_deref(),
+            self.plugins.as_deref(),
+        );
+
+        match &mut self.active_popup {
+            ActivePopup::MentionV2(popup) => {
+                popup.set_query(&query);
+                popup.set_candidates(candidates);
+            }
+            _ => {
+                let mut popup = MentionV2Popup::new(candidates);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::MentionV2(popup);
+            }
+        }
+
+        self.dismissed_mention_popup_token = None;
     }
 
     fn mention_items(&self) -> Vec<MentionItem> {
@@ -4246,17 +4471,7 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
 
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled || self.selected_remote_image_index.is_some() {
-            return None;
-        }
-
-        if let Some(pos) = self.history_search_cursor_pos(area) {
-            return Some(pos);
-        }
-
-        let [_, _, textarea_rect, _] = self.layout_areas(area);
-        let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        self.cursor_pos_with_textarea_right_reserve(area, /*textarea_right_reserve*/ 0)
     }
 
     fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
@@ -4268,6 +4483,20 @@ impl Renderable for ChatComposer {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
+        self.desired_height_with_textarea_right_reserve(width, /*textarea_right_reserve*/ 0)
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_with_mask(area, buf, /*mask_char*/ None);
+    }
+}
+
+impl ChatComposer {
+    pub(crate) fn desired_height_with_textarea_right_reserve(
+        &self,
+        width: u16,
+        textarea_right_reserve: u16,
+    ) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
@@ -4275,7 +4504,8 @@ impl Renderable for ChatComposer {
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        let inner_width = width.saturating_sub(COLS_WITH_MARGIN);
+        let inner_width =
+            width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
         let remote_images_height: u16 = self
             .remote_images_lines(inner_width)
             .len()
@@ -4291,18 +4521,27 @@ impl Renderable for ChatComposer {
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
+                ActivePopup::MentionV2(c) => c.calculate_required_height(width),
             }
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_with_mask(area, buf, /*mask_char*/ None);
     }
 }
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
+        self.render_with_mask_and_textarea_right_reserve(
+            area, buf, mask_char, /*textarea_right_reserve*/ 0,
+        );
+    }
+
+    pub(crate) fn render_with_mask_and_textarea_right_reserve(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mask_char: Option<char>,
+        textarea_right_reserve: u16,
+    ) {
         let [composer_rect, remote_images_rect, textarea_rect, popup_rect] =
-            self.layout_areas(area);
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -4311,6 +4550,9 @@ impl ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::Skill(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::MentionV2(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -4541,56 +4783,20 @@ impl ChatComposer {
                 }
             }
         }
-        self.render_textarea(
-            composer_rect,
-            remote_images_rect,
-            textarea_rect,
-            buf,
-            mask_char,
-        );
-    }
-
-    /// Paint the composer's text input area, prompt chevron, and placeholder text.
-    ///
-    /// In Zellij sessions the textarea uses explicit `Color::Reset` foreground styling
-    /// to prevent the multiplexer's pane chrome from bleeding into cell styles, and
-    /// substitutes hardcoded colors for `.bold()` / `.dim()` modifiers that Zellij
-    /// renders inconsistently. The standard path is unchanged.
-    fn render_textarea(
-        &self,
-        composer_rect: Rect,
-        remote_images_rect: Rect,
-        textarea_rect: Rect,
-        buf: &mut Buffer,
-        mask_char: Option<char>,
-    ) {
-        let is_zellij = self.is_zellij;
         let style = user_message_style();
-        let textarea_style = style.fg(ratatui::style::Color::Reset);
         Block::default().style(style).render_ref(composer_rect, buf);
         if !remote_images_rect.is_empty() {
             Paragraph::new(self.remote_images_lines(remote_images_rect.width))
                 .style(style)
                 .render_ref(remote_images_rect, buf);
         }
-        if is_zellij && !textarea_rect.is_empty() {
-            buf.set_style(textarea_rect, textarea_style);
-        }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
                 if self.is_bash_mode {
-                    if is_zellij {
-                        Span::from("!").light_red()
-                    } else {
-                        Span::from("!").light_red().bold()
-                    }
-                } else if is_zellij {
-                    Span::styled("›", style.fg(ratatui::style::Color::Cyan))
+                    Span::from("!").light_red().bold()
                 } else {
                     "›".bold()
                 }
-            } else if is_zellij {
-                Span::styled("›", style.fg(ratatui::style::Color::DarkGray))
             } else {
                 "›".dim()
             };
@@ -4605,39 +4811,8 @@ impl ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         let textarea_is_empty = self.textarea.text().is_empty() && !self.is_bash_mode;
         if let Some(mask_char) = mask_char {
-            self.textarea.render_ref_masked(
-                textarea_rect,
-                buf,
-                &mut state,
-                mask_char,
-                if is_zellij {
-                    textarea_style
-                } else {
-                    ratatui::style::Style::default()
-                },
-            );
-        } else if is_zellij && textarea_is_empty {
-            buf.set_style(textarea_rect, textarea_style);
-        } else if is_zellij {
-            let highlight_ranges = self.history_search_highlight_ranges();
-            if highlight_ranges.is_empty() {
-                self.textarea
-                    .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
-            } else {
-                let highlight_style =
-                    textarea_style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
-                let highlights = highlight_ranges
-                    .into_iter()
-                    .map(|range| (range, highlight_style))
-                    .collect::<Vec<_>>();
-                self.textarea.render_ref_styled_with_highlights(
-                    textarea_rect,
-                    buf,
-                    &mut state,
-                    textarea_style,
-                    &highlights,
-                );
-            }
+            self.textarea
+                .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
         } else {
             let highlight_ranges = self.history_search_highlight_ranges();
             if highlight_ranges.is_empty() {
@@ -4668,18 +4843,9 @@ impl ChatComposer {
                     .to_string()
             };
             if !textarea_rect.is_empty() {
-                if is_zellij {
-                    buf.set_string(
-                        textarea_rect.x,
-                        textarea_rect.y,
-                        text,
-                        textarea_style.fg(ratatui::style::Color::White).italic(),
-                    );
-                } else {
-                    let placeholder = Span::from(text).dim();
-                    let line = Line::from(vec![placeholder]);
-                    line.render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
-                }
+                let placeholder = Span::from(text).dim();
+                Line::from(vec![placeholder])
+                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
             }
         }
     }
@@ -4900,35 +5066,6 @@ mod tests {
             enhanced_keys_supported,
             setup,
         );
-    }
-
-    fn snapshot_zellij_composer_state<F>(name: &str, setup: F)
-    where
-        F: FnOnce(&mut ChatComposer),
-    {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ true,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.is_zellij = true;
-        setup(&mut composer);
-        let footer_props = composer.footer_props();
-        let footer_lines = footer_height(&footer_props);
-        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
-        let height = footer_lines + footer_spacing + 8;
-        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
-        terminal
-            .draw(|f| composer.render(f.area(), f.buffer_mut()))
-            .unwrap();
-        insta::assert_snapshot!(name, terminal.backend());
     }
 
     #[test]
@@ -5448,11 +5585,6 @@ mod tests {
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
             },
         );
-    }
-
-    #[test]
-    fn zellij_empty_composer_snapshot() {
-        snapshot_zellij_composer_state("zellij_empty_composer", |_composer| {});
     }
 
     #[test]
@@ -7653,6 +7785,60 @@ mod tests {
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_pets_for_pet_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'e', 't']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_pet", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_pets_for_pet_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'p', 'e', 't']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "pets")
+                }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected pets command, got service tier {command:?}")
+                }
+                None => panic!("no selected command for '/pet'"),
+            },
+            _ => panic!("slash popup not active after typing '/pet'"),
         }
     }
 

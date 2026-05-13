@@ -59,6 +59,103 @@ async fn resume_paused_goal_prompt_snapshot() {
 }
 
 #[tokio::test]
+async fn goal_edit_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.show_goal_edit_prompt(
+        thread_id,
+        test_goal(
+            thread_id,
+            AppThreadGoalStatus::Active,
+            /*token_budget*/ Some(80_000),
+        ),
+    );
+
+    assert_chatwidget_snapshot!(
+        "goal_edit_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}
+
+#[tokio::test]
+async fn goal_edit_prompt_submits_preserved_status_and_budget() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.show_goal_edit_prompt(
+        thread_id,
+        test_goal(
+            thread_id,
+            AppThreadGoalStatus::Paused,
+            /*token_budget*/ Some(80_000),
+        ),
+    );
+    chat.handle_paste(" with clearer wording".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::SetThreadGoalObjective {
+            thread_id: event_thread_id,
+            objective,
+            mode:
+                crate::app_event::ThreadGoalSetMode::UpdateExisting {
+                    status,
+                    token_budget,
+                },
+        }) => {
+            assert_eq!(event_thread_id, thread_id);
+            assert_eq!(
+                objective,
+                "Keep improving the bare goal command until it feels calm and useful. with clearer wording"
+            );
+            assert_eq!(status, AppThreadGoalStatus::Paused);
+            assert_eq!(token_budget, Some(80_000));
+        }
+        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+    }
+    assert!(chat.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn goal_edit_prompt_resets_terminal_status_to_active() {
+    let cases = [
+        AppThreadGoalStatus::BudgetLimited,
+        AppThreadGoalStatus::Complete,
+    ];
+
+    for terminal_status in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = ThreadId::new();
+
+        chat.show_goal_edit_prompt(
+            thread_id,
+            test_goal(
+                thread_id,
+                terminal_status,
+                /*token_budget*/ Some(80_000),
+            ),
+        );
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetThreadGoalObjective {
+                mode:
+                    crate::app_event::ThreadGoalSetMode::UpdateExisting {
+                        status,
+                        token_budget,
+                    },
+                ..
+            }) => {
+                assert_eq!(status, AppThreadGoalStatus::Active);
+                assert_eq!(token_budget, Some(80_000));
+            }
+            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn resume_paused_goal_prompt_default_resumes_goal() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

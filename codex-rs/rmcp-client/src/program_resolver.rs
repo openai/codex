@@ -75,10 +75,25 @@ mod tests {
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.program_name);
-        cmd.envs(&env.mcp_env);
+        // Linux can transiently report ETXTBSY while the freshly written test
+        // script is becoming executable on the backing filesystem.
+        let mut retries = 0;
+        let output = loop {
+            let mut cmd = Command::new(&env.program_name);
+            cmd.envs(&env.mcp_env);
 
-        let output = cmd.output().await;
+            let output = cmd.output().await;
+            if !output
+                .as_ref()
+                .is_err_and(|err| err.kind() == std::io::ErrorKind::ExecutableFileBusy)
+                || retries == 2
+            {
+                break output;
+            }
+            retries += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+
         assert!(
             output.is_ok(),
             "Unix should execute PATH-resolved scripts directly: {output:?}"

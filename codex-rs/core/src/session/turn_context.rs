@@ -89,10 +89,10 @@ pub struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
-    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) server_model_warning_emitted: AtomicBool,
@@ -272,10 +272,10 @@ impl TurnContext {
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-            tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            extension_data: Arc::clone(&self.extension_data),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
             server_model_warning_emitted: AtomicBool::new(
@@ -537,6 +537,7 @@ impl Session {
             network.is_some(),
         ));
         let (current_date, timezone) = local_time_context();
+        let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -571,10 +572,10 @@ impl Session {
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-            tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
+            extension_data,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             server_model_warning_emitted: AtomicBool::new(false),

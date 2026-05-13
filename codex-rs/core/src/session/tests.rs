@@ -71,7 +71,7 @@ use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UpdateGoalHandler;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
@@ -542,9 +542,8 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     ));
@@ -1312,6 +1311,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
                 matcher: None,
                 hooks: vec![codex_config::HookHandlerConfig::Command {
                     command: "python3 /tmp/user.py".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(600),
                     r#async: false,
                     status_message: None,
@@ -1798,6 +1798,121 @@ async fn recompute_token_usage_updates_model_context_window() {
 
     let actual = session.state.lock().await.token_info().expect("token info");
     assert_eq!(actual.model_context_window, Some(128_000));
+}
+
+#[tokio::test]
+async fn record_token_usage_info_notifies_extension_contributors() {
+    struct SessionTokenUsageMarker;
+    struct ThreadTokenUsageMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTokenUsage {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
+        token_usage: TokenUsageInfo,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TokenUsageRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTokenUsage>>>,
+    }
+
+    impl codex_extension_api::TokenUsageContributor for TokenUsageRecorder {
+        fn on_token_usage(
+            &self,
+            session_store: &codex_extension_api::ExtensionData,
+            thread_store: &codex_extension_api::ExtensionData,
+            turn_store: &codex_extension_api::ExtensionData,
+            token_usage: &TokenUsageInfo,
+        ) {
+            self.records
+                .lock()
+                .expect("token usage records lock")
+                .push(RecordedTokenUsage {
+                    session_level_id: session_store.level_id().to_string(),
+                    thread_level_id: thread_store.level_id().to_string(),
+                    turn_level_id: turn_store.level_id().to_string(),
+                    token_usage: token_usage.clone(),
+                    saw_session_store: session_store.get::<SessionTokenUsageMarker>().is_some(),
+                    saw_thread_store: thread_store.get::<ThreadTokenUsageMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.token_usage_contributor(Arc::new(TokenUsageRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTokenUsageMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTokenUsageMarker);
+
+    let first_usage = TokenUsage {
+        input_tokens: 10,
+        cached_input_tokens: 2,
+        output_tokens: 20,
+        reasoning_output_tokens: 3,
+        total_tokens: 33,
+    };
+    let second_usage = TokenUsage {
+        input_tokens: 7,
+        cached_input_tokens: 1,
+        output_tokens: 8,
+        reasoning_output_tokens: 5,
+        total_tokens: 20,
+    };
+
+    session
+        .record_token_usage_info(&turn_context, Some(&first_usage))
+        .await;
+    session
+        .record_token_usage_info(&turn_context, Some(&second_usage))
+        .await;
+
+    let mut expected_total_usage = first_usage.clone();
+    expected_total_usage.add_assign(&second_usage);
+    let expected = vec![
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: first_usage.clone(),
+                last_token_usage: first_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+        RecordedTokenUsage {
+            session_level_id: session.session_id().to_string(),
+            thread_level_id: session.conversation_id.to_string(),
+            turn_level_id: turn_context.sub_id.clone(),
+            token_usage: TokenUsageInfo {
+                total_token_usage: expected_total_usage,
+                last_token_usage: second_usage,
+                model_context_window: turn_context.model_context_window(),
+            },
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+    ];
+    let actual = records
+        .lock()
+        .expect("token usage records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, actual);
 }
 
 #[tokio::test]
@@ -2836,10 +2951,6 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
-    assert!(!Arc::ptr_eq(
-        &updated.tool_call_gate,
-        &turn_context.tool_call_gate
-    ));
 }
 
 #[test]
@@ -3873,8 +3984,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5201,6 +5314,125 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
+    struct SessionStopMarker;
+    struct ThreadStopMarker;
+
+    struct ThreadStopRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        expected_thread_id: ThreadId,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert!(input.session_store.get::<SessionStopMarker>().is_some());
+            assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadStopRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionStopMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadStopMarker);
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    let session = Arc::new(session);
+    submission_loop(session, Arc::clone(&turn_context.config), rx_sub).await;
+
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lifecycle() {
+    struct LifecycleRecorder {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        expected_thread_id: ThreadId,
+        expected_turn_id: String,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("thread_stop");
+        }
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
+        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            assert_eq!(self.expected_turn_id, input.turn_store.level_id());
+            assert_eq!(TurnAbortReason::Interrupted, input.reason);
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("turn_abort");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::new(LifecycleRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+        expected_turn_id: turn_context.sub_id.clone(),
+    });
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(recorder.clone());
+    builder.turn_lifecycle_contributor(recorder);
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(
+            Arc::new(turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    submission_loop(Arc::clone(&session), session.get_config().await, rx_sub).await;
+
+    assert_eq!(
+        vec!["turn_abort", "thread_stop"],
+        *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
@@ -5593,8 +5825,10 @@ where
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
-        session_extension_data: codex_extension_api::ExtensionData::new(),
-        thread_extension_data: codex_extension_api::ExtensionData::new(),
+        session_extension_data: codex_extension_api::ExtensionData::new(
+            agent_control.session_id().to_string(),
+        ),
+        thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5794,34 +6028,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
-}
-
-#[tokio::test]
-async fn record_model_warning_appends_user_message() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let features = Features::with_defaults().into();
-    session.features = features;
-
-    session
-        .record_model_warning("too many unified exec processes", &turn_context)
-        .await;
-
-    let history = session.clone_history().await;
-    let history_items = history.raw_items();
-    let last = history_items.last().expect("warning recorded");
-
-    match last {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            assert_eq!(
-                content,
-                &vec![ContentItem::InputText {
-                    text: "Warning: too many unified exec processes".to_string(),
-                }]
-            );
-        }
-        other => panic!("expected user message, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -6146,21 +6352,25 @@ struct GitAttributionTestContributor;
 struct GitAttributionTestState;
 
 impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
-    fn contribute(
-        &self,
-        _session_store: &codex_extension_api::ExtensionData,
-        thread_store: &codex_extension_api::ExtensionData,
-    ) -> Vec<codex_extension_api::PromptFragment> {
-        thread_store
-            .get::<GitAttributionTestState>()
-            .is_some()
-            .then(|| {
-                codex_extension_api::PromptFragment::developer_policy(
-                    "git attribution extension enabled",
-                )
-            })
-            .into_iter()
-            .collect()
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a codex_extension_api::ExtensionData,
+        thread_store: &'a codex_extension_api::ExtensionData,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            thread_store
+                .get::<GitAttributionTestState>()
+                .is_some()
+                .then(|| {
+                    codex_extension_api::PromptFragment::developer_policy(
+                        "git attribution extension enabled",
+                    )
+                })
+                .into_iter()
+                .collect()
+        })
     }
 }
 
@@ -7706,7 +7916,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
-    let _responses = mount_sse_sequence(
+    let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -7768,6 +7978,25 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
         }
     })
     .await??;
+
+    let continuation_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("<goal_context>"))
+        .expect("expected a goal continuation request");
+    let body = continuation_request.body_json();
+    let goal_context_message = body["input"]
+        .as_array()
+        .expect("input should be an array")
+        .iter()
+        .find(|item| item.to_string().contains("<goal_context>"))
+        .expect("goal context message should be present");
+    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
+    assert!(
+        goal_context_message
+            .to_string()
+            .contains("Continue working toward the active thread goal.")
+    );
 
     Ok(())
 }
@@ -7969,10 +8198,12 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
-    assert_eq!("developer", role);
+    assert_eq!("user", role);
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected one text span in budget-limit steering message, got {content:#?}");
     };
+    assert!(text.starts_with("<goal_context>"));
+    assert!(text.trim_end().ends_with("</goal_context>"));
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
     assert!(sess.active_turn.lock().await.is_some());
@@ -8052,12 +8283,13 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
 
-    let previous_status = goal.status;
+    let previous_goal = goal.clone();
     let goal_id = goal.goal_id.clone();
     let updated_goal = state_db
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
+                objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
                 expected_goal_id: Some(goal_id),
@@ -8068,7 +8300,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
         external_set: ExternalGoalSet {
             goal: updated_goal,
-            previous_status: ExternalGoalPreviousStatus::Existing(previous_status),
+            previous_status: ExternalGoalPreviousStatus::from(&previous_goal),
         },
     })
     .await?;
@@ -8080,6 +8312,70 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
     assert_eq!(70, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+    let old_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+    let new_goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Write a concise benchmark summary",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10_000),
+        )
+        .await?;
+
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        external_set: ExternalGoalSet {
+            goal: new_goal,
+            previous_status: ExternalGoalPreviousStatus::from(&old_goal),
+        },
+    })
+    .await?;
+
+    let pending_input = sess.get_pending_input().await;
+    assert!(
+        pending_input.iter().any(|item| {
+            matches!(
+                item,
+                ResponseInputItem::Message { role, content, .. }
+                    if role == "user"
+                        && content.iter().any(|content| matches!(
+                            content,
+                            ContentItem::InputText { text }
+                                if text.starts_with("<goal_context>")
+                                    && text.trim_end().ends_with("</goal_context>")
+                                    && text.contains("The active thread goal objective was edited")
+                                    && text.contains("Write a concise benchmark summary")
+                        ))
+            )
+        }),
+        "expected objective-updated steering prompt in pending input: {pending_input:?}"
+    );
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
@@ -8552,9 +8848,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     );
@@ -8566,8 +8861,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         input: "{}".to_string(),
     };
 
-    let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
-        .await
+    let call = ToolRouter::build_tool_call(item.clone())
         .expect("build tool call")
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

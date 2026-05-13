@@ -113,7 +113,7 @@ pub(super) async fn spawn_review_thread(
     ));
 
     let review_turn_context = TurnContext {
-        sub_id: review_turn_id,
+        sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
@@ -146,10 +146,10 @@ pub(super) async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
+        extension_data: Arc::new(codex_extension_api::ExtensionData::new(review_turn_id)),
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),

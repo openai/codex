@@ -1,11 +1,13 @@
 /*
-This module implements the websocket-backed app-server client transport.
+This module implements the remote app-server client transport.
 
 It owns the remote connection lifecycle, including the initialize/initialized
 handshake, JSON-RPC request/response routing, server-request resolution, and
-notification streaming. The rest of the crate uses the same `AppServerEvent`
-surface for both in-process and remote transports, so callers such as the TUI
-can switch between them without changing their higher-level session logic.
+notification streaming. Remote connections always carry WebSocket frames, over
+either TCP WebSocket URLs or local Unix sockets. The rest of the crate uses the
+same `AppServerEvent` surface for both in-process and remote transports, so
+callers such as the TUI can switch between them without changing their
+higher-level session logic.
 */
 
 use std::collections::HashMap;
@@ -35,17 +37,23 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_uds::UnixStream;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::client_async_with_config;
 use tokio_tungstenite::connect_async_with_config;
+use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -57,18 +65,30 @@ use url::Url;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE: usize = 128 << 20;
+// Tungstenite still needs an HTTP request URI for the WebSocket handshake;
+// the bytes travel over the Unix socket, not TCP.
+const UDS_WEBSOCKET_HANDSHAKE_URL: &str = "ws://localhost/rpc";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteAppServerEndpoint {
+    WebSocket {
+        websocket_url: String,
+        auth_token: Option<String>,
+    },
+    UnixSocket {
+        socket_path: AbsolutePathBuf,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub struct RemoteAppServerConnectArgs {
-    pub websocket_url: String,
-    pub auth_token: Option<String>,
+    pub endpoint: RemoteAppServerEndpoint,
     pub client_name: String,
     pub client_version: String,
     pub experimental_api: bool,
     pub opt_out_notification_methods: Vec<String>,
     pub channel_capacity: usize,
 }
-
 impl RemoteAppServerConnectArgs {
     fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
@@ -141,69 +161,39 @@ pub struct RemoteAppServerRequestHandle {
 impl RemoteAppServerClient {
     pub async fn connect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
-        let websocket_url = args.websocket_url.clone();
-        let url = Url::parse(&websocket_url).map_err(|err| {
-            IoError::new(
-                ErrorKind::InvalidInput,
-                format!("invalid websocket URL `{websocket_url}`: {err}"),
-            )
-        })?;
-        if args.auth_token.is_some() && !websocket_url_supports_auth_token(&url) {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
-                ),
-            ));
+        let initialize_params = args.initialize_params();
+        match args.endpoint {
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url,
+                auth_token,
+            } => {
+                let (endpoint, stream) =
+                    connect_websocket_endpoint(websocket_url, auth_token).await?;
+                Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
+                    .await
+            }
+            RemoteAppServerEndpoint::UnixSocket { socket_path } => {
+                let (endpoint, stream) = connect_unix_socket_endpoint(socket_path).await?;
+                Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
+                    .await
+            }
         }
-        let mut request = url.as_str().into_client_request().map_err(|err| {
-            IoError::new(
-                ErrorKind::InvalidInput,
-                format!("invalid websocket URL `{websocket_url}`: {err}"),
-            )
-        })?;
-        if let Some(auth_token) = args.auth_token.as_deref() {
-            let header_value =
-                HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|err| {
-                    IoError::new(
-                        ErrorKind::InvalidInput,
-                        format!("invalid remote authorization header value: {err}"),
-                    )
-                })?;
-            request.headers_mut().insert(AUTHORIZATION, header_value);
-        }
-        ensure_rustls_crypto_provider();
-        // Remote resume responses can legitimately carry large thread histories.
-        // Keep a bounded cap, but raise it above tungstenite's 16 MiB frame default.
-        let websocket_config = WebSocketConfig::default()
-            .max_frame_size(Some(REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE))
-            .max_message_size(Some(REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE));
-        let stream = timeout(
-            CONNECT_TIMEOUT,
-            connect_async_with_config(
-                request,
-                Some(websocket_config),
-                /*disable_nagle*/ false,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            IoError::new(
-                ErrorKind::TimedOut,
-                format!("timed out connecting to remote app server at `{websocket_url}`"),
-            )
-        })?
-        .map(|(stream, _response)| stream)
-        .map_err(|err| {
-            IoError::other(format!(
-                "failed to connect to remote app server at `{websocket_url}`: {err}"
-            ))
-        })?;
+    }
+
+    async fn connect_with_stream<S>(
+        channel_capacity: usize,
+        endpoint: String,
+        stream: WebSocketStream<S>,
+        initialize_params: InitializeParams,
+    ) -> IoResult<Self>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let mut stream = stream;
         let pending_events = initialize_remote_connection(
             &mut stream,
-            &websocket_url,
-            args.initialize_params(),
+            &endpoint,
+            initialize_params,
             INITIALIZE_TIMEOUT,
         )
         .await?;
@@ -235,13 +225,13 @@ impl RemoteAppServerClient {
                                 if let Err(err) = write_jsonrpc_message(
                                     &mut stream,
                                     JSONRPCMessage::Request(jsonrpc_request_from_client_request(*request)),
-                                    &websocket_url,
+                                    &endpoint,
                                 )
                                 .await
                                 {
                                     let err_message = err.to_string();
                                     let message = format!(
-                                        "remote app server at `{websocket_url}` write failed: {err_message}"
+                                        "remote app server at `{endpoint}` write failed: {err_message}"
                                     );
                                     if let Some(response_tx) = pending_requests.remove(&request_id) {
                                         let _ = response_tx.send(Err(err));
@@ -262,7 +252,7 @@ impl RemoteAppServerClient {
                                     JSONRPCMessage::Notification(
                                         jsonrpc_notification_from_client_notification(notification),
                                     ),
-                                    &websocket_url,
+                                    &endpoint,
                                 )
                                 .await;
                                 let _ = response_tx.send(result);
@@ -278,7 +268,7 @@ impl RemoteAppServerClient {
                                         id: request_id,
                                         result,
                                     }),
-                                    &websocket_url,
+                                    &endpoint,
                                 )
                                 .await;
                                 let _ = response_tx.send(result);
@@ -294,16 +284,20 @@ impl RemoteAppServerClient {
                                         error,
                                         id: request_id,
                                     }),
-                                    &websocket_url,
+                                    &endpoint,
                                 )
                                 .await;
                                 let _ = response_tx.send(result);
                             }
                             RemoteClientCommand::Shutdown { response_tx } => {
-                                let close_result = stream.close(None).await.map_err(|err| {
-                                    IoError::other(format!(
-                                        "failed to close websocket app server `{websocket_url}`: {err}"
-                                    ))
+                                let close_result = stream.close(None).await.or_else(|err| {
+                                    if websocket_close_error_is_already_closed(&err) {
+                                        Ok(())
+                                    } else {
+                                        Err(IoError::other(format!(
+                                            "failed to close websocket app server `{endpoint}`: {err}"
+                                        )))
+                                    }
                                 });
                                 let _ = response_tx.send(close_result);
                                 break;
@@ -364,13 +358,13 @@ impl RemoteAppServerClient {
                                                         },
                                                         id: request_id,
                                                     }),
-                                                    &websocket_url,
+                                                    &endpoint,
                                                 )
                                                 .await
                                                 {
                                                     let err_message = reject_err.to_string();
                                                     let message = format!(
-                                                        "remote app server at `{websocket_url}` write failed: {err_message}"
+                                                        "remote app server at `{endpoint}` write failed: {err_message}"
                                                     );
                                                     let _ = deliver_event(
                                                         &event_tx,
@@ -387,7 +381,7 @@ impl RemoteAppServerClient {
                                     }
                                     Err(err) => {
                                         let message = format!(
-                                            "remote app server at `{websocket_url}` sent invalid JSON-RPC: {err}"
+                                            "remote app server at `{endpoint}` sent invalid JSON-RPC: {err}"
                                         );
                                         let _ = deliver_event(
                                             &event_tx,
@@ -408,7 +402,7 @@ impl RemoteAppServerClient {
                                     .filter(|reason| !reason.is_empty())
                                     .unwrap_or_else(|| "connection closed".to_string());
                                 let message = format!(
-                                    "remote app server at `{websocket_url}` disconnected: {reason}"
+                                    "remote app server at `{endpoint}` disconnected: {reason}"
                                 );
                                 let _ = deliver_event(
                                     &event_tx,
@@ -428,7 +422,7 @@ impl RemoteAppServerClient {
                             | Some(Ok(Message::Frame(_))) => {}
                             Some(Err(err)) => {
                                 let message = format!(
-                                    "remote app server at `{websocket_url}` transport failed: {err}"
+                                    "remote app server at `{endpoint}` transport failed: {err}"
                                 );
                                 let _ = deliver_event(
                                     &event_tx,
@@ -441,7 +435,7 @@ impl RemoteAppServerClient {
                             }
                             None => {
                                 let message = format!(
-                                    "remote app server at `{websocket_url}` closed the connection"
+                                    "remote app server at `{endpoint}` closed the connection"
                                 );
                                 let _ = deliver_event(
                                     &event_tx,
@@ -678,12 +672,131 @@ impl RemoteAppServerRequestHandle {
     }
 }
 
-async fn initialize_remote_connection(
-    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    websocket_url: &str,
+async fn connect_websocket_endpoint(
+    websocket_url: String,
+    auth_token: Option<String>,
+) -> IoResult<(String, WebSocketStream<MaybeTlsStream<TcpStream>>)> {
+    let url = Url::parse(&websocket_url).map_err(|err| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!("invalid websocket URL `{websocket_url}`: {err}"),
+        )
+    })?;
+    if auth_token.is_some() && !websocket_url_supports_auth_token(&url) {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
+            ),
+        ));
+    }
+
+    let mut request = url.as_str().into_client_request().map_err(|err| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!("invalid websocket URL `{websocket_url}`: {err}"),
+        )
+    })?;
+    if let Some(auth_token) = auth_token.as_deref() {
+        let header_value =
+            HeaderValue::from_str(&format!("Bearer {auth_token}")).map_err(|err| {
+                IoError::new(
+                    ErrorKind::InvalidInput,
+                    format!("invalid remote authorization header value: {err}"),
+                )
+            })?;
+        request.headers_mut().insert(AUTHORIZATION, header_value);
+    }
+
+    ensure_rustls_crypto_provider();
+    let websocket_config = remote_websocket_config();
+    let stream = timeout(
+        CONNECT_TIMEOUT,
+        connect_async_with_config(
+            request,
+            Some(websocket_config),
+            /*disable_nagle*/ false,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        IoError::new(
+            ErrorKind::TimedOut,
+            format!("timed out connecting to remote app server at `{websocket_url}`"),
+        )
+    })?
+    .map(|(stream, _response)| stream)
+    .map_err(|err| {
+        IoError::other(format!(
+            "failed to connect to remote app server at `{websocket_url}`: {err}"
+        ))
+    })?;
+
+    Ok((websocket_url, stream))
+}
+
+async fn connect_unix_socket_endpoint(
+    socket_path: AbsolutePathBuf,
+) -> IoResult<(String, WebSocketStream<UnixStream>)> {
+    let endpoint = format!("unix://{}", socket_path.display());
+    let request = UDS_WEBSOCKET_HANDSHAKE_URL
+        .into_client_request()
+        .map_err(|err| {
+            IoError::new(
+                ErrorKind::InvalidInput,
+                format!("invalid UDS websocket handshake URL: {err}"),
+            )
+        })?;
+    let stream = timeout(CONNECT_TIMEOUT, UnixStream::connect(socket_path.as_path()))
+        .await
+        .map_err(|_| {
+            IoError::new(
+                ErrorKind::TimedOut,
+                format!("timed out connecting to remote app server at `{endpoint}`"),
+            )
+        })?
+        .map_err(|err| {
+            IoError::other(format!(
+                "failed to connect to remote app server at `{endpoint}`: {err}"
+            ))
+        })?;
+    let websocket_config = remote_websocket_config();
+    let stream = timeout(
+        CONNECT_TIMEOUT,
+        client_async_with_config(request, stream, Some(websocket_config)),
+    )
+    .await
+    .map_err(|_| {
+        IoError::new(
+            ErrorKind::TimedOut,
+            format!("timed out upgrading remote app server at `{endpoint}`"),
+        )
+    })?
+    .map(|(stream, _response)| stream)
+    .map_err(|err| {
+        IoError::other(format!(
+            "failed to upgrade remote app server at `{endpoint}`: {err}"
+        ))
+    })?;
+
+    Ok((endpoint, stream))
+}
+
+fn remote_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_frame_size(Some(REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE))
+        .max_message_size(Some(REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE))
+}
+
+async fn initialize_remote_connection<S>(
+    stream: &mut WebSocketStream<S>,
+    endpoint: &str,
     params: InitializeParams,
     initialize_timeout: Duration,
-) -> IoResult<Vec<AppServerEvent>> {
+) -> IoResult<Vec<AppServerEvent>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let initialize_request_id = RequestId::String("initialize".to_string());
     let mut pending_events = Vec::new();
     write_jsonrpc_message(
@@ -694,7 +807,7 @@ async fn initialize_remote_connection(
                 params,
             },
         )),
-        websocket_url,
+        endpoint,
     )
     .await?;
 
@@ -704,7 +817,7 @@ async fn initialize_remote_connection(
                 Some(Ok(Message::Text(text))) => {
                     let message = serde_json::from_str::<JSONRPCMessage>(&text).map_err(|err| {
                         IoError::other(format!(
-                            "remote app server at `{websocket_url}` sent invalid initialize response: {err}"
+                            "remote app server at `{endpoint}` sent invalid initialize response: {err}"
                         ))
                     })?;
                     match message {
@@ -713,7 +826,7 @@ async fn initialize_remote_connection(
                         }
                         JSONRPCMessage::Error(error) if error.id == initialize_request_id => {
                             break Err(IoError::other(format!(
-                                "remote app server at `{websocket_url}` rejected initialize: {}",
+                                "remote app server at `{endpoint}` rejected initialize: {}",
                                 error.error.message
                             )));
                         }
@@ -743,7 +856,7 @@ async fn initialize_remote_connection(
                                             },
                                             id: request_id,
                                         }),
-                                        websocket_url,
+                                        endpoint,
                                     )
                                     .await?;
                                 }
@@ -765,19 +878,19 @@ async fn initialize_remote_connection(
                     break Err(IoError::new(
                         ErrorKind::ConnectionAborted,
                         format!(
-                            "remote app server at `{websocket_url}` closed during initialize: {reason}"
+                            "remote app server at `{endpoint}` closed during initialize: {reason}"
                         ),
                     ));
                 }
                 Some(Err(err)) => {
                     break Err(IoError::other(format!(
-                        "remote app server at `{websocket_url}` transport failed during initialize: {err}"
+                        "remote app server at `{endpoint}` transport failed during initialize: {err}"
                     )));
                 }
                 None => {
                     break Err(IoError::new(
                         ErrorKind::UnexpectedEof,
-                        format!("remote app server at `{websocket_url}` closed during initialize"),
+                        format!("remote app server at `{endpoint}` closed during initialize"),
                     ));
                 }
             }
@@ -787,7 +900,7 @@ async fn initialize_remote_connection(
     .map_err(|_| {
         IoError::new(
             ErrorKind::TimedOut,
-            format!("timed out waiting for initialize response from `{websocket_url}`"),
+            format!("timed out waiting for initialize response from `{endpoint}`"),
         )
     })??;
 
@@ -796,7 +909,7 @@ async fn initialize_remote_connection(
         JSONRPCMessage::Notification(jsonrpc_notification_from_client_notification(
             ClientNotification::Initialized,
         )),
-        websocket_url,
+        endpoint,
     )
     .await?;
 
@@ -850,20 +963,34 @@ fn jsonrpc_notification_from_client_notification(
     }
 }
 
-async fn write_jsonrpc_message(
-    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+async fn write_jsonrpc_message<S>(
+    stream: &mut WebSocketStream<S>,
     message: JSONRPCMessage,
-    websocket_url: &str,
-) -> IoResult<()> {
+    endpoint: &str,
+) -> IoResult<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let payload = serde_json::to_string(&message).map_err(IoError::other)?;
     stream
         .send(Message::Text(payload.into()))
         .await
         .map_err(|err| {
             IoError::other(format!(
-                "failed to write websocket message to `{websocket_url}`: {err}"
+                "failed to write websocket message to `{endpoint}`: {err}"
             ))
         })
+}
+
+fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
+    match err {
+        TungsteniteError::ConnectionClosed | TungsteniteError::AlreadyClosed => true,
+        TungsteniteError::Io(err) => matches!(
+            err.kind(),
+            ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::NotConnected
+        ),
+        _ => false,
+    }
 }
 #[cfg(test)]
 mod tests {

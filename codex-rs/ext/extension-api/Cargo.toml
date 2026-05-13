@@ -16,5 +16,3 @@ workspace = true
 [dependencies]
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }

@@ -55,6 +55,7 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::TuiPetAnchor;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
@@ -89,6 +90,9 @@ use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
+use rmcp::model::UrlElicitationCapability;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -563,6 +567,8 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
@@ -789,55 +795,8 @@ allow_upstream_proxy = false
 }
 
 #[tokio::test]
-async fn permissions_profiles_network_enabled_allows_runtime_network_without_proxy()
+async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_without_feature()
 -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            glob_scan_max_depth: None,
-                            entries: BTreeMap::from([(
-                                ":minimal".to_string(),
-                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
-                            )]),
-                        }),
-                        network: Some(NetworkToml {
-                            enabled: Some(true),
-                            ..Default::default()
-                        }),
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert_eq!(
-        config.permissions.network_sandbox_policy(),
-        NetworkSandboxPolicy::Enabled
-    );
-    assert!(
-        config.permissions.network.is_none(),
-        "bare profile network.enabled should not start the managed network proxy"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -878,15 +837,412 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Enabled
     );
+    assert!(
+        config.permissions.network.is_none(),
+        "profile proxy policy should not start the managed network proxy without the feature"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_is_no_op_without_sandbox_network() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    assert!(
+        config.permissions.network.is_none(),
+        "network_proxy should not start the managed network proxy while network access is off"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> std::io::Result<()> {
+    #[derive(Clone, Copy)]
+    enum Surface {
+        PermissionProfile,
+        LegacyWorkspaceWrite,
+    }
+
+    struct Case {
+        name: &'static str,
+        surface: Surface,
+        network_enabled: bool,
+        proxy_enabled: bool,
+        expected_network_policy: NetworkSandboxPolicy,
+    }
+
+    let cases = [
+        Case {
+            name: "permission profile network disabled without proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: false,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "permission profile network disabled with proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: false,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "permission profile network enabled without proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: true,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "permission profile network enabled with proxy",
+            surface: Surface::PermissionProfile,
+            network_enabled: true,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "legacy workspace write network disabled without proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: false,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "legacy workspace write network disabled with proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: false,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Restricted,
+        },
+        Case {
+            name: "legacy workspace write network enabled without proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: true,
+            proxy_enabled: false,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+        Case {
+            name: "legacy workspace write network enabled with proxy",
+            surface: Surface::LegacyWorkspaceWrite,
+            network_enabled: true,
+            proxy_enabled: true,
+            expected_network_policy: NetworkSandboxPolicy::Enabled,
+        },
+    ];
+
+    for case in cases {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+        std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+        let features = case
+            .proxy_enabled
+            .then(|| toml::from_str("network_proxy = true").expect("valid features"));
+        let base_config = match case.surface {
+            Surface::PermissionProfile => ConfigToml {
+                default_permissions: Some("workspace".to_string()),
+                permissions: Some(PermissionsToml {
+                    entries: BTreeMap::from([(
+                        "workspace".to_string(),
+                        PermissionProfileToml {
+                            filesystem: Some(FilesystemPermissionsToml {
+                                glob_scan_max_depth: None,
+                                entries: BTreeMap::from([(
+                                    ":minimal".to_string(),
+                                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                                )]),
+                            }),
+                            network: Some(NetworkToml {
+                                enabled: Some(case.network_enabled),
+                                ..Default::default()
+                            }),
+                        },
+                    )]),
+                }),
+                features,
+                ..Default::default()
+            },
+            Surface::LegacyWorkspaceWrite => ConfigToml {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                    network_access: case.network_enabled,
+                    ..Default::default()
+                }),
+                windows: Some(WindowsToml {
+                    sandbox: Some(WindowsSandboxModeToml::Elevated),
+                    sandbox_private_desktop: None,
+                }),
+                features,
+                ..Default::default()
+            },
+        };
+        let config = Config::load_from_base_config_with_overrides(
+            base_config,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.network_sandbox_policy(),
+            case.expected_network_policy,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            config.permissions.network.is_some(),
+            case.network_enabled && case.proxy_enabled,
+            "{}",
+            case.name
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_cli_overrides_merge_toggle_with_proxy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[windows]
+sandbox = "elevated"
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.network_proxy.enabled".to_string(),
+                toml::Value::Boolean(true),
+            ),
+            (
+                "features.network_proxy.enable_socks5".to_string(),
+                toml::Value::Boolean(false),
+            ),
+        ])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
     let network = config
         .permissions
         .network
         .as_ref()
-        .expect("profile proxy policy should start the managed network proxy");
-    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:3128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                network: Some(codex_config::NetworkRequirementsToml {
+                    enabled: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.managed_network_requirements_enabled());
     assert!(
-        !network.socks_enabled(),
-        "profile proxy policy should preserve SOCKS config"
+        config
+            .permissions
+            .network
+            .as_ref()
+            .expect("experimental_network should configure the managed proxy")
+            .enabled()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_network_proxy_disable_ignores_base_feature_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+[network_proxy]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+"#,
+                )
+                .expect("valid base features"),
+            ),
+            profiles: HashMap::from([(
+                "no_proxy".to_string(),
+                ConfigProfile {
+                    features: Some(
+                        toml::from_str("network_proxy = false").expect("valid profile features"),
+                    ),
+                    ..Default::default()
+                },
+            )]),
+            profile: Some("no_proxy".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.permissions.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_network_proxy_feature_does_not_start_profile_proxy_policy() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+[network_proxy]
+enabled = false
+"#,
+                )
+                .expect("valid features"),
+            ),
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(
+        config.permissions.network.is_none(),
+        "disabled feature should keep profile proxy policy from starting the managed proxy"
     );
     Ok(())
 }
@@ -2178,6 +2534,19 @@ session_picker_view = "dense"
 }
 
 #[test]
+fn tui_pet_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet = "chefito"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.pet.as_deref()),
+        Some("chefito"),
+    );
+}
+
+#[test]
 fn tui_session_picker_view_defaults_to_none() {
     let cfg = r#"
 [tui]
@@ -2186,6 +2555,56 @@ fn tui_session_picker_view_defaults_to_none() {
     assert_eq!(
         parsed.tui.as_ref().and_then(|t| t.session_picker_view),
         None,
+    );
+}
+
+#[test]
+fn tui_pet_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(parsed.tui.as_ref().and_then(|t| t.pet.as_deref()), None);
+}
+
+#[test]
+fn tui_pet_anchor_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+pet_anchor = "screen-bottom"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::ScreenBottom),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_defaults_to_composer() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().map(|t| t.pet_anchor),
+        Some(TuiPetAnchor::Composer),
+    );
+}
+
+#[test]
+fn tui_pet_anchor_rejects_unknown_value() {
+    let cfg = r#"
+[tui]
+pet_anchor = "bottom"
+"#;
+    let err = toml::from_str::<ConfigToml>(cfg).expect_err("reject unknown pet anchor");
+    let err = err.to_string();
+    assert!(
+        err.contains("unknown variant `bottom`")
+            && err.contains("composer")
+            && err.contains("screen-bottom"),
+        "unexpected error: {err}"
     );
 }
 
@@ -2212,6 +2631,8 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            pet: None,
+            pet_anchor: TuiPetAnchor::Composer,
             session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -3371,69 +3792,6 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
-async fn to_mcp_config_empty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        mcp_servers: Some(BTreeMap::new()),
-        ..Default::default()
-    };
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
-        .build()
-        .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_nonempty_mcp_requirements_preserve_builtin_mcps() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        mcp_servers: Some(BTreeMap::from([(
-            "docs".to_string(),
-            McpServerRequirement {
-                identity: McpServerIdentity::Command {
-                    command: "docs-mcp".to_string(),
-                },
-            },
-        )])),
-        ..Default::default()
-    };
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
-        .build()
-        .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
@@ -4256,7 +4614,7 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
 }
 
 #[tokio::test]
-async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
+async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -4264,73 +4622,22 @@ async fn to_mcp_config_includes_enabled_builtin_mcps() -> std::io::Result<()> {
         codex_home.abs(),
     )
     .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
     assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+        mcp_config.client_elicitation_capability,
+        ElicitationCapability::default()
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_omits_builtin_mcps_when_feature_is_disabled() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
+    let _ = config.features.enable(Feature::AuthElicitation);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
-    assert!(mcp_config.builtin_mcp_servers.is_empty());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_reserves_enabled_builtin_mcp_names() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            mcp_servers: HashMap::from([(
-                codex_mcp::MEMORIES_MCP_SERVER_NAME.to_string(),
-                http_mcp("https://user.example/memories"),
-            )]),
-            ..ConfigToml::default()
-        },
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::BuiltInMcp);
-    let _ = config.features.enable(Feature::MemoryTool);
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-
     assert_eq!(
-        mcp_config.builtin_mcp_servers,
-        vec![codex_mcp::BuiltinMcpServer::Memories]
-    );
-    assert!(
-        !mcp_config
-            .configured_mcp_servers
-            .contains_key(codex_mcp::MEMORIES_MCP_SERVER_NAME)
+        mcp_config.client_elicitation_capability,
+        ElicitationCapability {
+            form: Some(FormElicitationCapability::default()),
+            url: Some(UrlElicitationCapability::default()),
+        }
     );
 
     Ok(())
@@ -6943,8 +7250,7 @@ model_verbosity = "high"
 /// 2. as part of a profile, where the `--profile` is specified via a CLI
 ///    (or in the config file itself)
 /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
-/// 4. the default value for a required field defined in code, e.g.,
-///    `crate::flags::OPENAI_DEFAULT_MODEL`
+/// 4. the default value for a required field defined in code.
 ///
 /// Note that profiles are the recommended way to specify a group of
 /// configuration options together.
@@ -7016,6 +7322,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             startup_warnings: Vec::new(),
             history: History::default(),
             ephemeral: false,
+            bypass_hook_trust: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_self_exe: None,
             codex_linux_sandbox_exe: None,
@@ -7046,6 +7353,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_collaboration_mode_instructions: true,
             include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
@@ -7083,6 +7391,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_pet: None,
+            tui_pet_anchor: TuiPetAnchor::Composer,
             tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
@@ -7460,6 +7770,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,
+        bypass_hook_trust: false,
         file_opener: UriBasedFileOpener::VsCode,
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
@@ -7490,6 +7801,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -7527,6 +7839,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
@@ -7618,6 +7932,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,
+        bypass_hook_trust: false,
         file_opener: UriBasedFileOpener::VsCode,
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
@@ -7648,6 +7963,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -7685,6 +8001,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
@@ -7761,6 +8079,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,
+        bypass_hook_trust: false,
         file_opener: UriBasedFileOpener::VsCode,
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
@@ -7791,6 +8110,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_collaboration_mode_instructions: true,
         include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
@@ -7828,6 +8148,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
@@ -7848,6 +8170,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_sandbox_modes: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -8560,6 +8883,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -8647,6 +8971,29 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
     assert!(
         config.startup_warnings.iter().any(|warning| warning
             .contains("Configured value for `permission_profile` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bypass_hook_trust_adds_startup_warning() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            bypass_hook_trust: Some(true),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning
+            == "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."),
         "{:?}",
         config.startup_warnings
     );
@@ -9026,6 +9373,7 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config_and_profiles() ->
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"include_permissions_instructions = false
 include_apps_instructions = false
+include_collaboration_mode_instructions = false
 include_environment_context = false
 profile = "chatty"
 
@@ -9034,6 +9382,7 @@ include_instructions = false
 
 [profiles.chatty]
 include_permissions_instructions = true
+include_collaboration_mode_instructions = true
 include_environment_context = true
 "#,
     )?;
@@ -9046,6 +9395,7 @@ include_environment_context = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
     Ok(())

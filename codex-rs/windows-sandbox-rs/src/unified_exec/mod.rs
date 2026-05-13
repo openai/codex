@@ -10,9 +10,11 @@
 mod backends;
 
 use anyhow::Result;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::SpawnedProcess;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_windows_sandbox_session_legacy(
@@ -23,6 +25,8 @@ pub async fn spawn_windows_sandbox_session_legacy(
     cwd: &Path,
     env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    additional_deny_read_paths: &[AbsolutePathBuf],
+    additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,
@@ -35,6 +39,8 @@ pub async fn spawn_windows_sandbox_session_legacy(
         cwd,
         env_map,
         timeout_ms,
+        additional_deny_read_paths,
+        additional_deny_write_paths,
         tty,
         stdin_open,
         use_private_desktop,
@@ -51,6 +57,11 @@ pub async fn spawn_windows_sandbox_session_elevated(
     cwd: &Path,
     env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[AbsolutePathBuf],
+    deny_write_paths_override: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
     use_private_desktop: bool,
@@ -63,6 +74,11 @@ pub async fn spawn_windows_sandbox_session_elevated(
         cwd,
         env_map,
         timeout_ms,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
         tty,
         stdin_open,
         use_private_desktop,

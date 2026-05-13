@@ -18,13 +18,18 @@ use codex_core_skills::model::SkillDependencies;
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
 use codex_core_skills::model::SkillToolDependency;
+use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
-        self.insert_str("$");
+        if self.config.features.enabled(Feature::MentionsV2) {
+            self.insert_str("@");
+        } else {
+            self.insert_str("$");
+        }
     }
 
     pub(crate) fn open_skills_menu(&mut self) {

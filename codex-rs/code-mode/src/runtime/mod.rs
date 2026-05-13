@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
+use crate::description::CodeModeToolKind;
 use crate::description::EnabledToolMetadata;
 use crate::description::ToolDefinition;
 use crate::description::enabled_tool_metadata;
@@ -46,6 +47,11 @@ pub struct WaitRequest {
     pub terminate: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct WaitToPendingRequest {
+    pub cell_id: String,
+}
+
 /// Result of waiting on a code-mode cell.
 ///
 /// The wrapped `RuntimeResponse` is the model-facing wait result. The enum
@@ -57,6 +63,34 @@ pub struct WaitRequest {
 pub enum WaitOutcome {
     /// The requested code cell was live when the wait command was accepted.
     LiveCell(RuntimeResponse),
+    /// The requested code cell was not live.
+    MissingCell(RuntimeResponse),
+}
+
+/// Result of executing a code-mode cell until it either completes or reaches a
+/// quiescent pending state.
+#[derive(Debug, PartialEq)]
+pub enum ExecuteToPendingOutcome {
+    /// The cell is waiting for more runtime input after draining the runtime
+    /// input queue that was ready at the pending boundary.
+    Pending {
+        cell_id: String,
+        content_items: Vec<FunctionCallOutputContentItem>,
+        /// Runtime tool-call ids emitted before this paused execution frontier
+        /// sealed. Hosts can use these ids to drain their tool-call transport
+        /// before surfacing the pending boundary to callers.
+        pending_tool_call_ids: Vec<String>,
+    },
+    /// The cell reached a terminal runtime response before going pending.
+    Completed(RuntimeResponse),
+}
+
+/// Result of resuming a live code-mode cell until it completes or becomes
+/// quiescent again.
+#[derive(Debug, PartialEq)]
+pub enum WaitToPendingOutcome {
+    /// The requested code cell was live when the wait command was accepted.
+    LiveCell(ExecuteToPendingOutcome),
     /// The requested code cell was not live.
     MissingCell(RuntimeResponse),
 }
@@ -97,6 +131,7 @@ pub struct CodeModeNestedToolCall {
     pub cell_id: String,
     pub runtime_tool_call_id: String,
     pub tool_name: ToolName,
+    pub tool_kind: CodeModeToolKind,
     pub input: Option<JsonValue>,
 }
 
@@ -118,14 +153,28 @@ pub(crate) enum RuntimeCommand {
     Terminate,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PendingRuntimeMode {
+    Continue,
+    PauseUntilResumed,
+}
+
+#[derive(Debug)]
+pub(crate) enum RuntimeControlCommand {
+    Resume,
+    Terminate,
+}
+
 #[derive(Debug)]
 pub(crate) enum RuntimeEvent {
     Started,
+    Pending,
     ContentItem(FunctionCallOutputContentItem),
     YieldRequested,
     ToolCall {
         id: String,
         name: ToolName,
+        kind: CodeModeToolKind,
         input: Option<JsonValue>,
     },
     Notify {
@@ -141,10 +190,19 @@ pub(crate) enum RuntimeEvent {
 pub(crate) fn spawn_runtime(
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
-) -> Result<(std_mpsc::Sender<RuntimeCommand>, v8::IsolateHandle), String> {
+    pending_mode: PendingRuntimeMode,
+) -> Result<
+    (
+        std_mpsc::Sender<RuntimeCommand>,
+        std_mpsc::Sender<RuntimeControlCommand>,
+        v8::IsolateHandle,
+    ),
+    String,
+> {
     initialize_v8()?;
 
     let (command_tx, command_rx) = std_mpsc::channel();
+    let (control_tx, control_rx) = std_mpsc::channel();
     let runtime_command_tx = command_tx.clone();
     let (isolate_handle_tx, isolate_handle_rx) = std_mpsc::sync_channel(1);
     let enabled_tools = request
@@ -164,6 +222,8 @@ pub(crate) fn spawn_runtime(
             config,
             event_tx,
             command_rx,
+            control_rx,
+            pending_mode,
             isolate_handle_tx,
             runtime_command_tx,
         );
@@ -172,7 +232,7 @@ pub(crate) fn spawn_runtime(
     let isolate_handle = isolate_handle_rx
         .recv()
         .map_err(|_| "failed to initialize code mode runtime".to_string())?;
-    Ok((command_tx, isolate_handle))
+    Ok((command_tx, control_tx, isolate_handle))
 }
 
 #[derive(Clone)]
@@ -224,6 +284,8 @@ fn run_runtime(
     config: RuntimeConfig,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     command_rx: std_mpsc::Receiver<RuntimeCommand>,
+    control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
+    pending_mode: PendingRuntimeMode,
     isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
@@ -279,7 +341,8 @@ fn run_runtime(
 
     let mut pending_promise = pending_promise;
     loop {
-        let Ok(command) = command_rx.recv() else {
+        let Some(command) = next_runtime_command(&event_tx, &command_rx, &control_rx, pending_mode)
+        else {
             break;
         };
 
@@ -330,6 +393,30 @@ fn run_runtime(
     }
 }
 
+fn next_runtime_command(
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    command_rx: &std_mpsc::Receiver<RuntimeCommand>,
+    control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
+    pending_mode: PendingRuntimeMode,
+) -> Option<RuntimeCommand> {
+    loop {
+        match command_rx.try_recv() {
+            Ok(command) => return Some(command),
+            Err(std_mpsc::TryRecvError::Disconnected) => return None,
+            Err(std_mpsc::TryRecvError::Empty) => {}
+        }
+
+        let _ = event_tx.send(RuntimeEvent::Pending);
+        match pending_mode {
+            PendingRuntimeMode::Continue => return command_rx.recv().ok(),
+            PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
+                RuntimeControlCommand::Resume => continue,
+                RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
+            },
+        }
+    }
+}
+
 fn capture_scope_send_error(
     scope: &mut v8::PinScope<'_, '_>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
@@ -363,8 +450,12 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::ExecuteRequest;
+    use super::PendingRuntimeMode;
+    use super::RuntimeCommand;
+    use super::RuntimeControlCommand;
     use super::RuntimeEvent;
     use super::spawn_runtime;
+    use crate::FunctionCallOutputContentItem;
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
@@ -381,8 +472,12 @@ mod tests {
     #[tokio::test]
     async fn terminate_execution_stops_cpu_bound_module() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (_runtime_tx, runtime_terminate_handle) =
-            spawn_runtime(execute_request("while (true) {}"), event_tx).unwrap();
+        let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
+            execute_request("while (true) {}"),
+            event_tx,
+            PendingRuntimeMode::Continue,
+        )
+        .unwrap();
 
         let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
@@ -412,5 +507,72 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn pending_mode_freezes_runtime_commands_until_resume() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, runtime_control_tx, _runtime_terminate_handle) = spawn_runtime(
+            execute_request(
+                r#"
+await new Promise((resolve) => setTimeout(resolve, 60_000));
+text("after");
+await new Promise(() => {});
+"#,
+            ),
+            event_tx,
+            PendingRuntimeMode::PauseUntilResumed,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            RuntimeEvent::Started
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            RuntimeEvent::Pending
+        ));
+
+        runtime_tx
+            .send(RuntimeCommand::TimeoutFired { id: 1 })
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), event_rx.recv())
+                .await
+                .is_err()
+        );
+
+        runtime_control_tx
+            .send(RuntimeControlCommand::Resume)
+            .unwrap();
+
+        let content_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }) =
+            content_event
+        else {
+            panic!("expected resumed runtime output");
+        };
+        assert_eq!(text, "after");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            RuntimeEvent::Pending
+        ));
+
+        runtime_control_tx
+            .send(RuntimeControlCommand::Terminate)
+            .unwrap();
     }
 }

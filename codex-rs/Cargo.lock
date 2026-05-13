@@ -1904,6 +1904,7 @@ dependencies = [
  "codex-file-watcher",
  "codex-git-attribution",
  "codex-git-utils",
+ "codex-guardian",
  "codex-hooks",
  "codex-login",
  "codex-mcp",
@@ -1969,6 +1970,8 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-uds",
+ "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
  "futures",
  "pretty_assertions",
@@ -1989,14 +1992,15 @@ dependencies = [
  "anyhow",
  "codex-app-server-protocol",
  "codex-app-server-transport",
- "codex-core",
  "codex-uds",
+ "codex-utils-home-dir",
  "futures",
  "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-tungstenite",
@@ -2174,17 +2178,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
-]
-
-[[package]]
-name = "codex-builtin-mcps"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-memories-mcp",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "tokio",
 ]
 
 [[package]]
@@ -2535,7 +2528,6 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-plugins",
  "codex-utils-pty",
- "codex-utils-readiness",
  "codex-utils-stream-parser",
  "codex-utils-string",
  "codex-utils-template",
@@ -2545,7 +2537,6 @@ dependencies = [
  "ctor 0.6.3",
  "dirs",
  "dunce",
- "env-flags",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
@@ -2745,6 +2736,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "codex-app-server-protocol",
@@ -2755,9 +2747,11 @@ dependencies = [
  "codex-test-binary-support",
  "codex-utils-absolute-path",
  "codex-utils-pty",
+ "codex-utils-rustls-provider",
  "ctor 0.6.3",
  "futures",
  "pretty_assertions",
+ "prost 0.14.3",
  "reqwest",
  "serde",
  "serde_json",
@@ -2826,8 +2820,6 @@ version = "0.0.0"
 dependencies = [
  "codex-protocol",
  "codex-tools",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2951,6 +2943,15 @@ dependencies = [
  "tokio",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-guardian"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-extension-api",
+ "codex-protocol",
 ]
 
 [[package]]
@@ -3080,7 +3081,6 @@ dependencies = [
  "async-channel",
  "codex-api",
  "codex-async-utils",
- "codex-builtin-mcps",
  "codex-config",
  "codex-exec-server",
  "codex-login",
@@ -3524,6 +3524,7 @@ dependencies = [
  "anyhow",
  "codex-code-mode",
  "codex-protocol",
+ "http 1.4.0",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3696,6 +3697,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-state",
+ "codex-utils-path",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3716,10 +3718,12 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-pty",
+ "codex-utils-string",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -3779,6 +3783,7 @@ dependencies = [
  "codex-utils-string",
  "codex-windows-sandbox",
  "color-eyre",
+ "core_test_support",
  "cpal",
  "crossterm",
  "derive_more 2.1.1",
@@ -3802,6 +3807,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.28.0",
@@ -3828,6 +3834,7 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.52.0",
  "winsplit",
+ "wiremock",
 ]
 
 [[package]]
@@ -5375,12 +5382,6 @@ dependencies = [
  "quote",
  "syn 2.0.114",
 ]
-
-[[package]]
-name = "env-flags"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbfd0e7fc632dec5e6c9396a27bc9f9975b4e039720e1fd3e34021d3ce28c415"
 
 [[package]]
 name = "env_filter"
@@ -8981,7 +8982,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -9449,7 +9450,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14093,7 +14094,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

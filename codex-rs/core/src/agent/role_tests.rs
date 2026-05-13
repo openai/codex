@@ -246,6 +246,36 @@ service_tier = "priority"
 }
 
 #[tokio::test]
+async fn apply_role_preserves_existing_service_tier_without_override() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let role_path = write_role_config(
+        &home,
+        "default-tier-role.toml",
+        r#"developer_instructions = "Stay focused"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(
+        config.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
 async fn apply_role_preserves_active_profile_and_model_provider() {
     let home = TempDir::new().expect("create temp dir");
     tokio::fs::write(
@@ -795,6 +825,31 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
     assert!(spec.contains(
             "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
         ));
+}
+
+#[test]
+fn spawn_tool_spec_marks_role_locked_service_tier() {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let role_path = tempdir.path().join("tiered.toml");
+    fs::write(
+        &role_path,
+        "developer_instructions = \"Stay fast\"\nservice_tier = \"priority\"\n",
+    )
+    .expect("write role config");
+    let user_defined_roles = BTreeMap::from([(
+        "tiered".to_string(),
+        AgentRoleConfig {
+            description: Some("Stay fast.".to_string()),
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    )]);
+
+    let spec = spawn_tool_spec::build(&user_defined_roles);
+
+    assert!(spec.contains(
+        "Stay fast.\n- This role's service tier is set to `priority` and overrides any spawn request service tier."
+    ));
 }
 
 #[test]

@@ -2,38 +2,34 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use codex_extension_api::CodexExtension;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 
-/// Small tutorial extension that installs two prompt contributors.
-#[derive(Debug, Default)]
-pub struct SharedStateExtension;
-
-impl CodexExtension<()> for SharedStateExtension {
-    fn install(self: Arc<Self>, registry: &mut ExtensionRegistryBuilder<()>) {
-        registry.prompt_contributor(Arc::new(StyleContributor));
-        registry.prompt_contributor(Arc::new(UsageContributor));
-    }
+/// Installs the tutorial contributors used by the example host.
+pub fn install(registry: &mut ExtensionRegistryBuilder<()>) {
+    registry.prompt_contributor(Arc::new(StyleContributor));
+    registry.prompt_contributor(Arc::new(UsageContributor));
 }
 
 #[derive(Debug)]
 struct StyleContributor;
 
 impl ContextContributor for StyleContributor {
-    fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment> {
-        contribution_counts(session_store).record_style();
-        contribution_counts(thread_store).record_style();
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+        Box::pin(async move {
+            contribution_counts(session_store).record_style();
+            contribution_counts(thread_store).record_style();
 
-        vec![PromptFragment::developer_policy(
-            "Prefer short answers unless the user asks for detail.",
-        )]
+            vec![PromptFragment::developer_policy(
+                "Prefer short answers unless the user asks for detail.",
+            )]
+        })
     }
 }
 
@@ -41,17 +37,19 @@ impl ContextContributor for StyleContributor {
 struct UsageContributor;
 
 impl ContextContributor for UsageContributor {
-    fn contribute(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<PromptFragment> {
-        contribution_counts(session_store).record_usage();
-        contribution_counts(thread_store).record_usage();
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+        Box::pin(async move {
+            contribution_counts(session_store).record_usage();
+            contribution_counts(thread_store).record_usage();
 
-        vec![PromptFragment::developer_capability(
-            "This extension can contribute more than one prompt fragment.",
-        )]
+            vec![PromptFragment::developer_capability(
+                "This extension can contribute more than one prompt fragment.",
+            )]
+        })
     }
 }
 
