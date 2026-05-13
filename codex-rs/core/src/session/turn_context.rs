@@ -5,6 +5,7 @@ use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -476,6 +477,15 @@ impl Session {
         let provider_for_context = create_model_provider(provider, auth_manager);
         let provider_capabilities = provider_for_context.capabilities();
         let session_telemetry_for_context = session_telemetry;
+        let mut request_user_input_allowed_modes =
+            per_turn_config.request_user_input_allowed_modes.clone();
+        if per_turn_config
+            .features
+            .enabled(Feature::DefaultModeRequestUserInput)
+            && !request_user_input_allowed_modes.contains(&ModeKind::Default)
+        {
+            request_user_input_allowed_modes.push(ModeKind::Default);
+        }
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager.try_list_models().unwrap_or_default(),
@@ -497,7 +507,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_request_user_input_config(
             per_turn_config.request_user_input_tool_enabled,
-            per_turn_config.request_user_input_allowed_modes.clone(),
+            request_user_input_allowed_modes,
         )
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_environment_mode(ToolEnvironmentMode::from_count(

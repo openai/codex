@@ -96,14 +96,6 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                     .features
                     .enable(Feature::DefaultModeRequestUserInput)
                     .expect("test config should allow feature update");
-                if !config
-                    .request_user_input_allowed_modes
-                    .contains(&ModeKind::Default)
-                {
-                    config
-                        .request_user_input_allowed_modes
-                        .push(ModeKind::Default);
-                }
             }
         })
         .build(&server)
