@@ -230,7 +230,7 @@ async fn run_command_under_sandbox(
     let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
             spec.start_proxy(
-                config.permissions.permission_profile.get(),
+                config.permissions.permission_profile_ref(),
                 /*policy_decider*/ None,
                 /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
@@ -285,7 +285,7 @@ async fn run_command_under_sandbox(
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
-                &config.permissions.permission_profile(),
+                config.permissions.permission_profile_ref(),
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
@@ -777,6 +777,16 @@ mod tests {
         Ok(())
     }
 
+    fn workspace_write_policy_for_codex_home(
+        codex_home: &TempDir,
+    ) -> codex_protocol::permissions::FileSystemSandboxPolicy {
+        let memories_root = AbsolutePathBuf::try_from(codex_home.path().join("memories"))
+            .expect("codex home tempdir should be absolute");
+        codex_protocol::models::PermissionProfile::workspace_write()
+            .file_system_sandbox_policy()
+            .with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&memories_root))
+    }
+
     #[tokio::test]
     async fn debug_sandbox_honors_active_permission_profiles() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
@@ -964,8 +974,7 @@ mod tests {
 
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+            workspace_write_policy_for_codex_home(&codex_home)
         );
 
         Ok(())
@@ -998,8 +1007,7 @@ mod tests {
 
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+            workspace_write_policy_for_codex_home(&codex_home)
         );
 
         Ok(())

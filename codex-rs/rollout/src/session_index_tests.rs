@@ -29,6 +29,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
                 forked_from_id: None,
                 timestamp,
                 cwd: ".".into(),
+                workspace_roots: Vec::new(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::Cli,
