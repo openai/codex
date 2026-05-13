@@ -1,15 +1,21 @@
+use super::HandleOutputCtx;
 use super::TurnItemContributorPolicy;
 use super::completed_item_defers_mailbox_delivery_to_next_turn;
 use super::handle_non_tool_response_item;
+use super::handle_output_item_done;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
 use crate::session::tests::make_session_and_context;
+use crate::tools::ToolRouter;
+use crate::tools::parallel::ToolCallRuntime;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::error::CodexErr;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::memory_citation::MemoryCitation;
 use codex_protocol::models::ContentItem;
@@ -22,6 +28,7 @@ use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
     assistant_output_text_with_phase(text, /*phase*/ None)
@@ -180,6 +187,26 @@ impl TurnItemContributor for TestTurnItemContributor {
     }
 }
 
+struct RewriteAgentMessageContributor;
+
+impl TurnItemContributor for RewriteAgentMessageContributor {
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> TurnItemContributionFuture<'a> {
+        Box::pin(async move {
+            if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.content = vec![AgentMessageContent::Text {
+                    text: "contributed assistant text".to_string(),
+                }];
+            }
+            Ok(())
+        })
+    }
+}
+
 #[tokio::test]
 async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_requested() {
     let (mut session, turn_context) = make_session_and_context().await;
@@ -230,6 +257,50 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         })
         .collect::<String>();
     assert_eq!(text, "hello world");
+}
+
+#[tokio::test]
+async fn handle_output_item_done_returns_contributed_last_agent_message() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
+    session.services.extensions = Arc::new(builder.build());
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let router = Arc::new(ToolRouter::from_config(
+        &turn_context.tools_config,
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
+    ));
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let tool_runtime = ToolCallRuntime::new(
+        router,
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        tracker,
+    );
+    let item = assistant_output_text("original assistant text");
+    let mut ctx = HandleOutputCtx {
+        sess: session,
+        turn_context,
+        turn_store: Arc::new(ExtensionData::new()),
+        tool_runtime,
+        cancellation_token: CancellationToken::new(),
+    };
+
+    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
+        .await
+        .expect("assistant message should complete");
+
+    assert_eq!(
+        output.last_agent_message.as_deref(),
+        Some("contributed assistant text")
+    );
 }
 
 #[test]

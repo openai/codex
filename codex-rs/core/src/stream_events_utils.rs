@@ -278,6 +278,23 @@ fn turn_item_memory_citation(item: &TurnItem) -> Option<MemoryCitation> {
     None
 }
 
+pub(crate) fn last_agent_message_from_turn_item(item: &TurnItem) -> Option<String> {
+    let TurnItem::AgentMessage(agent_message) = item else {
+        return None;
+    };
+    let combined = agent_message
+        .content
+        .iter()
+        .map(|entry| match entry {
+            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    if combined.trim().is_empty() {
+        return None;
+    }
+    Some(combined)
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
@@ -326,8 +343,10 @@ pub(crate) async fn handle_output_item_done(
             )
             .await;
             let mut final_memory_citation = None;
+            let mut last_agent_message = None;
             if let Some(turn_item) = turn_item {
                 final_memory_citation = turn_item_memory_citation(&turn_item);
+                last_agent_message = last_agent_message_from_turn_item(&turn_item);
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -352,7 +371,6 @@ pub(crate) async fn handle_output_item_done(
                 final_memory_citation.as_ref(),
             )
             .await;
-            let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
         }

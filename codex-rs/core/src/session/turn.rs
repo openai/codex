@@ -47,6 +47,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
+use crate::stream_events_utils::last_agent_message_from_turn_item;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
@@ -1729,7 +1730,8 @@ async fn emit_turn_item_in_plan_mode(
     turn_item: TurnItem,
     previously_active_item: Option<&TurnItem>,
     state: &mut PlanModeStreamState,
-) {
+) -> Option<String> {
+    let last_agent_message = last_agent_message_from_turn_item(&turn_item);
     match turn_item {
         TurnItem::AgentMessage(agent_message) => {
             emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
@@ -1741,6 +1743,7 @@ async fn emit_turn_item_in_plan_mode(
             sess.emit_turn_item_completed(turn_context, turn_item).await;
         }
     }
+    last_agent_message
 }
 
 /// Handle a completed assistant response item in plan mode, returning true if handled.
@@ -1759,6 +1762,7 @@ async fn handle_assistant_item_done_in_plan_mode(
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
         let mut final_memory_citation = None;
+        let mut final_last_agent_message = None;
         if let Some(turn_item) = handle_non_tool_response_item(
             sess,
             turn_context,
@@ -1771,7 +1775,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             if let TurnItem::AgentMessage(agent_message) = &turn_item {
                 final_memory_citation = agent_message.memory_citation.clone();
             }
-            emit_turn_item_in_plan_mode(
+            final_last_agent_message = emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
                 turn_item,
@@ -1788,7 +1792,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             final_memory_citation.as_ref(),
         )
         .await;
-        if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
+        if let Some(agent_message) = final_last_agent_message {
             *last_agent_message = Some(agent_message);
         }
         return true;
@@ -2291,3 +2295,7 @@ pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     }
     None
 }
+
+#[cfg(test)]
+#[path = "turn_tests.rs"]
+mod tests;
