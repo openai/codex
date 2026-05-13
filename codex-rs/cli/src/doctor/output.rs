@@ -3,7 +3,7 @@
 //! The renderer is intentionally separate from check construction so the JSON
 //! report can stay stable while the human view optimizes for scanability. It
 //! groups checks by concern, colors only status/actionable tokens, and redacts
-//! sensitive detail lines before showing them in verbose output.
+//! sensitive detail lines before showing them in detailed output.
 
 use std::fmt::Write as _;
 
@@ -50,7 +50,7 @@ struct OutputGroup {
 /// run or which fields are present in the underlying JSON report.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct HumanOutputOptions {
-    pub(super) verbose: bool,
+    pub(super) show_details: bool,
     pub(super) ascii: bool,
     pub(super) color_enabled: bool,
 }
@@ -119,7 +119,7 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
         style_description(&description, check.status, options)
     );
 
-    if options.verbose {
+    if options.show_details {
         for detail in &check.details {
             let _ = writeln!(
                 out,
@@ -228,19 +228,28 @@ fn styled_overall_status(label: &str, status: CheckStatus, options: HumanOutputO
 }
 
 fn write_footer(out: &mut String, options: HumanOutputOptions) {
+    if options.show_details {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            cyan("--summary", options),
+            dim("compact output", options)
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "{}",
+            dim(
+                "Run codex doctor without --summary for detailed diagnostics.",
+                options
+            )
+        );
+    }
     let _ = writeln!(
         out,
         "{} {}",
         cyan("--json", options),
         dim("redacted support report", options)
-    );
-    let _ = writeln!(
-        out,
-        "{}",
-        dim(
-            "Still having issues? Run codex doctor --verbose for more details.",
-            options
-        )
     );
 }
 
@@ -444,9 +453,17 @@ mod tests {
 
     use super::*;
 
-    fn no_color_unicode_options() -> HumanOutputOptions {
+    fn detailed_no_color_unicode_options() -> HumanOutputOptions {
         HumanOutputOptions {
-            verbose: false,
+            show_details: true,
+            ascii: false,
+            color_enabled: false,
+        }
+    }
+
+    fn summary_no_color_unicode_options() -> HumanOutputOptions {
+        HumanOutputOptions {
+            show_details: false,
             ascii: false,
             color_enabled: false,
         }
@@ -533,8 +550,45 @@ mod tests {
     }
 
     #[test]
-    fn render_human_report_groups_checks_without_color() {
-        let rendered = render_human_report(&sample_report(), no_color_unicode_options());
+    fn render_human_report_includes_details_by_default_without_color() {
+        let rendered = render_human_report(&sample_report(), detailed_no_color_unicode_options());
+        let expected = "\
+Codex Doctor v0.0.0
+
+Environment
+  ✓ runtime      running local build on darwin-arm64
+  ✓ install      installation looks consistent
+  ✓ search       search is OK (bundled)
+  ⚠ terminal     narrow terminal
+  ✓ state        state paths inspectable
+
+Configuration
+  ✗ auth         token expired — Run `codex login`.
+    - OPENAI_API_KEY: <redacted>
+
+Updates
+  ✓ updates      update configuration is locally consistent
+
+Connectivity
+  ✓ network      network environment readable
+  ✓ websocket    Responses WebSocket handshake succeeded
+  ✓ reachability active provider endpoints are reachable over HTTP
+
+Background Server
+  ✓ app-server   background server is not running
+
+─────────────────────────────────────────────
+9 ok · 1 warn · 1 fail failed
+
+--summary compact output
+--json redacted support report
+";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn render_human_report_supports_summary_output_without_color() {
+        let rendered = render_human_report(&sample_report(), summary_no_color_unicode_options());
         let expected = "\
 Codex Doctor v0.0.0
 
@@ -562,8 +616,8 @@ Background Server
 ─────────────────────────────────────────────
 9 ok · 1 warn · 1 fail failed
 
+Run codex doctor without --summary for detailed diagnostics.
 --json redacted support report
-Still having issues? Run codex doctor --verbose for more details.
 ";
         assert_eq!(rendered, expected);
     }
@@ -573,7 +627,7 @@ Still having issues? Run codex doctor --verbose for more details.
         let rendered = render_human_report(
             &sample_report(),
             HumanOutputOptions {
-                verbose: false,
+                show_details: false,
                 ascii: true,
                 color_enabled: false,
             },
@@ -606,8 +660,8 @@ Background Server
 {}
 9 ok | 1 warn | 1 fail failed
 
+Run codex doctor without --summary for detailed diagnostics.
 --json redacted support report
-Still having issues? Run codex doctor --verbose for more details.
 ",
             "-".repeat(SEPARATOR_WIDTH)
         );
@@ -615,11 +669,11 @@ Still having issues? Run codex doctor --verbose for more details.
     }
 
     #[test]
-    fn render_human_report_includes_verbose_redacted_details() {
+    fn render_human_report_includes_redacted_details() {
         let rendered = render_human_report(
             &sample_report(),
             HumanOutputOptions {
-                verbose: true,
+                show_details: true,
                 ascii: false,
                 color_enabled: false,
             },
@@ -654,7 +708,7 @@ Still having issues? Run codex doctor --verbose for more details.
         let rendered = render_human_report(
             &sample_report(),
             HumanOutputOptions {
-                verbose: false,
+                show_details: false,
                 ascii: false,
                 color_enabled: true,
             },

@@ -89,18 +89,17 @@ const PROXY_ENV_VARS: &[&str] = &[
 
 /// Options for building a local Codex diagnostic report.
 ///
-/// The command always runs the full bounded diagnostic set. Human output is
-/// concise by default, while --verbose exposes local paths and command output
-/// that are useful when debugging a specific installation.
+/// The command always runs the full bounded diagnostic set. Human output includes
+/// detailed diagnostics by default; --summary keeps the terminal output compact.
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
 
-    /// Include extra local paths and command outputs in human output.
+    /// Only show grouped check rows and the final count summary.
     #[arg(long, default_value_t = false)]
-    verbose: bool,
+    summary: bool,
 
     /// Disable ANSI color in human output.
     #[arg(long, default_value_t = false)]
@@ -136,9 +135,8 @@ struct DoctorReport {
 
 /// One diagnostic result in the doctor report.
 ///
-/// Summaries are safe for the default human view. Details may include local
-/// paths or command output and are therefore shown only with --verbose in
-/// human mode, while JSON consumers receive the full redacted report.
+/// Summaries are safe for compact human output. Details may include local paths
+/// or command output and are redacted before rendering or JSON serialization.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorCheck {
@@ -224,7 +222,7 @@ async fn build_report(
     arg0_paths: &Arg0DispatchPaths,
 ) -> DoctorReport {
     let mut checks = Vec::new();
-    checks.push(timed_check(|| installation_check(command.verbose)));
+    checks.push(timed_check(|| installation_check(!command.summary)));
     checks.push(timed_check(runtime_check));
     checks.push(timed_check(search_check));
 
@@ -392,7 +390,7 @@ fn generated_at() -> String {
     }
 }
 
-fn installation_check(verbose: bool) -> DoctorCheck {
+fn installation_check(show_details: bool) -> DoctorCheck {
     let mut details = Vec::new();
     let current_exe = env::current_exe().ok();
     push_path_detail(&mut details, "current executable", current_exe.as_deref());
@@ -429,7 +427,7 @@ fn installation_check(verbose: bool) -> DoctorCheck {
     if path_entries.len() > 1 {
         details.push(format!("PATH codex entries: {}", path_entries.len()));
     }
-    if verbose || path_entries.len() > 1 {
+    if show_details || path_entries.len() > 1 {
         details.extend(
             path_entries
                 .iter()
@@ -2012,7 +2010,7 @@ fn human_output_options(command: &DoctorCommand) -> HumanOutputOptions {
         supports_color::on(Stream::Stdout).is_some(),
     );
     HumanOutputOptions {
-        verbose: command.verbose,
+        show_details: !command.summary,
         ascii: command.ascii,
         color_enabled,
     }
