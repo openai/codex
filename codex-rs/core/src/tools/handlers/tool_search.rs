@@ -5,6 +5,7 @@ use crate::tools::context::ToolSearchOutput;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchEntry;
+use crate::tools::tool_search_entry::ToolSearchInfo;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
@@ -28,10 +29,15 @@ pub struct ToolSearchHandler {
 }
 
 impl ToolSearchHandler {
-    pub(crate) fn new(
-        entries: Vec<ToolSearchEntry>,
-        search_source_infos: Vec<ToolSearchSourceInfo>,
-    ) -> Self {
+    pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
+        let mut entries = Vec::with_capacity(search_infos.len());
+        let mut search_source_infos = Vec::new();
+        for search_info in search_infos {
+            entries.push(search_info.entry);
+            if let Some(source_info) = search_info.source_info {
+                search_source_infos.push(source_info);
+            }
+        }
         let documents: Vec<Document<usize>> = entries
             .iter()
             .map(|entry| entry.search_text.clone())
@@ -223,23 +229,21 @@ mod tests {
             tool_info("calendar", "create_event", "Create events"),
             tool_info("calendar", "list_events", "List events"),
         ];
-        let mut entries = mcp_tools
+        let mut search_infos = mcp_tools
             .iter()
             .map(|tool| {
                 McpHandler::new(tool.clone())
                     .search_info()
                     .expect("MCP handler should return search info")
-                    .entry
             })
             .collect::<Vec<_>>();
-        entries.extend(dynamic_tools.iter().map(|tool| {
+        search_infos.extend(dynamic_tools.iter().map(|tool| {
             DynamicToolHandler::new(tool)
                 .expect("dynamic tool should convert")
                 .search_info()
                 .expect("dynamic handler should return search info")
-                .entry
         }));
-        let handler = ToolSearchHandler::new(entries, Vec::new());
+        let handler = ToolSearchHandler::new(search_infos);
         let results = [
             &handler.entries[0],
             &handler.entries[2],
@@ -321,10 +325,8 @@ mod tests {
                     McpHandler::new(tool.clone())
                         .search_info()
                         .expect("MCP handler should return search info")
-                        .entry
                 })
                 .collect(),
-            Vec::new(),
         );
 
         let results = handler.search_result_entries(
@@ -368,10 +370,8 @@ mod tests {
                     McpHandler::new(tool.clone())
                         .search_info()
                         .expect("MCP handler should return search info")
-                        .entry
                 })
                 .collect(),
-            Vec::new(),
         );
 
         let results = handler.search_result_entries(
@@ -413,10 +413,8 @@ mod tests {
                     McpHandler::new(tool.clone())
                         .search_info()
                         .expect("MCP handler should return search info")
-                        .entry
                 })
                 .collect(),
-            Vec::new(),
         );
 
         let results = handler.search_result_entries(

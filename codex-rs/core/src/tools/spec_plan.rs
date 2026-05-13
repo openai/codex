@@ -163,16 +163,7 @@ pub fn build_tool_registry_builder(
     }
 
     if config.search_tool && config.namespace_tools && !deferred_search_infos.is_empty() {
-        builder.register_handler(Arc::new(ToolSearchHandler::new(
-            deferred_search_infos
-                .iter()
-                .map(|search_info| search_info.entry.clone())
-                .collect(),
-            deferred_search_infos
-                .into_iter()
-                .filter_map(|search_info| search_info.source_info)
-                .collect(),
-        )));
+        builder.register_handler(Arc::new(ToolSearchHandler::new(deferred_search_infos)));
     }
 
     for bundle in params.extension_tool_bundles.iter().cloned() {
