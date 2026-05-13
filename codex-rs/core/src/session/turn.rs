@@ -166,6 +166,19 @@ pub(crate) async fn run_turn(
     if pre_sampling_compact.reset_client_session {
         client_session.reset_websocket_session();
     }
+    let turn_extension_data = {
+        let active_turn_state = {
+            let active_turn = sess.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .map(|active_turn| Arc::clone(&active_turn.turn_state))
+        };
+        if let Some(active_turn_state) = active_turn_state {
+            Arc::clone(&active_turn_state.lock().await.extension_data)
+        } else {
+            Arc::new(codex_extension_api::ExtensionData::new())
+        }
+    };
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
@@ -453,6 +466,7 @@ pub(crate) async fn run_turn(
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            Arc::clone(&turn_extension_data),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
@@ -1004,6 +1018,7 @@ pub(crate) fn build_prompt(
 async fn run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
@@ -1060,6 +1075,7 @@ async fn run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
+            Arc::clone(&turn_store),
             client_session,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
@@ -1742,6 +1758,7 @@ async fn emit_turn_item_in_plan_mode(
 async fn handle_assistant_item_done_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
+    turn_store: &codex_extension_api::ExtensionData,
     item: &ResponseItem,
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
@@ -1752,8 +1769,14 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) =
-            handle_non_tool_response_item(sess, turn_context, item, /*plan_mode*/ true).await
+        if let Some(turn_item) = handle_non_tool_response_item(
+            sess,
+            turn_context,
+            turn_store,
+            item,
+            /*plan_mode*/ true,
+        )
+        .await
         {
             emit_turn_item_in_plan_mode(
                 sess,
@@ -1812,6 +1835,7 @@ async fn try_run_sampling_request(
     tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
@@ -1929,6 +1953,7 @@ async fn try_run_sampling_request(
                     && handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &turn_context,
+                        turn_store.as_ref(),
                         &item,
                         state,
                         previously_active_item.as_ref(),
@@ -1942,6 +1967,7 @@ async fn try_run_sampling_request(
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
+                    turn_store: Arc::clone(&turn_store),
                     tool_runtime: tool_runtime.clone(),
                     cancellation_token: cancellation_token.child_token(),
                 };
@@ -2000,6 +2026,7 @@ async fn try_run_sampling_request(
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
+                    turn_store.as_ref(),
                     &item,
                     plan_mode,
                 )

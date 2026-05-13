@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
@@ -31,6 +32,7 @@ use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
+use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
@@ -215,8 +217,25 @@ pub(crate) struct OutputItemResult {
 pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
+    pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
+}
+
+async fn apply_turn_item_contributors(
+    sess: &Session,
+    turn_store: &ExtensionData,
+    item: &mut TurnItem,
+) {
+    let contributors = sess.services.extensions.turn_item_contributors().to_vec();
+    for contributor in contributors {
+        if let Err(err) = contributor
+            .contribute(&sess.services.thread_extension_data, turn_store, item)
+            .await
+        {
+            warn!("turn item contributor failed: {err}");
+        }
+    }
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -261,6 +280,7 @@ pub(crate) async fn handle_output_item_done(
             let turn_item = handle_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
+                ctx.turn_store.as_ref(),
                 &item,
                 plan_mode,
             )
@@ -351,6 +371,7 @@ pub(crate) async fn handle_output_item_done(
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
     turn_context: &TurnContext,
+    turn_store: &ExtensionData,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
@@ -362,6 +383,7 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
+            apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
                     .content
@@ -374,7 +396,9 @@ pub(crate) async fn handle_non_tool_response_item(
                     strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
-                agent_message.memory_citation = memory_citation;
+                if agent_message.memory_citation.is_none() {
+                    agent_message.memory_citation = memory_citation;
+                }
             }
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
                 let session_id = sess.conversation_id.to_string();

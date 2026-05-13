@@ -5,8 +5,13 @@ use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
 use crate::session::tests::make_session_and_context;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::TurnItemContributionFuture;
+use codex_extension_api::TurnItemContributor;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
+use codex_protocol::memory_citation::MemoryCitation;
+use codex_protocol::memory_citation::MemoryCitationEntry;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
@@ -16,6 +21,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
     assistant_output_text_with_phase(text, /*phase*/ None)
@@ -117,10 +123,15 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
     );
 
-    let turn_item =
-        handle_non_tool_response_item(&session, &turn_context, &item, /*plan_mode*/ false)
-            .await
-            .expect("assistant message should parse");
+    let turn_item = handle_non_tool_response_item(
+        &session,
+        &turn_context,
+        &ExtensionData::new(),
+        &item,
+        /*plan_mode*/ false,
+    )
+    .await
+    .expect("assistant message should parse");
 
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
@@ -141,6 +152,83 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
     assert_eq!(
         memory_citation.rollout_ids,
         vec!["019cc2ea-1dff-7902-8d40-c8f6e5d83cc4".to_string()]
+    );
+}
+
+struct TestTurnItemContributor;
+
+#[derive(Debug)]
+struct TurnItemContributorRan;
+
+impl TurnItemContributor for TestTurnItemContributor {
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> TurnItemContributionFuture<'a> {
+        Box::pin(async move {
+            turn_store.insert(TurnItemContributorRan);
+            if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.memory_citation = Some(MemoryCitation {
+                    entries: vec![MemoryCitationEntry {
+                        path: "from-contributor.md".to_string(),
+                        line_start: 3,
+                        line_end: 4,
+                        note: "set by contributor".to_string(),
+                    }],
+                    rollout_ids: vec!["from-contributor".to_string()],
+                });
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn handle_non_tool_response_item_runs_turn_item_contributors_before_hidden_markup_cleanup() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.turn_item_contributor(Arc::new(TestTurnItemContributor));
+    session.services.extensions = Arc::new(builder.build());
+    let turn_store = ExtensionData::new();
+    let item = assistant_output_text(
+        "hello<oai-mem-citation>ignored by memory parser</oai-mem-citation> world",
+    );
+
+    let turn_item = handle_non_tool_response_item(
+        &session,
+        &turn_context,
+        &turn_store,
+        &item,
+        /*plan_mode*/ false,
+    )
+    .await
+    .expect("assistant message should parse");
+
+    assert!(turn_store.get::<TurnItemContributorRan>().is_some());
+    let TurnItem::AgentMessage(agent_message) = turn_item else {
+        panic!("expected agent message");
+    };
+    let text = agent_message
+        .content
+        .iter()
+        .map(|entry| match entry {
+            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(text, "hello world");
+    assert_eq!(
+        agent_message.memory_citation,
+        Some(MemoryCitation {
+            entries: vec![MemoryCitationEntry {
+                path: "from-contributor.md".to_string(),
+                line_start: 3,
+                line_end: 4,
+                note: "set by contributor".to_string(),
+            }],
+            rollout_ids: vec!["from-contributor".to_string()],
+        })
     );
 }
 
