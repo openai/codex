@@ -7772,6 +7772,14 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             .features
             .enable(Feature::DefaultModeRequestUserInput)
             .expect("default-mode request_user_input should be enableable in tests");
+        if !config
+            .request_user_input_allowed_modes
+            .contains(&ModeKind::Default)
+        {
+            config
+                .request_user_input_allowed_modes
+                .push(ModeKind::Default);
+        }
     });
     let test = builder.build(&server).await?;
     let responses = mount_sse_sequence(
