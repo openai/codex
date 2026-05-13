@@ -1824,13 +1824,27 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         ))?;
     shared_plugin_body["plugins"][0]["share_principals"] = serde_json::Value::Null;
     let shared_plugin_body = serde_json::to_string(&shared_plugin_body)?;
-    let workspace_installed_body = workspace_remote_plugin_page_body(
-        "plugins~Plugin_22222222222222222222222222222222",
-        "shared-linear",
-        "Shared Linear",
-        "PRIVATE",
-        /*enabled*/ Some(true),
-    );
+    let mut workspace_installed_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_22222222222222222222222222222222",
+            "shared-linear",
+            "Shared Linear",
+            "PRIVATE",
+            /*enabled*/ Some(true),
+        ))?;
+    let unlisted_installed_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_33333333333333333333333333333333",
+            "unlisted-linear",
+            "Unlisted Linear",
+            "UNLISTED",
+            /*enabled*/ Some(false),
+        ))?;
+    workspace_installed_body["plugins"]
+        .as_array_mut()
+        .expect("installed plugins should be an array")
+        .push(unlisted_installed_body["plugins"][0].clone());
+    let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
     mount_shared_workspace_plugins(&server, &shared_plugin_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
 
@@ -1851,9 +1865,12 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
     .await??;
     let response: PluginListResponse = to_response(response)?;
 
-    assert_eq!(response.marketplaces.len(), 1);
-    let marketplace = &response.marketplaces[0];
-    assert_eq!(marketplace.name, "shared-with-me");
+    assert_eq!(response.marketplaces.len(), 2);
+    let marketplace = response
+        .marketplaces
+        .iter()
+        .find(|marketplace| marketplace.name == "workspace-shared-with-me-private")
+        .expect("expected private shared-with-me marketplace");
     assert_eq!(
         marketplace
             .interface
@@ -1862,7 +1879,10 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some("Shared with me")
     );
     assert_eq!(marketplace.plugins.len(), 1);
-    assert_eq!(marketplace.plugins[0].id, "shared-linear@shared-with-me");
+    assert_eq!(
+        marketplace.plugins[0].id,
+        "shared-linear@workspace-shared-with-me-private"
+    );
     assert_eq!(
         marketplace.plugins[0].remote_plugin_id.as_deref(),
         Some("plugins~Plugin_22222222222222222222222222222222")
@@ -1893,6 +1913,44 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some("https://chatgpt.example/plugins/share/share-key-1")
     );
     assert_eq!(share_context.share_principals, None);
+
+    let marketplace = response
+        .marketplaces
+        .iter()
+        .find(|marketplace| marketplace.name == "workspace-shared-with-me-unlisted")
+        .expect("expected unlisted shared-with-me marketplace");
+    assert_eq!(
+        marketplace
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref()),
+        Some("Shared with me (unlisted)")
+    );
+    assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(
+        marketplace.plugins[0].id,
+        "unlisted-linear@workspace-shared-with-me-unlisted"
+    );
+    assert_eq!(
+        marketplace.plugins[0].remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_33333333333333333333333333333333")
+    );
+    assert_eq!(marketplace.plugins[0].name, "unlisted-linear");
+    assert_eq!(marketplace.plugins[0].installed, true);
+    assert_eq!(marketplace.plugins[0].enabled, false);
+    let share_context = marketplace.plugins[0]
+        .share_context
+        .as_ref()
+        .expect("expected share context");
+    assert_eq!(
+        share_context.remote_plugin_id,
+        "plugins~Plugin_33333333333333333333333333333333"
+    );
+    assert_eq!(share_context.remote_version.as_deref(), Some("1.2.3"));
+    assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Unlisted)
+    );
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }

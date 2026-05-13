@@ -303,7 +303,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("shared-with-me".to_string()),
+            remote_marketplace_name: Some("workspace-shared-with-me-private".to_string()),
             plugin_name: "plugins~Plugin_11111111111111111111111111111111".to_string(),
         })
         .await?;
@@ -315,8 +315,14 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(response.plugin.marketplace_name, "shared-with-me");
-    assert_eq!(response.plugin.summary.id, "shared-linear@shared-with-me");
+    assert_eq!(
+        response.plugin.marketplace_name,
+        "workspace-shared-with-me-private"
+    );
+    assert_eq!(
+        response.plugin.summary.id,
+        "shared-linear@workspace-shared-with-me-private"
+    );
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_11111111111111111111111111111111")

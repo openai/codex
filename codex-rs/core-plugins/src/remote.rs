@@ -47,10 +47,15 @@ pub use share::update_remote_plugin_share_targets;
 
 pub const REMOTE_GLOBAL_MARKETPLACE_NAME: &str = "chatgpt-global";
 pub const REMOTE_WORKSPACE_MARKETPLACE_NAME: &str = "workspace-directory";
-pub const REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME: &str = "shared-with-me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME: &str =
+    "workspace-shared-with-me-private";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME: &str =
+    "workspace-shared-with-me-unlisted";
 pub const REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Plugins";
 pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "Workspace Directory";
-pub const REMOTE_SHARED_WITH_ME_MARKETPLACE_DISPLAY_NAME: &str = "Shared with me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME: &str = "Shared with me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME: &str =
+    "Shared with me (unlisted)";
 
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
@@ -286,9 +291,9 @@ impl RemotePluginScope {
     fn from_marketplace_name(name: &str) -> Option<Self> {
         match name {
             REMOTE_GLOBAL_MARKETPLACE_NAME => Some(Self::Global),
-            REMOTE_WORKSPACE_MARKETPLACE_NAME | REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME => {
-                Some(Self::Workspace)
-            }
+            REMOTE_WORKSPACE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME => Some(Self::Workspace),
             _ => None,
         }
     }
@@ -388,9 +393,11 @@ fn remote_plugin_canonical_marketplace_name(
         RemotePluginScope::Global => Ok(REMOTE_GLOBAL_MARKETPLACE_NAME),
         RemotePluginScope::Workspace => match workspace_plugin_discoverability(plugin)? {
             RemotePluginShareDiscoverability::Listed => Ok(REMOTE_WORKSPACE_MARKETPLACE_NAME),
-            RemotePluginShareDiscoverability::Unlisted
-            | RemotePluginShareDiscoverability::Private => {
-                Ok(REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME)
+            RemotePluginShareDiscoverability::Unlisted => {
+                Ok(REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME)
+            }
+            RemotePluginShareDiscoverability::Private => {
+                Ok(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME)
             }
         },
     }
@@ -462,43 +469,81 @@ pub async fn fetch_remote_marketplaces(
     };
 
     for source in sources {
-        let marketplace = match source {
+        match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
                 let (directory_plugins, installed_plugins) = tokio::try_join!(
                     fetch_directory_plugins_for_scope(config, auth, scope),
                     fetch_installed_plugins_for_scope(config, auth, scope),
                 )?;
-                build_remote_marketplace(
+                if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
                     installed_plugins,
                     /*include_installed_only*/ true,
-                )?
+                )? {
+                    marketplaces.push(marketplace);
+                }
             }
             RemoteMarketplaceSource::WorkspaceDirectory => {
                 let scope = RemotePluginScope::Workspace;
                 let directory_plugins =
                     fetch_directory_plugins_for_scope(config, auth, scope).await?;
-                build_remote_marketplace(
+                if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
                     workspace_installed_plugins.clone().unwrap_or_default(),
                     /*include_installed_only*/ false,
-                )?
+                )? {
+                    marketplaces.push(marketplace);
+                }
             }
-            RemoteMarketplaceSource::SharedWithMe => build_remote_marketplace(
-                REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME,
-                REMOTE_SHARED_WITH_ME_MARKETPLACE_DISPLAY_NAME,
-                fetch_shared_workspace_plugins(config, auth).await?,
-                workspace_installed_plugins.clone().unwrap_or_default(),
-                /*include_installed_only*/ false,
-            )?,
-        };
-        if let Some(marketplace) = marketplace {
-            marketplaces.push(marketplace);
+            RemoteMarketplaceSource::SharedWithMe => {
+                let private_plugins = fetch_shared_workspace_plugins(config, auth)
+                    .await?
+                    .into_iter()
+                    .filter_map(|plugin| match workspace_plugin_discoverability(&plugin) {
+                        Ok(RemotePluginShareDiscoverability::Private) => Some(Ok(plugin)),
+                        Ok(RemotePluginShareDiscoverability::Listed)
+                        | Ok(RemotePluginShareDiscoverability::Unlisted) => None,
+                        Err(err) => Some(Err(err)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(marketplace) = build_remote_marketplace(
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME,
+                    private_plugins,
+                    workspace_installed_plugins.clone().unwrap_or_default(),
+                    /*include_installed_only*/ false,
+                )? {
+                    marketplaces.push(marketplace);
+                }
+
+                let unlisted_installed_plugins = workspace_installed_plugins
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(
+                        |plugin| match workspace_plugin_discoverability(&plugin.plugin) {
+                            Ok(RemotePluginShareDiscoverability::Unlisted) => Some(Ok(plugin)),
+                            Ok(RemotePluginShareDiscoverability::Listed)
+                            | Ok(RemotePluginShareDiscoverability::Private) => None,
+                            Err(err) => Some(Err(err)),
+                        },
+                    )
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(marketplace) = build_remote_marketplace(
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME,
+                    Vec::new(),
+                    unlisted_installed_plugins,
+                    /*include_installed_only*/ true,
+                )? {
+                    marketplaces.push(marketplace);
+                }
+            }
         }
     }
 
