@@ -69,6 +69,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -95,7 +119,7 @@ jobs:
             binaries: "codex-app-server"
             build_dmg: "false"
 
-    steps: &rust_release_build_steps
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -478,55 +502,6 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
-  build-macos:
-    needs: tag-check
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Release builds can take a long time, so leave some headroom to avoid
-    # having to restart the full workflow due to a timeout.
-    timeout-minutes: 90
-    environment: macos-signing
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      # Preserve the LTO setting from the original combined release build matrix.
-      # Linux ARM is why this currently resolves to thin for every target.
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: primary
-            artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: app-server
-            artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: primary
-            artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: app-server
-            artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-
-    steps: *rust_release_build_steps
-
   build-windows:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
@@ -549,7 +524,6 @@ jobs:
   release:
     needs:
       - build
-      - build-macos
       - build-windows
       - argument-comment-lint-release-assets
       - zsh-release-assets

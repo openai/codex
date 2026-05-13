@@ -846,6 +846,7 @@ pub struct MultiAgentV2Config {
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
+    pub non_code_mode_only: bool,
 }
 
 impl Default for MultiAgentV2Config {
@@ -859,6 +860,7 @@ impl Default for MultiAgentV2Config {
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+            non_code_mode_only: false,
         }
     }
 }
@@ -1995,6 +1997,10 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
         .unwrap_or(default.hide_spawn_agent_metadata);
+    let non_code_mode_only = profile
+        .and_then(|config| config.non_code_mode_only)
+        .or_else(|| base.and_then(|config| config.non_code_mode_only))
+        .unwrap_or(default.non_code_mode_only);
 
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
@@ -2004,6 +2010,7 @@ fn resolve_multi_agent_v2_config(
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
         hide_spawn_agent_metadata,
+        non_code_mode_only,
     }
 }
 

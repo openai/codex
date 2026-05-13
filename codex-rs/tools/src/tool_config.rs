@@ -117,6 +117,7 @@ pub struct ToolsConfig {
     pub collab_tools: bool,
     pub goal_tools: bool,
     pub multi_agent_v2: bool,
+    pub multi_agent_v2_non_code_mode_only: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -257,6 +258,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             goal_tools: include_goal_tools,
             multi_agent_v2: include_multi_agent_v2,
+            multi_agent_v2_non_code_mode_only: false,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -311,6 +313,15 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_multi_agent_v2_non_code_mode_only(
+        mut self,
+        multi_agent_v2_non_code_mode_only: bool,
+    ) -> Self {
+        self.multi_agent_v2_non_code_mode_only =
+            self.multi_agent_v2 && multi_agent_v2_non_code_mode_only;
         self
     }
 

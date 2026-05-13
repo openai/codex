@@ -9656,6 +9656,7 @@ usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
+non_code_mode_only = true
 "#,
     )?;
 
@@ -9683,6 +9684,7 @@ hide_spawn_agent_metadata = true
         Some("Subagent guidance.")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
 }
@@ -9702,6 +9704,7 @@ usage_hint_text = "base hint"
 root_agent_usage_hint_text = "base root hint"
 subagent_usage_hint_text = "base subagent hint"
 hide_spawn_agent_metadata = true
+non_code_mode_only = false
 
 [profiles.no_hint.features.multi_agent_v2]
 max_concurrent_threads_per_session = 6
@@ -9711,6 +9714,7 @@ usage_hint_text = "profile hint"
 root_agent_usage_hint_text = "profile root hint"
 subagent_usage_hint_text = "profile subagent hint"
 hide_spawn_agent_metadata = false
+non_code_mode_only = true
 "#,
     )?;
 
@@ -9736,6 +9740,7 @@ hide_spawn_agent_metadata = false
         Some("profile subagent hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
 }
@@ -9759,6 +9764,7 @@ enabled = true
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
     assert_eq!(config.agent_max_threads, Some(3));
+    assert!(!config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
 }

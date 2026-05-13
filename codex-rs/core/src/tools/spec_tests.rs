@@ -1384,3 +1384,67 @@ async fn code_mode_only_restricts_model_tools_to_exec_tools() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn code_mode_only_can_expose_multi_agent_v2_as_normal_tools() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_multi_agent_v2_non_code_mode_only(/*multi_agent_v2_non_code_mode_only*/ true);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+    );
+    let model_visible_specs = router.model_visible_specs();
+    let tool_names = model_visible_specs
+        .iter()
+        .map(ToolSpec::name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_names,
+        vec![
+            "exec",
+            "wait",
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+        ]
+    );
+
+    let exec = find_tool(&model_visible_specs, "exec");
+    let ToolSpec::Freeform(exec) = exec else {
+        panic!("exec should be a freeform tool");
+    };
+    assert!(!exec.description.contains("spawn_agent"));
+    assert!(!exec.description.contains("wait_agent"));
+
+    let spawn_agent = find_tool(&model_visible_specs, "spawn_agent");
+    let ToolSpec::Function(spawn_agent) = spawn_agent else {
+        panic!("spawn_agent should be a function tool");
+    };
+    assert!(!spawn_agent.description.contains("exec tool declaration"));
+}

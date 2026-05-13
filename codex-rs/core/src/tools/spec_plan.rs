@@ -43,6 +43,7 @@ use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::override_tool_exposure;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
 use codex_extension_api::ExtensionToolExecutor;
@@ -79,9 +80,9 @@ pub fn build_tool_registry_builder(
     let mut deferred_search_infos = Vec::new();
     for handler in &handlers {
         match handler.exposure() {
-            ToolExposure::Direct => {
+            ToolExposure::Direct | ToolExposure::DirectModelOnly => {
                 if let Some(spec) = handler.spec() {
-                    non_deferred_specs.push(spec);
+                    non_deferred_specs.push((spec, handler.exposure()));
                 }
             }
             ToolExposure::Deferred => {
@@ -97,21 +98,27 @@ pub fn build_tool_registry_builder(
         web_search_config: config.web_search_config.as_ref(),
         web_search_tool_type: config.web_search_tool_type,
     }) {
-        non_deferred_specs.push(web_search_tool);
+        non_deferred_specs.push((web_search_tool, ToolExposure::Direct));
     }
     if config.image_gen_tool {
-        non_deferred_specs.push(create_image_generation_tool("png"));
+        non_deferred_specs.push((create_image_generation_tool("png"), ToolExposure::Direct));
     }
+
+    let non_deferred_specs = non_deferred_specs
+        .into_iter()
+        .map(|(spec, exposure)| {
+            if config.code_mode_enabled && exposure != ToolExposure::DirectModelOnly {
+                codex_tools::augment_tool_spec_for_code_mode(spec)
+            } else {
+                spec
+            }
+        })
+        .collect();
 
     for spec in merge_into_namespaces(non_deferred_specs) {
         if !config.namespace_tools && matches!(spec, ToolSpec::Namespace(_)) {
             continue;
         }
-        let spec = if config.code_mode_enabled {
-            codex_tools::augment_tool_spec_for_code_mode(spec)
-        } else {
-            spec
-        };
         builder.push_spec(spec);
     }
 
@@ -142,7 +149,14 @@ fn build_code_mode_handlers(
 
     let mut code_mode_nested_tool_specs = handlers
         .iter()
-        .filter_map(|handler| handler.spec())
+        .filter_map(|handler| {
+            if handler.exposure() == ToolExposure::DirectModelOnly {
+                return None;
+            }
+
+            let spec = handler.spec()?;
+            Some(spec)
+        })
         .collect::<Vec<_>>();
     code_mode_nested_tool_specs.extend(
         extension_tool_executors
@@ -344,23 +358,32 @@ fn collect_handler_tools(
 
     if config.collab_tools {
         if config.multi_agent_v2 {
+            let exposure = if config.multi_agent_v2_non_code_mode_only {
+                ToolExposure::DirectModelOnly
+            } else {
+                ToolExposure::Direct
+            };
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            handlers.push(Arc::new(SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            handlers.push(Arc::new(SendMessageHandlerV2));
-            handlers.push(Arc::new(FollowupTaskHandlerV2));
-            handlers.push(Arc::new(WaitAgentHandlerV2::new(
-                params.wait_agent_timeouts,
-            )));
-            handlers.push(Arc::new(CloseAgentHandlerV2));
-            handlers.push(Arc::new(ListAgentsHandlerV2));
+            handlers.push(multi_agent_v2_handler(
+                SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                    available_models: config.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
+                }),
+                exposure,
+            ));
+            handlers.push(multi_agent_v2_handler(SendMessageHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(FollowupTaskHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(
+                WaitAgentHandlerV2::new(params.wait_agent_timeouts),
+                exposure,
+            ));
+            handlers.push(multi_agent_v2_handler(CloseAgentHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(ListAgentsHandlerV2, exposure));
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
@@ -414,6 +437,13 @@ fn collect_handler_tools(
     }
 
     handlers
+}
+
+fn multi_agent_v2_handler(
+    handler: impl RegisteredTool + 'static,
+    exposure: ToolExposure,
+) -> Arc<dyn RegisteredTool> {
+    override_tool_exposure(Arc::new(handler), exposure)
 }
 
 fn compare_code_mode_tools(
