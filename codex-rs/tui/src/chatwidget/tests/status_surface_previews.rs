@@ -164,19 +164,26 @@ async fn status_surface_preview_lines_mixed_snapshot() {
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
 
-    let snapshot = combined_preview_snapshot(
+    let status_line = status_preview_line(
         &mut chat,
         &[
             StatusLineItem::ProjectRoot,
             StatusLineItem::GitBranch,
             StatusLineItem::ThreadTitle,
         ],
+    );
+    chat.status_line_project_root_name_cache = None;
+    let terminal_title = title_preview_line(
+        &mut chat,
         &[
             TerminalTitleItem::Project,
             TerminalTitleItem::Thread,
             TerminalTitleItem::TaskProgress,
         ],
     );
+    let snapshot = normalize_snapshot_paths(format!(
+        "status line: {status_line}\nterminal title: {terminal_title}"
+    ));
 
     assert_chatwidget_snapshot!("status_surface_previews_mixed", snapshot);
 }
