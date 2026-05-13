@@ -354,6 +354,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
@@ -430,6 +432,11 @@ use uuid::Uuid;
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
 
+struct ResolvedPermissionProfileSelection {
+    permission_profile: PermissionProfile,
+    active_permission_profile: ActivePermissionProfile,
+}
+
 mod account_processor;
 mod apps_processor;
 mod catalog_processor;
@@ -441,6 +448,7 @@ mod feedback_processor;
 mod fs_processor;
 mod git_processor;
 mod initialize_processor;
+mod legacy_sandbox_compat;
 mod marketplace_processor;
 mod mcp_processor;
 mod plugins;

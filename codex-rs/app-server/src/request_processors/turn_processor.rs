@@ -1,3 +1,4 @@
+use super::legacy_sandbox_compat::*;
 use super::*;
 
 #[derive(Clone)]
@@ -376,48 +377,72 @@ impl TurnRequestProcessor {
         }
 
         let cwd = params.cwd;
-        let workspace_roots = params.workspace_roots;
+        let mut workspace_roots = params.workspace_roots;
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
             .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
+        let legacy_sandbox_policy = params.sandbox_policy;
+        let sandbox_policy = None;
         let (permission_profile, active_permission_profile) =
             if let Some(permissions) = params.permissions {
                 let snapshot = thread.config_snapshot().await;
-                let mut overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
-                let config = self
-                    .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
+                let selection = self
+                    .validate_active_permission_profile_selection(
+                        permissions,
+                        cwd.clone(),
                         Some(snapshot.cwd.to_path_buf()),
                     )
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
-                // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn request
-                // is different: reject it before accepting user input.
-                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
-                    warning.contains("Configured value for `permission_profile` is disallowed")
-                }) {
-                    return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
-                    )));
-                }
+                    .await?;
                 (
-                    Some(config.permissions.permission_profile()),
-                    config.permissions.active_permission_profile(),
+                    Some(selection.permission_profile),
+                    Some(selection.active_permission_profile),
                 )
+            } else if let Some(legacy_sandbox_policy) = legacy_sandbox_policy.as_ref() {
+                let snapshot = thread.config_snapshot().await;
+                let effective_cwd = resolve_cwd_against_fallback(cwd.as_deref(), &snapshot.cwd);
+                match resolve_legacy_sandbox_profile_selection(
+                    legacy_sandbox_policy,
+                    Some(CurrentPermissionProfile {
+                        permission_profile: &snapshot.permission_profile,
+                        workspace_roots: &snapshot.workspace_roots,
+                    }),
+                    &effective_cwd,
+                    workspace_roots.as_deref(),
+                    "sandboxPolicy",
+                )? {
+                    LegacySandboxResolution::Noop {
+                        workspace_roots: legacy_workspace_roots,
+                    } => {
+                        if workspace_roots.is_none() {
+                            workspace_roots = legacy_workspace_roots;
+                        }
+                        (None, None)
+                    }
+                    LegacySandboxResolution::Selection(legacy_selection) => {
+                        if workspace_roots.is_none() {
+                            workspace_roots = legacy_selection.workspace_roots.clone();
+                        }
+                        let selection = self
+                            .validate_active_permission_profile_selection(
+                                legacy_selection.permissions.clone(),
+                                cwd.clone(),
+                                Some(snapshot.cwd.to_path_buf()),
+                            )
+                            .await?;
+                        validate_legacy_sandbox_profile_selection(
+                            &legacy_selection,
+                            &selection,
+                            &effective_cwd,
+                            workspace_roots.as_deref(),
+                            "sandboxPolicy",
+                        )?;
+                        (
+                            Some(selection.permission_profile),
+                            Some(selection.active_permission_profile),
+                        )
+                    }
+                }
             } else {
                 (None, None)
             };
@@ -520,6 +545,49 @@ impl TurnRequestProcessor {
         };
 
         Ok(TurnStartResponse { turn })
+    }
+
+    async fn validate_active_permission_profile_selection(
+        &self,
+        permissions: String,
+        cwd: Option<PathBuf>,
+        fallback_cwd: Option<PathBuf>,
+    ) -> Result<ResolvedPermissionProfileSelection, JSONRPCErrorError> {
+        let mut overrides = ConfigOverrides {
+            cwd,
+            codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+            ..Default::default()
+        };
+        apply_permission_profile_selection_to_config_overrides(&mut overrides, Some(permissions));
+        let config = self
+            .config_manager
+            .load_for_cwd(/*request_overrides*/ None, overrides, fallback_cwd)
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        // Startup config is allowed to fall back when requirements disallow a
+        // configured profile. An explicit turn request is different: reject it
+        // before accepting user input.
+        if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+            warning.contains("Configured value for `permission_profile` is disallowed")
+        }) {
+            return Err(invalid_request(format!(
+                "invalid turn context override: {warning}"
+            )));
+        }
+        let active_permission_profile =
+            config
+                .permissions
+                .active_permission_profile()
+                .ok_or_else(|| {
+                    invalid_request(
+                        "permission profile selection did not resolve to a named profile",
+                    )
+                })?;
+        Ok(ResolvedPermissionProfileSelection {
+            permission_profile: config.permissions.permission_profile(),
+            active_permission_profile,
+        })
     }
 
     async fn thread_inject_items_response_inner(
