@@ -232,31 +232,31 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "windows", ignore = "empty PTY startup hangs on windows")]
 async fn startup_failure_emits_begin_then_failed_end() {
     let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
         Arc::clone(&turn),
-        "call-unified-empty".to_string(),
+        "call-unified-startup-failure".to_string(),
     );
     let process_id = session
         .services
         .unified_exec_manager
         .allocate_process_id()
         .await;
+    let invalid_remote = Arc::new(
+        codex_exec_server::Environment::create_for_tests(Some("not-a-websocket-url".to_string()))
+            .expect("remote test environment"),
+    );
     let request = ExecCommandRequest {
-        command: Vec::new(),
+        command: vec!["echo".to_string(), "hello".to_string()],
         hook_command: String::new(),
         process_id,
         yield_time_ms: 1000,
         max_output_tokens: None,
         cwd: turn.cwd.clone(),
         sandbox_cwd: turn.cwd.clone(),
-        environment: turn
-            .environments
-            .primary_environment()
-            .expect("primary environment"),
+        environment: invalid_remote,
         network: None,
         tty: true,
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
@@ -271,11 +271,8 @@ async fn startup_failure_emits_begin_then_failed_end() {
         .unified_exec_manager
         .exec_command(request, &context)
         .await
-        .expect_err("empty unified exec command should fail");
-    assert!(
-        err.to_string().contains("missing command line for PTY"),
-        "unexpected startup error: {err}"
-    );
+        .expect_err("unreachable remote exec-server should fail startup");
+    assert!(matches!(err, UnifiedExecError::CreateProcess { .. }));
 
     let begin_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
         .await
@@ -284,7 +281,7 @@ async fn startup_failure_emits_begin_then_failed_end() {
     let codex_protocol::protocol::EventMsg::ExecCommandBegin(begin_event) = begin_event.msg else {
         panic!("expected ExecCommandBegin event");
     };
-    assert_eq!(begin_event.call_id, "call-unified-empty");
+    assert_eq!(begin_event.call_id, "call-unified-startup-failure");
 
     let end_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
         .await
@@ -293,7 +290,7 @@ async fn startup_failure_emits_begin_then_failed_end() {
     let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = end_event.msg else {
         panic!("expected ExecCommandEnd event");
     };
-    assert_eq!(end_event.call_id, "call-unified-empty");
+    assert_eq!(end_event.call_id, "call-unified-startup-failure");
     assert_eq!(
         end_event.status,
         codex_protocol::protocol::ExecCommandStatus::Failed
