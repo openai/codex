@@ -26,11 +26,12 @@ pub(super) async fn test_config() -> Config {
 }
 
 pub(super) fn test_project_path() -> PathBuf {
-    let project = tempfile::Builder::new()
-        .rand_bytes("project".len())
+    let isolated_root = tempfile::Builder::new()
+        .prefix("chatwidget-project-")
         .tempdir_in(std::env::temp_dir())
         .expect("tempdir")
         .keep();
+    let project = isolated_root.join("project");
     std::fs::create_dir_all(project.join(".git")).expect("create test project git marker");
     isolated_test_project_paths()
         .lock()
@@ -89,12 +90,7 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
 }
 
 pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
-    let platform_test_cwd = test_path_display("/tmp/project");
     let rendered = format!("{value}");
-
-    if platform_test_cwd == "/tmp/project" {
-        return normalize_snapshot_paths(rendered);
-    }
 
     rendered
         .lines()
