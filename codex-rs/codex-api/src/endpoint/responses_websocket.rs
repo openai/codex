@@ -35,6 +35,7 @@ use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::debug;
@@ -326,6 +327,31 @@ pub struct ResponsesWebsocketClient {
     auth: SharedAuthProvider,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponsesWebsocketClose {
+    /// WebSocket close code returned by the server.
+    pub code: String,
+    /// Human-readable close reason returned by the server.
+    pub reason: String,
+}
+
+/// Result of a handshake-only Responses WebSocket probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponsesWebsocketProbe {
+    /// Redacted by callers before displaying or serializing support reports.
+    pub url: String,
+    /// HTTP status returned by the successful WebSocket upgrade.
+    pub status: StatusCode,
+    /// Whether the server reported reasoning support in the upgrade response.
+    pub reasoning_included: bool,
+    /// Whether the server returned a model catalog ETag in the upgrade response.
+    pub models_etag_present: bool,
+    /// Whether the server returned a server-selected model in the upgrade response.
+    pub server_model_present: bool,
+    /// Close frame received immediately after upgrade, when one arrives quickly.
+    pub immediate_close: Option<ResponsesWebsocketClose>,
+}
+
 impl ResponsesWebsocketClient {
     pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self {
         Self { provider, auth }
@@ -353,7 +379,7 @@ impl ResponsesWebsocketClient {
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         self.auth.add_auth_headers(&mut headers);
 
-        let (stream, server_reasoning_included, models_etag, server_model) =
+        let (stream, _status, server_reasoning_included, models_etag, server_model) =
             connect_websocket(ws_url, headers, turn_state.clone()).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
@@ -363,6 +389,57 @@ impl ResponsesWebsocketClient {
             server_model,
             telemetry,
         ))
+    }
+
+    pub async fn probe_handshake(
+        &self,
+        extra_headers: HeaderMap,
+        default_headers: HeaderMap,
+        immediate_close_timeout: Duration,
+    ) -> Result<ResponsesWebsocketProbe, ApiError> {
+        let ws_url = self
+            .provider
+            .websocket_url_for_path("responses")
+            .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+
+        let mut headers =
+            merge_request_headers(&self.provider.headers, extra_headers, default_headers);
+        self.auth.add_auth_headers(&mut headers);
+
+        let (mut stream, status, reasoning_included, models_etag, server_model) =
+            connect_websocket(ws_url.clone(), headers, /*turn_state*/ None).await?;
+        let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
+            .await
+            .ok()
+            .flatten()
+            .transpose()
+            .map_err(|err| {
+                ApiError::Stream(format!("failed to read websocket probe event: {err}"))
+            })?
+            .and_then(immediate_close_from_message);
+
+        Ok(ResponsesWebsocketProbe {
+            url: ws_url.to_string(),
+            status,
+            reasoning_included,
+            models_etag_present: models_etag.is_some(),
+            server_model_present: server_model.is_some(),
+            immediate_close,
+        })
+    }
+}
+
+fn immediate_close_from_message(message: Message) -> Option<ResponsesWebsocketClose> {
+    let Message::Close(frame) = message else {
+        return None;
+    };
+    frame.map(close_frame_to_probe)
+}
+
+fn close_frame_to_probe(frame: CloseFrame) -> ResponsesWebsocketClose {
+    ResponsesWebsocketClose {
+        code: frame.code.to_string(),
+        reason: frame.reason.to_string(),
     }
 }
 
@@ -385,7 +462,7 @@ async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
-) -> Result<(WsStream, bool, Option<String>, Option<String>), ApiError> {
+) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
@@ -445,6 +522,7 @@ async fn connect_websocket(
     }
     Ok((
         WsStream::new(stream),
+        response.status(),
         reasoning_included,
         models_etag,
         server_model,

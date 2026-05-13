@@ -17,14 +17,18 @@ use std::ffi::OsStr;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
 use clap::Parser;
+use codex_api::ApiError;
+use codex_api::ResponsesWebsocketClient;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -34,11 +38,15 @@ use codex_core::config::find_codex_home;
 use codex_install_context::InstallContext;
 use codex_install_context::StandalonePlatform;
 use codex_login::AuthDotJson;
+use codex_login::AuthManager;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
+use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::default_headers;
 use codex_login::load_auth_dot_json;
+use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::AskForApproval;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
@@ -46,6 +54,8 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_tui::Cli as TuiCli;
 use codex_utils_cli::CliConfigOverrides;
+use http::HeaderMap;
+use http::HeaderValue;
 use serde::Serialize;
 use supports_color::Stream;
 
@@ -61,6 +71,20 @@ use output::render_human_report;
 use runtime::runtime_check;
 use runtime::search_check;
 use updates::updates_check;
+
+const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+const WEBSOCKET_IMMEDIATE_CLOSE_GRACE: Duration = Duration::from_millis(250);
+const PROXY_ENV_VARS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+];
 
 /// Options for building a local Codex diagnostic report.
 ///
@@ -206,10 +230,16 @@ async fn build_report(
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
     match &config_result {
         Ok(config) => {
+            let auth_manager =
+                AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
             checks.push(timed_check(|| config_check(config)));
             checks.push(timed_check(|| auth_check(config)));
             checks.push(timed_check(|| updates_check(config)));
             checks.push(timed_check(network_check));
+            checks.push(
+                timed_check_async(|| websocket_reachability_check(config, Some(auth_manager)))
+                    .await,
+            );
             checks.push(timed_check_async(|| mcp_check(config)).await);
             checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
             checks.push(timed_check(terminal_check));
@@ -884,28 +914,7 @@ fn stored_auth_issues(
 
 fn network_check() -> DoctorCheck {
     let mut details = Vec::new();
-    let proxy_vars = [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-    ];
-    let present_proxy_vars = proxy_vars
-        .into_iter()
-        .filter(|name| env_var_present(name))
-        .collect::<Vec<_>>();
-    if present_proxy_vars.is_empty() {
-        details.push("proxy env vars: none".to_string());
-    } else {
-        details.push(format!(
-            "proxy env vars present: {}",
-            present_proxy_vars.join(", ")
-        ));
-    }
+    push_proxy_env_details(&mut details);
 
     let mut status = CheckStatus::Ok;
     let mut summary = "network-related environment looks readable".to_string();
@@ -937,6 +946,22 @@ fn network_check() -> DoctorCheck {
     }
 
     DoctorCheck::new("network.env", "network", status, summary).details(details)
+}
+
+fn push_proxy_env_details(details: &mut Vec<String>) {
+    let present_proxy_vars = PROXY_ENV_VARS
+        .iter()
+        .copied()
+        .filter(|name| env_var_present(name))
+        .collect::<Vec<_>>();
+    if present_proxy_vars.is_empty() {
+        details.push("proxy env vars: none".to_string());
+    } else {
+        details.push(format!(
+            "proxy env vars present: {}",
+            present_proxy_vars.join(", ")
+        ));
+    }
 }
 
 fn read_probe_file(path: &Path) -> std::io::Result<()> {
@@ -1202,6 +1227,212 @@ fn state_check(config: &Config) -> DoctorCheck {
         "state paths are inspectable",
     )
     .details(details)
+}
+
+async fn websocket_reachability_check(
+    config: &Config,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> DoctorCheck {
+    let provider = &config.model_provider;
+    let mut details = vec![
+        format!("model provider: {}", config.model_provider_id),
+        format!("provider name: {}", provider.name),
+        format!("wire API: {}", provider.wire_api),
+        format!("supports websockets: {}", provider.supports_websockets),
+    ];
+    push_proxy_env_details(&mut details);
+
+    if !provider.supports_websockets {
+        return DoctorCheck::new(
+            "network.websocket_reachability",
+            "websocket",
+            CheckStatus::Ok,
+            "Responses WebSocket is not enabled for the active provider",
+        )
+        .details(details);
+    }
+
+    details.push(format!(
+        "connect timeout: {} ms",
+        provider.websocket_connect_timeout().as_millis()
+    ));
+
+    let runtime_provider = create_model_provider(provider.clone(), auth_manager);
+    let auth = runtime_provider.auth().await;
+    details.push(format!(
+        "auth mode: {}",
+        auth.as_ref().map(auth_mode_name).unwrap_or("none")
+    ));
+
+    let api_provider = match runtime_provider.api_provider().await {
+        Ok(api_provider) => api_provider,
+        Err(err) => {
+            return websocket_probe_warning(
+                "Responses WebSocket provider setup failed",
+                details,
+                format!("provider setup failed: {err}"),
+            );
+        }
+    };
+    match api_provider.websocket_url_for_path("responses") {
+        Ok(url) => {
+            details.push(format!("endpoint: {url}"));
+            if let Some(host) = url.host_str()
+                && let Some(port) = url.port_or_known_default()
+            {
+                details.extend(dns_address_family_details(host, port).await);
+            }
+        }
+        Err(err) => {
+            return websocket_probe_warning(
+                "Responses WebSocket endpoint could not be built",
+                details,
+                format!("endpoint build failed: {err}"),
+            );
+        }
+    }
+
+    let api_auth = match runtime_provider.api_auth().await {
+        Ok(api_auth) => api_auth,
+        Err(err) => {
+            return websocket_probe_warning(
+                "Responses WebSocket auth could not be resolved",
+                details,
+                format!("auth resolution failed: {err}"),
+            );
+        }
+    };
+
+    let mut extra_headers = HeaderMap::new();
+    extra_headers.insert(
+        OPENAI_BETA_HEADER,
+        HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
+    );
+    let client = ResponsesWebsocketClient::new(api_provider, api_auth);
+    match tokio::time::timeout(
+        provider.websocket_connect_timeout(),
+        client.probe_handshake(
+            extra_headers,
+            default_headers(),
+            WEBSOCKET_IMMEDIATE_CLOSE_GRACE,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(probe)) => {
+            details.push(format!("handshake status: {}", probe.status));
+            details.push(format!("reasoning header: {}", probe.reasoning_included));
+            details.push(format!(
+                "models etag present: {}",
+                probe.models_etag_present
+            ));
+            details.push(format!(
+                "server model present: {}",
+                probe.server_model_present
+            ));
+            if let Some(close) = probe.immediate_close {
+                details.push(format!("immediate close code: {}", close.code));
+                details.push(format!("immediate close reason: {}", close.reason));
+                return DoctorCheck::new(
+                    "network.websocket_reachability",
+                    "websocket",
+                    CheckStatus::Warning,
+                    "Responses WebSocket closed immediately after handshake",
+                )
+                .details(details)
+                .remediation(
+                    "Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.",
+                );
+            }
+            DoctorCheck::new(
+                "network.websocket_reachability",
+                "websocket",
+                CheckStatus::Ok,
+                "Responses WebSocket handshake succeeded",
+            )
+            .details(details)
+        }
+        Ok(Err(err)) => websocket_probe_warning(
+            "Responses WebSocket failed; HTTPS fallback may still work",
+            details,
+            websocket_error_detail(&err),
+        ),
+        Err(_) => websocket_probe_warning(
+            "Responses WebSocket timed out; HTTPS fallback may still work",
+            details,
+            "handshake timed out".to_string(),
+        ),
+    }
+}
+
+fn websocket_probe_warning(
+    summary: &'static str,
+    mut details: Vec<String>,
+    error_detail: String,
+) -> DoctorCheck {
+    details.push(error_detail);
+    DoctorCheck::new(
+        "network.websocket_reachability",
+        "websocket",
+        CheckStatus::Warning,
+        summary,
+    )
+    .details(details)
+    .remediation("Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.")
+}
+
+fn websocket_error_detail(err: &ApiError) -> String {
+    match err {
+        ApiError::Transport(transport) => format!("handshake transport error: {transport}"),
+        ApiError::Api { status, message } => {
+            format!("handshake API error: {status} {message}")
+        }
+        ApiError::Stream(message) => format!("handshake stream error: {message}"),
+        ApiError::ContextWindowExceeded
+        | ApiError::QuotaExceeded
+        | ApiError::UsageNotIncluded
+        | ApiError::Retryable { .. }
+        | ApiError::RateLimit(_)
+        | ApiError::InvalidRequest { .. }
+        | ApiError::CyberPolicy { .. }
+        | ApiError::ServerOverloaded => format!("handshake error: {err}"),
+    }
+}
+
+fn auth_mode_name(auth: &CodexAuth) -> &'static str {
+    match auth.auth_mode() {
+        codex_app_server_protocol::AuthMode::ApiKey => "api_key",
+        codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
+        codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
+        codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+    }
+}
+
+async fn dns_address_family_details(host: &str, port: u16) -> Vec<String> {
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addresses) => {
+            let addresses = addresses.collect::<Vec<_>>();
+            let ipv4_count = addresses
+                .iter()
+                .filter(|address| matches!(address.ip(), IpAddr::V4(_)))
+                .count();
+            let ipv6_count = addresses
+                .iter()
+                .filter(|address| matches!(address.ip(), IpAddr::V6(_)))
+                .count();
+            let first_family = addresses
+                .first()
+                .map(|address| match address.ip() {
+                    IpAddr::V4(_) => "IPv4",
+                    IpAddr::V6(_) => "IPv6",
+                })
+                .unwrap_or("none");
+            vec![format!(
+                "DNS: {ipv4_count} IPv4, {ipv6_count} IPv6, first {first_family}"
+            )]
+        }
+        Err(err) => vec![format!("DNS: lookup failed ({err})")],
+    }
 }
 
 fn fallback_state_check() -> DoctorCheck {

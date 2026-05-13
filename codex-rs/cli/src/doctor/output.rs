@@ -31,7 +31,7 @@ const GROUPS: &[OutputGroup] = &[
     },
     OutputGroup {
         title: "Connectivity",
-        keys: &["network", "reachability"],
+        keys: &["network", "websocket", "reachability"],
     },
     OutputGroup {
         title: "Background Server",
@@ -505,6 +505,12 @@ mod tests {
                 "network environment readable",
             ),
             DoctorCheck::new(
+                "network.websocket_reachability",
+                "websocket",
+                CheckStatus::Ok,
+                "Responses WebSocket handshake succeeded",
+            ),
+            DoctorCheck::new(
                 "app_server.status",
                 "app-server",
                 CheckStatus::Ok,
@@ -547,13 +553,14 @@ Updates
 
 Connectivity
   ✓ network      network environment readable
+  ✓ websocket    Responses WebSocket handshake succeeded
   ✓ reachability OpenAI endpoints are reachable over HTTP
 
 Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────
-8 ok · 1 warn · 1 fail failed
+9 ok · 1 warn · 1 fail failed
 
 --json redacted support report
 Still having issues? Run codex doctor --verbose for more details.
@@ -590,13 +597,14 @@ Updates
 
 Connectivity
   [ok] network      network environment readable
+  [ok] websocket    Responses WebSocket handshake succeeded
   [ok] reachability OpenAI endpoints are reachable over HTTP
 
 Background Server
   [ok] app-server   background server is not running
 
 {}
-8 ok | 1 warn | 1 fail failed
+9 ok | 1 warn | 1 fail failed
 
 --json redacted support report
 Still having issues? Run codex doctor --verbose for more details.
