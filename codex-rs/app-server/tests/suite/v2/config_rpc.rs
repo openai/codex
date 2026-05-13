@@ -14,6 +14,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
@@ -162,7 +163,7 @@ allowed_domains = ["example.com"]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_normalizes_legacy_forced_chatgpt_workspace_id() -> Result<()> {
+async fn config_read_accepts_legacy_forced_chatgpt_workspace_id() -> Result<()> {
     const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
     let codex_home = TempDir::new()?;
@@ -193,7 +194,49 @@ forced_chatgpt_workspace_id = "{WORKSPACE_ID}"
 
     assert_eq!(
         config.forced_chatgpt_workspace_id,
-        Some(vec![WORKSPACE_ID.to_string()])
+        Some(ForcedChatgptWorkspaceIds::Single(WORKSPACE_ID.to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_forced_chatgpt_workspace_id_list() -> Result<()> {
+    const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            WORKSPACE_ID_A.to_string(),
+            WORKSPACE_ID_B.to_string(),
+        ]))
     );
 
     Ok(())

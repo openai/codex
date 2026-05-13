@@ -27,6 +27,7 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
+use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
@@ -100,6 +101,13 @@ impl ForcedChatgptWorkspaceIds {
         match self {
             Self::Single(value) => vec![value],
             Self::Multiple(values) => values,
+        }
+    }
+
+    pub fn into_api(self) -> ApiForcedChatgptWorkspaceIds {
+        match self {
+            Self::Single(value) => ApiForcedChatgptWorkspaceIds::Single(value),
+            Self::Multiple(values) => ApiForcedChatgptWorkspaceIds::Multiple(values),
         }
     }
 }
@@ -553,7 +561,7 @@ impl From<ConfigToml> for UserSavedConfig {
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml
                 .forced_chatgpt_workspace_id
-                .map(ForcedChatgptWorkspaceIds::into_vec),
+                .map(ForcedChatgptWorkspaceIds::into_api),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,

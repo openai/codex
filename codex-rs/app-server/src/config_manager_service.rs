@@ -17,7 +17,6 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
-use codex_config::config_toml::ForcedChatgptWorkspaceIds;
 use codex_config::merge_toml_values;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
@@ -127,16 +126,9 @@ impl ConfigManager {
 
         let effective = layers.effective_config();
 
-        let mut effective_config_toml: ConfigToml = effective
+        let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
-        // The API always returns the normalized list shape, even though config.toml
-        // still accepts the legacy single-string workspace form.
-        if let Some(workspace_ids) = effective_config_toml.forced_chatgpt_workspace_id.take() {
-            effective_config_toml.forced_chatgpt_workspace_id = Some(
-                ForcedChatgptWorkspaceIds::Multiple(workspace_ids.into_vec()),
-            );
-        }
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
