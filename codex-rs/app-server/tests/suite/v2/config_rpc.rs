@@ -101,9 +101,6 @@ model = "gpt-user"
 [tools.web_search]
 context_size = "low"
 allowed_domains = ["example.com"]
-
-[tools]
-view_image = false
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -138,7 +135,6 @@ view_image = false
                 allowed_domains: Some(vec!["example.com".to_string()]),
                 location: None,
             }),
-            view_image: Some(false),
         }
     );
     assert_eq!(
@@ -159,13 +155,6 @@ view_image = false
             file: user_file.clone(),
         }
     );
-    assert_eq!(
-        origins.get("tools.view_image").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        }
-    );
-
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
 

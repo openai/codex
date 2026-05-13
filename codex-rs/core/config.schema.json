@@ -685,9 +685,6 @@
         "tools": {
           "$ref": "#/definitions/ToolsToml"
         },
-        "tools_view_image": {
-          "type": "boolean"
-        },
         "tui": {
           "allOf": [
             {
@@ -2501,11 +2498,6 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
-        "view_image": {
-          "default": null,
-          "description": "Enable the `view_image` tool that lets the agent attach local images.",
-          "type": "boolean"
-        },
         "web_search": {
           "allOf": [
             {

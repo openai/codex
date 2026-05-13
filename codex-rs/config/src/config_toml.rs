@@ -606,10 +606,6 @@ pub struct ToolsToml {
         deserialize_with = "deserialize_optional_web_search_tool_config"
     )]
     pub web_search: Option<WebSearchToolConfig>,
-
-    /// Enable the `view_image` tool that lets the agent attach local images.
-    #[serde(default)]
-    pub view_image: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -687,7 +683,6 @@ impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
             web_search: tools_toml.web_search.is_some().then_some(true),
-            view_image: tools_toml.view_image,
         }
     }
 }

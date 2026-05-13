@@ -376,13 +376,7 @@ web_search = true
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(
-        cfg.tools,
-        Some(ToolsToml {
-            web_search: None,
-            view_image: None,
-        })
-    );
+    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
 }
 
 #[test]
@@ -395,13 +389,7 @@ web_search = false
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(
-        cfg.tools,
-        Some(ToolsToml {
-            web_search: None,
-            view_image: None,
-        })
-    );
+    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
 }
 
 #[test]

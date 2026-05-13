@@ -120,7 +120,6 @@ pub struct SandboxWorkspaceWrite {
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
-    pub view_image: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
