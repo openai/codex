@@ -617,7 +617,9 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
     }
 }
 
-async fn shutdown_runtime_services(sess: &Arc<Session>) {
+async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager
         .terminate_all_processes()
@@ -641,9 +643,7 @@ fn emit_thread_stop_lifecycle(sess: &Session) {
 }
 
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    let _ = sess.conversation.shutdown().await;
-    shutdown_runtime_services(sess).await;
+    shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
     let turn_count = history
@@ -910,7 +910,7 @@ pub(super) async fn submission_loop(
     // If the submission loop exits because the channel closed without an
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
-        shutdown_runtime_services(&sess).await;
+        shutdown_session_runtime(&sess).await;
         emit_thread_stop_lifecycle(sess.as_ref());
     }
     debug!("Agent loop exited");

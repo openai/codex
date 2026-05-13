@@ -5241,6 +5241,72 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
 }
 
 #[tokio::test]
+async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lifecycle() {
+    struct LifecycleRecorder {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        expected_thread_id: ThreadId,
+        expected_turn_id: String,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(self.expected_thread_id, input.thread_id);
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("thread_stop");
+        }
+    }
+
+    impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
+        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+            assert_eq!(self.expected_thread_id, input.thread_id);
+            assert_eq!(self.expected_turn_id, input.turn_id);
+            assert_eq!(TurnAbortReason::Interrupted, input.reason);
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push("turn_abort");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::new(LifecycleRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+        expected_turn_id: turn_context.sub_id.clone(),
+    });
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(recorder.clone());
+    builder.turn_lifecycle_contributor(recorder);
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(
+            Arc::new(turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    submission_loop(Arc::clone(&session), session.get_config().await, rx_sub).await;
+
+    assert_eq!(
+        vec!["turn_abort", "thread_stop"],
+        *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
