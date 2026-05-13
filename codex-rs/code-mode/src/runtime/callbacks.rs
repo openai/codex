@@ -42,20 +42,16 @@ pub(super) fn tool_callback(
     let promise = resolver.get_promise(scope);
 
     let resolver = v8::Global::new(scope, resolver);
-    let tool_name = {
+    let (tool_name, tool_kind) = {
         let Some(state) = scope.get_slot::<RuntimeState>() else {
             throw_type_error(scope, "runtime state unavailable");
             return;
         };
-        let Some(tool_name) = state
-            .enabled_tools
-            .get(tool_index)
-            .map(|tool| tool.tool_name.clone())
-        else {
+        let Some(tool) = state.enabled_tools.get(tool_index) else {
             throw_type_error(scope, "tool callback data is out of range");
             return;
         };
-        tool_name
+        (tool.tool_name.clone(), tool.kind)
     };
 
     let Some(state) = scope.get_slot_mut::<RuntimeState>() else {
@@ -69,6 +65,7 @@ pub(super) fn tool_callback(
     let _ = event_tx.send(RuntimeEvent::ToolCall {
         id,
         name: tool_name,
+        kind: tool_kind,
         input,
     });
     retval.set(promise.into());

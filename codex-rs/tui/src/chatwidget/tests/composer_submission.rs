@@ -7,6 +7,7 @@ use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use pretty_assertions::assert_eq;
+use std::collections::VecDeque;
 
 #[tokio::test]
 async fn submission_preserves_text_elements_and_local_images() {

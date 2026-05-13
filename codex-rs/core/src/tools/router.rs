@@ -9,13 +9,13 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
+use codex_extension_api::ExtensionToolExecutor;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -37,16 +37,14 @@ pub struct ToolCall {
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    specs: Vec<ToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
-    pub(crate) extension_tool_bundles: Vec<ExtensionToolBundle>,
+    pub(crate) extension_tool_executors: Vec<Arc<dyn ExtensionToolExecutor>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
@@ -55,18 +53,16 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
-            extension_tool_bundles,
+            extension_tool_executors,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
-            &extension_tool_bundles,
+            &extension_tool_executors,
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
@@ -90,42 +86,12 @@ impl ToolRouter {
 
         Self {
             registry,
-            specs,
             model_visible_specs,
         }
     }
 
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.specs.clone()
-    }
-
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
-    }
-
-    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        self.specs.iter().find_map(|spec| match spec {
-            ToolSpec::Function(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Freeform(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool)
-                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
-                        && tool.name == tool_name.name =>
-                {
-                    Some(ToolSpec::Function(tool.clone()))
-                }
-                _ => None,
-            }),
-            _ => None,
-        })
     }
 
     pub(crate) fn create_diff_consumer(
@@ -251,7 +217,7 @@ impl ToolRouter {
     }
 }
 
-pub(crate) fn extension_tool_bundles(session: &Session) -> Vec<ExtensionToolBundle> {
+pub(crate) fn extension_tool_executors(session: &Session) -> Vec<Arc<dyn ExtensionToolExecutor>> {
     session
         .services
         .extensions

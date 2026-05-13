@@ -1,15 +1,20 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
-use codex_tool_api::ToolBundle;
+use codex_protocol::protocol::ReviewDecision;
 
 use crate::ExtensionData;
 
 mod prompt;
+mod tools;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use tools::ExtensionToolExecutor;
+pub use tools::ExtensionToolFuture;
+pub use tools::ExtensionToolOutput;
 
 /// Contributor that receives the live thread id and host-owned thread-start
 /// input before later contributors read from extension stores.
@@ -35,8 +40,25 @@ pub trait ContextContributor: Send + Sync {
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
     /// Returns the native tools visible for the supplied extension stores.
-    fn tools(&self, session_store: &ExtensionData, thread_store: &ExtensionData)
-    -> Vec<ToolBundle>;
+    fn tools(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ExtensionToolExecutor>>;
+}
+
+/// Future returned by one claimed approval-review contribution.
+pub type ApprovalReviewFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = ReviewDecision> + Send + 'a>>;
+
+/// Extension contribution that can claim rendered approval-review prompts.
+pub trait ApprovalReviewContributor: Send + Sync {
+    fn contribute<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> Option<ApprovalReviewFuture<'a>>;
 }
 
 /// Future returned by one ordered turn-item contribution.
@@ -55,16 +77,4 @@ pub trait TurnItemContributor: Send + Sync {
         turn_store: &'a ExtensionData,
         item: &'a mut TurnItem,
     ) -> TurnItemContributionFuture<'a>;
-}
-
-// TODO: WIP (do not consider)
-/// Extension contribution that can claim approval requests for a runtime context.
-/// (ideally we can replace it by a session lifecycle thing or a request contributor?)
-pub trait ApprovalInterceptorContributor: Send + Sync {
-    /// Returns whether this contributor should intercept approvals in `context`.
-    fn intercepts_approvals(
-        &self,
-        thread_store: &ExtensionData,
-        turn_store: &ExtensionData,
-    ) -> bool;
 }

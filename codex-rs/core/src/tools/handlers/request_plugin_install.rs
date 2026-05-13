@@ -34,6 +34,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 
 #[derive(Default)]
@@ -49,7 +50,7 @@ impl RequestPluginInstallHandler {
     }
 }
 
-impl ToolHandler for RequestPluginInstallHandler {
+impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -191,6 +192,8 @@ impl ToolHandler for RequestPluginInstallHandler {
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
+
+impl ToolHandler for RequestPluginInstallHandler {}
 
 async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,
