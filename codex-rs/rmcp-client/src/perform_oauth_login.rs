@@ -9,6 +9,9 @@ use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
 use reqwest::Url;
+use rmcp::transport::AuthorizationManager;
+use rmcp::transport::AuthorizationSession;
+use rmcp::transport::auth::OAuthClientConfig;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -77,6 +80,7 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -88,6 +92,7 @@ pub async fn perform_oauth_login(
         http_headers,
         env_http_headers,
         scopes,
+        oauth_client_id,
         oauth_resource,
         callback_port,
         callback_url,
@@ -104,6 +109,7 @@ pub async fn perform_oauth_login_silent(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -115,6 +121,7 @@ pub async fn perform_oauth_login_silent(
         http_headers,
         env_http_headers,
         scopes,
+        oauth_client_id,
         oauth_resource,
         callback_port,
         callback_url,
@@ -131,6 +138,7 @@ async fn perform_oauth_login_with_browser_output(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -146,6 +154,7 @@ async fn perform_oauth_login_with_browser_output(
         store_mode,
         headers,
         scopes,
+        oauth_client_id,
         oauth_resource,
         /*launch_browser*/ true,
         callback_port,
@@ -165,6 +174,7 @@ pub async fn perform_oauth_login_return_url(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
@@ -180,6 +190,7 @@ pub async fn perform_oauth_login_return_url(
         store_mode,
         headers,
         scopes,
+        oauth_client_id,
         oauth_resource,
         /*launch_browser*/ false,
         callback_port,
@@ -407,6 +418,7 @@ impl OauthLoginFlow {
         store_mode: OAuthCredentialsStoreMode,
         headers: OauthHeaders,
         scopes: &[String],
+        oauth_client_id: Option<&str>,
         oauth_resource: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
@@ -440,11 +452,15 @@ impl OauthLoginFlow {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 
-        let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        oauth_state
-            .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
-            .await?;
+        let oauth_state = start_authorization(
+            server_url,
+            http_client,
+            &scope_refs,
+            &redirect_uri,
+            oauth_client_id,
+        )
+        .await?;
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -554,6 +570,41 @@ impl OauthLoginFlow {
     }
 }
 
+async fn start_authorization(
+    server_url: &str,
+    http_client: reqwest::Client,
+    scopes: &[&str],
+    redirect_uri: &str,
+    oauth_client_id: Option<&str>,
+) -> Result<OAuthState> {
+    let Some(oauth_client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
+    else {
+        let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+        oauth_state
+            .start_authorization(scopes, redirect_uri, Some("Codex"))
+            .await?;
+        return Ok(oauth_state);
+    };
+
+    let mut auth_manager = AuthorizationManager::new(server_url).await?;
+    auth_manager.with_client(http_client)?;
+    let metadata = auth_manager.discover_metadata().await?;
+    auth_manager.set_metadata(metadata);
+    auth_manager.configure_client(OAuthClientConfig {
+        client_id: oauth_client_id.to_string(),
+        client_secret: None,
+        scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
+        redirect_uri: redirect_uri.to_string(),
+    })?;
+    let auth_url = auth_manager.get_authorization_url(scopes).await?;
+
+    Ok(OAuthState::Session(AuthorizationSession {
+        auth_manager,
+        auth_url,
+        redirect_uri: redirect_uri.to_string(),
+    }))
+}
+
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
     let Some(value) = value else {
         return url.to_string();
@@ -573,13 +624,82 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::Json;
+    use axum::Router;
+    use axum::routing::get;
     use pretty_assertions::assert_eq;
+    use reqwest::Url;
+    use serde_json::json;
+    use tokio::net::TcpListener;
 
     use super::CallbackOutcome;
     use super::OAuthProviderError;
+    use super::OauthHeaders;
+    use super::OauthLoginFlow;
     use super::append_query_param;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
+    use codex_config::types::OAuthCredentialsStoreMode;
+
+    async fn spawn_oauth_metadata_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind metadata listener");
+        let addr = listener.local_addr().expect("read metadata listener addr");
+        let base_url = format!("http://{addr}");
+        let metadata = json!({
+            "authorization_endpoint": format!("{base_url}/oauth/authorize"),
+            "token_endpoint": format!("{base_url}/oauth/token"),
+            "scopes_supported": [""],
+        });
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get(move || {
+                let metadata = metadata.clone();
+                async move { Json(metadata) }
+            }),
+        );
+
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve oauth metadata");
+        });
+
+        base_url
+    }
+
+    #[tokio::test]
+    async fn oauth_login_flow_uses_configured_client_id() {
+        let base_url = spawn_oauth_metadata_server().await;
+        let flow = OauthLoginFlow::new(
+            "maas_outlook",
+            &format!("{base_url}/mcp"),
+            OAuthCredentialsStoreMode::File,
+            OauthHeaders {
+                http_headers: None,
+                env_http_headers: None,
+            },
+            &[],
+            Some("eci-prd-pub-codex-123"),
+            /*oauth_resource*/ None,
+            /*launch_browser*/ false,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            Some(1),
+        )
+        .await
+        .expect("build oauth login flow");
+
+        let auth_url =
+            Url::parse(&flow.authorization_url()).expect("authorization url should parse");
+        let client_id = auth_url
+            .query_pairs()
+            .find(|(key, _)| key == "client_id")
+            .map(|(_, value)| value.into_owned());
+
+        assert_eq!(client_id.as_deref(), Some("eci-prd-pub-codex-123"));
+    }
 
     #[test]
     fn parse_oauth_callback_accepts_default_path() {

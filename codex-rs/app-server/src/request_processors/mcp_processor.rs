@@ -160,6 +160,10 @@ impl McpRequestProcessor {
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,
+            server
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.as_deref()),
             server.oauth_resource.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
