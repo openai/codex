@@ -84,7 +84,6 @@ impl ToolHandler for McpHandler {
         ToolSearchInfo::from_spec(
             build_mcp_search_text(&self.tool_info),
             self.spec()?,
-            Some(self.tool_info.server_name.clone()),
             source_info,
         )
     }

@@ -8,7 +8,6 @@ use codex_tools::default_namespace_description;
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
     pub(crate) output: LoadableToolSpec,
-    pub(crate) limit_bucket: Option<String>,
 }
 
 #[derive(Clone)]
@@ -21,7 +20,6 @@ impl ToolSearchInfo {
     pub(crate) fn from_spec(
         search_text: String,
         spec: ToolSpec,
-        limit_bucket: Option<String>,
         source_info: Option<ToolSearchSourceInfo>,
     ) -> Option<Self> {
         let output = match spec {
@@ -52,7 +50,6 @@ impl ToolSearchInfo {
             entry: ToolSearchEntry {
                 search_text,
                 output,
-                limit_bucket,
             },
             source_info,
         })

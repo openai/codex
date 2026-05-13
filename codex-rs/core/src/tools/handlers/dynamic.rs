@@ -14,10 +14,13 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
-use codex_tools::dynamic_tool_to_loadable_tool_spec;
+use codex_tools::default_namespace_description;
+use codex_tools::dynamic_tool_to_responses_api_tool;
 use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::oneshot;
@@ -32,7 +35,15 @@ pub struct DynamicToolHandler {
 impl DynamicToolHandler {
     pub fn new(tool: &DynamicToolSpec) -> Option<Self> {
         let tool_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-        let spec = dynamic_tool_to_loadable_tool_spec(tool).ok()?.into();
+        let output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
+        let spec = match tool.namespace.as_ref() {
+            Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+                name: namespace.clone(),
+                description: default_namespace_description(namespace),
+                tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
+            }),
+            None => ToolSpec::Function(output_tool),
+        };
         Some(Self {
             tool_name,
             spec: Some(spec),
@@ -56,7 +67,6 @@ impl ToolHandler for DynamicToolHandler {
         ToolSearchInfo::from_spec(
             self.search_text.clone(),
             self.spec()?,
-            /*limit_bucket*/ None,
             Some(ToolSearchSourceInfo {
                 name: "Dynamic tools".to_string(),
                 description: Some("Tools provided by the current Codex thread.".to_string()),
