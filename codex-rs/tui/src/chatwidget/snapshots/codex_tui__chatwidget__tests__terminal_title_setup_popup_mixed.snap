@@ -8,7 +8,7 @@ expression: terminal_title_popup_snapshot(&mut chat)
   Type to search
   >
 › [x] project-name   Project name (falls back to current directory name)
-  [x] thread-title   Current thread title (omitted when unavailable)
+  [x] thread-title   Current thread title, or thread identifier when unnamed
   [x] task-progress  Latest task progress from update_plan (omitted until available)
   [ ] app-name       Codex app name
   [ ] current-dir    Current working directory
@@ -17,4 +17,4 @@ expression: terminal_title_popup_snapshot(&mut chat)
   [ ] git-branch     Current Git branch (omitted when unavailable)
 
   project | Mixed preview thread | Tasks 0/0
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

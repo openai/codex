@@ -19,12 +19,15 @@ codex-config = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "process", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

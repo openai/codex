@@ -21,25 +21,28 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use crate::tools::registry::ToolRegistry;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
-#[derive(Default)]
-struct TestHandler;
+struct TestHandler {
+    tool_name: codex_tools::ToolName,
+}
 
-impl ToolHandler for TestHandler {
+impl ToolExecutor<ToolInvocation> for TestHandler {
     type Output = FunctionToolOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> codex_tools::ToolName {
+        self.tool_name.clone()
     }
 
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
     }
 }
+
+impl ToolHandler for TestHandler {}
 
 #[tokio::test]
 async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> anyhow::Result<()> {
@@ -53,10 +56,9 @@ async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> a
         "await tools.test_tool({})",
     );
 
-    let registry = ToolRegistry::with_handler_for_test(
-        codex_tools::ToolName::plain("test_tool"),
-        Arc::new(TestHandler),
-    );
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
+        tool_name: codex_tools::ToolName::plain("test_tool"),
+    }));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -165,10 +167,9 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     let (mut session, turn) = make_session_and_context().await;
     attach_test_trace(&mut session, &turn, temp.path())?;
 
-    let registry = ToolRegistry::with_handler_for_test(
-        codex_tools::ToolName::plain("test_tool"),
-        Arc::new(TestHandler),
-    );
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
+        tool_name: codex_tools::ToolName::plain("test_tool"),
+    }));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -200,10 +201,7 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
     let (mut session, turn) = make_session_and_context().await;
     attach_test_trace(&mut session, &turn, temp.path())?;
 
-    let registry = ToolRegistry::with_handler_for_test(
-        codex_tools::ToolName::plain(WAIT_TOOL_NAME),
-        Arc::new(CodeModeWaitHandler),
-    );
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

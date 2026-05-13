@@ -38,6 +38,8 @@ pub use crate::tui_keymap::TuiGlobalKeymap;
 pub use crate::tui_keymap::TuiKeymap;
 pub use crate::tui_keymap::TuiListKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;
+pub use crate::tui_keymap::TuiVimNormalKeymap;
+pub use crate::tui_keymap::TuiVimOperatorKeymap;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
@@ -53,6 +55,30 @@ const MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 128;
 
 const fn default_enabled() -> bool {
     true
+}
+
+/// Preferred layout for the resume/fork session picker.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionPickerViewMode {
+    Comfortable,
+    #[default]
+    Dense,
+}
+
+impl SessionPickerViewMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Comfortable => "comfortable",
+            Self::Dense => "dense",
+        }
+    }
+}
+
+impl fmt::Display for SessionPickerViewMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Determine where Codex should store CLI auth credentials.
@@ -134,6 +160,7 @@ impl UriBasedFileOpener {
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(default)]
 #[schemars(deny_unknown_fields)]
 pub struct History {
     /// If true, history entries will not be written to disk.
@@ -260,7 +287,7 @@ pub struct MemoriesToml {
 }
 
 /// Effective memories settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemoriesConfig {
     pub disable_on_external_context: bool,
     pub generate_memories: bool,
@@ -487,6 +514,12 @@ pub struct OtelConfigToml {
 
     /// Optional metrics exporter
     pub metrics_exporter: Option<OtelExporterKind>,
+
+    /// Attributes to add to every exported trace span.
+    pub span_attributes: Option<BTreeMap<String, String>>,
+
+    /// Semicolon-separated `key:value` fields to upsert into W3C tracestate members.
+    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 /// Effective OTEL settings after defaults are applied.
@@ -497,6 +530,8 @@ pub struct OtelConfig {
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
     pub metrics_exporter: OtelExporterKind,
+    pub span_attributes: BTreeMap<String, String>,
+    pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Default for OtelConfig {
@@ -507,6 +542,8 @@ impl Default for OtelConfig {
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
             metrics_exporter: OtelExporterKind::Statsig,
+            span_attributes: BTreeMap::new(),
+            tracestate: BTreeMap::new(),
         }
     }
 }
@@ -562,6 +599,16 @@ impl fmt::Display for NotificationCondition {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuiPetAnchor {
+    /// Anchor the pet to the bottom of the current TUI composer viewport.
+    #[default]
+    Composer,
+    /// Anchor the pet to the physical bottom of the terminal screen.
+    ScreenBottom,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiNotificationSettings {
@@ -609,14 +656,21 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub vim_mode_default: bool,
+
+    /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub raw_output_mode: bool,
+
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
+    /// - `auto` (default): Use alternate screen.
+    /// - `always`: Always use alternate screen.
     /// - `never`: Never use alternate screen (inline mode only, preserves scrollback).
-    ///
-    /// Using alternate screen provides a cleaner fullscreen experience but prevents
-    /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
 
@@ -626,6 +680,11 @@ pub struct Tui {
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Color status line items with colors derived from the active syntax theme.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub status_line_use_colors: bool,
 
     /// Ordered list of terminal title item identifiers.
     ///
@@ -642,6 +701,22 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Pet id to preselect in the terminal pet picker.
+    ///
+    /// Custom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.
+    #[serde(default)]
+    pub pet: Option<String>,
+
+    /// Where the terminal pet should anchor vertically.
+    ///
+    /// Defaults to `composer`, which follows the current TUI composer viewport.
+    #[serde(default)]
+    pub pet_anchor: TuiPetAnchor,
+
+    /// Preferred layout for resume/fork session picker results.
+    #[serde(default)]
+    pub session_picker_view: Option<SessionPickerViewMode>,
 
     /// Keybinding overrides for the TUI.
     ///
@@ -717,6 +792,50 @@ pub use crate::skills_config::SkillsConfig;
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub mcp_servers: HashMap<String, PluginMcpServerConfig>,
+}
+
+/// Policy settings for a plugin-provided MCP server.
+///
+/// This intentionally excludes transport settings: plugin manifests own how the
+/// MCP server is launched, while user config owns enablement and tool policy.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginMcpServerConfig {
+    /// When `false`, Codex skips initializing this plugin MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Approval mode for tools in this server unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
+    /// Explicit allow-list of tools exposed from this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+
+    /// Per-tool approval settings keyed by tool name.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tools: HashMap<String, McpServerToolConfig>,
+}
+
+impl Default for PluginMcpServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            tools: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
@@ -773,8 +892,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-/// Policy for building the `env` when spawning a process via either the
-/// `shell` or `local_shell` tool.
+/// Policy for building the `env` when spawning a process via shell-like tools.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ShellEnvironmentPolicyToml {

@@ -6,6 +6,8 @@ fn auto_review_denial_event() -> GuardianAssessmentEvent {
         id: "auto-review-recent-1".into(),
         target_item_id: Some("target-auto-review-recent-1".into()),
         turn_id: "turn-recent-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
         status: GuardianAssessmentStatus::Denied,
         risk_level: Some(GuardianRiskLevel::High),
         user_authorization: Some(GuardianUserAuthorization::Low),
@@ -23,10 +25,7 @@ fn auto_review_denial_event() -> GuardianAssessmentEvent {
 async fn auto_review_denials_popup_lists_stored_auto_review_denials() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(auto_review_denial_event()),
-    });
+    chat.on_guardian_assessment(auto_review_denial_event());
     drain_insert_history(&mut rx);
 
     chat.open_auto_review_denials_popup();
@@ -40,10 +39,7 @@ async fn approving_recent_denial_emits_structured_core_op_once() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(auto_review_denial_event()),
-    });
+    chat.on_guardian_assessment(auto_review_denial_event());
     drain_insert_history(&mut rx);
 
     chat.approve_recent_auto_review_denial(thread_id, "auto-review-recent-1".to_string());
@@ -75,39 +71,32 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         cwd: test_path_buf("/tmp").abs(),
     };
 
-    chat.handle_codex_event(Event {
-        id: "guardian-in-progress".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".into(),
-            target_item_id: Some("guardian-target-1".into()),
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_level: None,
-            user_authorization: None,
-            rationale: None,
-            decision_source: None,
-            action: action.clone(),
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".into(),
+        target_item_id: Some("guardian-target-1".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: action.clone(),
     });
-    chat.handle_codex_event(Event {
-        id: "guardian-warning".into(),
-        msg: EventMsg::GuardianWarning(WarningEvent {
-            message: "Automatic approval review denied (risk: high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".into(),
-            target_item_id: Some("guardian-target-1".into()),
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::Denied,
-            risk_level: Some(GuardianRiskLevel::High),
-            user_authorization: Some(GuardianUserAuthorization::Low),
-            rationale: Some("Would exfiltrate local source code.".into()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-            action,
-        }),
+    chat.on_warning("Automatic approval review denied (risk: high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.");
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".into(),
+        target_item_id: Some("guardian-target-1".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Denied,
+        risk_level: Some(GuardianRiskLevel::High),
+        user_authorization: Some(GuardianUserAuthorization::Low),
+        rationale: Some("Would exfiltrate local source code.".into()),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action,
     });
 
     let width: u16 = 140;
@@ -140,28 +129,27 @@ async fn guardian_approved_exec_renders_approved_request() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
 
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "thread:child-thread:guardian-1".into(),
-            target_item_id: Some("guardian-approved-target".into()),
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::Approved,
-            risk_level: Some(GuardianRiskLevel::Low),
-            user_authorization: Some(GuardianUserAuthorization::High),
-            rationale: Some("Narrowly scoped to the requested file.".into()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-            action: GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -f /tmp/guardian-approved.sqlite".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            },
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "thread:child-thread:guardian-1".into(),
+        target_item_id: Some("guardian-approved-target".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Approved,
+        risk_level: Some(GuardianRiskLevel::Low),
+        user_authorization: Some(GuardianUserAuthorization::High),
+        rationale: Some("Narrowly scoped to the requested file.".into()),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action: GuardianAssessmentAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -f /tmp/guardian-approved.sqlite".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+        },
     });
 
     let width: u16 = 120;
     let ui_height: u16 = chat.desired_height(width);
-    let vt_height: u16 = 12;
+    let vt_height: u16 = ui_height.saturating_add(1).max(12);
     let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
 
     let backend = VT100Backend::new(width, vt_height);
@@ -199,19 +187,18 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
         },
     };
 
-    chat.handle_codex_event(Event {
-        id: "guardian-in-progress".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-request-permissions".into(),
-            target_item_id: None,
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_level: None,
-            user_authorization: None,
-            rationale: None,
-            decision_source: None,
-            action: action.clone(),
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-request-permissions".into(),
+        target_item_id: None,
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: action.clone(),
     });
 
     let status = chat
@@ -224,24 +211,23 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
         Some("permission request: Need write access for generated report assets.")
     );
 
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-request-permissions".into(),
-            target_item_id: None,
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::Approved,
-            risk_level: Some(GuardianRiskLevel::Low),
-            user_authorization: Some(GuardianUserAuthorization::High),
-            rationale: Some("Request is scoped to report output.".into()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-            action,
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-request-permissions".into(),
+        target_item_id: None,
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Approved,
+        risk_level: Some(GuardianRiskLevel::Low),
+        user_authorization: Some(GuardianUserAuthorization::High),
+        rationale: Some("Request is scoped to report output.".into()),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action,
     });
 
     let width: u16 = 110;
     let ui_height: u16 = chat.desired_height(width);
-    let vt_height: u16 = 12;
+    let vt_height: u16 = ui_height.saturating_add(1).max(12);
     let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
 
     let backend = VT100Backend::new(width, vt_height);
@@ -275,43 +261,34 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
         cwd: test_path_buf("/tmp").abs(),
     };
 
-    chat.handle_codex_event(Event {
-        id: "guardian-in-progress".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".into(),
-            target_item_id: Some("guardian-target-1".into()),
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_level: None,
-            user_authorization: None,
-            rationale: None,
-            decision_source: None,
-            action: action.clone(),
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".into(),
+        target_item_id: Some("guardian-target-1".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: action.clone(),
     });
-    chat.handle_codex_event(Event {
-        id: "guardian-warning".into(),
-        msg: EventMsg::GuardianWarning(WarningEvent {
-            message: "Automatic approval review timed out while evaluating the requested approval."
-                .into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "guardian-assessment".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".into(),
-            target_item_id: Some("guardian-target-1".into()),
-            turn_id: "turn-1".into(),
-            status: GuardianAssessmentStatus::TimedOut,
-            risk_level: None,
-            user_authorization: None,
-            rationale: Some(
-                "Automatic approval review timed out while evaluating the requested approval."
-                    .into(),
-            ),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-            action,
-        }),
+    chat.on_warning("Automatic approval review timed out while evaluating the requested approval.");
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".into(),
+        target_item_id: Some("guardian-target-1".into()),
+        turn_id: "turn-1".into(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::TimedOut,
+        risk_level: None,
+        user_authorization: None,
+        rationale: Some(
+            "Automatic approval review timed out while evaluating the requested approval.".into(),
+        ),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action,
     });
 
     let width: u16 = 140;
@@ -354,6 +331,7 @@ async fn app_server_guardian_review_started_sets_review_status() {
             ItemGuardianApprovalReviewStartedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
                 review: GuardianApprovalReview {
@@ -395,6 +373,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
             ItemGuardianApprovalReviewStartedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
                 review: GuardianApprovalReview {
@@ -414,6 +393,8 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
             ItemGuardianApprovalReviewCompletedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
+                completed_at_ms: 1,
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
                 decision_source: AppServerGuardianApprovalReviewDecisionSource::Agent,
@@ -431,7 +412,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
 
     let width: u16 = 140;
     let ui_height: u16 = chat.desired_height(width);
-    let vt_height: u16 = 16;
+    let vt_height: u16 = ui_height.saturating_add(1).max(16);
     let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
 
     let backend = VT100Backend::new(width, vt_height);
@@ -470,6 +451,7 @@ async fn app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
             ItemGuardianApprovalReviewStartedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
                 review: GuardianApprovalReview {
@@ -489,6 +471,8 @@ async fn app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
             ItemGuardianApprovalReviewCompletedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
+                completed_at_ms: 1,
                 review_id: "guardian-1".to_string(),
                 target_item_id: Some("guardian-target-1".to_string()),
                 decision_source: AppServerGuardianApprovalReviewDecisionSource::Agent,
@@ -509,7 +493,7 @@ async fn app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
 
     let width: u16 = 140;
     let ui_height: u16 = chat.desired_height(width);
-    let vt_height: u16 = 16;
+    let vt_height: u16 = ui_height.saturating_add(1).max(16);
     let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
 
     let backend = VT100Backend::new(width, vt_height);
@@ -541,23 +525,22 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
         ("guardian-1", "rm -rf '/tmp/guardian target 1'"),
         ("guardian-2", "rm -rf '/tmp/guardian target 2'"),
     ] {
-        chat.handle_codex_event(Event {
-            id: format!("event-{id}"),
-            msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: id.to_string(),
-                target_item_id: Some(format!("{id}-target")),
-                turn_id: "turn-1".to_string(),
-                status: GuardianAssessmentStatus::InProgress,
-                risk_level: None,
-                user_authorization: None,
-                rationale: None,
-                decision_source: None,
-                action: GuardianAssessmentAction::Command {
-                    source: GuardianCommandSource::Shell,
-                    command: command.to_string(),
-                    cwd: test_path_buf("/tmp").abs(),
-                },
-            }),
+        chat.on_guardian_assessment(GuardianAssessmentEvent {
+            id: id.to_string(),
+            target_item_id: Some(format!("{id}-target")),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            completed_at_ms: None,
+            status: GuardianAssessmentStatus::InProgress,
+            risk_level: None,
+            user_authorization: None,
+            rationale: None,
+            decision_source: None,
+            action: GuardianAssessmentAction::Command {
+                source: GuardianCommandSource::Shell,
+                command: command.to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+            },
         });
     }
 
@@ -573,64 +556,64 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
 
-    chat.handle_codex_event(Event {
-        id: "event-guardian-1".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".to_string(),
-            target_item_id: Some("guardian-1-target".to_string()),
-            turn_id: "turn-1".to_string(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_level: None,
-            user_authorization: None,
-            rationale: None,
-            decision_source: None,
-            action: GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -rf '/tmp/guardian target 1'".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            },
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".to_string(),
+        target_item_id: Some("guardian-1-target".to_string()),
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: GuardianAssessmentAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf '/tmp/guardian target 1'".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+        },
     });
-    chat.handle_codex_event(Event {
-        id: "event-guardian-2".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-2".to_string(),
-            target_item_id: Some("guardian-2-target".to_string()),
-            turn_id: "turn-1".to_string(),
-            status: GuardianAssessmentStatus::InProgress,
-            risk_level: None,
-            user_authorization: None,
-            rationale: None,
-            decision_source: None,
-            action: GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -rf '/tmp/guardian target 2'".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            },
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-2".to_string(),
+        target_item_id: Some("guardian-2-target".to_string()),
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: GuardianAssessmentAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf '/tmp/guardian target 2'".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+        },
     });
-    chat.handle_codex_event(Event {
-        id: "event-guardian-1-denied".into(),
-        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-            id: "guardian-1".to_string(),
-            target_item_id: Some("guardian-1-target".to_string()),
-            turn_id: "turn-1".to_string(),
-            status: GuardianAssessmentStatus::Denied,
-            risk_level: Some(GuardianRiskLevel::High),
-            user_authorization: Some(GuardianUserAuthorization::Low),
-            rationale: Some("Would delete important data.".to_string()),
-            decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-            action: GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -rf '/tmp/guardian target 1'".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            },
-        }),
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".to_string(),
+        target_item_id: Some("guardian-1-target".to_string()),
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Denied,
+        risk_level: Some(GuardianRiskLevel::High),
+        user_authorization: Some(GuardianUserAuthorization::Low),
+        rationale: Some("Would delete important data.".to_string()),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action: GuardianAssessmentAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf '/tmp/guardian target 1'".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+        },
     });
 
-    assert_eq!(chat.current_status.header, "Reviewing approval request");
     assert_eq!(
-        chat.current_status.details,
+        chat.status_state.current_status.header,
+        "Reviewing approval request"
+    );
+    assert_eq!(
+        chat.status_state.current_status.details,
         Some("rm -rf '/tmp/guardian target 2'".to_string())
     );
 }

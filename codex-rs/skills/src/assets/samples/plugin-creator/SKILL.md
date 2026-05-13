@@ -1,6 +1,6 @@
 ---
 name: plugin-creator
-description: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, and baseline placeholders you can edit before publishing or testing. Use when Codex needs to create a new local plugin, add optional plugin structure, or generate or update repo-root `.agents/plugins/marketplace.json` entries for plugin ordering and availability metadata.
+description: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, and baseline placeholders you can edit before publishing or testing. Use when Codex needs to create a new personal plugin, add optional plugin structure, or generate or update personal or repo-root `.agents/plugins/marketplace.json` entries for plugin ordering and availability metadata.
 ---
 
 # Plugin Creator
@@ -13,32 +13,36 @@ description: Create and scaffold plugin directories for Codex with a required `.
   # Plugin names are normalized to lower-case hyphen-case and must be <= 64 chars.
   # The generated folder and plugin.json name are always the same.
 # Run from repo root (or replace .agents/... with the absolute path to this SKILL).
-# By default creates in <repo_root>/plugins/<plugin-name>.
+# By default creates in ~/plugins/<plugin-name>.
 python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py <plugin-name>
 ```
 
 2. Open `<plugin-path>/.codex-plugin/plugin.json` and replace `[TODO: ...]` placeholders.
 
-3. Generate or update the repo marketplace entry when the plugin should appear in Codex UI ordering:
+3. Generate or update the personal marketplace entry when the plugin should appear in Codex UI ordering:
 
 ```bash
-# marketplace.json always lives at <repo-root>/.agents/plugins/marketplace.json
+# Personal marketplace entries default to ~/.agents/plugins/marketplace.json.
 python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin --with-marketplace
 ```
 
-For a home-local plugin, treat `<home>` as the root and use:
+If the current Git repo already has `.agents/plugins/marketplace.json` and the user has not said
+whether the plugin is personal or shared with their team, ask before generating a marketplace entry.
+When they choose the repo marketplace, use:
 
 ```bash
 python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin \
-  --path ~/plugins \
-  --marketplace-path ~/.agents/plugins/marketplace.json \
+  --path ./plugins \
+  --marketplace-path ./.agents/plugins/marketplace.json \
   --with-marketplace
 ```
 
 4. Generate/adjust optional companion folders as needed:
 
 ```bash
-python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin --path <parent-plugin-directory> \
+python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin \
+  --path <parent-plugin-directory> \
+  --marketplace-path <marketplace-json-path> \
   --with-skills --with-hooks --with-scripts --with-assets --with-mcp --with-apps --with-marketplace
 ```
 
@@ -46,11 +50,14 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 
 ## What this skill creates
 
-- If the user has not made the plugin location explicit, ask whether they want a repo-local plugin or a home-local plugin before generating marketplace entries.
+- Default marketplace-backed scaffolds are personal: `~/plugins/<plugin-name>/` plus
+  `~/.agents/plugins/marketplace.json`.
+- If the current Git repo already has `.agents/plugins/marketplace.json` and the user has not said
+  personal vs team, ask which marketplace to update before generating a marketplace entry.
 - Creates plugin root at `/<parent-plugin-directory>/<plugin-name>/`.
 - Always creates `/<parent-plugin-directory>/<plugin-name>/.codex-plugin/plugin.json`.
 - Fills the manifest with the full schema shape, placeholder values, and the complete `interface` section.
-- Creates or updates `<repo-root>/.agents/plugins/marketplace.json` when `--with-marketplace` is set.
+- Creates or updates the selected marketplace when `--with-marketplace` is set.
   - If the marketplace file does not exist yet, seed top-level `name` plus `interface.displayName` placeholders before adding the first plugin entry.
 - `<plugin-name>` is normalized using skill-creator naming rules:
   - `My Plugin` → `my-plugin`
@@ -67,9 +74,8 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 
 ## Marketplace workflow
 
-- `marketplace.json` always lives at `<repo-root>/.agents/plugins/marketplace.json`.
-- For a home-local plugin, use the same convention with `<home>` as the root:
-  `~/.agents/plugins/marketplace.json` plus `./plugins/<plugin-name>`.
+- Personal plugins use `~/.agents/plugins/marketplace.json`.
+- Repo/team plugins use `<repo-root>/.agents/plugins/marketplace.json`.
 - Marketplace root metadata supports top-level `name` plus optional `interface.displayName`.
 - Treat plugin order in `plugins[]` as render order in Codex. Append new entries unless a user explicitly asks to reorder the list.
 - `displayName` belongs inside the marketplace `interface` object, not individual `plugins[]` entries.
@@ -107,7 +113,7 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 ```
 
 - Use `--force` only when intentionally replacing an existing marketplace entry for the same plugin name.
-- If `<repo-root>/.agents/plugins/marketplace.json` does not exist yet, create it with top-level `"name"`, an `"interface"` object containing `"displayName"`, and a `plugins` array, then add the new entry.
+- If the selected marketplace file does not exist yet, create it with top-level `"name"`, an `"interface"` object containing `"displayName"`, and a `plugins` array, then add the new entry.
 
 - For a brand-new marketplace file, the root object should look like:
 
@@ -143,7 +149,19 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin -
 - Preserve any existing marketplace `interface.displayName`.
 - When generating marketplace entries, always write `policy.installation`, `policy.authentication`, and `category` even if their values are defaults.
 - Add `policy.products` only when the user explicitly asks for that override.
-- Keep marketplace `source.path` relative to repo root as `./plugins/<plugin-name>`.
+- Keep marketplace `source.path` relative to the selected marketplace root as `./plugins/<plugin-name>`.
+- When the workflow created or updated a marketplace-backed plugin, end the final user-facing
+  response with a short Codex app handoff. Say `To view this in the Codex app:` and write
+  `View <normalized plugin name>` and `Share <normalized plugin name>` as Markdown links, not raw
+  URLs or code spans.
+- The View deeplink uses `codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>`.
+  The Share deeplink uses the same URL with `&mode=share`.
+- Replace the placeholders with the real normalized plugin name and absolute `marketplace.json`
+  path from the scaffolded plugin. URL-encode the path segment and query value when needed.
+- Do not add `pluginName` or `hostId` query parameters to these deeplinks. Codex derives both after
+  the user clicks the link.
+- Do not emit the `View <normalized plugin name>` or `Share <normalized plugin name>` links when no marketplace entry was
+  created or updated.
 
 ## Reference to exact spec sample
 

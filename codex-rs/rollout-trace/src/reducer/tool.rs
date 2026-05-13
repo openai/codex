@@ -7,6 +7,7 @@ use crate::model::CodeModeRuntimeToolId;
 use crate::model::ConversationItemKind;
 use crate::model::ExecutionStatus;
 use crate::model::ExecutionWindow;
+use crate::model::McpCallId;
 use crate::model::ModelVisibleCallId;
 use crate::model::ProducerRef;
 use crate::model::ToolCall;
@@ -128,6 +129,7 @@ impl TraceReducer {
             tool_call_id.clone(),
             ToolCall {
                 tool_call_id: tool_call_id.clone(),
+                mcp_call_id: None,
                 model_visible_call_id,
                 code_mode_runtime_tool_id: started.code_mode_runtime_tool_id,
                 thread_id,
@@ -163,6 +165,21 @@ impl TraceReducer {
         // Re-sync after insertion so terminal observations get both directions
         // of the model-visible link.
         self.sync_terminal_model_observation(&tool_call_id)?;
+        Ok(())
+    }
+
+    /// Attaches the bridge-visible MCP UUID after the generic tool call exists.
+    pub(super) fn assign_mcp_tool_call_correlation(
+        &mut self,
+        tool_call_id: ToolCallId,
+        mcp_call_id: McpCallId,
+    ) -> Result<()> {
+        let Some(tool_call) = self.rollout.tool_calls.get_mut(&tool_call_id) else {
+            bail!("MCP correlation referenced unknown tool call {tool_call_id}");
+        };
+        if tool_call.mcp_call_id.replace(mcp_call_id).is_some() {
+            bail!("duplicate MCP correlation for tool call {tool_call_id}");
+        }
         Ok(())
     }
 

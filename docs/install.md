@@ -25,7 +25,7 @@ source "$HOME/.cargo/env"
 rustup component add rustfmt
 rustup component add clippy
 # Install helper tools used by the workspace justfile:
-cargo install just
+cargo install --locked just
 # Optional: install nextest for the `just test` helper
 cargo install --locked cargo-nextest
 

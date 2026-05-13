@@ -17,7 +17,6 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
-use crate::tools::handlers::ShellHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -89,6 +88,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let expected_command = session
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
+    #[allow(deprecated)]
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
@@ -204,52 +204,12 @@ fn shell_command_handler_rejects_login_when_disallowed() {
 }
 
 #[tokio::test]
-async fn shell_pre_tool_use_payload_uses_joined_command() {
-    let payload = ToolPayload::LocalShell {
-        params: codex_protocol::models::ShellToolCallParams {
-            command: vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "printf hi".to_string(),
-            ],
-            workdir: None,
-            timeout_ms: None,
-            sandbox_permissions: None,
-            prefix_rule: None,
-            additional_permissions: None,
-            justification: None,
-        },
-    };
-    let (session, turn) = make_session_and_context().await;
-    let handler = ShellHandler;
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&ToolInvocation {
-            session: session.into(),
-            turn: turn.into(),
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
-            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-            call_id: "call-41".to_string(),
-            tool_name: codex_tools::ToolName::plain("shell"),
-            source: crate::tools::context::ToolCallSource::Direct,
-            payload,
-        }),
-        Some(crate::tools::registry::PreToolUsePayload {
-            tool_name: HookToolName::bash(),
-            tool_input: json!({ "command": "bash -lc 'printf hi'" }),
-        })
-    );
-}
-
-#[tokio::test]
 async fn shell_command_pre_tool_use_payload_uses_raw_command() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
-    };
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
@@ -279,9 +239,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         success: Some(true),
         post_tool_use_response: Some(json!("shell output")),
     };
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
-    };
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
     let (session, turn) = make_session_and_context().await;
     let invocation = ToolInvocation {
         session: session.into(),

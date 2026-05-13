@@ -52,10 +52,11 @@ pub(super) async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_has_environment(parent_turn_context.tools_config.has_environment)
+    .with_environment_mode(parent_turn_context.tools_config.environment_mode)
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+    .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
     .with_goal_tools_allowed(goal_tools_supported)
     .with_max_concurrent_threads_per_session(config.agent_max_threads)
     .with_wait_agent_min_timeout_ms(
@@ -102,9 +103,11 @@ pub(super) async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
-        sess.conversation_id.to_string(),
-        &session_source,
+        sess.session_id().to_string(),
+        sess.thread_id().to_string(),
+        parent_turn_context.thread_source,
         review_turn_id.clone(),
+        #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
@@ -112,7 +115,7 @@ pub(super) async fn spawn_review_thread(
     ));
 
     let review_turn_context = TurnContext {
-        sub_id: review_turn_id,
+        sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
@@ -123,7 +126,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
-        environment: parent_turn_context.environment.clone(),
+        thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
@@ -141,14 +144,15 @@ pub(super) async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
+        #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
+        extension_data: Arc::new(codex_extension_api::ExtensionData::new(review_turn_id)),
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),

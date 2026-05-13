@@ -20,6 +20,7 @@ use crate::markdown_stream::MarkdownStreamCollector;
 pub(crate) mod chunking;
 pub(crate) mod commit_tick;
 pub(crate) mod controller;
+mod table_holdback;
 
 struct QueuedLine {
     line: Line<'static>,

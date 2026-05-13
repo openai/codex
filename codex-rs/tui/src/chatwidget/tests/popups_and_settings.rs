@@ -1,5 +1,11 @@
 use super::*;
+use crate::app_event::ConnectorsSnapshot;
+use crate::chatwidget::connectors::ConnectorsCacheState;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::HookErrorInfo;
+use codex_app_server_protocol::HooksListEntry;
+use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -8,12 +14,14 @@ async fn realtime_error_closes_without_followup_closed_info() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
 
-    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
-        payload: RealtimeEvent::Error("boom".to_string()),
+    chat.on_realtime_error(ThreadRealtimeErrorNotification {
+        thread_id: ThreadId::new().to_string(),
+        message: "boom".to_string(),
     });
     next_realtime_close_op(&mut op_rx);
 
-    chat.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+    chat.on_realtime_conversation_closed(ThreadRealtimeClosedNotification {
+        thread_id: ThreadId::new().to_string(),
         reason: Some("error".to_string()),
     });
 
@@ -64,8 +72,10 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
@@ -73,6 +83,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
@@ -99,6 +110,85 @@ async fn plugins_popup_loading_state_snapshot() {
         "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
     );
     assert_chatwidget_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn marketplace_upgrade_loading_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    chat.open_marketplace_upgrade_loading_popup(Some("debug"));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let upgrade_lines = popup
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("Upgrading"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    insta::assert_snapshot!(
+        upgrade_lines,
+        @"Upgrading debug marketplace... | ›    Upgrading debug marketplace...  This updates when marketplace upgrade completes."
+    );
+}
+
+#[tokio::test]
+async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_marketplace_upgrade_loaded(
+        cwd.to_path_buf(),
+        Ok(MarketplaceUpgradeResponse {
+            selected_marketplaces: vec!["debug".to_string(), "tools".to_string()],
+            upgraded_roots: Vec::new(),
+            errors: vec![
+                MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "debug".to_string(),
+                    message: "git ls-remote marketplace source failed with status 128: authentication failed".to_string(),
+                },
+                MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "tools".to_string(),
+                    message: "failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest".to_string(),
+                },
+            ],
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(
+        rendered.trim(),
+        @"■ Failed to upgrade 2 marketplaces: debug: git ls-remote marketplace source failed with status 128: authentication failed; tools: failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest"
+    );
+}
+
+#[tokio::test]
+async fn hooks_popup_shows_list_diagnostics() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_hooks_loaded(
+        cwd.to_path_buf(),
+        Ok(HooksListResponse {
+            data: vec![HooksListEntry {
+                cwd: cwd.to_path_buf(),
+                hooks: Vec::new(),
+                warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
+                errors: vec![HookErrorInfo {
+                    path: test_path_buf("/tmp/hooks.json"),
+                    message: "failed to parse hooks config".to_string(),
+                }],
+            }],
+        }),
+    );
+
+    let popup = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 112));
+    assert_chatwidget_snapshot!("hooks_popup_shows_list_diagnostics", popup);
 }
 
 #[tokio::test]
@@ -275,6 +365,78 @@ async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
 }
 
 #[tokio::test]
+async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace_tab() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Repo Marketplace.")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
+            && popup.contains("Debug Plugin"),
+        "expected upgradeable user-configured marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceUpgradeLoading { marketplace_name }) => {
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected OpenMarketplaceUpgradeLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceUpgrade {
+            cwd: event_cwd,
+            marketplace_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected FetchMarketplaceUpgrade event, got {other:?}"),
+    }
+    let no_more_events = rx.try_recv();
+    assert!(
+        no_more_events.is_err(),
+        "expected no duplicate marketplace upgrade events, got {no_more_events:?}"
+    );
+}
+
+#[tokio::test]
 async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -283,6 +445,15 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     let marketplace_root = plugins_test_absolute_path("marketplaces/debug");
     let marketplace_path =
         plugins_test_absolute_path("marketplaces/debug/.agents/plugins/marketplace.json");
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.debug]\nsource_type = \"git\"\nsource = \"https://github.com/owner/debug.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
     render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
@@ -329,6 +500,8 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     assert_chatwidget_snapshot!("plugins_popup_newly_installed_marketplace", popup);
     assert!(
         popup.contains("Debug Marketplace installed successfully.")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
             && popup.contains("Debug Plugin"),
         "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
     );
@@ -344,6 +517,118 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
         reopened_popup.contains("Installed 0 of 1 Debug Marketplace plugins.")
             && !reopened_popup.contains("installed successfully"),
         "expected reopening the marketplace tab later to use the normal header, got:\n{reopened_popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_removes_user_configured_marketplace_flow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let cwd = chat.config.cwd.to_path_buf();
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+    while rx.try_recv().is_ok() {}
+
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    let repo_tab = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        repo_tab.contains("Repo Marketplace.")
+            && repo_tab.contains("ctrl + u upgrade")
+            && repo_tab.contains("ctrl + r remove")
+            && repo_tab.contains("Debug Plugin"),
+        "expected removable user-configured marketplace tab, got:\n{repo_tab}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    let confirmation = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        confirmation.contains("Remove Repo Marketplace marketplace?")
+            && confirmation.contains("Remove marketplace")
+            && confirmation.contains("Back to plugins"),
+        "expected marketplace removal confirmation, got:\n{confirmation}"
+    );
+    assert_chatwidget_snapshot!(
+        "plugins_popup_marketplace_remove_confirmation",
+        confirmation
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let marketplace_display_name = match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceRemoveLoading {
+            marketplace_display_name,
+        }) => marketplace_display_name,
+        other => panic!("expected OpenMarketplaceRemoveLoading event, got {other:?}"),
+    };
+    assert_eq!(marketplace_display_name, "Repo Marketplace");
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceRemove {
+            cwd: event_cwd,
+            marketplace_name,
+            marketplace_display_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, "repo");
+            assert_eq!(marketplace_display_name, "Repo Marketplace");
+        }
+        other => panic!("expected FetchMarketplaceRemove event, got {other:?}"),
+    }
+
+    chat.open_marketplace_remove_loading_popup(&marketplace_display_name);
+    let loading = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        loading.contains("Removing Repo Marketplace...")
+            && loading.contains("Removing marketplace..."),
+        "expected marketplace removal loading state, got:\n{loading}"
+    );
+
+    chat.on_marketplace_remove_loaded(
+        cwd.clone(),
+        "repo".to_string(),
+        marketplace_display_name,
+        Ok(MarketplaceRemoveResponse {
+            marketplace_name: "repo".to_string(),
+            installed_root: Some(plugins_test_absolute_path("marketplaces/repo")),
+        }),
+    );
+    chat.on_plugins_loaded(
+        cwd,
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+
+    let refreshed = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        refreshed.contains("Browse plugins from available marketplaces.")
+            && !refreshed.contains("Repo Marketplace")
+            && !refreshed.contains("Debug Plugin")
+            && !refreshed.contains("ctrl + r remove"),
+        "expected refreshed plugin list without removed marketplace, got:\n{refreshed}"
     );
 }
 
@@ -374,6 +659,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),
@@ -414,6 +703,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),
@@ -1047,7 +1340,7 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     );
     chat.add_connectors_output();
     assert!(
-        chat.connectors_prefetch_in_flight,
+        chat.connectors.prefetch_in_flight,
         "expected /apps to trigger a forced connectors refresh"
     );
 
@@ -1184,7 +1477,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 
@@ -1325,8 +1618,8 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         .enable(Feature::Apps)
         .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
-    chat.connectors_prefetch_in_flight = true;
-    chat.connectors_force_refetch_pending = true;
+    chat.connectors.prefetch_in_flight = true;
+    chat.connectors.force_refetch_pending = true;
 
     let full_connectors = vec![AppInfo {
         id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
@@ -1343,7 +1636,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-    chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
+    chat.connectors.cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
         connectors: full_connectors.clone(),
     });
 
@@ -1352,10 +1645,10 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         /*is_final*/ true,
     );
 
-    assert!(chat.connectors_prefetch_in_flight);
-    assert!(!chat.connectors_force_refetch_pending);
+    assert!(chat.connectors.prefetch_in_flight);
+    assert!(!chat.connectors.force_refetch_pending);
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 }
@@ -1449,7 +1742,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 
@@ -1508,7 +1801,7 @@ async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors.len() == 1
     );
 
@@ -1609,7 +1902,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1635,6 +1928,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -1675,7 +1969,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1708,6 +2002,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -1739,7 +2034,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1810,7 +2105,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1888,7 +2183,11 @@ async fn experimental_features_popup_snapshot() {
             enabled: true,
         },
     ];
-    let view = ExperimentalFeaturesView::new(features, chat.app_event_tx.clone());
+    let view = ExperimentalFeaturesView::new(
+        features,
+        chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
     chat.bottom_pane.show_view(Box::new(view));
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1908,6 +2207,7 @@ async fn experimental_features_toggle_saves_on_exit() {
             enabled: false,
         }],
         chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
     );
     chat.bottom_pane.show_view(Box::new(view));
 
@@ -2171,6 +2471,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         }],
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -2202,13 +2503,11 @@ async fn server_overloaded_error_does_not_switch_models() {
     while rx.try_recv().is_ok() {}
     while op_rx.try_recv().is_ok() {}
 
-    chat.handle_codex_event(Event {
-        id: "err-1".to_string(),
-        msg: EventMsg::Error(ErrorEvent {
-            message: "server overloaded".to_string(),
-            codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
-        }),
-    });
+    handle_error(
+        &mut chat,
+        "server overloaded",
+        Some(CodexErrorInfo::ServerOverloaded),
+    );
 
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::UpdateModel(model) = event {
@@ -2393,6 +2692,7 @@ async fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: single_effort,
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker: true,
@@ -2440,6 +2740,7 @@ async fn feedback_upload_consent_popup_snapshot() {
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
+        Some("auto-review-rollout-thread-1.jsonl".to_string()),
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),
@@ -2459,6 +2760,7 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
+        Some("auto-review-rollout-thread-1.jsonl".to_string()),
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),

@@ -2,11 +2,13 @@ use crate::events::AppServerRpcTransport;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
@@ -23,8 +25,15 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AcceptedLineFingerprint {
+    pub path_hash: String,
+    pub line_hash: String,
+}
 
 #[derive(Clone)]
 pub struct TrackEventsContext {
@@ -171,6 +180,7 @@ pub struct SkillInvocation {
     pub skill_name: String,
     pub skill_scope: SkillScope,
     pub skill_path: PathBuf,
+    pub plugin_id: Option<String>,
     pub invocation_type: InvocationType,
 }
 
@@ -272,20 +282,38 @@ pub(crate) enum AnalyticsFact {
         runtime: CodexRuntimeMetadata,
         rpc_transport: AppServerRpcTransport,
     },
-    Request {
+    ClientRequest {
         connection_id: u64,
         request_id: RequestId,
         request: Box<ClientRequest>,
     },
-    Response {
+    ClientResponse {
         connection_id: u64,
-        response: Box<ClientResponse>,
+        request_id: RequestId,
+        response: Box<ClientResponsePayload>,
     },
     ErrorResponse {
         connection_id: u64,
         request_id: RequestId,
         error: JSONRPCErrorError,
         error_type: Option<AnalyticsJsonRpcError>,
+    },
+    ServerRequest {
+        connection_id: u64,
+        request: Box<ServerRequest>,
+    },
+    ServerResponse {
+        completed_at_ms: u64,
+        response: Box<ServerResponse>,
+    },
+    EffectivePermissionsApprovalResponse {
+        completed_at_ms: u64,
+        request_id: RequestId,
+        response: Box<RequestPermissionsResponse>,
+    },
+    ServerRequestAborted {
+        completed_at_ms: u64,
+        request_id: RequestId,
     },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or

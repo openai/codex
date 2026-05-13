@@ -495,8 +495,9 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            fork_config,
+            fork_config.clone(),
             rollout_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )

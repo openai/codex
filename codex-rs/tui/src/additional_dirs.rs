@@ -46,13 +46,14 @@ fn format_warning(additional_dirs: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::add_dir_warning_message;
-    use codex_protocol::models::ManagedFileSystemPermissions;
+    use codex_app_server_protocol::FileSystemAccessMode;
+    use codex_app_server_protocol::FileSystemPath;
+    use codex_app_server_protocol::FileSystemSandboxEntry;
+    use codex_app_server_protocol::FileSystemSpecialPath;
+    use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+    use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+    use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_protocol::models::PermissionProfile;
-    use codex_protocol::permissions::FileSystemAccessMode;
-    use codex_protocol::permissions::FileSystemPath;
-    use codex_protocol::permissions::FileSystemSandboxEntry;
-    use codex_protocol::permissions::FileSystemSpecialPath;
-    use codex_protocol::protocol::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::path::PathBuf;
@@ -79,9 +80,10 @@ mod tests {
 
     #[test]
     fn returns_none_for_external_sandbox() {
-        let profile = PermissionProfile::External {
-            network: NetworkSandboxPolicy::Enabled,
-        };
+        let profile: PermissionProfile = AppServerPermissionProfile::External {
+            network: PermissionProfileNetworkPermissions { enabled: true },
+        }
+        .into();
         let dirs = vec![PathBuf::from("/tmp/example")];
         assert_eq!(
             add_dir_warning_message(&dirs, &profile, Path::new("/tmp/project")),
@@ -103,8 +105,9 @@ mod tests {
 
     #[test]
     fn warns_when_profile_can_write_elsewhere_but_not_cwd() {
-        let profile = PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Restricted {
+        let profile: PermissionProfile = AppServerPermissionProfile::Managed {
+            network: PermissionProfileNetworkPermissions { enabled: false },
+            file_system: PermissionProfileFileSystemPermissions::Restricted {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -121,8 +124,8 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
-            network: NetworkSandboxPolicy::Restricted,
-        };
+        }
+        .into();
         let dirs = vec![PathBuf::from("/tmp/extra")];
 
         assert_eq!(

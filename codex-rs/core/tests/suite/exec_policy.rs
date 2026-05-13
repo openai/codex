@@ -81,11 +81,6 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
 
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
-    // TODO execpolicy doesn't parse powershell commands yet
-    if cfg!(windows) {
-        return Ok(());
-    }
-
     let mut builder = test_codex().with_config(|config| {
         let policy_path = config.codex_home.join("rules").join("policy.rules");
         fs::create_dir_all(

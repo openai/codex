@@ -12,6 +12,8 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
+use crate::tools::flat_tool_name;
+use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
@@ -25,6 +27,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
@@ -76,7 +79,23 @@ impl ToolOrchestrator {
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
-        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+        let attempt_with_network_approval = SandboxAttempt {
+            sandbox: attempt.sandbox,
+            permissions: attempt.permissions,
+            enforce_managed_network: attempt.enforce_managed_network,
+            manager: attempt.manager,
+            sandbox_cwd: attempt.sandbox_cwd,
+            codex_linux_sandbox_exe: attempt.codex_linux_sandbox_exe,
+            use_legacy_landlock: attempt.use_legacy_landlock,
+            windows_sandbox_level: attempt.windows_sandbox_level,
+            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
+            network_denial_cancellation_token: network_approval
+                .as_ref()
+                .map(ActiveNetworkApproval::cancellation_token),
+        };
+        let run_result = tool
+            .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
+            .await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);
@@ -94,7 +113,11 @@ impl ToolOrchestrator {
             NetworkApprovalMode::Deferred => {
                 let deferred = network_approval.into_deferred();
                 if run_result.is_err() {
-                    finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+                    let finalize_result =
+                        finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+                    if let Err(err) = finalize_result {
+                        return (Err(err), None);
+                    }
                     return (run_result, None);
                 }
                 (run_result, deferred)
@@ -114,7 +137,7 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         let otel = turn_ctx.session_telemetry.clone();
-        let otel_tn = &tool_ctx.tool_name;
+        let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
@@ -127,7 +150,7 @@ impl ToolOrchestrator {
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
-        match requirement {
+        match &requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 if strict_auto_review {
                     let guardian_review_id = Some(new_guardian_review_id());
@@ -154,7 +177,7 @@ impl ToolOrchestrator {
                     already_approved = true;
                 } else {
                     otel.tool_decision(
-                        otel_tn,
+                        &otel_tn,
                         otel_ci,
                         &ReviewDecision::Approved,
                         ToolDecisionSource::Config,
@@ -162,7 +185,7 @@ impl ToolOrchestrator {
                 }
             }
             ExecApprovalRequirement::Forbidden { reason } => {
-                return Err(ToolError::Rejected(reason));
+                return Err(ToolError::Rejected(reason.clone()));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let guardian_review_id = use_guardian.then(new_guardian_review_id);
@@ -171,7 +194,7 @@ impl ToolOrchestrator {
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
                     guardian_review_id: guardian_review_id.clone(),
-                    retry_reason: reason,
+                    retry_reason: reason.clone(),
                     network_approval_context: None,
                 };
                 let decision = Self::request_approval(
@@ -192,8 +215,13 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
+        let sandbox_override = sandbox_override_for_first_attempt(
+            tool.sandbox_permissions(req),
+            &requirement,
+            &file_system_sandbox_policy,
+        );
         let managed_network_active = turn_ctx.network.is_some();
-        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
+        let initial_sandbox = match sandbox_override {
             SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
                 &file_system_sandbox_policy,
@@ -206,12 +234,14 @@ impl ToolOrchestrator {
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
+        #[allow(deprecated)]
+        let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             permissions: &turn_ctx.permission_profile,
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
-            sandbox_cwd: &turn_ctx.cwd,
+            sandbox_cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -219,6 +249,7 @@ impl ToolOrchestrator {
                 .config
                 .permissions
                 .windows_sandbox_private_desktop,
+            network_denial_cancellation_token: None,
         };
 
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
@@ -328,7 +359,7 @@ impl ToolOrchestrator {
                     permissions: &turn_ctx.permission_profile,
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
-                    sandbox_cwd: &turn_ctx.cwd,
+                    sandbox_cwd,
                     codex_linux_sandbox_exe: None,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -336,6 +367,7 @@ impl ToolOrchestrator {
                         .config
                         .permissions
                         .windows_sandbox_private_desktop,
+                    network_denial_cancellation_token: None,
                 };
 
                 // Second attempt.
@@ -374,6 +406,7 @@ impl ToolOrchestrator {
         if evaluate_permission_request_hooks
             && let Some(permission_request) = tool.permission_request_payload(req)
         {
+            let tool_name = flat_tool_name(&tool_ctx.tool_name);
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
@@ -385,7 +418,7 @@ impl ToolOrchestrator {
                 Some(PermissionRequestDecision::Allow) => {
                     let decision = ReviewDecision::Approved;
                     otel.tool_decision(
-                        &tool_ctx.tool_name,
+                        tool_name.as_ref(),
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
@@ -395,7 +428,7 @@ impl ToolOrchestrator {
                 Some(PermissionRequestDecision::Deny { message }) => {
                     let decision = ReviewDecision::Denied;
                     otel.tool_decision(
-                        &tool_ctx.tool_name,
+                        tool_name.as_ref(),
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
@@ -412,8 +445,9 @@ impl ToolOrchestrator {
             ToolDecisionSource::User
         };
         let decision = tool.start_approval_async(req, approval_ctx).await;
+        let tool_name = flat_tool_name(&tool_ctx.tool_name);
         otel.tool_decision(
-            &tool_ctx.tool_name,
+            tool_name.as_ref(),
             &tool_ctx.call_id,
             &decision,
             otel_source,

@@ -10,6 +10,7 @@ use tempfile::TempDir;
 
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigRequirementsToml;
+use codex_config::LoaderOverrides;
 use codex_config::NetworkRequirementsToml;
 use codex_core::CodexThread;
 use codex_core::config::Config;
@@ -23,6 +24,7 @@ use std::path::PathBuf;
 
 pub mod apps_test_server;
 pub mod context_snapshot;
+pub mod hooks;
 pub mod process;
 pub mod responses;
 pub mod streaming_sse;
@@ -181,6 +183,7 @@ pub async fn load_default_config_for_test_with_cloud_requirements(
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
     ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .cloud_requirements(cloud_requirements)

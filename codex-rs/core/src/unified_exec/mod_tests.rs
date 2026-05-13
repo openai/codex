@@ -83,6 +83,7 @@ async fn exec_command_with_tty(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
+    #[allow(deprecated)]
     let cwd = workdir
         .as_ref()
         .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
@@ -96,7 +97,11 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environment.as_ref().expect("turn environment"),
+                turn.environments
+                    .primary()
+                    .expect("turn environment")
+                    .environment
+                    .as_ref(),
             )
             .await?,
     );
@@ -111,7 +116,7 @@ async fn exec_command_with_tty(
             process_id,
             hook_command: cmd.to_string(),
             tty,
-            network_approval_id: None,
+            network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
         };
@@ -497,10 +502,12 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "exit 17".to_string()],
-        turn.cwd.clone(),
+        cwd,
         shell_env(),
     );
 
@@ -591,12 +598,15 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    turn.environment = Some(Arc::new(remote_test_env.environment().clone()));
+    turn.environments.turn_environments[0].environment =
+        Arc::new(remote_test_env.environment().clone());
 
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "echo ok".to_string()],
-        turn.cwd.clone(),
+        cwd,
         shell_env(),
     );
 
@@ -609,7 +619,11 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environment.as_ref().expect("turn environment"),
+            turn.environments
+                .primary()
+                .expect("turn environment")
+                .environment
+                .as_ref(),
         )
         .await
         .expect_err("expected inherited fd rejection");

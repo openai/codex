@@ -9,9 +9,9 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
@@ -23,9 +23,8 @@ use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
 use auth::resolve_provider_auth;
-use auth::resolve_region;
 pub(crate) use catalog::static_model_catalog;
-use mantle::base_url;
+use mantle::runtime_base_url;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
 #[derive(Clone, Debug)]
@@ -64,6 +63,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         }
     }
 
+    fn approval_review_preferred_model(&self) -> &'static str {
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         None
     }
@@ -80,10 +83,13 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     async fn api_provider(&self) -> Result<Provider> {
-        let region = resolve_region(&self.aws).await?;
         let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url = Some(base_url(&region)?);
+        api_provider_info.base_url = Some(runtime_base_url(&self.aws).await?);
         api_provider_info.to_api_provider(/*auth_mode*/ None)
+    }
+
+    async fn runtime_base_url(&self) -> Result<Option<String>> {
+        Ok(Some(runtime_base_url(&self.aws).await?))
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
@@ -94,12 +100,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         &self,
         _codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             config_model_catalog.unwrap_or_else(static_model_catalog),
-            collaboration_modes_config,
         ))
     }
 }
@@ -115,7 +119,7 @@ mod tests {
         let region = "eu-central-1";
         let mut api_provider_info =
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        api_provider_info.base_url = Some(base_url(region).expect("supported region"));
+        api_provider_info.base_url = Some(mantle::base_url(region).expect("supported region"));
         let api_provider = api_provider_info
             .to_api_provider(/*auth_mode*/ None)
             .expect("api provider should build");
@@ -139,6 +143,18 @@ mod tests {
                 image_generation: false,
                 web_search: false,
             }
+        );
+    }
+
+    #[test]
+    fn approval_review_preferred_model_uses_bedrock_gpt_5_4() {
+        let provider = AmazonBedrockModelProvider::new(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        );
+
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            AMAZON_BEDROCK_GPT_5_4_MODEL_ID
         );
     }
 }

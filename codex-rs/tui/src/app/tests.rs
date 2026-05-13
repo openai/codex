@@ -13,6 +13,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
@@ -21,6 +22,8 @@ use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
 use assert_matches::assert_matches;
 
+use crate::app_command::AppCommand as Op;
+use crate::diff_model::FileChange;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
@@ -28,12 +31,15 @@ use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
@@ -46,6 +52,7 @@ use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
@@ -59,6 +66,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
 use codex_otel::SessionTelemetry;
@@ -66,30 +74,19 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
-use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::NetworkApprovalContext;
-use codex_protocol::protocol::NetworkApprovalProtocol;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -158,6 +155,42 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
         )),
         false
     );
+}
+
+#[test]
+fn startup_paused_goal_prompt_gate_is_only_for_quiet_resume() {
+    let resume = SessionSelection::Resume(crate::resume_picker::SessionTarget {
+        path: Some(PathBuf::from("/tmp/restore")),
+        thread_id: ThreadId::new(),
+    });
+    let fork = SessionSelection::Fork(crate::resume_picker::SessionTarget {
+        path: Some(PathBuf::from("/tmp/fork")),
+        thread_id: ThreadId::new(),
+    });
+    let no_images: Vec<PathBuf> = Vec::new();
+    let initial_images = vec![PathBuf::from("/tmp/image.png")];
+
+    assert!(App::should_prompt_for_paused_goal_after_startup_resume(
+        &resume, &None, &no_images
+    ));
+    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
+        &resume,
+        &Some("continue from here".to_string()),
+        &no_images
+    ));
+    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
+        &resume,
+        &None,
+        &initial_images
+    ));
+    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
+        &SessionSelection::StartFresh,
+        &None,
+        &no_images
+    ));
+    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
+        &fork, &None, &no_images
+    ));
 }
 
 #[test]
@@ -271,6 +304,18 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     assert!(app.transcript_cells.is_empty());
 }
 
+#[test]
+fn bypass_hook_trust_startup_warning_snapshot() {
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(
+            "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
+                .to_string(),
+        )
+        .display_lines(/*width*/ 80),
+    );
+
+    assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
+}
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -394,8 +439,10 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
         initial_user_message: create_initial_user_message(
             Some(initial_prompt.clone()),
             Vec::new(),
@@ -407,6 +454,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: false,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(model),
         startup_tooltip_override: None,
@@ -507,18 +555,8 @@ async fn history_lookup_response_is_routed_to_requesting_thread() -> Result<()> 
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
 
-    let handled = app
-        .try_handle_local_history_op(
-            thread_id,
-            &Op::GetHistoryEntryRequest {
-                offset: 0,
-                log_id: 1,
-            }
-            .into(),
-        )
+    app.lookup_message_history_entry(thread_id, /*offset*/ 0, /*log_id*/ 1)
         .await?;
-
-    assert!(handled);
 
     let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
         .await
@@ -1207,8 +1245,10 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 #[tokio::test]
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextWindowSize]);
+    app.chat_widget.setup_status_line(
+        vec![crate::bottom_pane::StatusLineItem::ContextWindowSize],
+        /*use_theme_colors*/ true,
+    );
 
     assert_eq!(app.chat_widget.status_line_text(), None);
 
@@ -1225,16 +1265,87 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 }
 
 #[tokio::test]
-async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
+async fn collab_receiver_notification_caches_thread_without_app_server_read() {
     let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "wait-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::Wait,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: None,
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+        }),
+    ));
+
+    assert_eq!(
+        app.agent_navigation.get(&receiver_thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            is_closed: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_does_not_cache_not_found_thread() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "send-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::SendInput,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::Failed,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: Some("hello".to_string()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::from([(
+                    receiver_thread_id.to_string(),
+                    codex_app_server_protocol::CollabAgentState {
+                        status: codex_app_server_protocol::CollabAgentStatus::NotFound,
+                        message: None,
+                    },
+                )]),
+            },
+        }),
+    ));
+
+    assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
+}
+
+#[tokio::test]
+async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
     assert_eq!(
@@ -1251,10 +1362,12 @@ async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
 
 #[tokio::test]
 async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
@@ -1265,7 +1378,7 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
         /*is_closed*/ true,
     );
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
     assert_eq!(
@@ -1281,10 +1394,12 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 
 #[tokio::test]
 async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.agent_navigation.upsert(
         thread_id,
@@ -1293,7 +1408,7 @@ async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()>
         /*is_closed*/ false,
     );
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     assert_eq!(app.agent_navigation.get(&thread_id), None);
     assert!(app.agent_navigation.is_empty());
@@ -1302,10 +1417,12 @@ async fn open_agent_picker_prunes_terminal_metadata_only_threads() -> Result<()>
 
 #[tokio::test]
 async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
@@ -1316,7 +1433,7 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
         /*is_closed*/ false,
     );
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     assert_eq!(
         app.agent_navigation.get(&thread_id),
@@ -1329,91 +1446,126 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+#[test]
+fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
         .await
         .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await?;
-    let thread_id = started.session.thread_id;
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    app.open_agent_picker(&mut app_server).await;
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
 
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            is_closed: false,
-        })
-    );
-    Ok(())
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                is_closed: false,
+            })
+        );
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads()
--> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await?;
-    let thread_id = started.session.thread_id;
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Scout".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let err = app
-        .attach_live_thread_for_selection(&mut app_server, thread_id)
-        .await
-        .expect_err("empty fallback should not attach as a blank replay-only thread");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    assert_eq!(
-        err.to_string(),
-        format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-    );
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+    runtime.block_on(async {
+        let config = {
+            let app = make_test_app().await;
+            app.chat_widget.config_ref().clone()
+        };
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let started = app_server.start_thread(&config).await?;
+        let thread_id = started.session.thread_id;
+        let mut app = make_test_app().await;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let err = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await
+            .expect_err("empty fallback should not attach as a blank replay-only thread");
+
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let mut ephemeral_config = app.chat_widget.config_ref().clone();
-    ephemeral_config.ephemeral = true;
-    let started = app_server.start_thread(&ephemeral_config).await?;
-    let thread_id = started.session.thread_id;
-    app.agent_navigation.upsert(
-        thread_id,
-        Some("Scout".to_string()),
-        Some("worker".to_string()),
-        /*is_closed*/ false,
-    );
+#[test]
+fn attach_live_thread_for_selection_rejects_unmaterialized_fallback_threads() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let err = app
-        .attach_live_thread_for_selection(&mut app_server, thread_id)
-        .await
-        .expect_err("ephemeral fallback should not attach as a blank live thread");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    assert_eq!(
-        err.to_string(),
-        format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-    );
-    assert!(!app.thread_event_channels.contains_key(&thread_id));
-    Ok(())
+    runtime.block_on(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut ephemeral_config = app.chat_widget.config_ref().clone();
+        ephemeral_config.ephemeral = true;
+        let started = app_server.start_thread(&ephemeral_config).await?;
+        let thread_id = started.session.thread_id;
+        app.agent_navigation.upsert(
+            thread_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        let err = app
+            .attach_live_thread_for_selection(&mut app_server, thread_id)
+            .await
+            .expect_err("ephemeral fallback should not attach as a blank live thread");
+
+        assert_eq!(
+            err.to_string(),
+            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
+        );
+        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    })
 }
 
 #[tokio::test]
@@ -1444,10 +1596,12 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
 
 #[tokio::test]
 async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app = Box::pin(make_test_app()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.agent_navigation.upsert(
         thread_id,
@@ -1456,9 +1610,8 @@ async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_thread
         /*is_closed*/ false,
     );
 
-    let is_available = app
-        .refresh_agent_picker_thread_liveness(&mut app_server, thread_id)
-        .await;
+    let is_available =
+        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
 
     assert!(!is_available);
     assert_eq!(app.agent_navigation.get(&thread_id), None);
@@ -1468,13 +1621,15 @@ async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_thread
 
 #[tokio::test]
 async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let _ = app.config.features.disable(Feature::Collab);
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1498,16 +1653,16 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
 
 #[tokio::test]
 async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    app.update_memory_settings_with_app_server(
+    Box::pin(app.update_memory_settings_with_app_server(
         &mut app_server,
         /*use_memories*/ false,
         /*generate_memories*/ false,
-    )
+    ))
     .await;
 
     assert!(!app.config.memories.use_memories);
@@ -1539,68 +1694,85 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
     Ok(())
 }
 
-#[tokio::test]
-async fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    // Seed the previous setting so this test exercises the thread-mode update path.
-    app.config.memories.generate_memories = true;
+#[test]
+fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let started = app_server.start_thread(&app.config).await?;
-    let thread_id = started.session.thread_id;
-    app.active_thread_id = Some(thread_id);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    app.update_memory_settings_with_app_server(
-        &mut app_server,
-        /*use_memories*/ true,
-        /*generate_memories*/ false,
-    )
-    .await;
+    runtime.block_on(async {
+        let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
+        // Seed the previous setting so this test exercises the thread-mode update path.
+        app.config.memories.generate_memories = true;
 
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        app.config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
-    let memory_mode = state_db
-        .get_thread_memory_mode(thread_id)
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let started = app_server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        app.active_thread_id = Some(thread_id);
+
+        Box::pin(app.update_memory_settings_with_app_server(
+            &mut app_server,
+            /*use_memories*/ true,
+            /*generate_memories*/ false,
+        ))
+        .await;
+
+        let state_db = codex_state::StateRuntime::init(
+            codex_home.path().to_path_buf(),
+            app.config.model_provider_id.clone(),
+        )
         .await
-        .expect("thread memory mode should be readable");
-    assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        .expect("state db should initialize");
+        let memory_mode = state_db
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("thread memory mode should be readable");
+        assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
-    app_server.shutdown().await?;
-    Ok(())
+        app_server.shutdown().await?;
+        Ok(())
+    })
 }
 
 #[tokio::test]
 async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    app.config.sqlite_home = codex_home.path().to_path_buf();
+    Box::pin(async {
+        let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
 
-    let memory_root = codex_home.path().join("memories");
-    let extensions_root = memory_root.join("extensions");
-    std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
-    std::fs::create_dir_all(&extensions_root)?;
-    std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
-    std::fs::write(
-        memory_root.join("rollout_summaries").join("stale.md"),
-        "stale summary\n",
-    )?;
-    std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
+        let memory_root = codex_home.path().join("memories");
+        let extensions_root = memory_root.join("extensions");
+        std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
+        std::fs::create_dir_all(&extensions_root)?;
+        std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
+        std::fs::write(
+            memory_root.join("rollout_summaries").join("stale.md"),
+            "stale summary\n",
+        )?;
+        std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    app.reset_memories_with_app_server(&mut app_server).await;
+        Box::pin(app.reset_memories_with_app_server(&mut app_server)).await;
 
-    assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
+        assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
 
-    app_server.shutdown().await?;
-    Ok(())
+        app_server.shutdown().await?;
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]
@@ -1625,15 +1797,17 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approvals_reviewer
     );
     assert_eq!(
-        app.config.permissions.approval_policy.value(),
+        AskForApproval::from(app.config.permissions.approval_policy.value()),
         auto_review.approval_policy
     );
     assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .approval_policy
-            .value(),
+        AskForApproval::from(
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .approval_policy
+                .value(),
+        ),
         auto_review.approval_policy
     );
     assert_eq!(
@@ -1658,7 +1832,6 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: None,
             permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1714,7 +1887,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     app.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)?;
+        .set(AskForApproval::OnRequest.to_core())?;
     app.config
         .permissions
         .set_permission_profile(PermissionProfile::workspace_write())?;
@@ -1735,7 +1908,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     );
     assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
     assert_eq!(
-        app.config.permissions.approval_policy.value(),
+        AskForApproval::from(app.config.permissions.approval_policy.value()),
         AskForApproval::OnRequest
     );
     assert_eq!(
@@ -1749,7 +1922,6 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy: None,
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1812,7 +1984,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         auto_review.approvals_reviewer
     );
     assert_eq!(
-        app.config.permissions.approval_policy.value(),
+        AskForApproval::from(app.config.permissions.approval_policy.value()),
         auto_review.approval_policy
     );
     assert_eq!(
@@ -1828,7 +2000,6 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: None,
             permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1886,7 +2057,6 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy: None,
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1946,7 +2116,6 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: None,
             permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -2034,7 +2203,6 @@ guardian_approval = true
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy: None,
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -2137,15 +2305,17 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
 
 #[tokio::test]
 async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-    app.open_agent_picker(&mut app_server).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -2464,35 +2634,37 @@ async fn inactive_thread_exec_approval_preserves_context() {
 
     assert_eq!(
         network_approval_context,
-        Some(NetworkApprovalContext {
+        Some(AppServerNetworkApprovalContext {
             host: "example.com".to_string(),
-            protocol: NetworkApprovalProtocol::Socks5Tcp,
+            protocol: AppServerNetworkApprovalProtocol::Socks5Tcp,
         })
     );
     assert_eq!(
         additional_permissions,
-        Some(CoreAdditionalPermissionProfile {
-            network: Some(NetworkPermissions {
+        Some(AdditionalPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions::from_read_write_roots(
-                Some(vec![test_absolute_path("/tmp/read-only")]),
-                Some(vec![test_absolute_path("/tmp/write")]),
-            )),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![test_absolute_path("/tmp/read-only")]),
+                write: Some(vec![test_absolute_path("/tmp/write")]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
         })
     );
     assert_eq!(
         available_decisions,
         vec![
-            codex_protocol::protocol::ReviewDecision::Approved,
-            codex_protocol::protocol::ReviewDecision::ApprovedForSession,
-            codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment {
-                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+            codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+            codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession,
+            codex_app_server_protocol::CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                network_policy_amendment: AppServerNetworkPolicyAmendment {
                     host: "example.com".to_string(),
-                    action: codex_protocol::approvals::NetworkPolicyRuleAction::Allow,
+                    action: AppServerNetworkPolicyRuleAction::Allow,
                 },
             },
-            codex_protocol::protocol::ReviewDecision::Abort,
+            codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel,
         ]
     );
 }
@@ -2540,6 +2712,7 @@ async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id.to_string(),
             turn_id: "turn-approval".to_string(),
+            started_at_ms: 0,
             item: ThreadItem::FileChange {
                 id: "patch-approval".to_string(),
                 changes: vec![FileUpdateChange {
@@ -2560,6 +2733,7 @@ async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
             thread_id: thread_id.to_string(),
             turn_id: "turn-approval".to_string(),
             item_id: "patch-approval".to_string(),
+            started_at_ms: 0,
             reason: Some("command failed; retry without sandbox?".to_string()),
             grant_root: None,
         },
@@ -2610,6 +2784,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
             thread_id: thread_id.to_string(),
             turn_id: "turn-approval".to_string(),
             item_id: "call-approval".to_string(),
+            started_at_ms: 0,
             cwd: test_absolute_path("/tmp"),
             reason: Some("Need access to .git".to_string()),
             permissions: codex_app_server_protocol::RequestPermissionProfile {
@@ -2646,6 +2821,84 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                 Some(vec![test_absolute_path("/tmp/write")]),
             )),
         }
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_url_elicitation_routes_to_app_link() {
+    let app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let request = ServerRequest::McpServerElicitationRequest {
+        request_id: AppServerRequestId::Integer(9),
+        params: McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "payments".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Review the payment details to continue.".to_string(),
+                url: "https://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
+            },
+        },
+    };
+
+    let Some(ThreadInteractiveRequest::AppLink(params)) = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await
+    else {
+        panic!("expected app link request");
+    };
+
+    assert_eq!(params.title, "Action required");
+    assert_eq!(params.description, Some("Server: payments".to_string()));
+    assert_eq!(params.url, "https://payments.example/checkout/123");
+    assert_eq!(
+        params.elicitation_target,
+        Some(crate::bottom_pane::AppLinkElicitationTarget {
+            thread_id,
+            server_name: "payments".to_string(),
+            request_id: AppServerRequestId::Integer(9),
+        })
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_invalid_url_elicitation_is_declined() {
+    let (app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let request = ServerRequest::McpServerElicitationRequest {
+        request_id: AppServerRequestId::Integer(10),
+        params: McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "payments".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Review the payment details to continue.".to_string(),
+                url: "http://payments.example/checkout/123".to_string(),
+                elicitation_id: "payment-123".to_string(),
+            },
+        },
+    };
+
+    assert!(
+        app.interactive_request_for_thread_request(thread_id, &request)
+            .await
+            .is_none()
+    );
+    assert_matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::SubmitThreadOp {
+            thread_id: op_thread_id,
+            op: Op::ResolveElicitation {
+                server_name,
+                request_id: AppServerRequestId::Integer(10),
+                decision: codex_app_server_protocol::McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            },
+        }) if op_thread_id == thread_id && server_name == "payments"
     );
 }
 
@@ -2737,35 +2990,14 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     );
 
     let rollout_path = temp_dir.path().join("agent-rollout.jsonl");
-    let permission_profile = PermissionProfile::workspace_write();
-    let turn_context = TurnContextItem {
-        turn_id: None,
-        trace_id: None,
-        cwd: test_path_buf("/tmp/agent"),
-        current_date: None,
-        timezone: None,
-        approval_policy: primary_session.approval_policy,
-        sandbox_policy: permission_profile
-            .to_legacy_sandbox_policy(test_path_buf("/tmp/agent").as_path())
-            .expect("workspace profile must be legacy-compatible"),
-        permission_profile: Some(permission_profile),
-        network: None,
-        file_system_sandbox_policy: None,
-        model: "gpt-agent".to_string(),
-        personality: None,
-        collaboration_mode: None,
-        realtime_active: Some(false),
-        effort: primary_session.reasoning_effort,
-        summary: app.config.model_reasoning_summary.unwrap_or_default(),
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: None,
-    };
-    let rollout = RolloutLine {
-        timestamp: "t0".to_string(),
-        item: RolloutItem::TurnContext(turn_context),
-    };
+    let rollout = serde_json::json!({
+        "timestamp": "t0",
+        "type": "turn_context",
+        "payload": {
+            "cwd": test_path_buf("/tmp/agent"),
+            "model": "gpt-agent",
+        },
+    });
     std::fs::write(
         &rollout_path,
         format!("{}\n", serde_json::to_string(&rollout)?),
@@ -2775,6 +3007,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ServerNotification::ThreadStarted(ThreadStartedNotification {
             thread: Thread {
                 id: agent_thread_id.to_string(),
+                session_id: agent_thread_id.to_string(),
                 forked_from_id: None,
                 preview: "agent thread".to_string(),
                 ephemeral: false,
@@ -2786,6 +3019,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
@@ -2856,6 +3090,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ServerNotification::ThreadStarted(ThreadStartedNotification {
             thread: Thread {
                 id: agent_thread_id.to_string(),
+                session_id: agent_thread_id.to_string(),
                 forked_from_id: None,
                 preview: "agent thread".to_string(),
                 ephemeral: false,
@@ -2867,6 +3102,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 cwd: test_path_buf("/tmp/agent").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Unknown,
+                thread_source: None,
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
@@ -2910,6 +3146,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
 
     let thread = Thread {
         id: read_thread_id.to_string(),
+        session_id: read_thread_id.to_string(),
         forked_from_id: None,
         preview: "read thread".to_string(),
         ephemeral: false,
@@ -2921,6 +3158,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         cwd: test_path_buf("/tmp/read").abs(),
         cli_version: "0.0.0".to_string(),
         source: codex_app_server_protocol::SessionSource::Unknown,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -3001,8 +3239,7 @@ fn agent_picker_item_name_snapshot() {
 
 #[tokio::test]
 async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
-    let mut app = make_test_app().await;
-    app.config.developer_instructions = Some("Existing developer policy.".to_string());
+    let app = make_test_app().await;
     let original_approval_policy = app.config.permissions.approval_policy.value();
     let original_sandbox_policy = app.config.legacy_sandbox_policy();
 
@@ -3018,7 +3255,6 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
         .developer_instructions
         .as_deref()
         .expect("side developer instructions");
-    assert!(developer_instructions.contains("Existing developer policy."));
     assert!(
         developer_instructions.contains("You are in a side conversation, not the main thread.")
     );
@@ -3044,6 +3280,49 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     assert!(developer_instructions.contains("Do not modify files"));
     assert!(developer_instructions.contains("Do not request escalated permissions"));
     assert!(app.transcript_cells.is_empty());
+}
+
+#[tokio::test]
+async fn side_fork_config_inherits_parent_thread_runtime_settings() {
+    let mut app = make_test_app().await;
+    app.config.model = Some("persisted-default-model".to_string());
+    app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+
+    let parent_service_tier = ServiceTier::Fast.request_value();
+    let parent_permission_profile = PermissionProfile::workspace_write();
+    app.chat_widget.set_model("parent-thread-model");
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    app.chat_widget
+        .set_service_tier(Some(parent_service_tier.to_string()));
+    app.chat_widget
+        .set_approval_policy(AskForApproval::OnRequest);
+    app.chat_widget
+        .set_permission_profile(parent_permission_profile.clone())
+        .expect("test permission profile should be accepted");
+    app.chat_widget
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+
+    let fork_config = app.side_fork_config();
+
+    assert_eq!(
+        (
+            fork_config.model.as_deref(),
+            fork_config.model_reasoning_effort,
+            fork_config.service_tier.as_deref(),
+            fork_config.permissions.approval_policy.value(),
+            fork_config.permissions.permission_profile(),
+            fork_config.approvals_reviewer,
+        ),
+        (
+            Some("parent-thread-model"),
+            Some(ReasoningEffortConfig::High),
+            Some(parent_service_tier),
+            AskForApproval::OnRequest.to_core(),
+            parent_permission_profile,
+            ApprovalsReviewer::AutoReview,
+        )
+    );
 }
 
 #[tokio::test]
@@ -3203,6 +3482,7 @@ async fn side_thread_snapshot_hides_forked_parent_transcript() {
     let mut store = ThreadEventStore::new(/*capacity*/ 4);
     let session = ThreadSessionState {
         forked_from_id: Some(parent_thread_id),
+        fork_parent_title: None,
         ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
     };
     let parent_turn = test_turn(
@@ -3265,6 +3545,7 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
     let snapshot = ThreadEventSnapshot {
         session: Some(ThreadSessionState {
             forked_from_id: Some(parent_thread_id),
+            fork_parent_title: None,
             ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
         }),
         turns: Vec::new(),
@@ -3352,30 +3633,33 @@ async fn side_discard_selection_keeps_current_side_thread() {
 
 #[tokio::test]
 async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-    let mut side_config = app.chat_widget.config_ref().clone();
-    side_config.ephemeral = true;
-    let started = app_server.start_thread(&side_config).await?;
-    let side_thread_id = started.session.thread_id;
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
-    app.agent_navigation.upsert(
-        side_thread_id,
-        Some("Side".to_string()),
-        Some("side".to_string()),
-        /*is_closed*/ false,
-    );
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut side_config = app.chat_widget.config_ref().clone();
+        side_config.ephemeral = true;
+        let started = app_server.start_thread(&side_config).await?;
+        let side_thread_id = started.session.thread_id;
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
 
-    assert!(
-        app.discard_side_thread(&mut app_server, side_thread_id)
-            .await
-    );
+        assert!(
+            app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
 
-    assert_eq!(app.agent_navigation.get(&side_thread_id), None);
-    assert!(!app.side_threads.contains_key(&side_thread_id));
-    Ok(())
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]
@@ -3560,9 +3844,10 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         )) as Arc<dyn HistoryCell>
     };
     let make_header = |is_first| -> Arc<dyn HistoryCell> {
-        let event = SessionConfiguredEvent {
-            session_id: ThreadId::new(),
+        let session = ThreadSessionState {
+            thread_id: ThreadId::new(),
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -3570,18 +3855,18 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         };
         Arc::new(new_session_info(
             app.chat_widget.config_ref(),
             app.chat_widget.current_model(),
-            event,
+            &session,
             is_first,
             /*tooltip_override*/ None,
             /*auth_plan*/ None,
@@ -3659,8 +3944,11 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     set_fast_mode_test_catalog(&mut app.chat_widget);
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
     set_chatgpt_auth(&mut app.chat_widget);
     set_fast_mode_test_catalog(&mut app.chat_widget);
 
@@ -3691,7 +3979,9 @@ async fn make_test_app() -> App {
         session_telemetry,
         app_event_tx,
         chat_widget,
+        workspace_command_runner: None,
         config,
+        state_db: None,
         active_profile: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -3714,8 +4004,7 @@ async fn make_test_app() -> App {
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        remote_app_server_url: None,
-        remote_app_server_auth_token: None,
+        remote_app_server_endpoint: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
@@ -3731,6 +4020,7 @@ async fn make_test_app() -> App {
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
+        pending_hook_enabled_writes: HashMap::new(),
     }
 }
 
@@ -3751,7 +4041,9 @@ async fn make_test_app_with_channels() -> (
             session_telemetry,
             app_event_tx,
             chat_widget,
+            workspace_command_runner: None,
             config,
+            state_db: None,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
@@ -3774,8 +4066,7 @@ async fn make_test_app_with_channels() -> (
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            remote_app_server_url: None,
-            remote_app_server_auth_token: None,
+            remote_app_server_endpoint: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -3791,6 +4082,7 @@ async fn make_test_app_with_channels() -> (
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
+            pending_hook_enabled_writes: HashMap::new(),
         },
         rx,
         op_rx,
@@ -3809,11 +4101,11 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     }
@@ -3880,6 +4172,32 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
 }
 
 #[tokio::test]
+async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda".to_string(),
+        Path::new("/tmp"),
+    ))];
+
+    let without_pet = app.render_transcript_lines_for_reflow(/*width*/ 40);
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let width = app.chat_widget.history_wrap_width(/*width*/ 40);
+    assert!(width < 40);
+    let with_pet = app.render_transcript_lines_for_reflow(width);
+
+    assert!(
+        with_pet.lines.len() > without_pet.lines.len(),
+        "expected pet-enabled transcript reflow to wrap earlier"
+    );
+}
+
+#[tokio::test]
 async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
@@ -3941,6 +4259,33 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
 }
 
 #[tokio::test]
+async fn thread_switch_replay_buffer_uses_transcript_tail_mode_when_row_cap_present() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
+
+    app.begin_thread_switch_history_replay_buffer();
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("thread switch replay buffer should be active");
+    assert!(buffer.render_from_transcript_tail);
+    assert!(buffer.retained_lines.is_empty());
+}
+
+#[tokio::test]
+async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+
+    app.begin_thread_switch_history_replay_buffer();
+
+    assert!(app.initial_history_replay_buffer.is_none());
+}
+
+#[tokio::test]
 async fn height_shrink_schedules_resize_reflow() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
@@ -3963,6 +4308,7 @@ async fn height_shrink_schedules_resize_reflow() {
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
         items,
         status,
         error: None,
@@ -4057,6 +4403,7 @@ fn exec_approval_request(
             thread_id: thread_id.to_string(),
             turn_id: turn_id.to_string(),
             item_id: item_id.to_string(),
+            started_at_ms: 0,
             approval_id: approval_id.map(str::to_string),
             reason: Some("needs approval".to_string()),
             network_approval_context: None,
@@ -4208,7 +4555,7 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
         "test_originator".to_string(),
         /*log_user_prompts*/ false,
         "test".to_string(),
-        SessionSource::Cli,
+        crate::test_support::session_source_cli(),
     )
 }
 
@@ -4276,14 +4623,21 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
 #[tokio::test]
 async fn fresh_session_config_uses_current_service_tier() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+    app.chat_widget.set_service_tier(Some(
+        codex_protocol::config_types::ServiceTier::Fast
+            .request_value()
+            .to_string(),
+    ));
 
     let config = app.fresh_session_config();
 
     assert_eq!(
         config.service_tier,
-        Some(codex_protocol::config_types::ServiceTier::Fast)
+        Some(
+            codex_protocol::config_types::ServiceTier::Fast
+                .request_value()
+                .to_string()
+        )
     );
 }
 
@@ -4311,9 +4665,10 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
     };
 
     let make_header = |is_first| {
-        let event = SessionConfiguredEvent {
-            session_id: ThreadId::new(),
+        let session = ThreadSessionState {
+            thread_id: ThreadId::new(),
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -4321,18 +4676,18 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         };
         Arc::new(new_session_info(
             app.chat_widget.config_ref(),
             app.chat_widget.current_model(),
-            event,
+            &session,
             is_first,
             /*tooltip_override*/ None,
             /*auth_plan*/ None,
@@ -4372,11 +4727,11 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
     assert_eq!(user_count(&app.transcript_cells), 2);
 
     let base_id = ThreadId::new();
-    app.chat_widget.handle_codex_event(Event {
-        id: String::new(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: base_id,
+    app.chat_widget
+        .handle_thread_session(crate::session_state::ThreadSessionState {
+            thread_id: base_id,
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -4384,15 +4739,14 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
-        }),
-    });
+        });
 
     app.backtrack.base_id = Some(base_id);
     app.backtrack.primed = true;
@@ -4465,11 +4819,11 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
     let thread_id = ThreadId::new();
-    app.chat_widget.handle_codex_event(Event {
-        id: String::new(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: thread_id,
+    app.chat_widget
+        .handle_thread_session(crate::session_state::ThreadSessionState {
+            thread_id,
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -4477,15 +4831,14 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
-        }),
-    });
+        });
 
     let data_image_url = "data:image/png;base64,abc123".to_string();
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
@@ -4521,7 +4874,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     assert!(items.iter().any(|item| {
         matches!(
             item,
-            UserInput::Image { image_url } if image_url == &data_image_url
+            UserInput::Image { url } if url == &data_image_url
         )
     }));
 }
@@ -4539,6 +4892,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
             turns: vec![
                 Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
                         content: vec![AppServerUserInput::Text {
@@ -4554,6 +4908,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                 },
                 Turn {
                     id: "turn-2".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),
@@ -4618,8 +4973,10 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 
     let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
         config: app.config.clone(),
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
@@ -4627,6 +4984,10 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         feedback: app.feedback.clone(),
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
+        runtime_model_provider_base_url: app
+            .chat_widget
+            .runtime_model_provider_base_url()
+            .map(str::to_string),
         initial_plan_type: app.chat_widget.current_plan_type(),
         model: Some(app.chat_widget.current_model().to_string()),
         startup_tooltip_override: None,
@@ -4645,6 +5006,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
                     codex_app_server_protocol::ItemStartedNotification {
                         thread_id: "thread-1".to_string(),
                         turn_id: "turn-1".to_string(),
+                        started_at_ms: 0,
                         item: ThreadItem::CollabAgentToolCall {
                             id: "wait-1".to_string(),
                             tool: codex_app_server_protocol::CollabAgentTool::Wait,
@@ -4706,6 +5068,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
     )];
     let resumed_session = ThreadSessionState {
         cwd: test_path_buf("/tmp/refreshed").abs(),
+        instruction_source_paths: Vec::new(),
         ..initial_session.clone()
     };
     let mut snapshot = ThreadEventSnapshot {
@@ -4820,6 +5183,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
         &ThreadRollbackResponse {
             thread: Thread {
                 id: thread_id.to_string(),
+                session_id: thread_id.to_string(),
                 forked_from_id: None,
                 preview: String::new(),
                 ephemeral: false,
@@ -4830,7 +5194,8 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
-                source: SessionSource::Cli.into(),
+                source: SessionSource::Cli,
+                thread_source: None,
                 agent_nickname: None,
                 agent_role: None,
                 git_info: None,
@@ -4850,45 +5215,48 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
 
 #[tokio::test]
 async fn new_session_requests_shutdown_for_previous_conversation() {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    Box::pin(async {
+        let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
 
-    let thread_id = ThreadId::new();
-    let event = SessionConfiguredEvent {
-        session_id: thread_id,
-        forked_from_id: None,
-        thread_name: None,
-        model: "gpt-test".to_string(),
-        model_provider_id: "test-provider".to_string(),
-        service_tier: None,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::read_only(),
-        cwd: test_path_buf("/home/user/project").abs(),
-        reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: None,
-        network_proxy: None,
-        rollout_path: Some(PathBuf::new()),
-    };
+        let thread_id = ThreadId::new();
+        let event = crate::session_state::ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            fork_parent_title: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            cwd: test_path_buf("/home/user/project").abs(),
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: None,
+            message_history: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        };
 
-    app.chat_widget.handle_codex_event(Event {
-        id: String::new(),
-        msg: EventMsg::SessionConfigured(event),
-    });
+        app.chat_widget.handle_thread_session(event);
 
-    while app_event_rx.try_recv().is_ok() {}
-    while op_rx.try_recv().is_ok() {}
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
         .await
         .expect("embedded app server");
-    app.shutdown_current_thread(&mut app_server).await;
+        Box::pin(app.shutdown_current_thread(&mut app_server)).await;
 
-    assert!(
-        op_rx.try_recv().is_err(),
-        "shutdown should not submit Op::Shutdown"
-    );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "shutdown should not submit Op::Shutdown"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -4897,12 +5265,12 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
     let thread_id = ThreadId::new();
     app.active_thread_id = Some(thread_id);
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let control = app
-        .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
-        .await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
     assert_eq!(app.pending_shutdown_exit_thread_id, None);
     assert!(matches!(
@@ -4913,16 +5281,16 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
 
 #[tokio::test]
 async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
     let thread_id = ThreadId::new();
     app.active_thread_id = Some(thread_id);
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let control = app
-        .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
-        .await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
     assert_eq!(app.pending_shutdown_exit_thread_id, None);
     assert!(matches!(
@@ -4937,37 +5305,45 @@ async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
 
 #[tokio::test]
 async fn interrupt_without_active_turn_is_treated_as_handled() {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
         .await
         .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("thread/start should succeed");
-    let thread_id = started.session.thread_id;
-    app.enqueue_primary_thread_session(started.session, started.turns)
-        .await
-        .expect("primary thread should be registered");
-    let op = AppCommand::interrupt();
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let op = AppCommand::interrupt();
 
-    let handled = app
-        .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+            &mut app_server,
+            thread_id,
+            &op,
+        ))
         .await
         .expect("interrupt submission should not fail");
 
-    assert_eq!(handled, true);
+        assert_eq!(handled, true);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn clear_only_ui_reset_preserves_chat_session_state() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.chat_widget.handle_codex_event(Event {
-        id: String::new(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: thread_id,
+    app.chat_widget
+        .handle_thread_session(crate::session_state::ThreadSessionState {
+            thread_id,
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: Some("keep me".to_string()),
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -4975,15 +5351,14 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
-        }),
-    });
+        });
     app.chat_widget
         .apply_external_edit("draft prompt".to_string());
     app.transcript_cells = vec![Arc::new(UserHistoryCell {
@@ -5015,6 +5390,32 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+}
+
+#[tokio::test]
+async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
+    let mut app = make_test_app().await;
+    let esc = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+
+    assert!(app.chat_widget.composer_is_empty());
+    assert!(app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    assert!(app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget
+        .handle_key_event(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        ));
+    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(!app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget.handle_key_event(esc);
+
+    assert!(!app.backtrack.primed);
+    assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(app.should_handle_backtrack_esc(esc));
 }
 
 #[tokio::test]

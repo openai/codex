@@ -16,7 +16,12 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
+pub use feature_configs::AppsMcpPathOverrideConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
+pub use feature_configs::NetworkProxyConfigToml;
+pub use feature_configs::NetworkProxyDomainPermissionToml;
+pub use feature_configs::NetworkProxyModeToml;
+pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -125,7 +130,7 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
-    /// Enable git commit attribution guidance via model instructions.
+    /// Removed legacy git commit attribution guidance flag.
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
@@ -139,6 +144,8 @@ pub enum Feature {
     ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Start the managed network proxy for sandboxed sessions.
+    NetworkProxy,
     /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
@@ -149,11 +156,13 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
+    /// Use the new path for the host-owned apps MCP server.
+    AppsMcpPathOverride,
     /// Enable the tool_search tool for apps.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
-    /// Expose placeholder tools for unavailable historical tool calls.
+    /// Removed compatibility flag for the deleted unavailable-tool placeholder backfill.
     UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
@@ -169,12 +178,18 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow Browser Use integration with external browsers.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUseExternal,
     /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Enable remote plugin sharing flows.
+    PluginSharing,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
@@ -183,6 +198,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
@@ -197,6 +214,8 @@ pub enum Feature {
     CollaborationModes,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
+    /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
+    AuthElicitation,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable native artifact tools.
@@ -214,12 +233,17 @@ pub enum Feature {
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable workspace-specific owner nudge copy and prompts in the TUI.
+    /// Removed compatibility flag retained as a no-op now that workspace owner
+    /// usage nudges are always enabled.
     WorkspaceOwnerUsageNudge,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// Send `response.processed` over Responses API websockets after a turn response is recorded.
+    ResponsesWebsocketResponseProcessed,
+    /// Enable remote compaction v2 over the normal Responses API.
+    RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 }
@@ -557,6 +581,9 @@ pub fn is_known_feature_key(key: &str) -> bool {
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
+    pub network_proxy: Option<FeatureToml<NetworkProxyConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,
@@ -575,7 +602,51 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
+        if let Some(enabled) = self
+            .apps_mcp_path_override
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::AppsMcpPathOverride.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
+        }
         entries
+    }
+
+    pub fn materialize_resolved_enabled(&mut self, features: &Features) {
+        let Self {
+            multi_agent_v2,
+            apps_mcp_path_override,
+            network_proxy,
+            entries,
+        } = self;
+        for key in legacy::legacy_feature_keys() {
+            entries.remove(key);
+        }
+        for spec in FEATURES {
+            let enabled = features.enabled(spec.id);
+            if spec.id == Feature::MultiAgentV2 {
+                materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::AppsMcpPathOverride {
+                materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
+            } else if spec.id == Feature::NetworkProxy {
+                materialize_resolved_feature_enabled(network_proxy, enabled);
+            } else {
+                entries.insert(spec.key.to_string(), enabled);
+            }
+        }
+    }
+}
+
+fn materialize_resolved_feature_enabled<T: FeatureConfig>(
+    feature: &mut Option<FeatureToml<T>>,
+    enabled: bool,
+) {
+    match feature {
+        Some(feature) => feature.set_enabled(enabled),
+        None => *feature = Some(FeatureToml::Enabled(enabled)),
     }
 }
 
@@ -604,12 +675,20 @@ impl<T: FeatureConfig> FeatureToml<T> {
             Self::Config(config) => config.enabled(),
         }
     }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        match self {
+            Self::Enabled(value) => *value = enabled,
+            Self::Config(config) => config.set_enabled(enabled),
+        }
+    }
 }
 
 // A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
 // just enabled/disabled.
 pub trait FeatureConfig {
     fn enabled(&self) -> Option<bool>;
+    fn set_enabled(&mut self, enabled: bool);
 }
 
 /// Single, easy-to-read registry of all feature definitions.
@@ -705,11 +784,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Removed,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -730,7 +808,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Memories",
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
-            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+            announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
         default_enabled: false,
     },
@@ -749,8 +827,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,
@@ -766,7 +844,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::CodexHooks,
-        key: "codex_hooks",
+        key: "hooks",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -819,6 +897,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::NetworkProxy,
+        key: "network_proxy",
+        stage: Stage::Experimental {
+            name: "Network proxy",
+            menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
+            announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Stable,
@@ -849,6 +937,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::AppsMcpPathOverride,
+        key: "apps_mcp_path_override",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
         stage: Stage::Stable,
@@ -863,8 +957,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnavailableDummyTools,
         key: "unavailable_dummy_tools",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSuggest,
@@ -897,6 +991,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::BrowserUseExternal,
+        key: "browser_use_external",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ComputerUse,
         key: "computer_use",
         stage: Stage::Stable,
@@ -907,6 +1007,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_plugin",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PluginSharing,
+        key: "plugin_sharing",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ExternalMigration,
@@ -937,6 +1043,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Experimental {
+            name: "Mentions v2",
+            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Removed,
@@ -957,7 +1073,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Goals,
         key: "goals",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set a persistent goal Codex can continue over time",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -971,6 +1091,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tool_call_mcp_elicitation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AuthElicitation,
+        key: "auth_elicitation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Personality,
@@ -1035,7 +1161,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1048,6 +1174,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketResponseProcessed,
+        key: "responses_websocket_response_processed",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompactionV2,
+        key: "remote_compaction_v2",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

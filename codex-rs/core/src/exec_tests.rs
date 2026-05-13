@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 
 fn make_exec_output(
     exit_code: i32,
@@ -661,8 +662,60 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             read_roots_override: None,
             read_roots_include_platform_defaults: false,
             write_roots_override: None,
+            additional_deny_read_paths: vec![],
             additional_deny_write_paths: expected_deny_write_paths,
         }))
+    );
+}
+
+#[test]
+fn windows_restricted_token_rejects_unreadable_split_carveouts() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = dunce::canonicalize(temp_dir.path())
+        .expect("canonicalize temp dir")
+        .abs();
+    let blocked = cwd.join("blocked");
+    std::fs::create_dir_all(blocked.as_path()).expect("create blocked");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
+                    /*subpath*/ None,
+                ),
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: blocked },
+            access: codex_protocol::permissions::FileSystemAccessMode::None,
+        },
+    ]);
+
+    assert_eq!(
+        resolve_windows_restricted_token_filesystem_overrides(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+            &cwd,
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+        Err(
+            "windows unelevated restricted-token sandbox cannot enforce deny-read restrictions directly; refusing to run unsandboxed"
+                .to_string()
+        )
     );
 }
 
@@ -698,6 +751,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
             read_roots_override: Some(vec![expected_docs]),
             read_roots_include_platform_defaults: false,
             write_roots_override: None,
+            additional_deny_read_paths: vec![],
             additional_deny_write_paths: vec![],
         }))
     );
@@ -752,6 +806,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
             read_roots_override: None,
             read_roots_include_platform_defaults: false,
             write_roots_override: None,
+            additional_deny_read_paths: vec![],
             additional_deny_write_paths: vec![
                 codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(expected_docs)
                     .expect("absolute docs"),
@@ -761,10 +816,11 @@ fn windows_elevated_supports_split_write_read_carveouts() {
 }
 
 #[test]
-fn windows_elevated_rejects_unreadable_split_carveouts() {
+fn windows_elevated_supports_unreadable_split_carveouts() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let blocked = temp_dir.path().join("blocked");
     std::fs::create_dir_all(&blocked).expect("create blocked");
+    let expected_blocked = dunce::canonicalize(&blocked).expect("canonical blocked");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
@@ -796,24 +852,38 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
     ]);
 
     assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
+        resolve_windows_elevated_filesystem_overrides(
             SandboxType::WindowsRestrictedToken,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             &temp_dir.path().abs(),
-            WindowsSandboxLevel::Elevated,
+            /*use_windows_elevated_backend*/ true,
         ),
-        Some(
-            "windows elevated sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
-                .to_string()
-        )
+        Ok(Some(WindowsSandboxFilesystemOverrides {
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: None,
+            additional_deny_read_paths: vec![
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                    expected_blocked.clone(),
+                )
+                .expect("absolute blocked"),
+            ],
+            additional_deny_write_paths: vec![
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(expected_blocked)
+                    .expect("absolute blocked"),
+            ],
+        }))
     );
 }
 
 #[test]
-fn windows_elevated_rejects_unreadable_globs() {
+fn windows_elevated_supports_unreadable_globs() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let secret = temp_dir.path().join("app").join(".env");
+    std::fs::create_dir_all(secret.parent().expect("parent")).expect("create parent");
+    std::fs::write(&secret, "secret").expect("write secret");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
@@ -844,18 +914,24 @@ fn windows_elevated_rejects_unreadable_globs() {
     ]);
 
     assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
+        resolve_windows_elevated_filesystem_overrides(
             SandboxType::WindowsRestrictedToken,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
             &temp_dir.path().abs(),
-            WindowsSandboxLevel::Elevated,
+            /*use_windows_elevated_backend*/ true,
         ),
-        Some(
-            "windows elevated sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
-                .to_string()
-        )
+        Ok(Some(WindowsSandboxFilesystemOverrides {
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: None,
+            additional_deny_read_paths: vec![
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(secret)
+                    .expect("absolute secret"),
+            ],
+            additional_deny_write_paths: vec![],
+        }))
     );
 }
 
@@ -1033,22 +1109,23 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(1_000)).await;
         cancel_tx.cancel();
     });
-    let permission_profile = PermissionProfile::Disabled;
-    let result = process_exec_tool_call(
-        params,
-        &permission_profile,
-        &cwd,
-        &None,
-        /*use_legacy_landlock*/ false,
-        /*stdout_stream*/ None,
+    let result = timeout(
+        Duration::from_secs(5),
+        process_exec_tool_call(
+            params,
+            &PermissionProfile::Disabled,
+            &cwd,
+            &None,
+            /*use_legacy_landlock*/ false,
+            /*stdout_stream*/ None,
+        ),
     )
-    .await;
-    let output = match result {
-        Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
-        other => panic!("expected timeout error, got {other:?}"),
-    };
-    assert!(output.timed_out);
-    assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+    .await
+    .expect("cancellation should stop the process promptly");
+    let output = result.expect("cancellation should return a non-timeout exec result");
+    assert!(!output.timed_out);
+    assert_ne!(output.exit_code, 0);
+    assert_ne!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
     Ok(())
 }
 

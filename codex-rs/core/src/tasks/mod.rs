@@ -1,7 +1,7 @@
 mod compact;
+mod lifecycle;
 mod regular;
 mod review;
-mod undo;
 mod user_shell;
 
 use std::sync::Arc;
@@ -57,7 +57,6 @@ use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
-pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
@@ -357,6 +356,7 @@ impl Session {
                 turn_state.push_pending_input(item);
             }
         }
+        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
 
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -368,12 +368,14 @@ impl Session {
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
+        let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
         let task_span = info_span!(
             "turn",
             otel.name = span_name,
             thread.id = %self.conversation_id,
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
+            codex.turn.reasoning_effort = %reasoning_effort,
             codex.turn.token_usage.input_tokens = field::Empty,
             codex.turn.token_usage.cached_input_tokens = field::Empty,
             codex.turn.token_usage.non_cached_input_tokens = field::Empty,
@@ -488,6 +490,9 @@ impl Session {
             }
         }
 
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+        }
         if (aborted_turn || reason == TurnAbortReason::Interrupted)
             && let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
@@ -532,6 +537,9 @@ impl Session {
         let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
         for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
+        }
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
@@ -733,11 +741,13 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        if should_clear_active_turn {
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
+        }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
                 turn_completed: should_clear_active_turn,
-                tool_calls: turn_tool_calls,
             })
             .await
         {

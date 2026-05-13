@@ -138,8 +138,11 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation =
-        record_stage1_output_usage_and_detect_memory_citation(turn_context, item).await;
+    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
+        sess.services.state_db.as_ref(),
+        item,
+    )
+    .await;
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -174,7 +177,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
 }
 
 async fn record_stage1_output_usage_and_detect_memory_citation(
-    turn_context: &TurnContext,
+    state_db_ctx: Option<&state_db::StateDbHandle>,
     item: &ResponseItem,
 ) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
@@ -190,7 +193,7 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
         return true;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
+    if let Some(db) = state_db_ctx {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
     true
@@ -225,7 +228,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
+    match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess
@@ -236,7 +239,7 @@ pub(crate) async fn handle_output_item_done(
             tracing::info!(
                 thread_id = %ctx.sess.conversation_id,
                 "ToolCall: {} {}",
-                call.tool_name.display(),
+                call.tool_name,
                 payload_preview
             );
 
@@ -255,14 +258,14 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(
+            let turn_item = handle_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
                 plan_mode,
             )
-            .await
-            {
+            .await;
+            if let Some(turn_item) = turn_item {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -285,34 +288,6 @@ pub(crate) async fn handle_output_item_done(
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
-        }
-        // Guardrail: the model issued a LocalShellCall without an id; surface the error back into history.
-        Err(FunctionCallError::MissingLocalShellCallId) => {
-            let msg = "LocalShellCall without call_id or id";
-            ctx.turn_context
-                .session_telemetry
-                .log_tool_failed("local_shell", msg);
-            tracing::error!(msg);
-
-            let response = ResponseInputItem::FunctionCallOutput {
-                call_id: String::new(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(msg.to_string()),
-                    ..Default::default()
-                },
-            };
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
-            if let Some(response_item) = response_input_to_response_item(&response) {
-                ctx.sess
-                    .record_conversation_items(
-                        &ctx.turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
-            }
-
-            output.needs_follow_up = true;
         }
         // The tool request should be answered directly (or was denied); push that response into the transcript.
         Err(FunctionCallError::RespondToModel(message)) => {

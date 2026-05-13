@@ -62,6 +62,12 @@
     },
     "ConfigRequirements": {
       "properties": {
+        "allowManagedHooksOnly": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
@@ -120,6 +126,12 @@
             },
             "command": {
               "type": "string"
+            },
+            "commandWindows": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "statusMessage": {
               "type": [
@@ -213,7 +225,19 @@
           },
           "type": "array"
         },
+        "PostCompact": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreCompact": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
           },
@@ -258,7 +282,9 @@
       },
       "required": [
         "PermissionRequest",
+        "PostCompact",
         "PostToolUse",
+        "PreCompact",
         "PreToolUse",
         "SessionStart",
         "Stop",

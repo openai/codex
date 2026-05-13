@@ -1,8 +1,18 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
+use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use pretty_assertions::assert_eq;
+use ratatui::backend::TestBackend;
+use serial_test::serial;
 
-/// Receiving a TokenCount event without usage clears the context indicator.
+fn enable_test_ambient_pet(chat: &mut ChatWidget) {
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+        crate::pets::ImageProtocol::Kitty,
+    ));
+    chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+}
+
+/// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -10,36 +20,25 @@ async fn token_count_none_resets_context_indicator() {
     let context_window = 13_000;
     let pre_compact_tokens = 12_700;
 
-    chat.handle_codex_event(Event {
-        id: "token-before".into(),
-        msg: EventMsg::TokenCount(TokenCountEvent {
-            info: Some(make_token_info(pre_compact_tokens, context_window)),
-            rate_limits: None,
-        }),
-    });
+    handle_token_count(
+        &mut chat,
+        Some(make_token_info(pre_compact_tokens, context_window)),
+    );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
 
-    chat.handle_codex_event(Event {
-        id: "token-cleared".into(),
-        msg: EventMsg::TokenCount(TokenCountEvent {
-            info: None,
-            rate_limits: None,
-        }),
-    });
+    handle_token_count(&mut chat, /*info*/ None);
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
 }
 
 #[tokio::test]
-async fn core_cyber_policy_error_renders_dedicated_notice() {
+async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(Event {
-        id: "cyber-policy".into(),
-        msg: EventMsg::Error(ErrorEvent {
-            message: "server fallback message".to_string(),
-            codex_error_info: Some(CodexErrorInfo::CyberPolicy),
-        }),
-    });
+    handle_error(
+        &mut chat,
+        "server fallback message",
+        Some(CodexErrorInfo::CyberPolicy),
+    );
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
@@ -50,15 +49,13 @@ async fn core_cyber_policy_error_renders_dedicated_notice() {
 }
 
 #[tokio::test]
-async fn core_model_verification_renders_warning() {
+async fn app_server_model_verification_renders_warning() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(Event {
-        id: "model-verification".into(),
-        msg: EventMsg::ModelVerification(ModelVerificationEvent {
-            verifications: vec![CoreModelVerification::TrustedAccessForCyber],
-        }),
-    });
+    handle_model_verification(
+        &mut chat,
+        vec![AppServerModelVerification::TrustedAccessForCyber],
+    );
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
@@ -89,13 +86,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         model_context_window: None,
     };
 
-    chat.handle_codex_event(Event {
-        id: "token-usage".into(),
-        msg: EventMsg::TokenCount(TokenCountEvent {
-            info: Some(token_info),
-            rate_limits: None,
-        }),
-    });
+    handle_token_count(&mut chat, Some(token_info));
 
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
     assert_eq!(
@@ -105,23 +96,20 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
 }
 
 #[tokio::test]
-async fn turn_started_uses_runtime_context_window_before_first_token_count() {
+async fn token_usage_update_uses_runtime_context_window() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.config.model_context_window = Some(1_000_000);
 
-    chat.handle_codex_event(Event {
-        id: "turn-start".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: Some(950_000),
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_token_count(
+        &mut chat,
+        Some(make_token_info(
+            /*total_tokens*/ 0, /*context_window*/ 950_000,
+        )),
+    );
 
     assert_eq!(
-        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::ContextWindowSize),
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::ContextWindowSize),
         Some("950K window".to_string())
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
@@ -146,24 +134,289 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
 
     assert!(
         context_line.contains("950K"),
-        "expected /status to use TurnStarted context window, got: {context_line}"
+        "expected /status to use runtime context window, got: {context_line}"
     );
     assert!(
         !context_line.contains("1M"),
         "expected /status to avoid raw config context window, got: {context_line}"
     );
 }
+
 #[tokio::test]
-async fn helpers_are_available_and_do_not_panic() {
-    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+async fn status_line_git_summary_items_render_values() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_git_summary = Some(StatusLineGitSummary {
+        pull_request: Some(crate::branch_summary::StatusLinePullRequest {
+            number: 20_252,
+            url: "https://github.com/openai/codex/pull/20252".to_string(),
+        }),
+        branch_change_stats: Some(crate::branch_summary::GitBranchDiffStats {
+            additions: 143,
+            deletions: 22,
+        }),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::PullRequestNumber),
+        Some("PR #20252".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::BranchChanges),
+        Some("+143 -22".to_string())
+    );
+}
+
+#[tokio::test]
+async fn raw_output_status_line_value_only_shows_when_enabled() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::RawOutput),
+        None
+    );
+
+    chat.set_raw_output_mode(/*enabled*/ true);
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::RawOutput),
+        Some("raw output".to_string())
+    );
+}
+
+#[tokio::test]
+async fn status_line_branch_changes_render_no_changes() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_git_summary = Some(StatusLineGitSummary {
+        pull_request: None,
+        branch_change_stats: Some(crate::branch_summary::GitBranchDiffStats {
+            additions: 0,
+            deletions: 0,
+        }),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::BranchChanges),
+        Some("No changes".to_string())
+    );
+}
+
+#[tokio::test]
+async fn stale_status_line_git_summary_update_is_ignored() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_git_summary_cwd = Some(PathBuf::from("/expected"));
+    chat.status_line_git_summary_pending = true;
+
+    chat.set_status_line_git_summary(
+        PathBuf::from("/other"),
+        StatusLineGitSummary {
+            pull_request: Some(crate::branch_summary::StatusLinePullRequest {
+                number: 20_252,
+                url: "https://github.com/openai/codex/pull/20252".to_string(),
+            }),
+            branch_change_stats: Some(crate::branch_summary::GitBranchDiffStats {
+                additions: 143,
+                deletions: 22,
+            }),
+        },
+    );
+
+    assert!(chat.status_line_git_summary.is_none());
+    assert!(!chat.status_line_git_summary_pending);
+}
+
+#[tokio::test]
+async fn raw_output_mode_can_change_without_inserting_notice() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_raw_output_mode(/*enabled*/ true);
+
+    assert!(chat.raw_output_mode());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.set_raw_output_mode_and_notify(/*enabled*/ false);
+
+    assert!(!chat.raw_output_mode());
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        history.contains("Raw output mode off: rich transcript rendering restored."),
+        "expected raw output notice, got {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    assert!(controller.push("plain response line\n"));
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+                assert!(deferred_history_cell.is_none());
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        saw_insert_history,
+        "plain text should still insert history before consolidation"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("| Name | Notes |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| alpha | tail held until final table render |\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected table holdback to leave a live tail for this regression",
+    );
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+                assert!(
+                    deferred_history_cell.is_some(),
+                    "live table tail should be staged for consolidation",
+                );
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        !saw_insert_history,
+        "live table tail should not be inserted before canonical reflow"
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_table_tail_skips_provisional_history_insert() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("| Step | Owner |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| Verify | Codex |\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected plan table holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+    chat.transcript.plan_delta_buffer =
+        "| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n".to_string();
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_plan_item_completed(String::new());
+
+    let mut saw_source_backed_plan = false;
+    let mut saw_stream_plan = false;
+    let mut rendered_plan = String::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            if cell.as_any().is::<history_cell::ProposedPlanCell>() {
+                saw_source_backed_plan = true;
+                rendered_plan = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            }
+            saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
+        }
+    }
+
+    assert!(saw_source_backed_plan, "expected source-backed plan insert");
+    assert!(
+        rendered_plan.contains('│') || rendered_plan.contains('┌'),
+        "expected completed plan table to render as a boxed table, got: {rendered_plan:?}"
+    );
+    assert!(
+        !saw_stream_plan,
+        "live plan table tail should not be inserted provisionally"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(target_os = "windows", ignore = "disabled on windows")]
+async fn configured_pet_load_is_deferred_until_after_construction() {
+    let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
-    let cfg = test_config().await;
+    let mut cfg = test_config().await;
+    cfg.tui_pet = Some(crate::pets::DEFAULT_PET_ID.to_string());
+    crate::pets::write_test_pack(&cfg.codex_home);
     let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
@@ -171,6 +424,7 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,
@@ -178,9 +432,21 @@ async fn helpers_are_available_and_do_not_panic() {
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
-    let mut w = ChatWidget::new_with_app_event(init);
-    // Basic construction sanity.
-    let _ = &mut w;
+
+    let chat = ChatWidget::new_with_app_event(init);
+
+    assert!(!chat.ambient_pet_image_enabled());
+    let event = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_matches!(
+        event,
+        AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+            assert_eq!(pet_id, crate::pets::DEFAULT_PET_ID);
+            assert!(result.unwrap().is_some());
+        }
+    );
 }
 
 #[tokio::test]
@@ -279,8 +545,8 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 80.0,
-            window_minutes: Some(60),
+            used_percent: 80,
+            window_duration_mins: Some(60),
             resets_at: Some(123),
         }),
         secondary: None,
@@ -314,13 +580,13 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 10.0,
-            window_minutes: Some(60),
+            used_percent: 10,
+            window_duration_mins: Some(60),
             resets_at: None,
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 5.0,
-            window_minutes: Some(300),
+            used_percent: 5,
+            window_duration_mins: Some(300),
             resets_at: None,
         }),
         credits: None,
@@ -333,13 +599,13 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 25.0,
-            window_minutes: Some(30),
+            used_percent: 25,
+            window_duration_mins: Some(30),
             resets_at: Some(123),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 15.0,
-            window_minutes: Some(300),
+            used_percent: 15,
+            window_duration_mins: Some(300),
             resets_at: Some(234),
         }),
         credits: None,
@@ -352,13 +618,13 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 30.0,
-            window_minutes: Some(60),
+            used_percent: 30,
+            window_duration_mins: Some(60),
             resets_at: Some(456),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 18.0,
-            window_minutes: Some(300),
+            used_percent: 18,
+            window_duration_mins: Some(300),
             resets_at: Some(567),
         }),
         credits: None,
@@ -376,8 +642,8 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         limit_id: Some("codex".to_string()),
         limit_name: Some("codex".to_string()),
         primary: Some(RateLimitWindow {
-            used_percent: 20.0,
-            window_minutes: Some(300),
+            used_percent: 20,
+            window_duration_mins: Some(300),
             resets_at: Some(100),
         }),
         secondary: None,
@@ -394,8 +660,8 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         limit_id: Some("codex_other".to_string()),
         limit_name: Some("codex_other".to_string()),
         primary: Some(RateLimitWindow {
-            used_percent: 90.0,
-            window_minutes: Some(60),
+            used_percent: 90,
+            window_duration_mins: Some(60),
             resets_at: Some(200),
         }),
         secondary: None,
@@ -447,8 +713,8 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         limit_id: Some("codex_other".to_string()),
         limit_name: Some("codex_other".to_string()),
         primary: Some(RateLimitWindow {
-            used_percent: 95.0,
-            window_minutes: Some(60),
+            used_percent: 95,
+            window_duration_mins: Some(60),
             resets_at: None,
         }),
         secondary: None,
@@ -533,56 +799,8 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn workspace_owner_usage_nudge_flag_disabled_keeps_generic_rate_limit_error() {
-    {
-        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        let mut limits = snapshot(/*percent*/ 100.0);
-        limits.rate_limit_reached_type =
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
-        chat.on_rate_limit_snapshot(Some(limits));
-
-        chat.on_rate_limit_error(
-            RateLimitErrorKind::UsageLimit,
-            "Usage limit reached.".to_string(),
-        );
-        let rendered = drain_insert_history(&mut rx)
-            .into_iter()
-            .map(|lines| lines_to_single_string(&lines))
-            .collect::<String>();
-        assert!(
-            rendered.contains("Usage limit reached."),
-            "rendered: {rendered}"
-        );
-    }
-
-    {
-        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        let mut limits = snapshot(/*percent*/ 100.0);
-        limits.rate_limit_reached_type =
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
-        chat.on_rate_limit_snapshot(Some(limits));
-
-        chat.on_rate_limit_error(
-            RateLimitErrorKind::UsageLimit,
-            "Usage limit reached.".to_string(),
-        );
-        let popup = render_bottom_popup(&chat, /*width*/ 100);
-        assert!(
-            !popup.contains("Request a limit increase from your owner"),
-            "popup: {popup}"
-        );
-        assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
-    }
-}
-
-fn enable_workspace_owner_usage_nudge(chat: &mut ChatWidget) {
-    chat.set_feature_enabled(Feature::WorkspaceOwnerUsageNudge, /*enabled*/ true);
-}
-
-#[tokio::test]
 async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut limits = snapshot(/*percent*/ 100.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
     chat.on_rate_limit_snapshot(Some(limits));
@@ -602,7 +820,6 @@ async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
 #[tokio::test]
 async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut limits = snapshot(/*percent*/ 100.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
     chat.on_rate_limit_snapshot(Some(limits));
@@ -622,7 +839,6 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
 #[tokio::test]
 async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut usage_limits = snapshot(/*percent*/ 100.0);
     usage_limits.rate_limit_reached_type =
         Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
@@ -652,7 +868,6 @@ async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt
 #[tokio::test]
 async fn usage_limit_error_remaps_stale_member_credits_state_to_usage_limit_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut limits = snapshot(/*percent*/ 100.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
     chat.on_rate_limit_snapshot(Some(limits));
@@ -689,7 +904,6 @@ async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
         ),
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        enable_workspace_owner_usage_nudge(&mut chat);
         let mut limits = snapshot(/*percent*/ 100.0);
         limits.rate_limit_reached_type = Some(limit_type);
         chat.on_rate_limit_snapshot(Some(limits));
@@ -719,7 +933,6 @@ async fn workspace_owner_limit_states_render_state_specific_messages() {
     let mut rendered_cases = Vec::new();
     for (limit_type, error_kind, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        enable_workspace_owner_usage_nudge(&mut chat);
         let mut limits = snapshot(/*percent*/ 100.0);
         limits.rate_limit_reached_type = Some(limit_type);
         chat.on_rate_limit_snapshot(Some(limits));
@@ -742,7 +955,6 @@ async fn workspace_owner_limit_states_render_state_specific_messages() {
 #[tokio::test]
 async fn missing_rate_limit_reached_type_does_not_prompt_or_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
 
     chat.on_rate_limit_error(
@@ -757,7 +969,6 @@ async fn missing_rate_limit_reached_type_does_not_prompt_or_refresh() {
 #[tokio::test]
 async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut limits = snapshot(/*percent*/ 100.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
     chat.on_rate_limit_snapshot(Some(limits));
@@ -774,7 +985,6 @@ async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
 #[tokio::test]
 async fn workspace_owner_nudge_reappears_after_dismissing_no() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_workspace_owner_usage_nudge(&mut chat);
     let mut limits = snapshot(/*percent*/ 100.0);
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
     chat.on_rate_limit_snapshot(Some(limits));
@@ -817,7 +1027,6 @@ async fn workspace_owner_credits_nudge_completion_renders_feedback() {
     let mut rendered_cases = Vec::new();
     for (result, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        enable_workspace_owner_usage_nudge(&mut chat);
         chat.start_add_credits_nudge_email_request(AddCreditsNudgeCreditType::Credits);
         chat.finish_add_credits_nudge_email_request(result);
         let rendered = drain_insert_history(&mut rx)
@@ -854,7 +1063,6 @@ async fn workspace_owner_usage_limit_nudge_completion_renders_feedback() {
     let mut rendered_cases = Vec::new();
     for (result, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        enable_workspace_owner_usage_nudge(&mut chat);
         chat.start_add_credits_nudge_email_request(AddCreditsNudgeCreditType::UsageLimit);
         chat.finish_add_credits_nudge_email_request(result);
         let rendered = drain_insert_history(&mut rx)
@@ -913,9 +1121,9 @@ async fn streaming_final_answer_keeps_task_running_state() {
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -972,7 +1180,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -1001,7 +1209,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
         "Please summarize the rest more briefly.",
     );
 
-    assert!(chat.pending_steers.is_empty());
+    assert!(chat.input_queue.pending_steers.is_empty());
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 }
@@ -1038,7 +1246,7 @@ async fn fast_status_indicator_requires_chatgpt_auth() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
 
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 
@@ -1054,7 +1262,7 @@ async fn fast_status_indicator_is_hidden_for_models_without_fast_support() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     set_fast_mode_test_catalog(&mut chat);
     assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(!get_available_model(&chat, "gpt-5.3-codex").supports_fast_mode());
@@ -1099,21 +1307,8 @@ async fn ui_snapshots_small_heights_task_running() {
     use ratatui::backend::TestBackend;
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     // Activate status line
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Thinking**".into(),
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
+    handle_agent_reasoning_delta(&mut chat, "**Thinking**");
     for h in [1u16, 2, 3] {
         let name = format!("chat_small_running_h{h}");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
@@ -1124,31 +1319,235 @@ async fn ui_snapshots_small_heights_task_running() {
     }
 }
 
+#[tokio::test]
+#[serial]
+async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
+    use ratatui::layout::Rect;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+        crate::pets::ImageProtocol::Kitty,
+    ));
+    assert!(chat.ambient_pet.is_none());
+
+    crate::pets::write_test_pack(&chat.config.codex_home);
+    chat.set_tui_pet(Some("codex".to_string()));
+
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 20,
+    );
+    let draw = chat
+        .ambient_pet_draw(area, area.bottom())
+        .expect("ambient pet draw request");
+    assert_eq!(draw.x, 51);
+    assert_eq!(draw.y, 14);
+    assert_eq!(draw.columns, 9);
+    assert_eq!(draw.rows, 5);
+    assert_eq!(
+        draw.y.saturating_add(draw.rows),
+        area.bottom().saturating_sub(/*rhs*/ 1)
+    );
+
+    handle_turn_started(&mut chat, "turn-1");
+    handle_agent_reasoning_delta(&mut chat, "**Thinking**");
+    let draw_with_status = chat
+        .ambient_pet_draw(area, area.bottom())
+        .expect("ambient pet draw request with status");
+    assert_eq!(draw_with_status.y, draw.y);
+    assert_eq!(
+        draw_with_status.y.saturating_add(draw_with_status.rows),
+        area.bottom().saturating_sub(/*rhs*/ 1)
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_screen_bottom_anchor_uses_terminal_bottom() {
+    use codex_config::types::TuiPetAnchor;
+    use ratatui::layout::Rect;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut chat);
+
+    let terminal_area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+    );
+    let composer_bottom_y = 20;
+    let default_draw = chat
+        .ambient_pet_draw(terminal_area, composer_bottom_y)
+        .expect("composer-anchored pet draw request");
+    assert_eq!(default_draw.y, 14);
+
+    chat.config.tui_pet_anchor = TuiPetAnchor::ScreenBottom;
+    let screen_bottom_draw = chat
+        .ambient_pet_draw(terminal_area, composer_bottom_y)
+        .expect("screen-bottom anchored pet draw request");
+    assert_eq!(screen_bottom_draw.y, 18);
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_can_be_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+
+    assert!(chat.ambient_pet.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_reserves_history_wrap_width() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut chat);
+
+    assert_eq!(chat.history_wrap_width(/*width*/ 80), 69);
+
+    chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+
+    assert_eq!(chat.history_wrap_width(/*width*/ 80), 80);
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_reduces_stream_width_and_composer_text_width() {
+    use ratatui::Terminal;
+
+    let (mut with_pet, _with_pet_rx, _with_pet_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut with_pet);
+    with_pet.last_rendered_width.set(Some(80));
+    let stream_width_with_pet = with_pet.current_stream_width(/*reserved_cols*/ 2);
+
+    let (mut disabled, _disabled_rx, _disabled_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    disabled.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+    disabled.last_rendered_width.set(Some(80));
+    let stream_width_without_pet = disabled.current_stream_width(/*reserved_cols*/ 2);
+
+    assert_eq!(
+        stream_width_with_pet,
+        crate::width::usable_content_width(/*total_width*/ 69, /*reserved_cols*/ 2)
+    );
+    assert_eq!(
+        stream_width_without_pet,
+        crate::width::usable_content_width(/*total_width*/ 80, /*reserved_cols*/ 2)
+    );
+    assert!(stream_width_with_pet < stream_width_without_pet);
+
+    let draft =
+        "Minim commodo esse elit Lorem exercitation elit ipsum proident labore. Esse culpa aliqua"
+            .to_string();
+    with_pet
+        .bottom_pane
+        .set_composer_text(draft.clone(), Vec::new(), Vec::new());
+    disabled
+        .bottom_pane
+        .set_composer_text(draft, Vec::new(), Vec::new());
+
+    let mut with_pet_terminal =
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 6)).expect("create terminal");
+    with_pet_terminal
+        .draw(|f| with_pet.render(f.area(), f.buffer_mut()))
+        .expect("draw pet-enabled chat");
+    let mut disabled_terminal =
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 6)).expect("create terminal");
+    disabled_terminal
+        .draw(|f| disabled.render(f.area(), f.buffer_mut()))
+        .expect("draw disabled-pet chat");
+
+    let pet_row = buffer_row_containing(with_pet_terminal.backend().buffer(), "Minim")
+        .expect("pet-enabled composer row should render draft");
+    let disabled_row = buffer_row_containing(disabled_terminal.backend().buffer(), "Minim")
+        .expect("disabled-pet composer row should render draft");
+
+    assert!(row_tail_is_blank(&pet_row, /*start_col*/ 69));
+    assert!(!row_tail_is_blank(&disabled_row, /*start_col*/ 69));
+}
+
+fn buffer_row_containing(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<String> {
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).expect("cell should exist").symbol())
+                .collect::<String>()
+        })
+        .find(|row| row.contains(text))
+}
+
+fn row_tail_is_blank(row: &str, start_col: usize) -> bool {
+    row.chars().skip(start_col).all(char::is_whitespace)
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
+    use ratatui::layout::Rect;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut chat);
+
+    assert!(
+        chat.ambient_pet_draw(
+            Rect::new(
+                /*x*/ 0, /*y*/ 21, /*width*/ 80, /*height*/ 3,
+            ),
+            /*composer_bottom_y*/ 24
+        )
+        .is_none(),
+        "a normal short inline viewport cannot fit the ambient pet"
+    );
+
+    let draw = chat
+        .ambient_pet_draw(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+            ),
+            /*composer_bottom_y*/ 24,
+        )
+        .expect("full terminal screen has room for the ambient pet");
+    assert_eq!(draw.x, 71);
+    assert_eq!(draw.y, 18);
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_hides_notification_text_overlay() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut chat);
+    for (kind, label) in [
+        (crate::pets::PetNotificationKind::Running, "Running"),
+        (crate::pets::PetNotificationKind::Waiting, "Needs input"),
+        (crate::pets::PetNotificationKind::Review, "Ready"),
+        (crate::pets::PetNotificationKind::Failed, "Blocked"),
+    ] {
+        chat.set_ambient_pet_notification(kind, /*body*/ None);
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("create terminal");
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("draw ambient pet notification");
+        assert!(
+            !normalized_backend_snapshot(terminal.backend()).contains(label),
+            "did not expect {label} notification text to render"
+        );
+    }
+}
+
 // Snapshot test: status widget + approval modal active together
 // The modal takes precedence visually; this captures the layout with a running
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use codex_protocol::protocol::ExecApprovalRequestEvent;
+    use crate::approval_events::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     // Begin a running task so the status indicator would be active.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
     // Provide a deterministic header for the status line.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Analyzing**".into(),
-        }),
-    });
+    handle_agent_reasoning_delta(&mut chat, "**Analyzing**");
 
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
@@ -1161,19 +1560,14 @@ async fn status_widget_and_approval_modal_snapshot() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         network_approval_context: None,
-        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-            "echo".into(),
-            "hello world".into(),
-        ])),
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment {
+            command: vec!["echo".into(), "hello world".into()],
+        }),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
         available_decisions: None,
-        parsed_cmd: vec![],
     };
-    chat.handle_codex_event(Event {
-        id: "sub-approve-exec".into(),
-        msg: EventMsg::ExecApprovalRequest(ev),
-    });
+    handle_exec_approval_request(&mut chat, "sub-approve-exec", ev);
 
     // Render at the widget's desired height and snapshot.
     let width: u16 = 100;
@@ -1196,22 +1590,9 @@ async fn status_widget_and_approval_modal_snapshot() {
 async fn status_widget_active_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     // Activate the status indicator by simulating a task start.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
     // Provide a deterministic header via a bold reasoning chunk.
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Analyzing**".into(),
-        }),
-    });
+    handle_agent_reasoning_delta(&mut chat, "**Analyzing**");
     // Render and snapshot.
     let height = chat.desired_height(/*width*/ 80);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
@@ -1231,14 +1612,7 @@ async fn stream_error_updates_status_indicator() {
     chat.bottom_pane.set_task_running(/*running*/ true);
     let msg = "Reconnecting... 2/5";
     let details = "Idle timeout waiting for SSE";
-    chat.handle_codex_event(Event {
-        id: "sub-1".into(),
-        msg: EventMsg::StreamError(StreamErrorEvent {
-            message: msg.to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: Some(details.to_string()),
-        }),
-    });
+    handle_stream_error(&mut chat, msg, Some(details.to_string()));
 
     let cells = drain_insert_history(&mut rx);
     assert!(
@@ -1264,14 +1638,7 @@ async fn stream_error_restores_hidden_status_indicator() {
 
     let msg = "Reconnecting... 2/5";
     let details = "Idle timeout waiting for SSE";
-    chat.handle_codex_event(Event {
-        id: "sub-1".into(),
-        msg: EventMsg::StreamError(StreamErrorEvent {
-            message: msg.to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: Some(details.to_string()),
-        }),
-    });
+    handle_stream_error(&mut chat, msg, Some(details.to_string()));
 
     let status = chat
         .bottom_pane
@@ -1284,12 +1651,7 @@ async fn stream_error_restores_hidden_status_indicator() {
 #[tokio::test]
 async fn warning_event_adds_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.handle_codex_event(Event {
-        id: "sub-1".into(),
-        msg: EventMsg::Warning(WarningEvent {
-            message: "test warning message".to_string(),
-        }),
-    });
+    handle_warning(&mut chat, "test warning message");
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
@@ -1298,6 +1660,34 @@ async fn warning_event_adds_warning_history_cell() {
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn repeated_model_metadata_warning_is_hidden_for_same_slug() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let warning = "Model metadata for `unknown-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+
+    handle_warning(&mut chat, warning);
+    handle_warning(&mut chat, warning);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("unknown-model"),
+        "warning cell missing model slug: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn repeated_generic_warning_is_not_hidden() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_warning(&mut chat, "test warning message");
+    handle_warning(&mut chat, "test warning message");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 2, "expected both warning history cells");
 }
 
 #[tokio::test]
@@ -1394,20 +1784,12 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
 #[tokio::test]
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    install_noop_workspace_command_runner(&mut chat);
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
     chat.status_line_branch_lookup_complete = true;
     chat.status_line_branch_pending = false;
 
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    });
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
 
     assert!(chat.status_line_branch_pending);
 }
@@ -1415,21 +1797,71 @@ async fn status_line_branch_refreshes_after_turn_complete() {
 #[tokio::test]
 async fn status_line_branch_refreshes_after_interrupt() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    install_noop_workspace_command_runner(&mut chat);
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
     chat.status_line_branch_lookup_complete = true;
     chat.status_line_branch_pending = false;
 
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
-            turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::Interrupted,
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
+    handle_turn_interrupted(&mut chat, "turn-1");
 
     assert!(chat.status_line_branch_pending);
+}
+
+fn install_noop_workspace_command_runner(chat: &mut ChatWidget) {
+    chat.workspace_command_runner = Some(std::sync::Arc::new(NoopWorkspaceCommandRunner));
+}
+
+struct NoopWorkspaceCommandRunner;
+
+impl crate::workspace_command::WorkspaceCommandExecutor for NoopWorkspaceCommandRunner {
+    fn run(
+        &self,
+        _command: crate::workspace_command::WorkspaceCommand,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::workspace_command::WorkspaceCommandOutput,
+                        crate::workspace_command::WorkspaceCommandError,
+                    >,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async {
+            Ok(crate::workspace_command::WorkspaceCommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn interrupted_turn_clears_visible_running_hook() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command policy"),
+        ),
+    );
+    reveal_running_hooks(&mut chat);
+    let before_interrupt = active_hook_blob(&chat);
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert_chatwidget_snapshot!(
+        "interrupted_turn_clears_visible_running_hook",
+        format!(
+            "before interrupt:\n{before_interrupt}after interrupt:\n{}",
+            active_hook_blob(&chat)
+        )
+    );
 }
 
 #[tokio::test]
@@ -1440,7 +1872,7 @@ async fn status_line_fast_mode_renders_on_and_off() {
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
 
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
 }
@@ -1453,7 +1885,7 @@ async fn status_line_fast_mode_footer_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     chat.refresh_status_line();
 
     let width = 80;
@@ -1480,7 +1912,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1590,13 +2022,15 @@ async fn renamed_thread_footer_title_snapshot() {
 
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    chat.handle_codex_event(Event {
-        id: "rename".to_string(),
-        msg: EventMsg::ThreadNameUpdated(codex_protocol::protocol::ThreadNameUpdatedEvent {
-            thread_id,
-            thread_name: Some("Roadmap cleanup".to_string()),
-        }),
-    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadNameUpdated(
+            codex_app_server_protocol::ThreadNameUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                thread_name: Some("Roadmap cleanup".to_string()),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -1626,7 +2060,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1660,7 +2094,7 @@ async fn status_line_model_with_reasoning_context_remaining_footer_snapshot() {
         "current-dir".to_string(),
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
-    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
     assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
@@ -1725,16 +2159,18 @@ async fn status_line_goal_complete_elapsed_footer_snapshot() {
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
     chat.refresh_status_line();
+    let mut goal = test_thread_goal(
+        codex_app_server_protocol::ThreadGoalStatus::Complete,
+        /*token_budget*/ None,
+        /*tokens_used*/ 40_000,
+    );
+    goal.time_used_seconds = 2 * 24 * 60 * 60 + 23 * 60 * 60 + 42 * 60;
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: None,
-                goal: test_thread_goal(
-                    codex_app_server_protocol::ThreadGoalStatus::Complete,
-                    /*token_budget*/ None,
-                    /*tokens_used*/ 40_000,
-                ),
+                goal,
             },
         ),
         /*replay_kind*/ None,
@@ -1776,33 +2212,33 @@ async fn session_configured_clears_goal_status_footer() {
             usage: Some("40K / 50K".to_string())
         })
     );
-    chat.budget_limited_turn_ids.insert("turn-1".to_string());
+    chat.turn_lifecycle
+        .budget_limited_turn_ids
+        .insert("turn-1".to_string());
 
     let rollout_file = NamedTempFile::new().unwrap();
-    chat.handle_codex_event(Event {
-        id: "session-2".into(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "gpt-5.4".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: PermissionProfile::read_only(),
-            cwd: test_path_buf("/home/user/project").abs(),
-            reasoning_effort: Some(ReasoningEffortConfig::default()),
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: Some(rollout_file.path().to_path_buf()),
-        }),
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.4".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        message_history: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
     });
 
     assert_eq!(chat.current_goal_status_indicator, None);
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[tokio::test]
@@ -1831,7 +2267,7 @@ async fn thread_goal_update_for_other_thread_is_ignored() {
 
     assert_eq!(chat.current_goal_status_indicator, None);
     assert!(chat.current_goal_status.is_none());
-    assert!(chat.budget_limited_turn_ids.is_empty());
+    assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
 }
 
 #[test]
@@ -1998,15 +2434,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     // Begin turn
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
 
     // First finalized assistant message
     complete_assistant_message(&mut chat, "msg-first", "First message", /*phase*/ None);
@@ -2020,16 +2448,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     );
 
     // End turn
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    });
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
 
     let cells = drain_insert_history(&mut rx);
     let combined: String = cells
@@ -2054,12 +2473,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     // No deltas; only final reasoning followed by final message.
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "I will first analyze the request.".into(),
-        }),
-    });
+    handle_agent_reasoning_final(&mut chat);
     complete_assistant_message(
         &mut chat,
         "msg-result",
@@ -2084,53 +2498,21 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     // Stream some reasoning deltas first.
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "I will ".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "first analyze the ".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "request.".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "request.".into(),
-        }),
-    });
+    handle_agent_reasoning_delta(&mut chat, "I will ");
+    handle_agent_reasoning_delta(&mut chat, "first analyze the ");
+    handle_agent_reasoning_delta(&mut chat, "request.");
+    handle_agent_reasoning_final(&mut chat);
 
     // Then stream answer deltas, followed by the exact same final message.
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "Here is the ".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "result.".into(),
-        }),
-    });
+    handle_agent_message_delta(&mut chat, "Here is the ");
+    handle_agent_message_delta(&mut chat, "result.");
 
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Here is the result.".into(),
-            phase: None,
-            memory_citation: None,
-        }),
-    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-result",
+        "Here is the result.",
+        /*phase*/ None,
+    );
 
     // Snapshot the combined visible content to ensure we render as expected
     // when deltas are followed by the identical final message.
@@ -2220,7 +2602,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
 #[tokio::test]
 async fn pre_tool_use_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
-        codex_protocol::protocol::HookEventName::PreToolUse,
+        codex_app_server_protocol::HookEventName::PreToolUse,
         "pre-tool-use:0:/tmp/hooks.json",
         "warming the shell",
         "pre_tool_use_hook_events_render_snapshot",
@@ -2231,7 +2613,7 @@ async fn pre_tool_use_hook_events_render_snapshot() {
 #[tokio::test]
 async fn post_tool_use_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
-        codex_protocol::protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookEventName::PostToolUse,
         "post-tool-use:0:/tmp/hooks.json",
         "warming the shell",
         "post_tool_use_hook_events_render_snapshot",
@@ -2243,54 +2625,27 @@ async fn post_tool_use_hook_events_render_snapshot() {
 async fn completed_hook_with_no_entries_stays_out_of_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(Event {
-        id: "hook-1".into(),
-        msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
-            turn_id: None,
-            run: codex_protocol::protocol::HookRunSummary {
-                id: "post-tool-use:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::PostToolUse,
-                handler_type: codex_protocol::protocol::HookHandlerType::Command,
-                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
-                source: codex_protocol::protocol::HookSource::User,
-                display_order: 0,
-                status: codex_protocol::protocol::HookRunStatus::Running,
-                status_message: None,
-                started_at: 1,
-                completed_at: None,
-                duration_ms: None,
-                entries: Vec::new(),
-            },
-        }),
-    });
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            /*status_message*/ None,
+        ),
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
     reveal_running_hooks(&mut chat);
     let running_snapshot = hook_live_and_history_snapshot(&chat, "running", "");
 
-    chat.handle_codex_event(Event {
-        id: "hook-1".into(),
-        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
-            turn_id: None,
-            run: codex_protocol::protocol::HookRunSummary {
-                id: "post-tool-use:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::PostToolUse,
-                handler_type: codex_protocol::protocol::HookHandlerType::Command,
-                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
-                source: codex_protocol::protocol::HookSource::User,
-                display_order: 0,
-                status: codex_protocol::protocol::HookRunStatus::Completed,
-                status_message: None,
-                started_at: 1,
-                completed_at: Some(2),
-                duration_ms: Some(1),
-                entries: Vec::new(),
-            },
-        }),
-    });
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Vec::new(),
+        ),
+    );
 
     assert!(drain_insert_history(&mut rx).is_empty());
     let completed_lingering_snapshot =
@@ -2307,20 +2662,26 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
 async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(hook_started_event(
-        "post-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        Some("checking output policy"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            Some("checking output policy"),
+        ),
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 
     reveal_running_hooks_after_delayed_redraw(&mut chat);
-    chat.handle_codex_event(hook_completed_event(
-        "post-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        codex_protocol::protocol::HookRunStatus::Completed,
-        Vec::new(),
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Vec::new(),
+        ),
+    );
 
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(
@@ -2335,24 +2696,30 @@ async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
 async fn blocked_and_failed_hooks_render_feedback_and_errors() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(hook_completed_event(
-        "pre-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        codex_protocol::protocol::HookRunStatus::Blocked,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
-            text: "run tests before touching the fixture".to_string(),
-        }],
-    ));
-    chat.handle_codex_event(hook_completed_event(
-        "post-tool-use:1:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        codex_protocol::protocol::HookRunStatus::Failed,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Error,
-            text: "hook exited with code 7".to_string(),
-        }],
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            codex_app_server_protocol::HookRunStatus::Blocked,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Feedback,
+                text: "run tests before touching the fixture".to_string(),
+            }],
+        ),
+    );
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "post-tool-use:1:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            codex_app_server_protocol::HookRunStatus::Failed,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Error,
+                text: "hook exited with code 7".to_string(),
+            }],
+        ),
+    );
 
     let rendered = drain_insert_history(&mut rx)
         .iter()
@@ -2375,23 +2742,29 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
 async fn completed_hook_with_output_flushes_immediately() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(hook_started_event(
-        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        Some("checking command"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command"),
+        ),
+    );
     reveal_running_hooks(&mut chat);
     let running_snapshot = hook_live_and_history_snapshot(&chat, "running", "");
 
-    chat.handle_codex_event(hook_completed_event(
-        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        codex_protocol::protocol::HookRunStatus::Blocked,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
-            text: "command blocked by policy".to_string(),
-        }],
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            codex_app_server_protocol::HookRunStatus::Blocked,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Feedback,
+                text: "command blocked by policy".to_string(),
+            }],
+        ),
+    );
     let history = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -2408,22 +2781,28 @@ async fn completed_hook_with_output_flushes_immediately() {
 async fn completed_hook_output_precedes_following_assistant_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(hook_started_event(
-        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        Some("checking command"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command"),
+        ),
+    );
     reveal_running_hooks(&mut chat);
 
-    chat.handle_codex_event(hook_completed_event(
-        "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        codex_protocol::protocol::HookRunStatus::Blocked,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Feedback,
-            text: "command blocked by policy".to_string(),
-        }],
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "pre-tool-use:0:/tmp/hooks.json:tool-call-1",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            codex_app_server_protocol::HookRunStatus::Blocked,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Feedback,
+                text: "command blocked by policy".to_string(),
+            }],
+        ),
+    );
 
     complete_assistant_message(
         &mut chat,
@@ -2460,26 +2839,35 @@ async fn completed_same_id_hook_output_survives_restart() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let hook_id = "stop:0:/tmp/hooks.json";
 
-    chat.handle_codex_event(hook_started_event(
-        hook_id,
-        codex_protocol::protocol::HookEventName::Stop,
-        Some("checking stop condition"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            hook_id,
+            codex_app_server_protocol::HookEventName::Stop,
+            Some("checking stop condition"),
+        ),
+    );
     reveal_running_hooks(&mut chat);
-    chat.handle_codex_event(hook_completed_event(
-        hook_id,
-        codex_protocol::protocol::HookEventName::Stop,
-        codex_protocol::protocol::HookRunStatus::Stopped,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Stop,
-            text: "continue with more context".to_string(),
-        }],
-    ));
-    chat.handle_codex_event(hook_started_event(
-        hook_id,
-        codex_protocol::protocol::HookEventName::Stop,
-        Some("checking stop condition"),
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            hook_id,
+            codex_app_server_protocol::HookEventName::Stop,
+            codex_app_server_protocol::HookRunStatus::Stopped,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Stop,
+                text: "continue with more context".to_string(),
+            }],
+        ),
+    );
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            hook_id,
+            codex_app_server_protocol::HookEventName::Stop,
+            Some("checking stop condition"),
+        ),
+    );
     reveal_running_hooks(&mut chat);
 
     let history = drain_insert_history(&mut rx)
@@ -2504,11 +2892,14 @@ async fn identical_parallel_running_hooks_collapse_to_count() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     for tool_call_id in ["tool-call-1", "tool-call-2", "tool-call-3"] {
-        chat.handle_codex_event(hook_started_event(
-            &format!("pre-tool-use:0:/tmp/hooks.json:{tool_call_id}"),
-            codex_protocol::protocol::HookEventName::PreToolUse,
-            Some("checking command policy"),
-        ));
+        handle_hook_started(
+            &mut chat,
+            hook_started_run(
+                &format!("pre-tool-use:0:/tmp/hooks.json:{tool_call_id}"),
+                codex_app_server_protocol::HookEventName::PreToolUse,
+                Some("checking command policy"),
+            ),
+        );
     }
     reveal_running_hooks(&mut chat);
 
@@ -2525,44 +2916,56 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
     chat.set_status_header("Thinking".to_string());
     chat.bottom_pane.ensure_status_indicator();
 
-    chat.handle_codex_event(hook_started_event(
-        "pre-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        Some("checking command policy"),
-    ));
-    assert_eq!(chat.current_status.header, "Thinking");
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command policy"),
+        ),
+    );
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let first_running_snapshot = hook_live_and_history_snapshot(&chat, "pre running", "");
 
-    chat.handle_codex_event(hook_started_event(
-        "post-tool-use:1:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        Some("checking output policy"),
-    ));
-    assert_eq!(chat.current_status.header, "Thinking");
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:1:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            Some("checking output policy"),
+        ),
+    );
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     reveal_running_hooks(&mut chat);
     let second_running_snapshot = hook_live_and_history_snapshot(&chat, "post running", "");
 
-    chat.handle_codex_event(hook_completed_event(
-        "pre-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PreToolUse,
-        codex_protocol::protocol::HookRunStatus::Completed,
-        Vec::new(),
-    ));
-    assert_eq!(chat.current_status.header, "Thinking");
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Vec::new(),
+        ),
+    );
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     let older_completed_snapshot =
         hook_live_and_history_snapshot(&chat, "pre completed lingering", "");
     expire_quiet_hook_linger(&mut chat);
     let older_completed_expired_snapshot =
         hook_live_and_history_snapshot(&chat, "pre completed after linger", "");
 
-    chat.handle_codex_event(hook_completed_event(
-        "post-tool-use:1:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        codex_protocol::protocol::HookRunStatus::Completed,
-        Vec::new(),
-    ));
-    assert_eq!(chat.current_status.header, "Thinking");
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "post-tool-use:1:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Vec::new(),
+        ),
+    );
+    assert_eq!(chat.status_state.current_status.header, "Thinking");
     assert!(chat.bottom_pane.status_indicator_visible());
     assert!(drain_insert_history(&mut rx).is_empty());
     let all_completed_lingering_snapshot =
@@ -2584,11 +2987,14 @@ async fn running_hook_does_not_displace_active_exec_cell() {
     let begin = begin_exec(&mut chat, "call-1", "echo done");
     let exec_running = active_blob(&chat);
 
-    chat.handle_codex_event(hook_started_event(
-        "post-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        Some("checking output policy"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            Some("checking output policy"),
+        ),
+    );
     reveal_running_hooks(&mut chat);
     let exec_and_hook_running = format!(
         "active exec:\n{}active hooks:\n{}",
@@ -2603,12 +3009,15 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         .collect::<String>();
     let hook_running_after_exec = active_hook_blob(&chat);
 
-    chat.handle_codex_event(hook_completed_event(
-        "post-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        codex_protocol::protocol::HookRunStatus::Completed,
-        Vec::new(),
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Vec::new(),
+        ),
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
     let quiet_hook_completed_lingering = active_hook_blob(&chat);
     expire_quiet_hook_linger(&mut chat);
@@ -2632,11 +3041,14 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
         .expect("active exec transcript lines")
         .len();
 
-    chat.handle_codex_event(hook_started_event(
-        "post-tool-use:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::PostToolUse,
-        Some("checking output policy"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            Some("checking output policy"),
+        ),
+    );
     let hidden_hook_transcript = chat
         .active_cell_transcript_lines(/*width*/ 80)
         .expect("active exec transcript lines");
@@ -2667,22 +3079,28 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
 async fn hook_completed_before_reveal_renders_completed_without_running_flash() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(hook_started_event(
-        "session-start:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::SessionStart,
-        Some("warming the shell"),
-    ));
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "session-start:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::SessionStart,
+            Some("warming the shell"),
+        ),
+    );
     let started_hidden_snapshot = active_hook_blob(&chat);
 
-    chat.handle_codex_event(hook_completed_event(
-        "session-start:0:/tmp/hooks.json",
-        codex_protocol::protocol::HookEventName::SessionStart,
-        codex_protocol::protocol::HookRunStatus::Completed,
-        vec![codex_protocol::protocol::HookOutputEntry {
-            kind: codex_protocol::protocol::HookOutputEntryKind::Context,
-            text: "session context".to_string(),
-        }],
-    ));
+    handle_hook_completed(
+        &mut chat,
+        hook_completed_run(
+            "session-start:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::SessionStart,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            vec![codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                text: "session context".to_string(),
+            }],
+        ),
+    );
 
     let history = drain_insert_history(&mut rx)
         .iter()
@@ -2697,7 +3115,7 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
 #[tokio::test]
 async fn session_start_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
-        codex_protocol::protocol::HookEventName::SessionStart,
+        codex_app_server_protocol::HookEventName::SessionStart,
         "session-start:0:/tmp/hooks.json",
         "warming the shell",
         "session_start_hook_events_render_snapshot",
@@ -2705,64 +3123,52 @@ async fn session_start_hook_events_render_snapshot() {
     .await;
 }
 
-fn hook_started_event(
+fn hook_started_run(
     id: &str,
-    event_name: codex_protocol::protocol::HookEventName,
+    event_name: codex_app_server_protocol::HookEventName,
     status_message: Option<&str>,
-) -> Event {
-    Event {
-        id: id.to_string(),
-        msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
-            turn_id: None,
-            run: hook_run_summary(
-                id,
-                event_name,
-                codex_protocol::protocol::HookRunStatus::Running,
-                status_message,
-                Vec::new(),
-            ),
-        }),
-    }
+) -> codex_app_server_protocol::HookRunSummary {
+    hook_run_summary(
+        id,
+        event_name,
+        codex_app_server_protocol::HookRunStatus::Running,
+        status_message,
+        Vec::new(),
+    )
 }
 
-fn hook_completed_event(
+fn hook_completed_run(
     id: &str,
-    event_name: codex_protocol::protocol::HookEventName,
-    status: codex_protocol::protocol::HookRunStatus,
-    entries: Vec<codex_protocol::protocol::HookOutputEntry>,
-) -> Event {
-    Event {
-        id: id.to_string(),
-        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
-            turn_id: None,
-            run: hook_run_summary(
-                id, event_name, status, /*status_message*/ None, entries,
-            ),
-        }),
-    }
+    event_name: codex_app_server_protocol::HookEventName,
+    status: codex_app_server_protocol::HookRunStatus,
+    entries: Vec<codex_app_server_protocol::HookOutputEntry>,
+) -> codex_app_server_protocol::HookRunSummary {
+    hook_run_summary(
+        id, event_name, status, /*status_message*/ None, entries,
+    )
 }
 
 fn hook_run_summary(
     id: &str,
-    event_name: codex_protocol::protocol::HookEventName,
-    status: codex_protocol::protocol::HookRunStatus,
+    event_name: codex_app_server_protocol::HookEventName,
+    status: codex_app_server_protocol::HookRunStatus,
     status_message: Option<&str>,
-    entries: Vec<codex_protocol::protocol::HookOutputEntry>,
-) -> codex_protocol::protocol::HookRunSummary {
-    codex_protocol::protocol::HookRunSummary {
+    entries: Vec<codex_app_server_protocol::HookOutputEntry>,
+) -> codex_app_server_protocol::HookRunSummary {
+    codex_app_server_protocol::HookRunSummary {
         id: id.to_string(),
         event_name,
-        handler_type: codex_protocol::protocol::HookHandlerType::Command,
-        execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-        scope: codex_protocol::protocol::HookScope::Turn,
+        handler_type: codex_app_server_protocol::HookHandlerType::Command,
+        execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+        scope: codex_app_server_protocol::HookScope::Turn,
         source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
-        source: codex_protocol::protocol::HookSource::User,
+        source: codex_app_server_protocol::HookSource::User,
         display_order: 0,
         status,
         status_message: status_message.map(str::to_string),
         started_at: 1,
-        completed_at: (status != codex_protocol::protocol::HookRunStatus::Running).then_some(2),
-        duration_ms: (status != codex_protocol::protocol::HookRunStatus::Running).then_some(1),
+        completed_at: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(2),
+        duration_ms: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(1),
         entries,
     }
 }
@@ -2793,7 +3199,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     );
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
-    let parsed_cmd = vec![
+    let parsed_cmd = [
         ParsedCommand::Search {
             query: Some("Change Approved".into()),
             path: None,
@@ -2805,55 +3211,44 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             path: "diff_render.rs".into(),
         },
     ];
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    chat.handle_codex_event(Event {
-        id: "c1".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "c1".into(),
-            process_id: None,
-            turn_id: "turn-1".into(),
-            command: command.clone(),
+    let command_actions = parsed_cmd
+        .iter()
+        .cloned()
+        .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
+        .collect::<Vec<_>>();
+    let cwd = chat.config.cwd.clone();
+    handle_exec_begin(
+        &mut chat,
+        AppServerThreadItem::CommandExecution {
+            id: "c1".into(),
+            command: codex_shell_command::parse_command::shlex_join(&command),
             cwd: cwd.clone(),
-            parsed_cmd: parsed_cmd.clone(),
-            source: ExecCommandSource::Agent,
-            interaction_input: None,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "c1".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "c1".into(),
             process_id: None,
-            turn_id: "turn-1".into(),
-            command,
-            cwd,
-            parsed_cmd,
             source: ExecCommandSource::Agent,
-            interaction_input: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            aggregated_output: String::new(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(16000),
-            formatted_output: String::new(),
-            status: CoreExecCommandStatus::Completed,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Investigating rendering code**".into(),
-        }),
-    });
+            status: AppServerCommandExecutionStatus::InProgress,
+            command_actions: command_actions.clone(),
+            aggregated_output: None,
+            exit_code: None,
+            duration_ms: None,
+        },
+    );
+    handle_exec_end(
+        &mut chat,
+        AppServerThreadItem::CommandExecution {
+            id: "c1".into(),
+            command: codex_shell_command::parse_command::shlex_join(&command),
+            cwd,
+            process_id: None,
+            source: ExecCommandSource::Agent,
+            status: AppServerCommandExecutionStatus::Completed,
+            command_actions,
+            aggregated_output: None,
+            exit_code: Some(0),
+            duration_ms: Some(16000),
+        },
+    );
+    handle_turn_started(&mut chat, "turn-1");
+    handle_agent_reasoning_delta(&mut chat, "**Investigating rendering code**");
     chat.bottom_pane.set_composer_text(
         "Summarize recent commits".to_string(),
         Vec::new(),
@@ -2892,15 +3287,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
 
     // Simulate a final agent message via streaming deltas instead of a single message
 
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
     // Build a vt100 visual from the history insertions only (no UI overlay)
     let width: u16 = 80;
     let height: u16 = 50;
@@ -2943,10 +3330,7 @@ printf 'fenced within fenced\n'
             delta.push(c2);
         }
 
-        chat.handle_codex_event(Event {
-            id: "t1".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
-        });
+        handle_agent_message_delta(&mut chat, delta);
         // Drive commit ticks and drain emitted history lines into the vt100 buffer.
         loop {
             chat.on_commit_tick();
@@ -2966,16 +3350,7 @@ printf 'fenced within fenced\n'
     }
 
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    });
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
     for lines in drain_insert_history(&mut rx) {
         crate::insert_history::insert_history_lines(&mut term, lines)
             .expect("Failed to insert history lines in test");
@@ -2991,15 +3366,7 @@ printf 'fenced within fenced\n'
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
     for i in 0..30 {
         chat.queue_user_message(format!("Hello, world! {i}").into());
     }

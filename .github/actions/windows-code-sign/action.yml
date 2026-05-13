@@ -30,7 +30,7 @@ runs:
   using: composite
   steps:
     - name: Azure login for Trusted Signing (OIDC)
-      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
       with:
         client-id: ${{ inputs.client-id }}
         tenant-id: ${{ inputs.tenant-id }}
@@ -54,7 +54,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Sign Windows binaries with Azure Trusted Signing
-      uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0
+      uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0.5.11
       with:
         endpoint: ${{ inputs.endpoint }}
         trusted-signing-account-name: ${{ inputs.account-name }}

@@ -1,17 +1,19 @@
 use super::*;
 use crate::agent::control::ListedAgent;
+use crate::tools::handlers::multi_agents_spec::create_list_agents_tool;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
+impl ToolExecutor<ToolInvocation> for Handler {
     type Output = ListAgentsResult;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("list_agents")
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_list_agents_tool())
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -35,6 +37,12 @@ impl ToolHandler for Handler {
             .map_err(collab_spawn_error)?;
 
         Ok(ListAgentsResult { agents })
+    }
+}
+
+impl ToolHandler for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

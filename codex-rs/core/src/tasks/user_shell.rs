@@ -21,6 +21,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
@@ -147,6 +148,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
+        #[allow(deprecated)]
         &turn_context.cwd,
         &turn_context.shell_environment_policy.r#set,
         &exec_env_map,
@@ -154,6 +156,7 @@ pub(crate) async fn execute_user_shell_command(
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
+    #[allow(deprecated)]
     let cwd = turn_context.cwd.clone();
 
     let parsed_cmd = parse_command(&display_command);
@@ -164,6 +167,7 @@ pub(crate) async fn execute_user_shell_command(
                 call_id: call_id.clone(),
                 process_id: None,
                 turn_id: turn_context.sub_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
                 cwd: cwd.clone(),
                 parsed_cmd: parsed_cmd.clone(),
@@ -236,6 +240,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -260,6 +265,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id: call_id.clone(),
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -304,6 +310,7 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
                         cwd,
                         parsed_cmd,

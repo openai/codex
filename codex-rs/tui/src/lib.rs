@@ -8,10 +8,12 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
-use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
+use crate::session_resume::ResolveCwdOutcome;
+use crate::session_resume::resolve_cwd_for_resume_or_fork;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -23,7 +25,9 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -37,37 +41,29 @@ use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::TurnContextItem;
-use codex_rollout::read_session_meta_line;
-use codex_rollout::state_db::get_state_db;
+use codex_rollout::StateDbHandle;
+use codex_rollout::state_db;
 use codex_state::log_db;
-use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
-use codex_utils_path as path_utils;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
-use cwd_prompt::CwdPromptOutcome;
-use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+pub use token_usage::TokenUsage;
 use tracing::Level;
 use tracing::error;
 use tracing::warn;
@@ -88,6 +84,7 @@ mod app_event;
 mod app_event_sender;
 mod app_server_approval_conversions;
 mod app_server_session;
+mod approval_events;
 mod ascii_animation;
 #[cfg(not(target_os = "linux"))]
 mod audio_device;
@@ -106,6 +103,7 @@ mod audio_device {
     }
 }
 mod bottom_pane;
+mod branch_summary;
 mod chatwidget;
 mod cli;
 mod clipboard_copy;
@@ -113,10 +111,12 @@ mod clipboard_paste;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
+mod pets;
 pub use custom_terminal::Terminal;
 mod auto_review_denials;
 mod cwd_prompt;
 mod debug_config;
+mod diff_model;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
@@ -126,8 +126,11 @@ mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
+mod git_action_directives;
 mod goal_display;
 mod history_cell;
+mod hooks_rpc;
+mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
@@ -143,6 +146,7 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]
@@ -157,17 +161,22 @@ mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
 mod session_log;
+mod session_resume;
+mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_hooks_review;
 mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_probe;
 mod terminal_title;
 mod text_formatting;
 mod theme_picker;
+mod token_usage;
 mod tooltips;
 mod transcript_reflow;
 mod tui;
@@ -184,12 +193,13 @@ mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
+mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
     use crate::legacy_core::config::Config;
-    use codex_protocol::protocol::RealtimeAudioFrame;
+    use codex_app_server_protocol::ThreadRealtimeAudioChunk;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU16;
@@ -231,7 +241,10 @@ mod voice {
             Err("voice output is unavailable in this build".to_string())
         }
 
-        pub(crate) fn enqueue_frame(&self, _frame: &RealtimeAudioFrame) -> Result<(), String> {
+        pub(crate) fn enqueue_frame(
+            &self,
+            _frame: &ThreadRealtimeAudioChunk,
+        ) -> Result<(), String> {
             Err("voice output is unavailable in this build".to_string())
         }
 
@@ -241,6 +254,7 @@ mod voice {
 
 mod wrapping;
 
+mod table_detect;
 #[cfg(test)]
 pub(crate) mod test_backend;
 #[cfg(test)]
@@ -248,6 +262,8 @@ pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
+use crate::startup_hooks_review::StartupHooksReviewOutcome;
+use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
@@ -256,15 +272,21 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[cfg(unix)]
+const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -272,9 +294,11 @@ async fn start_embedded_app_server(
         config,
         cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -284,10 +308,7 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
-    Remote {
-        websocket_url: String,
-        auth_token: Option<String>,
-    },
+    Remote { endpoint: RemoteAppServerEndpoint },
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -329,12 +350,24 @@ fn websocket_url_supports_auth_token(parsed: &Url) -> bool {
     }
 }
 
-pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
+pub fn resolve_remote_addr(addr: &str) -> color_eyre::Result<RemoteAppServerEndpoint> {
+    if let Some(socket_path) = addr.strip_prefix("unix://") {
+        let socket_path = if socket_path.is_empty() {
+            let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+            codex_app_server_client::app_server_control_socket_path(&codex_home)
+                .map_err(color_eyre::Report::new)?
+        } else {
+            AbsolutePathBuf::relative_to_current_dir(socket_path)
+                .map_err(color_eyre::Report::new)?
+        };
+        return Ok(RemoteAppServerEndpoint::UnixSocket { socket_path });
+    }
+
     let parsed = match Url::parse(addr) {
         Ok(parsed) => parsed,
         Err(_) => {
             color_eyre::eyre::bail!(
-                "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+                "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
             );
         }
     };
@@ -345,32 +378,31 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
         && parsed.query().is_none()
         && parsed.fragment().is_none()
     {
-        return Ok(parsed.to_string());
+        return Ok(RemoteAppServerEndpoint::WebSocket {
+            websocket_url: parsed.to_string(),
+            auth_token: None,
+        });
     }
 
     color_eyre::eyre::bail!(
-        "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+        "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
     );
 }
 
-fn validate_remote_auth_token_transport(websocket_url: &str) -> color_eyre::Result<()> {
-    let parsed = Url::parse(websocket_url).map_err(color_eyre::Report::new)?;
-    if websocket_url_supports_auth_token(&parsed) {
-        return Ok(());
+pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bool {
+    match endpoint {
+        RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
+            Url::parse(websocket_url).is_ok_and(|parsed| websocket_url_supports_auth_token(&parsed))
+        }
+        RemoteAppServerEndpoint::UnixSocket { .. } => false,
     }
-
-    color_eyre::eyre::bail!(
-        "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
-    )
 }
 
 async fn connect_remote_app_server(
-    websocket_url: String,
-    auth_token: Option<String>,
+    endpoint: RemoteAppServerEndpoint,
 ) -> color_eyre::Result<AppServerClient> {
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        websocket_url,
-        auth_token,
+        endpoint,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
@@ -382,6 +414,40 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+#[cfg(unix)]
+async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
+    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
+    if !socket_path.as_path().try_exists().unwrap_or(false) {
+        return None;
+    }
+
+    match tokio::time::timeout(
+        AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
+        tokio::net::UnixStream::connect(socket_path.as_path()),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => Some(socket_path),
+        Ok(Err(err)) => {
+            tracing::debug!(%err, socket_path = %socket_path.display(), "skipping default app-server daemon socket");
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                socket_path = %socket_path.display(),
+                timeout_ms = AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT.as_millis(),
+                "timed out probing default app-server daemon socket"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn maybe_probe_default_daemon_socket(_codex_home: &Path) -> Option<AbsolutePathBuf> {
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_app_server(
     target: &AppServerTarget,
@@ -389,9 +455,11 @@ async fn start_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -400,23 +468,23 @@ async fn start_app_server(
             config,
             cli_kv_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
             environment_manager,
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::Remote {
-            websocket_url,
-            auth_token,
-        } => connect_remote_app_server(websocket_url.clone(), auth_token.clone()).await,
+        AppServerTarget::Remote { endpoint } => connect_remote_app_server(endpoint.clone()).await,
     }
 }
 
 pub(crate) async fn start_app_server_for_picker(
     config: &Config,
     target: &AppServerTarget,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerSession> {
     let app_server = start_app_server(
@@ -425,9 +493,11 @@ pub(crate) async fn start_app_server_for_picker(
         config.clone(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
+        state_db,
         environment_manager,
     )
     .await?;
@@ -438,9 +508,11 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
+    let state_db = state_db::init(config).await;
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
+        state_db,
         Arc::new(EnvironmentManager::default_for_tests()),
     )
     .await
@@ -452,9 +524,11 @@ async fn start_embedded_app_server_with<F, Fut>(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -477,12 +551,15 @@ where
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         config_warnings,
-        session_source: codex_protocol::protocol::SessionSource::Cli,
+        session_source: serde_json::from_value(serde_json::json!("cli"))
+            .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
         enable_codex_api_key_env: false,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -641,10 +718,10 @@ fn config_cwd_for_app_server_target(
     app_server_target: &AppServerTarget,
     environment_manager: &EnvironmentManager,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if environment_manager
-        .default_environment()
-        .is_some_and(|environment| environment.is_remote())
-        || matches!(app_server_target, AppServerTarget::Remote { .. })
+    if matches!(app_server_target, AppServerTarget::Remote { .. })
+        || environment_manager
+            .default_environment()
+            .is_some_and(|environment| environment.is_remote())
     {
         return Ok(None);
     }
@@ -656,6 +733,14 @@ fn config_cwd_for_app_server_target(
         None => AbsolutePathBuf::current_dir(),
     }?;
     Ok(Some(cwd))
+}
+
+fn should_load_configured_environments(
+    loader_overrides: &LoaderOverrides,
+    app_server_target: &AppServerTarget,
+) -> bool {
+    !loader_overrides.ignore_user_config
+        && !matches!(app_server_target, AppServerTarget::Remote { .. })
 }
 
 fn latest_session_cwd_filter<'a>(
@@ -679,28 +764,13 @@ pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
-    remote: Option<String>,
-    remote_auth_token: Option<String>,
+    explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    let remote_url = remote;
-    if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
-        validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
-    }
-    let app_server_target = remote_url
-        .clone()
-        .map(|websocket_url| AppServerTarget::Remote {
-            websocket_url,
-            auth_token: remote_auth_token.clone(),
-        })
-        .unwrap_or(AppServerTarget::Embedded);
-    let remote_cwd_override = cli
-        .cwd
-        .clone()
-        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
+    let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
-            Some(AskForApproval::Never),
+            Some(AskForApproval::Never.to_core()),
         )
     } else {
         (
@@ -741,24 +811,47 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(
-        EnvironmentManager::new(EnvironmentManagerArgs::new(
-            ExecServerRuntimePaths::from_optional_paths(
-                arg0_paths.codex_self_exe.clone(),
-                arg0_paths.codex_linux_sandbox_exe.clone(),
-            )?,
-        ))
-        .await,
-    );
+    let remote_endpoint = match explicit_remote_endpoint {
+        Some(endpoint) => Some(endpoint),
+        None => maybe_probe_default_daemon_socket(&codex_home)
+            .await
+            .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path }),
+    };
+    let app_server_target = remote_endpoint
+        .clone()
+        .map_or(AppServerTarget::Embedded, |endpoint| {
+            AppServerTarget::Remote { endpoint }
+        });
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
+
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        if should_load_configured_environments(&loader_overrides, &app_server_target) {
+            EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        } else {
+            EnvironmentManager::from_env(local_runtime_paths).await
+        }
+        .map(Arc::new)
+        .map_err(std::io::Error::other)?;
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_load_options(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
+        codex_config::ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
     )
     .await
     {
@@ -779,15 +872,6 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
-
-    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
-        &codex_home,
-        &config_toml,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, "failed to run personality migration");
-    }
 
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
@@ -854,16 +938,91 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
+        loader_overrides.clone(),
+        strict_config,
     )
     .await;
+
+    let otel_originator = originator().value;
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::legacy_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
+        }
+    };
+    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
+    crate::legacy_core::otel_init::install_sqlite_telemetry(
+        otel.as_ref(),
+        otel_originator.as_str(),
+    );
+    let state_db = match &app_server_target {
+        AppServerTarget::Embedded => state_db::init(&config).await,
+        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
+    };
+
+    let effective_toml = config.config_layer_stack.effective_config();
+    match effective_toml.try_into() {
+        Ok(config_toml) => {
+            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                &config.codex_home,
+                &config_toml,
+                state_db.clone(),
+            )
+            .await
+            {
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                ) => {
+                    config = load_config_or_exit(
+                        cli_kv_overrides.clone(),
+                        overrides.clone(),
+                        cloud_requirements.clone(),
+                        loader_overrides.clone(),
+                        strict_config,
+                    )
+                    .await;
+                }
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                ) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to run personality migration");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+        }
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -967,36 +1126,11 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_analytics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            None
-        }
-    };
-
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -1014,6 +1148,7 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        strict_config,
         app_server_target,
         remote_cwd_override,
         config,
@@ -1022,8 +1157,8 @@ pub async fn run_main(
         cloud_requirements,
         feedback,
         log_db,
-        remote_url,
-        remote_auth_token,
+        state_db,
+        remote_endpoint,
         environment_manager,
     )
     .await
@@ -1035,6 +1170,7 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
@@ -1043,8 +1179,8 @@ async fn run_ratatui_app(
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
-    remote_url: Option<String>,
-    remote_auth_token: Option<String>,
+    state_db: Option<StateDbHandle>,
+    remote_endpoint: Option<RemoteAppServerEndpoint>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppExitInfo> {
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
@@ -1078,7 +1214,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: codex_protocol::protocol::TokenUsage::default(),
+                        token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -1092,29 +1228,30 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let mut app_server = Some(
-        match start_app_server(
-            &app_server_target,
-            arg0_paths.clone(),
-            initial_config.clone(),
-            cli_kv_overrides.clone(),
-            loader_overrides.clone(),
-            cloud_requirements.clone(),
-            feedback.clone(),
-            log_db.clone(),
-            environment_manager.clone(),
-        )
-        .await
-        {
-            Ok(app_server) => AppServerSession::new(app_server)
-                .with_remote_cwd_override(remote_cwd_override.clone()),
-            Err(err) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err);
-            }
-        },
-    );
+    let app_server_session = match start_app_server(
+        &app_server_target,
+        arg0_paths.clone(),
+        initial_config.clone(),
+        cli_kv_overrides.clone(),
+        loader_overrides.clone(),
+        strict_config,
+        cloud_requirements.clone(),
+        feedback.clone(),
+        log_db.clone(),
+        state_db.clone(),
+        environment_manager.clone(),
+    )
+    .await
+    {
+        Ok(app_server) => AppServerSession::new(app_server),
+        Err(err) => {
+            terminal_restore_guard.restore_silently();
+            session_log::log_session_end();
+            return Err(err);
+        }
+    }
+    .with_remote_cwd_override(remote_cwd_override.clone());
+    let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
@@ -1155,7 +1292,7 @@ async fn run_ratatui_app(
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
-                token_usage: codex_protocol::protocol::TokenUsage::default(),
+                token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
@@ -1185,6 +1322,8 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
             )
             .await
         } else {
@@ -1200,7 +1339,7 @@ async fn run_ratatui_app(
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: codex_protocol::protocol::TokenUsage::default(),
+            token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -1224,16 +1363,12 @@ async fn run_ratatui_app(
                 }
             }
         } else if cli.fork_last {
-            let filter_cwd = if remote_mode {
-                latest_session_cwd_filter(
-                    remote_mode,
-                    remote_cwd_override.as_deref(),
-                    &config,
-                    cli.fork_show_all,
-                )
-            } else {
-                None
-            };
+            let filter_cwd = latest_session_cwd_filter(
+                remote_mode,
+                remote_cwd_override.as_deref(),
+                &config,
+                cli.fork_show_all,
+            );
             let Some(app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork --last");
             };
@@ -1261,7 +1396,7 @@ async fn run_ratatui_app(
                     terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_protocol::protocol::TokenUsage::default(),
+                        token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -1322,7 +1457,7 @@ async fn run_ratatui_app(
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: codex_protocol::protocol::TokenUsage::default(),
+                    token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -1353,7 +1488,7 @@ async fn run_ratatui_app(
             } else {
                 match resolve_cwd_for_resume_or_fork(
                     &mut tui,
-                    &config,
+                    state_db.as_deref(),
                     &current_cwd,
                     target_session.thread_id,
                     target_session.path.as_deref(),
@@ -1367,7 +1502,7 @@ async fn run_ratatui_app(
                         terminal_restore_guard.restore_silently();
                         session_log::log_session_end();
                         return Ok(AppExitInfo {
-                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            token_usage: crate::token_usage::TokenUsage::default(),
                             thread_id: None,
                             thread_name: None,
                             update_action: None,
@@ -1380,13 +1515,30 @@ async fn run_ratatui_app(
         None => None,
     };
 
+    let picker_cancelled_without_selection = matches!(
+        session_selection,
+        resume_picker::SessionSelection::StartFresh
+    ) && (cli.resume_picker || cli.fork_picker);
+
     let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
                 fallback_cwd,
+            )
+            .await
+        }
+        resume_picker::SessionSelection::StartFresh if picker_cancelled_without_selection => {
+            load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
             )
             .await
         }
@@ -1420,7 +1572,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match app_server {
+    let mut app_server = match app_server {
         Some(app_server) => app_server,
         None => match start_app_server(
             &app_server_target,
@@ -1428,9 +1580,11 @@ async fn run_ratatui_app(
             config.clone(),
             cli_kv_overrides.clone(),
             loader_overrides,
+            strict_config,
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
+            state_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1444,6 +1598,12 @@ async fn run_ratatui_app(
             }
         },
     };
+
+    let startup_hooks_browser =
+        match maybe_run_startup_hooks_review(&mut app_server, &mut tui, &config).await? {
+            StartupHooksReviewOutcome::Continue => None,
+            StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
+        };
 
     let app_result = App::run(
         &mut tui,
@@ -1459,9 +1619,10 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
-        remote_url,
-        remote_auth_token,
+        remote_endpoint,
+        state_db,
         environment_manager,
+        startup_hooks_browser,
     )
     .await;
 
@@ -1470,123 +1631,6 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
-}
-
-pub(crate) async fn resolve_session_thread_id(
-    path: &Path,
-    id_str_if_uuid: Option<&str>,
-) -> Option<ThreadId> {
-    match id_str_if_uuid {
-        Some(id_str) => ThreadId::from_string(id_str).ok(),
-        None => read_session_meta_line(path)
-            .await
-            .ok()
-            .map(|meta_line| meta_line.meta.id),
-    }
-}
-
-pub(crate) async fn read_session_cwd(
-    config: &Config,
-    thread_id: ThreadId,
-    path: Option<&Path>,
-) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config).await
-        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
-    {
-        return Some(metadata.cwd);
-    }
-
-    // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt) when DB data is unavailable.
-    // The alternative would be mutating the SessionMeta line when the session cwd
-    // changes, but the rollout is an append-only JSONL log and rewriting the head
-    // would be error-prone.
-    let path = path?;
-    if let Some(cwd) = read_latest_turn_context(path).await.map(|item| item.cwd) {
-        return Some(cwd);
-    }
-    match read_session_meta_line(path).await {
-        Ok(meta_line) => Some(meta_line.meta.cwd),
-        Err(err) => {
-            let rollout_path = path.display().to_string();
-            tracing::warn!(
-                %rollout_path,
-                %err,
-                "Failed to read session metadata from rollout"
-            );
-            None
-        }
-    }
-}
-
-pub(crate) async fn read_session_model(
-    config: &Config,
-    thread_id: ThreadId,
-    path: Option<&Path>,
-) -> Option<String> {
-    if let Some(state_db_ctx) = get_state_db(config).await
-        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
-        && let Some(model) = metadata.model
-    {
-        return Some(model);
-    }
-
-    let path = path?;
-    read_latest_turn_context(path).await.map(|item| item.model)
-}
-
-async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item);
-        }
-    }
-    None
-}
-
-pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
-}
-
-pub(crate) enum ResolveCwdOutcome {
-    Continue(Option<PathBuf>),
-    Exit,
-}
-
-pub(crate) async fn resolve_cwd_for_resume_or_fork(
-    tui: &mut Tui,
-    config: &Config,
-    current_cwd: &Path,
-    thread_id: ThreadId,
-    path: Option<&Path>,
-    action: CwdPromptAction,
-    allow_prompt: bool,
-) -> color_eyre::Result<ResolveCwdOutcome> {
-    let Some(history_cwd) = read_session_cwd(config, thread_id, path).await else {
-        return Ok(ResolveCwdOutcome::Continue(None));
-    };
-    if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
-        let selection_outcome =
-            cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
-        return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(CwdSelection::Current) => {
-                ResolveCwdOutcome::Continue(Some(current_cwd.to_path_buf()))
-            }
-            CwdPromptOutcome::Selection(CwdSelection::Session) => {
-                ResolveCwdOutcome::Continue(Some(history_cwd))
-            }
-            CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
-        });
-    }
-    Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
 }
 
 #[expect(
@@ -1635,36 +1679,17 @@ impl Drop for TerminalRestoreGuard {
 
 /// Determine whether to use the terminal's alternate screen buffer.
 ///
-/// The alternate screen buffer provides a cleaner fullscreen experience without polluting
-/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
-/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
-/// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
-/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
-/// change this behavior.
-///
-/// This function implements a pragmatic workaround:
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
-///   - `always`: Use alternate screen everywhere (original behavior)
+///   - `always`: Use alternate screen
 ///   - `never`: Inline mode only, preserves scrollback
-///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
-///     only in Zellij, enabling it everywhere else
+///   - `auto` (default): Use alternate screen
 fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
     if no_alt_screen {
-        false
-    } else {
-        match tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                let terminal_info = terminal_info();
-                !matches!(
-                    terminal_info.multiplexer,
-                    Some(codex_terminal_detection::Multiplexer::Zellij {})
-                )
-            }
-        }
+        return false;
     }
+
+    tui_alternate_screen != AltScreenMode::Never
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1697,11 +1722,15 @@ async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
         cloud_requirements,
+        loader_overrides,
+        strict_config,
         /*fallback_cwd*/ None,
     )
     .await
@@ -1711,12 +1740,16 @@ async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()
@@ -1762,19 +1795,12 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
-    use codex_features::Feature;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::TurnContextItem;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -1789,17 +1815,40 @@ mod tests {
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
+        let state_db = state_db::init(&config).await;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            state_db,
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
+    }
+
+    #[test]
+    fn alternate_screen_auto_uses_alt_screen() {
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Auto,
+        ));
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Always,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Never,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ true,
+            AltScreenMode::Auto,
+        ));
     }
 
     #[test]
@@ -1814,81 +1863,103 @@ mod tests {
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_websocket_url() {
+    fn resolve_remote_addr_accepts_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
-            "ws://127.0.0.1:4500/"
+            resolve_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "ws://127.0.0.1:4500/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_secure_websocket_url() {
+    fn resolve_remote_addr_accepts_secure_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
-            "wss://example.com/"
+            resolve_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "wss://example.com/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_rejects_websocket_url_without_explicit_port() {
+    fn resolve_remote_addr_accepts_default_socket() -> color_eyre::Result<()> {
+        let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+        assert_eq!(
+            resolve_remote_addr("unix://")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: codex_app_server_client::app_server_control_socket_path(&codex_home)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_relative_socket_path() -> color_eyre::Result<()> {
+        assert_eq!(
+            resolve_remote_addr("unix://codex.sock")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_absolute_socket_path() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let socket_path = temp_dir.path().join("codex.sock");
+        assert_eq!(
+            resolve_remote_addr(&format!("unix://{}", socket_path.display()))?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::from_absolute_path(&socket_path)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_rejects_invalid_remote_addresses() {
         for addr in [
             "ws://127.0.0.1",
             "wss://example.com",
-            "ws://user:pass@127.0.0.1",
+            "127.0.0.1:4500",
+            "https://127.0.0.1:4500",
         ] {
-            let err = normalize_remote_addr(addr)
-                .expect_err("websocket URLs without an explicit port should be rejected");
-            assert!(
-                err.to_string()
-                    .contains("expected `ws://host:port` or `wss://host:port`")
-            );
+            let err = resolve_remote_addr(addr).expect_err("invalid remote addresses should fail");
+            assert!(err.to_string().contains(
+                "expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
+            ));
         }
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_invalid_input() {
-        let err = normalize_remote_addr("https://127.0.0.1:4500")
-            .expect_err("https URLs should be rejected");
+    #[tokio::test]
+    async fn default_daemon_auto_connect_skips_missing_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
         assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+            maybe_probe_default_daemon_socket(codex_home.path())
+                .await
+                .is_none()
         );
+        Ok(())
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_host_port_shortcut() {
-        let err =
-            normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
-        assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let socket_path =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
+        let _listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
+
+        assert_eq!(
+            maybe_probe_default_daemon_socket(codex_home.path()).await,
+            Some(socket_path)
         );
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_loopback_ws() {
-        validate_remote_auth_token_transport("ws://127.0.0.1:4500/")
-            .expect("loopback ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://localhost:4500/")
-            .expect("localhost ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://[::1]:4500/")
-            .expect("ipv6 loopback ws should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_secure_wss() {
-        validate_remote_auth_token_transport("wss://example.com:443/")
-            .expect("wss should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_rejects_non_loopback_ws() {
-        let err = validate_remote_auth_token_transport("ws://example.com:4500/")
-            .expect_err("non-loopback ws should be rejected for auth tokens");
-        assert!(
-            err.to_string()
-                .contains("remote auth tokens require `wss://` or loopback `ws://` URLs")
-        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -1952,6 +2023,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_session_cwd_filter_respects_scope_options() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let remote_cwd = Path::new("repo/on/server");
+
+        let local_filter = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ false,
+        );
+        let show_all_filter = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ true,
+        );
+        let remote_filter = latest_session_cwd_filter(
+            /*remote_mode*/ true,
+            Some(remote_cwd),
+            &config,
+            /*show_all*/ false,
+        );
+
+        assert_eq!(local_filter, Some(config.cwd.as_path()));
+        assert_eq!(show_all_filter, None);
+        assert_eq!(remote_filter, Some(remote_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre::Result<()> {
+        fn write_session_rollout(
+            codex_home: &Path,
+            filename_ts: &str,
+            meta_rfc3339: &str,
+            preview: &str,
+            model_provider: &str,
+            cwd: &Path,
+        ) -> color_eyre::Result<ThreadId> {
+            let uuid = Uuid::new_v4();
+            let uuid_str = uuid.to_string();
+            let thread_id = ThreadId::from_string(&uuid_str)?;
+            let year = &filename_ts[0..4];
+            let month = &filename_ts[5..7];
+            let day = &filename_ts[8..10];
+            let rollout_path = codex_home
+                .join("sessions")
+                .join(year)
+                .join(month)
+                .join(day)
+                .join(format!("rollout-{filename_ts}-{uuid_str}.jsonl"));
+            let parent = rollout_path.parent().ok_or_else(|| {
+                color_eyre::eyre::eyre!("rollout path is missing a parent directory")
+            })?;
+            std::fs::create_dir_all(parent)?;
+
+            let session_meta = codex_protocol::protocol::SessionMeta {
+                id: thread_id,
+                timestamp: meta_rfc3339.to_string(),
+                cwd: cwd.to_path_buf(),
+                originator: "codex".to_string(),
+                cli_version: "0.0.0".to_string(),
+                source: codex_protocol::protocol::SessionSource::Cli,
+                model_provider: Some(model_provider.to_string()),
+                ..Default::default()
+            };
+            let session_meta = serde_json::to_value(codex_protocol::protocol::SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            })?;
+            let lines = [
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "session_meta",
+                    "payload": session_meta,
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": preview}],
+                    },
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": preview,
+                        "kind": "plain",
+                    },
+                })
+                .to_string(),
+            ];
+            std::fs::write(&rollout_path, lines.join("\n") + "\n")?;
+            let updated_at =
+                chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
+            let times = std::fs::FileTimes::new().set_modified(updated_at.into());
+            OpenOptions::new()
+                .append(true)
+                .open(rollout_path)?
+                .set_times(times)?;
+
+            Ok(thread_id)
+        }
+
+        let temp_dir = TempDir::new()?;
+        let project_cwd = temp_dir.path().join("project");
+        let other_cwd = temp_dir.path().join("other-project");
+        std::fs::create_dir_all(&project_cwd)?;
+        std::fs::create_dir_all(&other_cwd)?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(project_cwd.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let model_provider = config.model_provider_id.as_str();
+        let project_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T10-00-00",
+            "2025-01-02T10:00:00Z",
+            "older project session",
+            model_provider,
+            &project_cwd,
+        )?;
+        let other_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T12-00-00",
+            "2025-01-02T12:00:00Z",
+            "newer other project session",
+            model_provider,
+            &other_cwd,
+        )?;
+
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ));
+        let filter_cwd = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ false,
+        );
+        let scoped_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            filter_cwd,
+            /*include_non_interactive*/ false,
+        )
+        .await?
+        .expect("expected project-scoped fork --last target");
+        let show_all_filter_cwd = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ true,
+        );
+        let show_all_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            show_all_filter_cwd,
+            /*include_non_interactive*/ false,
+        )
+        .await?
+        .expect("expected global fork --last target");
+        app_server.shutdown().await?;
+
+        assert_eq!(scoped_target.thread_id, project_thread_id);
+        assert_eq!(show_all_target.thread_id, other_thread_id);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn config_cwd_for_app_server_target_omits_cwd_for_remote_sessions() -> std::io::Result<()>
     {
         let remote_only_cwd = if cfg!(windows) {
@@ -1960,8 +2206,9 @@ mod tests {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Remote {
-            websocket_url: "ws://127.0.0.1:1234/".to_string(),
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
         };
         let environment_manager = EnvironmentManager::default_for_tests();
 
@@ -2032,17 +2279,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_session_cwd_returns_none_without_sqlite_or_rollout_path() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-
-        let cwd = read_session_cwd(&config, ThreadId::new(), /*path*/ None).await;
-
-        assert_eq!(cwd, None);
-        Ok(())
-    }
-
-    #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2081,60 +2317,65 @@ mod tests {
 
     #[tokio::test]
     async fn lookup_session_target_by_name_uses_backend_title_search() -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let thread_id = ThreadId::new();
-        let rollout_path = temp_dir
-            .path()
-            .join("sessions/2025/02/01")
-            .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
-        let rollout_dir = rollout_path.parent().expect("rollout parent");
-        std::fs::create_dir_all(rollout_dir)?;
-        std::fs::write(&rollout_path, "")?;
+        Box::pin(async {
+            let temp_dir = TempDir::new()?;
+            let config = build_config(&temp_dir).await?;
+            let thread_id = ThreadId::new();
+            let rollout_path = temp_dir
+                .path()
+                .join("sessions/2025/02/01")
+                .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
+            let rollout_dir = rollout_path.parent().expect("rollout parent");
+            std::fs::create_dir_all(rollout_dir)?;
+            std::fs::write(&rollout_path, "")?;
 
-        let state_runtime = codex_state::StateRuntime::init(
-            config.codex_home.to_path_buf(),
-            config.model_provider_id.clone(),
-        )
+            let state_runtime = codex_state::StateRuntime::init(
+                config.codex_home.to_path_buf(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .map_err(std::io::Error::other)?;
+            state_runtime
+                .mark_backfill_complete(/*last_watermark*/ None)
+                .await
+                .map_err(std::io::Error::other)?;
+
+            let session_cwd = temp_dir.path().join("project");
+            std::fs::create_dir_all(&session_cwd)?;
+            let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
+                .expect("timestamp should parse")
+                .with_timezone(&chrono::Utc);
+            let mut builder = codex_state::ThreadMetadataBuilder::new(
+                thread_id,
+                rollout_path.clone(),
+                created_at,
+                serde_json::from_value(serde_json::json!("cli"))
+                    .expect("cli session source should deserialize"),
+            );
+            builder.cwd = session_cwd;
+            let mut metadata = builder.build(config.model_provider_id.as_str());
+            metadata.title = "saved-session".to_string();
+            metadata.first_user_message = Some("preview text".to_string());
+            state_runtime
+                .upsert_thread(&metadata)
+                .await
+                .map_err(std::io::Error::other)?;
+
+            let mut app_server =
+                AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                    start_test_embedded_app_server(config).await?,
+                ));
+            let target =
+                lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
+                    .await?;
+            let target = target.expect("name lookup should find the saved thread");
+            assert_eq!(target.path, Some(rollout_path));
+            assert_eq!(target.thread_id, thread_id);
+
+            app_server.shutdown().await?;
+            Ok(())
+        })
         .await
-        .map_err(std::io::Error::other)?;
-        state_runtime
-            .mark_backfill_complete(/*last_watermark*/ None)
-            .await
-            .map_err(std::io::Error::other)?;
-
-        let session_cwd = temp_dir.path().join("project");
-        std::fs::create_dir_all(&session_cwd)?;
-        let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
-            .expect("timestamp should parse")
-            .with_timezone(&chrono::Utc);
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            rollout_path.clone(),
-            created_at,
-            SessionSource::Cli,
-        );
-        builder.cwd = session_cwd;
-        let mut metadata = builder.build(config.model_provider_id.as_str());
-        metadata.title = "saved-session".to_string();
-        metadata.first_user_message = Some("preview text".to_string());
-        state_runtime
-            .upsert_thread(&metadata)
-            .await
-            .map_err(std::io::Error::other)?;
-
-        let mut app_server =
-            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
-                start_test_embedded_app_server(config).await?,
-            ));
-        let target =
-            lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
-        let target = target.expect("name lookup should find the saved thread");
-        assert_eq!(target.path, Some(rollout_path));
-        assert_eq!(target.thread_id, thread_id);
-
-        app_server.shutdown().await?;
-        Ok(())
     }
 
     #[tokio::test]
@@ -2146,9 +2387,11 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            /*state_db*/ None,
             Arc::new(EnvironmentManager::default_for_tests()),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
@@ -2204,118 +2447,6 @@ mod tests {
         Ok(())
     }
 
-    fn build_turn_context(config: &Config, cwd: PathBuf) -> TurnContextItem {
-        let model = config
-            .model
-            .clone()
-            .unwrap_or_else(|| "gpt-5.1".to_string());
-        let permission_profile = config.permissions.permission_profile();
-        let sandbox_policy = permission_profile
-            .to_legacy_sandbox_policy(config.cwd.as_path())
-            .expect("configured permissions must have a legacy compatibility projection");
-        TurnContextItem {
-            turn_id: None,
-            trace_id: None,
-            cwd,
-            current_date: None,
-            timezone: None,
-            approval_policy: config.permissions.approval_policy.value(),
-            sandbox_policy,
-            permission_profile: Some(permission_profile),
-            network: None,
-            file_system_sandbox_policy: None,
-            model,
-            personality: None,
-            collaboration_mode: None,
-            realtime_active: Some(false),
-            effort: config.model_reasoning_effort,
-            summary: config
-                .model_reasoning_summary
-                .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
-            user_instructions: None,
-            developer_instructions: None,
-            final_output_json_schema: None,
-            truncation_policy: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn read_session_cwd_prefers_latest_turn_context() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let first = temp_dir.path().join("first");
-        let second = temp_dir.path().join("second");
-        std::fs::create_dir_all(&first)?;
-        std::fs::create_dir_all(&second)?;
-
-        let rollout_path = temp_dir.path().join("rollout.jsonl");
-        let lines = vec![
-            RolloutLine {
-                timestamp: "t0".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, first)),
-            },
-            RolloutLine {
-                timestamp: "t1".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, second.clone())),
-            },
-        ];
-        let mut text = String::new();
-        for line in lines {
-            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
-            text.push('\n');
-        }
-        std::fs::write(&rollout_path, text)?;
-
-        let cwd = read_session_cwd(&config, ThreadId::new(), Some(&rollout_path))
-            .await
-            .expect("expected cwd");
-        assert_eq!(cwd, second);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn should_prompt_when_meta_matches_current_but_latest_turn_differs() -> std::io::Result<()>
-    {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let current = temp_dir.path().join("current");
-        let latest = temp_dir.path().join("latest");
-        std::fs::create_dir_all(&current)?;
-        std::fs::create_dir_all(&latest)?;
-
-        let rollout_path = temp_dir.path().join("rollout.jsonl");
-        let session_meta = SessionMeta {
-            cwd: current.clone(),
-            ..SessionMeta::default()
-        };
-        let lines = vec![
-            RolloutLine {
-                timestamp: "t0".to_string(),
-                item: RolloutItem::SessionMeta(SessionMetaLine {
-                    meta: session_meta,
-                    git: None,
-                }),
-            },
-            RolloutLine {
-                timestamp: "t1".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, latest.clone())),
-            },
-        ];
-        let mut text = String::new();
-        for line in lines {
-            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
-            text.push('\n');
-        }
-        std::fs::write(&rollout_path, text)?;
-
-        let session_cwd = read_session_cwd(&config, ThreadId::new(), Some(&rollout_path))
-            .await
-            .expect("expected cwd");
-        assert_eq!(session_cwd, latest);
-        assert!(cwds_differ(&current, &session_cwd));
-        Ok(())
-    }
-
     #[tokio::test]
     async fn config_rebuild_changes_trust_defaults_with_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2349,7 +2480,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            trusted_config.permissions.approval_policy.value(),
+            AskForApproval::from(trusted_config.permissions.approval_policy.value()),
             AskForApproval::OnRequest
         );
 
@@ -2364,7 +2495,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            untrusted_config.permissions.approval_policy.value(),
+            AskForApproval::from(untrusted_config.permissions.approval_policy.value()),
             AskForApproval::UnlessTrusted
         );
         Ok(())
@@ -2411,97 +2542,6 @@ trust_level = "untrusted"
             config.startup_warnings[0].contains("bogus-theme"),
             "warning should reference the final config's theme name"
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_session_cwd_falls_back_to_session_meta() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let session_cwd = temp_dir.path().join("session");
-        std::fs::create_dir_all(&session_cwd)?;
-
-        let rollout_path = temp_dir.path().join("rollout.jsonl");
-        let session_meta = SessionMeta {
-            cwd: session_cwd.clone(),
-            ..SessionMeta::default()
-        };
-        let meta_line = RolloutLine {
-            timestamp: "t0".to_string(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            }),
-        };
-        let text = format!(
-            "{}\n",
-            serde_json::to_string(&meta_line).expect("serialize meta")
-        );
-        std::fs::write(&rollout_path, text)?;
-
-        let cwd = read_session_cwd(&config, ThreadId::new(), Some(&rollout_path))
-            .await
-            .expect("expected cwd");
-        assert_eq!(cwd, session_cwd);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_session_cwd_prefers_sqlite_when_thread_id_present() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let mut config = build_config(&temp_dir).await?;
-        config
-            .features
-            .enable(Feature::Sqlite)
-            .expect("test config should allow sqlite");
-
-        let thread_id = ThreadId::new();
-        let rollout_cwd = temp_dir.path().join("rollout-cwd");
-        let sqlite_cwd = temp_dir.path().join("sqlite-cwd");
-        std::fs::create_dir_all(&rollout_cwd)?;
-        std::fs::create_dir_all(&sqlite_cwd)?;
-
-        let rollout_path = temp_dir.path().join("rollout.jsonl");
-        let rollout_line = RolloutLine {
-            timestamp: "t0".to_string(),
-            item: RolloutItem::TurnContext(build_turn_context(&config, rollout_cwd)),
-        };
-        std::fs::write(
-            &rollout_path,
-            format!(
-                "{}\n",
-                serde_json::to_string(&rollout_line).expect("serialize rollout")
-            ),
-        )?;
-
-        let runtime = codex_state::StateRuntime::init(
-            config.codex_home.to_path_buf(),
-            config.model_provider_id.clone(),
-        )
-        .await
-        .map_err(std::io::Error::other)?;
-        runtime
-            .mark_backfill_complete(/*last_watermark*/ None)
-            .await
-            .map_err(std::io::Error::other)?;
-
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            rollout_path.clone(),
-            chrono::Utc::now(),
-            SessionSource::Cli,
-        );
-        builder.cwd = sqlite_cwd.clone();
-        let metadata = builder.build(config.model_provider_id.as_str());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .map_err(std::io::Error::other)?;
-
-        let cwd = read_session_cwd(&config, thread_id, Some(&rollout_path))
-            .await
-            .expect("expected cwd");
-        assert_eq!(cwd, sqlite_cwd);
         Ok(())
     }
 }

@@ -22,7 +22,6 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
-use codex_tools::ToolSpec;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -47,10 +46,6 @@ impl ToolCallRuntime {
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
         }
-    }
-
-    pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
-        self.router.find_spec(tool_name)
     }
 
     pub(crate) fn create_diff_consumer(
@@ -94,12 +89,11 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
-        let display_name = call.tool_name.display();
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
-            otel.name = display_name.as_str(),
-            tool_name = display_name.as_str(),
+            otel.name = %call.tool_name,
+            tool_name = %call.tool_name,
             call_id = call.call_id.as_str(),
             aborted = false,
         );
@@ -186,7 +180,7 @@ impl ToolCallRuntime {
         if call.tool_name.namespace.is_none()
             && matches!(
                 call.tool_name.name.as_str(),
-                "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec"
+                "shell_command" | "unified_exec"
             )
         {
             format!("Wall time: {secs:.1} seconds\naborted by user")

@@ -1582,7 +1582,7 @@ async fn workspace_settings_response(
     } else {
         Ok(Json(json!({
             "beta_settings": {
-                "plugins": state.workspace_plugins_enabled
+                "enable_plugins": state.workspace_plugins_enabled
             }
         })))
     }

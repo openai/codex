@@ -317,6 +317,59 @@ pub enum PermissionProfile {
     External { network: NetworkSandboxPolicy },
 }
 
+/// Metadata for the named or implicit built-in permissions profile that
+/// produced the active `PermissionProfile`.
+///
+/// The runtime must honor `PermissionProfile`; this sidecar exists so clients
+/// can display stable profile identity without trying to reverse-engineer a
+/// name from the compiled permissions.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ActivePermissionProfile {
+    /// Profile identifier from `default_permissions` or the implicit built-in
+    /// default, such as `:workspace` or a user-defined `[permissions.<id>]`
+    /// profile.
+    pub id: String,
+
+    /// Optional parent profile identifier once permissions profiles support
+    /// inheritance. This is always `None` until that config feature exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub extends: Option<String>,
+
+    /// Bounded user-requested modifications applied on top of the named
+    /// profile, if any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modifications: Vec<ActivePermissionProfileModification>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum ActivePermissionProfileModification {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+impl ActivePermissionProfile {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extends: None,
+            modifications: Vec::new(),
+        }
+    }
+
+    pub fn with_modifications(
+        mut self,
+        modifications: Vec<ActivePermissionProfileModification>,
+    ) -> Self {
+        self.modifications = modifications;
+        self
+    }
+}
+
 impl Default for PermissionProfile {
     fn default() -> Self {
         Self::Managed {
@@ -828,6 +881,11 @@ pub enum ResponseItem {
     },
     #[serde(alias = "compaction_summary")]
     Compaction { encrypted_content: String },
+    ContextCompaction {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        encrypted_content: Option<String>,
+    },
     #[serde(other)]
     Other,
 }
@@ -1193,30 +1251,6 @@ pub struct SearchToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<usize>,
-}
-
-/// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or `shell`, the `arguments` field should deserialize to this struct.
-#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ShellToolCallParams {
-    pub command: Vec<String>,
-    pub workdir: Option<String>,
-
-    /// This is the maximum time in milliseconds that the command is allowed to run.
-    #[serde(alias = "timeout")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sandbox_permissions: Option<SandboxPermissions>,
-    /// Suggests a command prefix to persist for future sessions
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub prefix_rule: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub justification: Option<String>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -2351,6 +2385,36 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_context_compaction() -> Result<()> {
+        let json = r#"{"type":"context_compaction","encrypted_content":"abc"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(
+            item,
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some("abc".into()),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_context_compaction_trigger_without_payload() -> Result<()> {
+        let item = ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(item)?,
+            serde_json::json!({
+                "type": "context_compaction",
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn deserializes_legacy_ghost_snapshot_as_other() -> Result<()> {
         let json = r#"{
             "type":"ghost_snapshot",
@@ -2454,30 +2518,6 @@ mod tests {
             assert_eq!(serialized, expected_serialized);
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn deserialize_shell_tool_call_params() -> Result<()> {
-        let json = r#"{
-            "command": ["ls", "-l"],
-            "workdir": "/tmp",
-            "timeout": 1000
-        }"#;
-
-        let params: ShellToolCallParams = serde_json::from_str(json)?;
-        assert_eq!(
-            ShellToolCallParams {
-                command: vec!["ls".to_string(), "-l".to_string()],
-                workdir: Some("/tmp".to_string()),
-                timeout_ms: Some(1000),
-                sandbox_permissions: None,
-                prefix_rule: None,
-                additional_permissions: None,
-                justification: None,
-            },
-            params
-        );
         Ok(())
     }
 

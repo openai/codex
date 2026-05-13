@@ -8,12 +8,12 @@ use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWatchResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
-use codex_core::file_watcher::FileWatcher;
-use codex_core::file_watcher::FileWatcherEvent;
-use codex_core::file_watcher::FileWatcherSubscriber;
-use codex_core::file_watcher::Receiver;
-use codex_core::file_watcher::WatchPath;
-use codex_core::file_watcher::WatchRegistration;
+use codex_file_watcher::FileWatcher;
+use codex_file_watcher::FileWatcherEvent;
+use codex_file_watcher::FileWatcherSubscriber;
+use codex_file_watcher::Receiver;
+use codex_file_watcher::WatchPath;
+use codex_file_watcher::WatchRegistration;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -234,7 +234,10 @@ mod tests {
         const OUTGOING_BUFFER: usize = 1;
         let (tx, _rx) = mpsc::channel(OUTGOING_BUFFER);
         FsWatchManager::new_with_file_watcher(
-            Arc::new(OutgoingMessageSender::new(tx)),
+            Arc::new(OutgoingMessageSender::new(
+                tx,
+                codex_analytics::AnalyticsEventsClient::disabled(),
+            )),
             Arc::new(FileWatcher::noop()),
         )
     }

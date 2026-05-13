@@ -8,14 +8,15 @@ version.workspace = true
 [lib]
 name = "codex_windows_sandbox"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "codex-windows-sandbox-setup"
-path = "src/bin/setup_main.rs"
+path = "src/bin/setup_main/main.rs"
 
 [[bin]]
 name = "codex-command-runner"
-path = "src/bin/command_runner.rs"
+path = "src/bin/command_runner/main.rs"
 
 [lints]
 workspace = true
@@ -30,6 +31,7 @@ chrono = { version = "0.4.42", default-features = false, features = [
 codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
+codex-otel = { workspace = true }
 dunce = "1.0"
 glob = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
@@ -74,11 +76,13 @@ features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_NetworkManagement_NetManagement",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_Security_Cryptography",
     "Win32_Security_Authentication_Identity",
+    "Win32_System_Rpc",
     "Win32_Graphics_Gdi",
     "Win32_System_StationsAndDesktops",
     "Win32_UI_WindowsAndMessaging",
@@ -92,6 +96,3 @@ pretty_assertions = { workspace = true }
 
 [build-dependencies]
 winres = "0.1"
-
-[package.metadata.cargo-shear]
-ignored = ["codex-utils-pty", "tokio"]

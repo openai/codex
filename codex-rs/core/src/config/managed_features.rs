@@ -27,6 +27,18 @@ pub struct ManagedFeatures {
     pinned_features: BTreeMap<Feature, bool>,
 }
 
+impl Default for ManagedFeatures {
+    fn default() -> Self {
+        Self {
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(Features::default()),
+                /*source*/ None,
+            ),
+            pinned_features: BTreeMap::new(),
+        }
+    }
+}
+
 impl ManagedFeatures {
     pub(crate) fn from_configured(
         configured_features: Features,

@@ -3,6 +3,9 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
+use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
+use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -10,10 +13,10 @@ use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
-use codex_cli::read_agent_identity_from_stdin;
+use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
-use codex_cli::run_login_with_agent_identity;
+use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -52,7 +55,7 @@ use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::build_models_manager;
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
@@ -62,7 +65,6 @@ use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
@@ -107,7 +109,7 @@ enum Subcommand {
     Exec(ExecCli),
 
     /// Run a code review non-interactively.
-    Review(ReviewArgs),
+    Review(ReviewCommand),
 
     /// Manage login.
     Login(LoginCommand),
@@ -122,10 +124,13 @@ enum Subcommand {
     Plugin(PluginCli),
 
     /// Start Codex as an MCP server (stdio).
-    McpServer,
+    McpServer(McpServerCommand),
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// [experimental] Ensure the app-server daemon is running with remote control enabled.
+    RemoteControl,
 
     /// Launch the Codex desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -262,6 +267,23 @@ struct DebugModelsCommand {
 }
 
 #[derive(Debug, Parser)]
+struct ReviewCommand {
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
+    #[clap(flatten)]
+    args: ReviewArgs,
+}
+
+#[derive(Debug, Parser)]
+struct McpServerCommand {
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+}
+
+#[derive(Debug, Parser)]
 struct DebugTraceReduceCommand {
     /// Trace bundle directory containing manifest.json and trace.jsonl.
     #[arg(value_name = "TRACE_BUNDLE")]
@@ -365,10 +387,10 @@ struct LoginCommand {
     with_api_key: bool,
 
     #[arg(
-        long = "with-agent-identity",
-        help = "Read the experimental Agent Identity token from stdin (e.g. `printenv CODEX_AGENT_IDENTITY | codex login --with-agent-identity`)"
+        long = "with-access-token",
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
     )]
-    with_agent_identity: bool,
+    with_access_token: bool,
 
     #[arg(
         long = "api-key",
@@ -414,6 +436,10 @@ struct AppServerCommand {
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
     /// Transport endpoint URL. Supported values: `stdio://` (default),
     /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
     #[arg(
@@ -447,18 +473,29 @@ struct AppServerCommand {
 
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
-    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default).
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        default_value = "ws://127.0.0.1:0"
-    )]
-    listen: String,
+    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
+    #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
+    listen: Option<String>,
+
+    /// Register this exec-server as a remote executor using the given base URL.
+    #[arg(long = "remote", value_name = "URL", requires = "executor_id")]
+    remote: Option<String>,
+
+    /// Executor id to attach to when registering remotely.
+    #[arg(long = "executor-id", value_name = "ID")]
+    executor_id: Option<String>,
+
+    /// Human-readable executor name.
+    #[arg(long = "name", value_name = "NAME")]
+    name: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
+    /// Manage the local app-server daemon.
+    Daemon(AppServerDaemonCommand),
+
     /// Proxy stdio bytes to the running app-server control socket.
     Proxy(AppServerProxyCommand),
 
@@ -474,10 +511,51 @@ enum AppServerSubcommand {
 }
 
 #[derive(Debug, Args)]
+struct AppServerDaemonCommand {
+    #[command(subcommand)]
+    subcommand: AppServerDaemonSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AppServerDaemonSubcommand {
+    /// Install durable local app-server management for SSH-driven use.
+    Bootstrap(AppServerBootstrapCommand),
+
+    /// Start the local app server daemon if it is not already running.
+    Start,
+
+    /// Restart the local app server daemon.
+    Restart,
+
+    /// Enable remote_control for future starts and a currently running managed daemon.
+    EnableRemoteControl,
+
+    /// Disable remote_control for future starts and a currently running managed daemon.
+    DisableRemoteControl,
+
+    /// Stop the local app server daemon.
+    Stop,
+
+    /// Print local CLI and running app-server versions as JSON.
+    Version,
+
+    /// [internal] Run the detached pid-backed standalone updater loop.
+    #[clap(hide = true)]
+    PidUpdateLoop,
+}
+
+#[derive(Debug, Args)]
 struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct AppServerBootstrapCommand {
+    /// Launch the managed app-server with remote_control enabled.
+    #[arg(long = "remote-control")]
+    remote_control: bool,
 }
 
 #[derive(Debug, Args)]
@@ -534,10 +612,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = Vec::new();
     if !token_usage.is_zero() {
-        lines.push(format!(
-            "{}",
-            codex_protocol::protocol::FinalOutput::from(token_usage)
-        ));
+        lines.push(token_usage.to_string());
     }
 
     if let Some(resume_cmd) =
@@ -664,9 +739,9 @@ struct FeatureToggles {
 
 #[derive(Debug, Default, Parser, Clone)]
 struct InteractiveRemoteOptions {
-    /// Connect the TUI to a remote app server websocket endpoint.
+    /// Connect the TUI to a remote app server endpoint.
     ///
-    /// Accepted forms: `ws://host:port` or `wss://host:port`.
+    /// Accepted forms: `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`.
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 
@@ -752,6 +827,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     root_config_overrides.raw_overrides.extend(toggle_overrides);
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
+    let root_strict_config = interactive.strict_config;
+    reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
 
     match subcommand {
         None => {
@@ -777,13 +854,17 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             exec_cli
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
+            exec_cli.strict_config |= root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
-        Some(Subcommand::Review(review_args)) => {
+        Some(Subcommand::Review(ReviewCommand {
+            strict_config,
+            args: review_args,
+        })) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
@@ -791,19 +872,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.strict_config = strict_config || root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
-        Some(Subcommand::McpServer) => {
+        Some(Subcommand::McpServer(McpServerCommand { strict_config })) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
                 "mcp-server",
             )?;
-            codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
+            codex_mcp_server::run_main(
+                arg0_paths.clone(),
+                root_config_overrides,
+                strict_config || root_strict_config,
+            )
+            .await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -836,10 +923,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
                 subcommand,
+                strict_config: app_server_strict_config,
                 listen,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
+            let strict_config = app_server_strict_config || root_strict_config;
+            reject_strict_config_for_app_server_subcommand(strict_config, subcommand.as_ref())?;
             reject_remote_mode_for_app_server_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
@@ -849,17 +939,54 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
-                    codex_app_server::run_main_with_transport(
+                    codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
                         codex_config::LoaderOverrides::default(),
+                        strict_config,
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
+                        codex_app_server::AppServerRuntimeOptions::default(),
                     )
                     .await?;
                 }
+                Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
+                    AppServerDaemonSubcommand::Start => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                    }
+                    AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
+                        let output =
+                            codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
+                                remote_control_enabled: bootstrap_cli.remote_control,
+                            })
+                            .await?;
+                        println!("{}", serde_json::to_string(&output)?);
+                    }
+                    AppServerDaemonSubcommand::Restart => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::EnableRemoteControl => {
+                        print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
+                            .await?;
+                    }
+                    AppServerDaemonSubcommand::DisableRemoteControl => {
+                        print_app_server_remote_control_output(
+                            AppServerRemoteControlMode::Disabled,
+                        )
+                        .await?;
+                    }
+                    AppServerDaemonSubcommand::Stop => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                    }
+                    AppServerDaemonSubcommand::Version => {
+                        print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
+                    }
+                    AppServerDaemonSubcommand::PidUpdateLoop => {
+                        codex_app_server_daemon::run_pid_update_loop().await?;
+                    }
+                },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
@@ -891,6 +1018,15 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
                 }
             }
+        }
+        Some(Subcommand::RemoteControl) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "remote-control",
+            )?;
+            let output = codex_app_server_daemon::ensure_remote_control_started().await?;
+            println!("{}", serde_json::to_string(&output)?);
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -970,9 +1106,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.with_api_key && login_cli.with_agent_identity {
+                    if login_cli.with_api_key && login_cli.with_access_token {
                         eprintln!(
-                            "Choose one login credential source: --with-api-key or --with-agent-identity."
+                            "Choose one login credential source: --with-api-key or --with-access-token."
                         );
                         std::process::exit(1);
                     } else if login_cli.use_device_code {
@@ -990,10 +1126,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
-                    } else if login_cli.with_agent_identity {
-                        let agent_identity = read_agent_identity_from_stdin();
-                        run_login_with_agent_identity(login_cli.config_overrides, agent_identity)
-                            .await;
+                    } else if login_cli.with_access_token {
+                        let access_token = read_access_token_from_stdin();
+                        run_login_with_access_token(login_cli.config_overrides, access_token).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -1213,11 +1348,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     ..Default::default()
                 };
 
-                let config = Config::load_with_cli_overrides_and_harness_overrides(
-                    cli_kv_overrides,
-                    overrides,
-                )
-                .await?;
+                let config = ConfigBuilder::default()
+                    .cli_overrides(cli_kv_overrides)
+                    .harness_overrides(overrides)
+                    .build()
+                    .await?;
                 let mut rows = Vec::with_capacity(FEATURES.len());
                 let mut name_width = 0;
                 let mut stage_width = 0;
@@ -1269,7 +1404,23 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    codex_exec_server::run_main(&cmd.listen, runtime_paths)
+    if let Some(base_url) = cmd.remote {
+        let executor_id = cmd
+            .executor_id
+            .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let mut remote_config =
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+        if let Some(name) = cmd.name {
+            remote_config.name = name;
+        }
+        codex_exec_server::run_remote_executor(remote_config, runtime_paths).await?;
+        return Ok(());
+    }
+    let listen_url = cmd
+        .listen
+        .as_deref()
+        .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
+    codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }
@@ -1373,11 +1524,15 @@ async fn run_debug_prompt_input_command(
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
         show_raw_agent_reasoning: shared.oss.then_some(true),
         ephemeral: Some(true),
+        bypass_hook_trust: shared.bypass_hook_trust.then_some(true),
         additional_writable_roots: shared.add_dir,
         ..Default::default()
     };
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .build()
+        .await?;
 
     let mut input = shared
         .images
@@ -1392,7 +1547,7 @@ async fn run_debug_prompt_input_command(
         });
     }
 
-    let prompt_input = codex_core::build_prompt_input(config, input).await?;
+    let prompt_input = codex_core::build_prompt_input(config, input, /*state_db*/ None).await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
     Ok(())
@@ -1408,11 +1563,13 @@ async fn run_debug_models_command(
         let cli_overrides = root_config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?;
-        let config = Config::load_with_cli_overrides(cli_overrides).await?;
+        let config = ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .build()
+            .await?;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
-        let models_manager =
-            build_models_manager(&config, auth_manager, CollaborationModesConfig::default());
+        let models_manager = build_models_manager(&config, auth_manager);
         models_manager
             .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
             .await
@@ -1434,8 +1591,11 @@ async fn run_debug_clear_memories_command(
         config_profile: interactive.config_profile.clone(),
         ..Default::default()
     };
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .build()
+        .await?;
 
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
@@ -1470,9 +1630,7 @@ fn prepend_config_flags(
     subcommand_config_overrides: &mut CliConfigOverrides,
     cli_config_overrides: CliConfigOverrides,
 ) {
-    subcommand_config_overrides
-        .raw_overrides
-        .splice(0..0, cli_config_overrides.raw_overrides);
+    subcommand_config_overrides.prepend_root_overrides(cli_config_overrides);
 }
 
 fn reject_remote_mode_for_subcommand(
@@ -1493,21 +1651,139 @@ fn reject_remote_mode_for_subcommand(
     Ok(())
 }
 
+fn reject_root_strict_config_for_subcommand(
+    strict_config: bool,
+    subcommand: &Option<Subcommand>,
+) -> anyhow::Result<()> {
+    if !strict_config {
+        return Ok(());
+    }
+
+    match unsupported_subcommand_name_for_strict_config(subcommand) {
+        Some(subcommand_name) => {
+            reject_strict_config_for_unsupported_subcommand(strict_config, subcommand_name)
+        }
+        None => Ok(()),
+    }
+}
+
+/// Return the selected subcommand name when a root-level `--strict-config`
+/// flag should be rejected after parsing.
+///
+/// `--strict-config` is parsed on the root interactive CLI so commands like
+/// `codex --strict-config` continue to work for the TUI and for wrappers that
+/// forward root options into another command shape. Clap will still accept that
+/// root flag before the dispatcher knows which subcommand the user selected, so
+/// unsupported subcommands need an explicit post-parse reject path.
+///
+/// `Some(...)` returns the user-facing command name fragment to embed in the
+/// rejection error, such as `cloud` or `app-server proxy`. `None` means the
+/// selected command is allowed to inherit root `--strict-config`.
+fn unsupported_subcommand_name_for_strict_config(
+    subcommand: &Option<Subcommand>,
+) -> Option<&'static str> {
+    match subcommand {
+        None
+        | Some(Subcommand::Exec(_))
+        | Some(Subcommand::Review(_))
+        | Some(Subcommand::McpServer(_))
+        | Some(Subcommand::Resume(_))
+        | Some(Subcommand::Fork(_)) => None,
+        Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
+        Some(Subcommand::AppServer(app_server)) => {
+            Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
+        }
+        Some(Subcommand::RemoteControl) => Some("remote-control"),
+        Some(Subcommand::Mcp(_)) => Some("mcp"),
+        Some(Subcommand::Plugin(_)) => Some("plugin"),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Some(Subcommand::App(_)) => Some("app"),
+        Some(Subcommand::Login(_)) => Some("login"),
+        Some(Subcommand::Logout(_)) => Some("logout"),
+        Some(Subcommand::Completion(_)) => Some("completion"),
+        Some(Subcommand::Update) => Some("update"),
+        Some(Subcommand::Cloud(_)) => Some("cloud"),
+        Some(Subcommand::Sandbox(_)) => Some("sandbox"),
+        Some(Subcommand::Debug(_)) => Some("debug"),
+        Some(Subcommand::Execpolicy(_)) => Some("execpolicy"),
+        Some(Subcommand::Apply(_)) => Some("apply"),
+        Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
+        Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
+        Some(Subcommand::ExecServer(_)) => Some("exec-server"),
+        Some(Subcommand::Features(_)) => Some("features"),
+    }
+}
+
+fn reject_strict_config_for_app_server_subcommand(
+    strict_config: bool,
+    subcommand: Option<&AppServerSubcommand>,
+) -> anyhow::Result<()> {
+    if subcommand.is_none() {
+        return Ok(());
+    }
+    reject_strict_config_for_unsupported_subcommand(
+        strict_config,
+        app_server_subcommand_name(subcommand),
+    )
+}
+
+fn reject_strict_config_for_unsupported_subcommand(
+    strict_config: bool,
+    subcommand: &str,
+) -> anyhow::Result<()> {
+    if strict_config {
+        anyhow::bail!("`--strict-config` is not supported for `codex {subcommand}`");
+    }
+    Ok(())
+}
+
 fn reject_remote_mode_for_app_server_subcommand(
     remote: Option<&str>,
     remote_auth_token_env: Option<&str>,
     subcommand: Option<&AppServerSubcommand>,
 ) -> anyhow::Result<()> {
-    let subcommand_name = match subcommand {
+    let subcommand_name = app_server_subcommand_name(subcommand);
+    reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+}
+
+fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'static str {
+    match subcommand {
         None => "app-server",
+        Some(AppServerSubcommand::Daemon(daemon)) => match daemon.subcommand {
+            AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
+            AppServerDaemonSubcommand::Start => "app-server daemon start",
+            AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::EnableRemoteControl => {
+                "app-server daemon enable-remote-control"
+            }
+            AppServerDaemonSubcommand::DisableRemoteControl => {
+                "app-server daemon disable-remote-control"
+            }
+            AppServerDaemonSubcommand::Stop => "app-server daemon stop",
+            AppServerDaemonSubcommand::Version => "app-server daemon version",
+            AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
+        },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
         Some(AppServerSubcommand::GenerateInternalJsonSchema(_)) => {
             "app-server generate-internal-json-schema"
         }
-    };
-    reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+    }
+}
+
+async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
+    let output = codex_app_server_daemon::run(command).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+async fn print_app_server_remote_control_output(
+    mode: AppServerRemoteControlMode,
+) -> anyhow::Result<()> {
+    let output = codex_app_server_daemon::set_remote_control(mode).await?;
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
 }
 
 fn read_remote_auth_token_from_env_var_with<F>(
@@ -1559,27 +1835,39 @@ async fn run_interactive_tui(
         }
     }
 
-    let normalized_remote = remote
+    let mut remote_endpoint = remote
         .as_deref()
-        .map(codex_tui::normalize_remote_addr)
+        .map(codex_tui::resolve_remote_addr)
         .transpose()
         .map_err(std::io::Error::other)?;
-    if remote_auth_token_env.is_some() && normalized_remote.is_none() {
-        return Ok(AppExitInfo::fatal(
-            "`--remote-auth-token-env` requires `--remote`.",
-        ));
+    if let Some(remote_auth_token_env) = remote_auth_token_env {
+        let Some(endpoint) = remote_endpoint.as_mut() else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires `--remote`.",
+            ));
+        };
+        if !codex_tui::remote_addr_supports_auth_token(endpoint) {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        }
+        let auth_token = read_remote_auth_token_from_env_var(&remote_auth_token_env)
+            .map_err(std::io::Error::other)?;
+        let codex_tui::RemoteAppServerEndpoint::WebSocket {
+            auth_token: slot, ..
+        } = endpoint
+        else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        };
+        *slot = Some(auth_token);
     }
-    let remote_auth_token = remote_auth_token_env
-        .as_deref()
-        .map(read_remote_auth_token_from_env_var)
-        .transpose()
-        .map_err(std::io::Error::other)?;
     codex_tui::run_main(
         interactive,
         arg0_paths,
         codex_config::LoaderOverrides::default(),
-        normalized_remote,
-        remote_auth_token,
+        remote_endpoint,
     )
     .await
 }
@@ -1653,6 +1941,7 @@ fn finalize_fork_interactive(
 fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
     let TuiCli {
         shared,
+        strict_config,
         approval_policy,
         web_search,
         prompt,
@@ -1667,6 +1956,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
+    }
+    if strict_config {
+        interactive.strict_config = true;
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1690,7 +1982,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use codex_protocol::ThreadId;
-    use codex_protocol::protocol::TokenUsage;
+    use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
@@ -2155,6 +2447,7 @@ mod tests {
                 "my-profile",
                 "-C",
                 "/tmp",
+                "--strict-config",
                 "-i",
                 "/tmp/a.png,/tmp/b.png",
             ]
@@ -2177,6 +2470,7 @@ mod tests {
             Some(std::path::Path::new("/tmp"))
         );
         assert!(interactive.web_search);
+        assert!(interactive.strict_config);
         let has_a = interactive
             .images
             .iter()
@@ -2202,6 +2496,18 @@ mod tests {
             .as_ref(),
         );
         assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_merges_bypass_hook_trust_flag() {
+        let interactive = finalize_resume_from_args(
+            ["codex", "resume", "--dangerously-bypass-hook-trust"].as_ref(),
+        );
+
+        assert!(interactive.bypass_hook_trust);
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -2259,10 +2565,97 @@ mod tests {
     }
 
     #[test]
-    fn remote_flag_parses_for_interactive_root() {
-        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "ws://127.0.0.1:4500"])
+    fn strict_config_parses_for_supported_commands() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--strict-config"]).expect("parse");
+        assert!(cli.interactive.strict_config);
+
+        let cli = MultitoolCli::try_parse_from(["codex", "mcp-server", "--strict-config"])
             .expect("parse");
-        assert_eq!(cli.remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::McpServer(McpServerCommand {
+                strict_config: true,
+            }))
+        );
+
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "review", "--strict-config", "--uncommitted"])
+                .expect("parse");
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::Review(ReviewCommand {
+                strict_config: true,
+                ..
+            }))
+        );
+    }
+
+    #[test]
+    fn root_strict_config_is_rejected_for_unsupported_subcommands() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "mcp", "list"])
+            .expect("parse");
+        let err = reject_root_strict_config_for_subcommand(
+            cli.interactive.strict_config,
+            &cli.subcommand,
+        )
+        .expect_err("mcp should not support root --strict-config");
+
+        assert_eq!(
+            err.to_string(),
+            "`--strict-config` is not supported for `codex mcp`"
+        );
+
+        let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "remote-control"])
+            .expect("parse");
+        let err = reject_root_strict_config_for_subcommand(
+            cli.interactive.strict_config,
+            &cli.subcommand,
+        )
+        .expect_err("remote-control should not support root --strict-config");
+
+        assert_eq!(
+            err.to_string(),
+            "`--strict-config` is not supported for `codex remote-control`"
+        );
+    }
+
+    #[test]
+    fn app_server_subcommands_reject_strict_config() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--strict-config", "proxy"].as_ref());
+        let err = reject_strict_config_for_app_server_subcommand(
+            app_server.strict_config,
+            app_server.subcommand.as_ref(),
+        )
+        .expect_err("app-server proxy should not support --strict-config");
+
+        assert_eq!(
+            err.to_string(),
+            "`--strict-config` is not supported for `codex app-server proxy`"
+        );
+    }
+
+    #[test]
+    fn reject_remote_flag_for_remote_control() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://", "remote-control"])
+            .expect("parse");
+        assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
+
+        let err = reject_remote_mode_for_subcommand(
+            cli.remote.remote.as_deref(),
+            cli.remote.remote_auth_token_env.as_deref(),
+            "remote-control",
+        )
+        .expect_err("remote-control should reject root --remote");
+
+        assert!(err.to_string().contains("remote-control"));
+    }
+
+    #[test]
+    fn remote_flag_parses_for_interactive_root() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://codex.sock"])
+            .expect("parse");
+        assert_eq!(cli.remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]
@@ -2284,14 +2677,14 @@ mod tests {
     #[test]
     fn remote_flag_parses_for_resume_subcommand() {
         let cli =
-            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "ws://127.0.0.1:4500"])
+            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "unix://codex.sock"])
                 .expect("parse");
         let Subcommand::Resume(ResumeCommand { remote, .. }) =
             cli.subcommand.expect("resume present")
         else {
             panic!("expected resume subcommand");
         };
-        assert_eq!(remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]
@@ -2439,6 +2832,70 @@ mod tests {
     }
 
     #[test]
+    fn app_server_daemon_subcommands_parse() {
+        assert!(matches!(
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "bootstrap",
+                    "--remote-control"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
+                    remote_control: true
+                })
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "start"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Start
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "restart"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Restart
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "enable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::EnableRemoteControl
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "disable-remote-control"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::DisableRemoteControl
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "stop"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Stop
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "daemon", "version"].as_ref()).subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Version
+            }))
+        ));
+    }
+
+    #[test]
     fn app_server_proxy_sock_path_parses() {
         let app_server =
             app_server_from_args(["codex", "app-server", "proxy", "--sock", "codex.sock"].as_ref());
@@ -2464,6 +2921,20 @@ mod tests {
         )
         .expect_err("app-server proxy should reject --remote-auth-token-env");
         assert!(err.to_string().contains("app-server proxy"));
+    }
+
+    #[test]
+    fn reject_remote_auth_token_env_for_app_server_version() {
+        let subcommand = AppServerSubcommand::Daemon(AppServerDaemonCommand {
+            subcommand: AppServerDaemonSubcommand::Version,
+        });
+        let err = reject_remote_mode_for_app_server_subcommand(
+            /*remote*/ None,
+            Some("CODEX_REMOTE_AUTH_TOKEN"),
+            Some(&subcommand),
+        )
+        .expect_err("app-server daemon version should reject --remote-auth-token-env");
+        assert!(err.to_string().contains("app-server daemon version"));
     }
 
     #[test]
@@ -2609,5 +3080,39 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn strict_config_with_unknown_enable_errors() {
+        let err = strict_config_feature_toggle_error(["--enable", "does_not_exist"].as_ref());
+        assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn strict_config_with_unknown_disable_errors() {
+        let err = strict_config_feature_toggle_error(["--disable", "does_not_exist"].as_ref());
+        assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn strict_config_with_compound_enable_errors() {
+        let err = strict_config_feature_toggle_error(
+            ["--enable", "multi_agent_v2.subagent_usage_hint_text"].as_ref(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Unknown feature flag: multi_agent_v2.subagent_usage_hint_text"
+        );
+    }
+
+    fn strict_config_feature_toggle_error(args: &[&str]) -> anyhow::Error {
+        let cli_args = std::iter::once("codex")
+            .chain(std::iter::once("--strict-config"))
+            .chain(args.iter().copied());
+        let cli = MultitoolCli::try_parse_from(cli_args).expect("parse should succeed");
+        assert!(cli.interactive.strict_config);
+        cli.feature_toggles
+            .to_overrides()
+            .expect_err("feature should be rejected")
     }
 }

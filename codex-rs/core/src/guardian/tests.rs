@@ -22,6 +22,9 @@ use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -29,7 +32,9 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -38,6 +43,7 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnCompleteEvent;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
@@ -84,7 +90,7 @@ fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 3,
-            total_denials: 3,
+            recent_denials: 3,
         }
     );
     assert_eq!(
@@ -113,13 +119,13 @@ fn guardian_rejection_circuit_breaker_resets_consecutive_denials_on_non_denial()
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 3,
-            total_denials: 4,
+            recent_denials: 4,
         }
     );
 }
 
 #[test]
-fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
+fn auto_review_rejection_circuit_breaker_interrupts_after_ten_recent_denials() {
     let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
     for _ in 0..9 {
         assert_eq!(
@@ -132,8 +138,27 @@ fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::InterruptTurn {
             consecutive_denials: 1,
-            total_denials: 10,
+            recent_denials: 10,
         }
+    );
+}
+
+#[test]
+fn auto_review_rejection_circuit_breaker_forgets_denials_outside_recent_review_window() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    for _ in 0..9 {
+        assert_eq!(
+            circuit_breaker.record_denial("turn-1"),
+            GuardianRejectionCircuitBreakerAction::Continue
+        );
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    for _ in 0..(AUTO_REVIEW_DENIAL_WINDOW_SIZE - 18) {
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
     );
 }
 
@@ -1675,6 +1700,113 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-1"),
+                ev_assistant_message(
+                    "msg-guardian-1",
+                    "{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"first guardian rationale\"}",
+                ),
+                ev_completed("resp-guardian-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-2"),
+                ev_assistant_message(
+                    "msg-guardian-2",
+                    "{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"second guardian rationale\"}",
+                ),
+                ev_completed("resp-guardian-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    let first_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the first docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
+        panic!("expected first guardian assessment");
+    };
+    assert_eq!(first_assessment.rationale, "first guardian rationale");
+    assert!(matches!(
+        first_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
+
+    session
+        .guardian_review_session
+        .send_trunk_event_raw_for_test(Event {
+            id: "stale-turn".to_string(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "stale-turn".to_string(),
+                last_agent_message: Some(
+                    "{\"risk_level\":\"high\",\"user_authorization\":\"low\",\"outcome\":\"deny\",\"rationale\":\"stale guardian rationale\"}"
+                        .to_string(),
+                ),
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: Some(1),
+            }),
+        })
+        .await;
+
+    let second_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-2".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the second docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(second_assessment), second_metadata) = second_outcome
+    else {
+        panic!("expected second guardian assessment");
+    };
+    assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(second_assessment.rationale, "second guardian rationale");
+    assert!(matches!(
+        second_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+
+    assert_eq!(
+        request_log.requests().len(),
+        2,
+        "the reused trunk should wait for the real follow-up review"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1785,7 +1917,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 
 #[tokio::test]
 async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
-    const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
     let handle =
         std::thread::Builder::new()
@@ -2206,6 +2338,35 @@ async fn guardian_review_session_config_uses_parent_active_model_instead_of_hard
     .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5_4() {
+    let mut parent_config = test_config().await;
+    parent_config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
+    parent_config.model_provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
+        Some(ReasoningEffort::Low),
+    )
+    .expect("guardian config");
+
+    assert_eq!(
+        (
+            guardian_config.model,
+            guardian_config.model_provider_id,
+            guardian_config.model_provider,
+        ),
+        (
+            Some(AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string()),
+            AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        )
+    );
 }
 
 #[tokio::test]

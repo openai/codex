@@ -11,14 +11,17 @@
 //!    first drawn.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
-use crate::exec_cell::spinner;
+use super::plain_lines;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
+use crate::motion::shimmer_text;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
-use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookOutputEntry;
-use codex_protocol::protocol::HookOutputEntryKind;
-use codex_protocol::protocol::HookRunStatus;
-use codex_protocol::protocol::HookRunSummary;
+use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookOutputEntry;
+use codex_app_server_protocol::HookOutputEntryKind;
+use codex_app_server_protocol::HookRunStatus;
+use codex_app_server_protocol::HookRunSummary;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
@@ -338,6 +341,10 @@ impl HistoryCell for HookCell {
         self.display_lines(width)
     }
 
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(u16::MAX))
+    }
+
     /// Produces a coarse cache key for transcript overlays while hook animations are active.
     fn transcript_animation_tick(&self) -> Option<u64> {
         if !self.animations_enabled {
@@ -626,11 +633,17 @@ fn push_running_hook_header(
     status_message: Option<&str>,
     animations_enabled: bool,
 ) {
-    let mut header = vec![spinner(start_time, animations_enabled), " ".into()];
-    if animations_enabled {
-        header.extend(shimmer_spans(hook_text));
-    } else {
-        header.push(hook_text.to_string().bold());
+    let mut header = Vec::new();
+    let motion_mode = MotionMode::from_animations_enabled(animations_enabled);
+    if let Some(indicator) =
+        activity_indicator(start_time, motion_mode, ReducedMotionIndicator::Hidden)
+    {
+        header.push(indicator);
+        header.push(" ".into());
+    }
+    header.extend(shimmer_text(hook_text, motion_mode));
+    if !animations_enabled && let Some(span) = header.last_mut() {
+        span.style = span.style.patch(Style::default().bold());
     }
     if let Some(status_message) = status_message
         && !status_message.is_empty()
@@ -703,6 +716,8 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
@@ -761,15 +776,41 @@ mod tests {
         assert_eq!(cell.transcript_animation_tick(), None);
     }
 
+    #[test]
+    fn visible_hook_without_animations_omits_spinner() {
+        let mut cell = HookCell::new_active(
+            hook_run_summary("hook-1"),
+            /*animations_enabled*/ false,
+        );
+        cell.reveal_running_runs_now_for_test();
+        cell.advance_time(Instant::now());
+
+        let rendered: Vec<String> = cell
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec!["Running PostToolUse hook: checking output policy".to_string()]
+        );
+    }
+
     fn hook_run_summary(id: &str) -> HookRunSummary {
         HookRunSummary {
             id: id.to_string(),
             event_name: HookEventName::PostToolUse,
-            handler_type: codex_protocol::protocol::HookHandlerType::Command,
-            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-            scope: codex_protocol::protocol::HookScope::Turn,
+            handler_type: codex_app_server_protocol::HookHandlerType::Command,
+            execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+            scope: codex_app_server_protocol::HookScope::Turn,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
-            source: codex_protocol::protocol::HookSource::User,
+            source: codex_app_server_protocol::HookSource::User,
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),

@@ -6,16 +6,26 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::shell_spec::create_request_permissions_tool;
+use crate::tools::handlers::shell_spec::request_permissions_tool_description;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub struct RequestPermissionsHandler;
 
-impl ToolHandler for RequestPermissionsHandler {
+impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("request_permissions")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_request_permissions_tool(
+            request_permissions_tool_description(),
+        ))
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -37,6 +47,7 @@ impl ToolHandler for RequestPermissionsHandler {
             }
         };
 
+        #[allow(deprecated)]
         let mut args: RequestPermissionsArgs =
             parse_arguments_with_base_path(&arguments, &turn.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
@@ -66,3 +77,5 @@ impl ToolHandler for RequestPermissionsHandler {
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
+
+impl ToolHandler for RequestPermissionsHandler {}

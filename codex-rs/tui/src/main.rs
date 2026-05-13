@@ -19,7 +19,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = Vec::new();
     if !token_usage.is_zero() {
-        lines.push(codex_protocol::protocol::FinalOutput::from(token_usage).to_string());
+        lines.push(token_usage.to_string());
     }
 
     if let Some(resume_cmd) =
@@ -57,8 +57,7 @@ fn main() -> anyhow::Result<()> {
             inner,
             arg0_paths,
             LoaderOverrides::default(),
-            /*remote*/ None,
-            /*remote_auth_token*/ None,
+            /*explicit_remote_endpoint*/ None,
         )
         .await?;
         match exit_info.exit_reason {

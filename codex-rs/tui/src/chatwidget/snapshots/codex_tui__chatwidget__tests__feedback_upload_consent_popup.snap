@@ -1,11 +1,12 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Upload logs?
 
   The following files will be sent:
     • codex-logs.log
+    • auto-review-rollout-thread-1.jsonl
     • codex-connectivity-diagnostics.txt
 
   Connectivity diagnostics
