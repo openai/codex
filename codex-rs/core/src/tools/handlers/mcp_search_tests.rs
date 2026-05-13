@@ -45,6 +45,7 @@ fn search_info_uses_connector_name_for_output_namespace_description() {
 fn tool_info() -> ToolInfo {
     ToolInfo {
         server_name: "codex-apps".to_string(),
+        server_provenance: Default::default(),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: "_create_event".to_string(),
