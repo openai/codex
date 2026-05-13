@@ -59,6 +59,7 @@ pub use codex_protocol::ThreadId;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
 pub use codex_protocol::config_types::CollaborationModeMask;
+pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::ShellEnvironmentPolicy;
 pub use codex_protocol::config_types::WebSearchMode;
 pub use codex_protocol::dynamic_tools::DynamicToolSpec;

@@ -26,6 +26,7 @@ use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
 use codex_core_api::MemoriesConfig;
+use codex_core_api::ModeKind;
 use codex_core_api::ModelAvailabilityNuxConfig;
 use codex_core_api::MultiAgentV2Config;
 use codex_core_api::NewThread;
@@ -265,6 +266,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Disabled),
         web_search_config: None,
+        request_user_input_tool_enabled: true,
+        request_user_input_allowed_modes: vec![ModeKind::Plan],
         use_experimental_unified_exec_tool: false,
         background_terminal_max_timeout: 300_000,
         ghost_snapshot: GhostSnapshotConfig::default(),
