@@ -15,7 +15,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
@@ -136,9 +135,11 @@ mod otel;
 mod permissions;
 #[cfg(test)]
 mod schema;
+pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+pub use codex_config::LoaderOverrides;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
@@ -465,6 +466,9 @@ pub struct Config {
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: bool,
 
+    /// Whether to inject the `<collaboration_mode>` developer block.
+    pub include_collaboration_mode_instructions: bool,
+
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
@@ -528,8 +532,8 @@ pub struct Config {
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// This is the same `tui.alternate_screen` value from `config.toml`.
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
+    /// - `auto` (default): Use alternate screen.
+    /// - `always`: Always use alternate screen.
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
     /// Ordered list of status line item identifiers for the TUI.
@@ -664,6 +668,11 @@ pub struct Config {
 
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
+
+    /// Whether enabled hooks should run without requiring persisted hook trust for this session.
+    ///
+    /// This is a runtime-only knob populated from invocation overrides, not from config files.
+    pub bypass_hook_trust: bool,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -837,6 +846,7 @@ pub struct MultiAgentV2Config {
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
+    pub non_code_mode_only: bool,
 }
 
 impl Default for MultiAgentV2Config {
@@ -850,6 +860,7 @@ impl Default for MultiAgentV2Config {
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+            non_code_mode_only: false,
         }
     }
 }
@@ -894,6 +905,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
@@ -917,6 +929,11 @@ impl ConfigBuilder {
 
     pub fn loader_overrides(mut self, loader_overrides: LoaderOverrides) -> Self {
         self.loader_overrides = Some(loader_overrides);
+        self
+    }
+
+    pub fn strict_config(mut self, strict_config: bool) -> Self {
+        self.strict_config = strict_config;
         self
     }
 
@@ -949,6 +966,7 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
@@ -971,7 +989,10 @@ impl ConfigBuilder {
             &codex_home,
             Some(cwd),
             &cli_overrides,
-            loader_overrides,
+            ConfigLoadOptions {
+                loader_overrides,
+                strict_config,
+            },
             cloud_requirements,
             thread_config_loader
                 .as_deref()
@@ -1252,56 +1273,38 @@ impl Config {
         )
         .await
     }
-
-    /// This is a secondary way of creating [Config], which is appropriate when
-    /// the harness is meant to be used with a specific configuration that
-    /// ignores user settings. For example, the `codex exec` subcommand is
-    /// designed to use [AskForApproval::Never] exclusively.
-    ///
-    /// Further, [ConfigOverrides] contains some options that are not supported
-    /// in [ConfigToml], such as `cwd`, `codex_self_exe`, `codex_linux_sandbox_exe`, and
-    /// `main_execve_wrapper_exe`.
-    pub async fn load_with_cli_overrides_and_harness_overrides(
-        cli_overrides: Vec<(String, TomlValue)>,
-        harness_overrides: ConfigOverrides,
-    ) -> std::io::Result<Self> {
-        ConfigBuilder::default()
-            .cli_overrides(cli_overrides)
-            .harness_overrides(harness_overrides)
-            .build()
-            .await
-    }
 }
 
-/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
-/// with [ConfigToml] directly means that [ConfigRequirements] have not been
-/// applied yet, which risks failing to enforce required constraints.
-pub async fn load_config_as_toml_with_cli_overrides(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-) -> std::io::Result<ConfigToml> {
-    load_config_as_toml_with_cli_and_loader_overrides(
-        codex_home,
-        cwd,
-        cli_overrides,
-        LoaderOverrides::default(),
-    )
-    .await
-}
-
+/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
+/// [ConfigBuilder] because working with [ConfigToml] directly means
+/// [ConfigRequirements] have not been applied yet, which risks skipping
+/// required constraints.
 pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
 ) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_load_options(codex_home, cwd, cli_overrides, loader_overrides)
+        .await
+}
+
+/// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
+/// [ConfigBuilder] because working with [ConfigToml] directly means
+/// [ConfigRequirements] have not been applied yet, which risks skipping
+/// required constraints.
+pub async fn load_config_as_toml_with_cli_and_load_options(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
-        loader_overrides,
+        options,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
@@ -1883,6 +1886,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1993,6 +1997,10 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
         .unwrap_or(default.hide_spawn_agent_metadata);
+    let non_code_mode_only = profile
+        .and_then(|config| config.non_code_mode_only)
+        .or_else(|| base.and_then(|config| config.non_code_mode_only))
+        .unwrap_or(default.non_code_mode_only);
 
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
@@ -2002,6 +2010,7 @@ fn resolve_multi_agent_v2_config(
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
         hide_spawn_agent_metadata,
+        non_code_mode_only,
     }
 }
 
@@ -2122,6 +2131,7 @@ impl Config {
             approvals_reviewer: mut constrained_approvals_reviewer,
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
+            allow_managed_hooks_only: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
@@ -2165,8 +2175,17 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            bypass_hook_trust,
             additional_writable_roots,
         } = overrides;
+        let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
+
+        if bypass_hook_trust {
+            startup_warnings.push(
+                "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
+                    .to_string(),
+            );
+        }
 
         if sandbox_mode.is_some() && permission_profile.is_some() {
             return Err(std::io::Error::new(
@@ -2816,6 +2835,10 @@ impl Config {
             .include_apps_instructions
             .or(cfg.include_apps_instructions)
             .unwrap_or(true);
+        let include_collaboration_mode_instructions = config_profile
+            .include_collaboration_mode_instructions
+            .or(cfg.include_collaboration_mode_instructions)
+            .unwrap_or(true);
         let include_skill_instructions = cfg
             .skills
             .as_ref()
@@ -3031,6 +3054,7 @@ impl Config {
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
+            include_collaboration_mode_instructions,
             include_skill_instructions,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
@@ -3094,6 +3118,7 @@ impl Config {
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,
             codex_linux_sandbox_exe,

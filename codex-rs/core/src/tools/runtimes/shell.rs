@@ -62,19 +62,8 @@ pub struct ShellRequest {
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
-///
-/// Note: `Generic` is not the same as `ShellCommandClassic`.
-/// `Generic` means "no `shell_command`-specific backend behavior" (used by the
-/// generic `shell` tool path). The `ShellCommand*` variants are only for the
-/// `shell_command` tool family.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellRuntimeBackend {
-    /// Tool-agnostic/default runtime path.
-    ///
-    /// Uses the normal `ShellRuntime` execution flow without enabling any
-    /// `shell_command`-specific backend selection.
-    #[default]
-    Generic,
     /// Legacy backend for the `shell_command` tool.
     ///
     /// Keeps `shell_command` on the standard shell runtime flow without the
@@ -88,7 +77,6 @@ pub(crate) enum ShellRuntimeBackend {
     ShellCommandZshFork,
 }
 
-#[derive(Default)]
 pub struct ShellRuntime {
     backend: ShellRuntimeBackend,
 }
@@ -102,12 +90,6 @@ pub(crate) struct ApprovalKey {
 }
 
 impl ShellRuntime {
-    pub fn new() -> Self {
-        Self {
-            backend: ShellRuntimeBackend::Generic,
-        }
-    }
-
     pub(crate) fn for_shell_command(backend: ShellRuntimeBackend) -> Self {
         Self { backend }
     }

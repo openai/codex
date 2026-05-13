@@ -481,6 +481,7 @@ usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
+non_code_mode_only = true
 "#,
     )
     .expect("features table should deserialize");
@@ -500,6 +501,7 @@ hide_spawn_agent_metadata = true
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            non_code_mode_only: Some(true),
         }))
     );
 }
@@ -535,6 +537,7 @@ usage_hint_enabled = false
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: None,
+            non_code_mode_only: None,
         }))
     );
 }

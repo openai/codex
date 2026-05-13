@@ -12,7 +12,11 @@ export type PluginSummary = { id: string,
 /**
  * Backend remote plugin identifier when available.
  */
-remotePluginId: string | null, name: string,
+remotePluginId: string | null,
+/**
+ * Version of the locally materialized plugin package when available.
+ */
+localVersion: string | null, name: string,
 /**
  * Remote sharing context associated with this plugin when available.
  */

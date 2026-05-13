@@ -57,7 +57,6 @@ fn tool_spec_name_covers_all_variants() {
         .name(),
         "tool_search"
     );
-    assert_eq!(ToolSpec::LocalShell {}.name(), "local_shell");
     assert_eq!(
         ToolSpec::ImageGeneration {
             output_format: "png".to_string(),

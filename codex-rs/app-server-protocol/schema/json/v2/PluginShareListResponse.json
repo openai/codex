@@ -194,6 +194,14 @@
         "remotePluginId": {
           "type": "string"
         },
+        "remoteVersion": {
+          "default": null,
+          "description": "Version of the remote shared plugin release when available.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sharePrincipals": {
           "items": {
             "$ref": "#/definitions/PluginSharePrincipal"
@@ -404,6 +412,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "localVersion": {
+          "default": null,
+          "description": "Version of the locally materialized plugin package when available.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "type": "string"

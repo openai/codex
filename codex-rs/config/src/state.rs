@@ -14,6 +14,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+/// User-facing config loading behavior that is not part of the config document.
+#[derive(Debug, Default, Clone)]
+pub struct ConfigLoadOptions {
+    pub loader_overrides: LoaderOverrides,
+    pub strict_config: bool,
+}
+
+impl From<LoaderOverrides> for ConfigLoadOptions {
+    fn from(loader_overrides: LoaderOverrides) -> Self {
+        Self {
+            loader_overrides,
+            strict_config: false,
+        }
+    }
+}
+
 /// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
@@ -66,6 +82,7 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
 }
 
 impl ConfigLayerEntry {
@@ -77,6 +94,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -88,6 +106,7 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
+            hooks_config_folder_override: None,
         }
     }
 
@@ -103,6 +122,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
+            hooks_config_folder_override: None,
         }
     }
 
@@ -112,6 +132,14 @@ impl ConfigLayerEntry {
 
     pub fn raw_toml(&self) -> Option<&str> {
         self.raw_toml.as_deref()
+    }
+
+    pub(crate) fn with_hooks_config_folder_override(
+        mut self,
+        hooks_config_folder_override: Option<AbsolutePathBuf>,
+    ) -> Self {
+        self.hooks_config_folder_override = hooks_config_folder_override;
+        self
     }
 
     pub fn metadata(&self) -> ConfigLayerMetadata {
@@ -141,6 +169,18 @@ impl ConfigLayerEntry {
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
         }
+    }
+
+    /// Returns the `.codex/` folder that should be used for hook declarations.
+    ///
+    /// Project layers normally use their own config folder. Linked Git worktrees
+    /// can instead point hook discovery at the matching folder from the root
+    /// checkout while the rest of the project config still comes from the
+    /// worktree.
+    pub fn hooks_config_folder(&self) -> Option<AbsolutePathBuf> {
+        self.hooks_config_folder_override
+            .clone()
+            .or_else(|| self.config_folder())
     }
 }
 

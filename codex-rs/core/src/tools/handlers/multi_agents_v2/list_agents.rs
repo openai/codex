@@ -5,7 +5,7 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
+impl ToolExecutor<ToolInvocation> for Handler {
     type Output = ListAgentsResult;
 
     fn tool_name(&self) -> ToolName {
@@ -14,10 +14,6 @@ impl ToolHandler for Handler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_list_agents_tool())
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -41,6 +37,12 @@ impl ToolHandler for Handler {
             .map_err(collab_spawn_error)?;
 
         Ok(ListAgentsResult { agents })
+    }
+}
+
+impl ToolHandler for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

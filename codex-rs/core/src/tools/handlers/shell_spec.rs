@@ -11,18 +11,9 @@ pub struct CommandToolOptions {
     pub exec_permission_approvals_enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShellToolOptions {
-    pub exec_permission_approvals_enabled: bool,
-}
-
 #[cfg(test)]
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
     create_exec_command_tool_with_environment_id(options, /*include_environment_id*/ false)
-}
-
-pub fn create_local_shell_tool() -> ToolSpec {
-    ToolSpec::LocalShell {}
 }
 
 pub(crate) fn create_exec_command_tool_with_environment_id(
@@ -150,69 +141,6 @@ pub fn create_write_stdin_tool() -> ToolSpec {
             Some(false.into()),
         ),
         output_schema: Some(unified_exec_output_schema()),
-    })
-}
-
-pub fn create_shell_tool(options: ShellToolOptions) -> ToolSpec {
-    let mut properties = BTreeMap::from([
-        (
-            "command".to_string(),
-            JsonSchema::array(
-                JsonSchema::string(/*description*/ None),
-                Some("The command to execute".to_string()),
-            ),
-        ),
-        (
-            "workdir".to_string(),
-            JsonSchema::string(Some(
-                "The working directory to execute the command in".to_string(),
-            )),
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::number(Some(
-                "The timeout for the command in milliseconds".to_string(),
-            )),
-        ),
-    ]);
-    properties.extend(create_approval_parameters(
-        options.exec_permission_approvals_enabled,
-    ));
-
-    let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-
-Examples of valid command strings:
-
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
-
-{}"#,
-            windows_shell_guidance()
-        )
-    } else {
-        r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-            .to_string()
-    };
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "shell".to_string(),
-        description,
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["command".to_string()]),
-            Some(false.into()),
-        ),
-        output_schema: None,
     })
 }
 

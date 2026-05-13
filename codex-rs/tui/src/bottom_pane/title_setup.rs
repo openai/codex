@@ -26,6 +26,7 @@ use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
+use crate::keymap::ListKeymap;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the terminal title.
@@ -244,6 +245,7 @@ impl TerminalTitleSetupView {
         title_items: Option<&[String]>,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
+        list_keymap: ListKeymap,
     ) -> Self {
         let selected_items = title_items
             .into_iter()
@@ -271,10 +273,7 @@ impl TerminalTitleSetupView {
                 Some("Select which items to display in the terminal title.".to_string()),
                 app_event_tx,
             )
-            .instructions(vec![
-                "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
-                    .into(),
-            ])
+            .list_keymap(list_keymap)
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
@@ -387,8 +386,12 @@ mod tests {
             "run-state".to_string(),
             "thread-title".to_string(),
         ];
-        let view =
-            TerminalTitleSetupView::new(Some(&selected), StatusSurfacePreviewData::default(), tx);
+        let view = TerminalTitleSetupView::new(
+            Some(&selected),
+            StatusSurfacePreviewData::default(),
+            tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        );
         assert_snapshot!(
             "terminal_title_setup_basic",
             render_lines(&view, /*width*/ 84)

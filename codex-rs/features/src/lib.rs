@@ -162,7 +162,7 @@ pub enum Feature {
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
-    /// Expose placeholder tools for unavailable historical tool calls.
+    /// Removed compatibility flag for the deleted unavailable-tool placeholder backfill.
     UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
@@ -188,6 +188,8 @@ pub enum Feature {
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Enable remote plugin sharing flows.
+    PluginSharing,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
@@ -231,7 +233,8 @@ pub enum Feature {
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable workspace-specific owner nudge copy and prompts in the TUI.
+    /// Removed compatibility flag retained as a no-op now that workspace owner
+    /// usage nudges are always enabled.
     WorkspaceOwnerUsageNudge,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
@@ -955,8 +958,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnavailableDummyTools,
         key: "unavailable_dummy_tools",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSuggest,
@@ -1005,6 +1008,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_plugin",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PluginSharing,
+        key: "plugin_sharing",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ExternalMigration,
@@ -1153,7 +1162,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

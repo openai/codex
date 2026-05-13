@@ -74,21 +74,6 @@ pub fn dynamic_tool_to_responses_api_tool(
     )?))
 }
 
-pub fn dynamic_tool_to_loadable_tool_spec(
-    tool: &DynamicToolSpec,
-) -> Result<LoadableToolSpec, serde_json::Error> {
-    let output_tool = dynamic_tool_to_responses_api_tool(tool)?;
-    Ok(match tool.namespace.as_ref() {
-        Some(namespace) => LoadableToolSpec::Namespace(ResponsesApiNamespace {
-            name: namespace.clone(),
-            // the user doesn't provide a description for dynamic tools, so we use the default
-            description: default_namespace_description(namespace),
-            tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
-        }),
-        None => LoadableToolSpec::Function(output_tool),
-    })
-}
-
 pub fn coalesce_loadable_tool_specs(
     specs: impl IntoIterator<Item = LoadableToolSpec>,
 ) -> Vec<LoadableToolSpec> {

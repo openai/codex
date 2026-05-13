@@ -8,35 +8,151 @@ use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolTelemetryTags;
+use crate::tools::tool_search_entry::ToolSearchInfo;
 use codex_mcp::ToolInfo;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchSourceInfo;
+use codex_tools::ToolSpec;
+use codex_tools::mcp_tool_to_responses_api_tool;
 use serde_json::Map;
 use serde_json::Value;
 
 pub struct McpHandler {
     tool_info: ToolInfo,
+    exposure: ToolExposure,
 }
 
 impl McpHandler {
     pub fn new(tool_info: ToolInfo) -> Self {
-        Self { tool_info }
+        Self::with_exposure(tool_info, ToolExposure::Direct)
+    }
+
+    pub fn with_exposure(tool_info: ToolInfo, exposure: ToolExposure) -> Self {
+        Self {
+            tool_info,
+            exposure,
+        }
     }
 }
 
-impl ToolHandler for McpHandler {
+impl ToolExecutor<ToolInvocation> for McpHandler {
     type Output = McpToolOutput;
 
     fn tool_name(&self) -> ToolName {
         self.tool_info.canonical_tool_name()
     }
 
+    fn spec(&self) -> Option<ToolSpec> {
+        let tool_name = self.tool_name();
+        let namespace_name = tool_name.namespace.as_ref()?;
+        let tool = mcp_tool_to_responses_api_tool(&tool_name, &self.tool_info.tool).ok()?;
+        let description = self
+            .tool_info
+            .namespace_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.tool_info
+                    .connector_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|connector_name| !connector_name.is_empty())
+                    .map(|connector_name| format!("Tools for working with {connector_name}."))
+            })
+            .unwrap_or_default();
+
+        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace_name.clone(),
+            description,
+            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+        }))
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
     fn supports_parallel_tool_calls(&self) -> bool {
         self.tool_info.supports_parallel_tool_calls
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
+
+        let payload = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "mcp handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let started = Instant::now();
+        let result = handle_mcp_tool_call(
+            Arc::clone(&session),
+            &turn,
+            call_id.clone(),
+            self.tool_info.server_name.clone(),
+            self.tool_info.tool.name.to_string(),
+            self.tool_name().to_string(),
+            payload,
+        )
+        .await;
+
+        Ok(McpToolOutput {
+            result: result.result,
+            tool_input: result.tool_input,
+            wall_time: started.elapsed(),
+            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
+            truncation_policy: turn.truncation_policy,
+        })
+    }
+}
+
+impl ToolHandler for McpHandler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        let source_name = self
+            .tool_info
+            .connector_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_name| !connector_name.is_empty())
+            .unwrap_or_else(|| self.tool_info.server_name.trim());
+        let source_info = (!source_name.is_empty()).then(|| ToolSearchSourceInfo {
+            name: source_name.to_string(),
+            description: self
+                .tool_info
+                .namespace_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(str::to_string),
+        });
+
+        ToolSearchInfo::from_spec(
+            build_mcp_search_text(&self.tool_info),
+            self.spec()?,
+            source_info,
+        )
     }
 
     async fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
@@ -98,45 +214,6 @@ impl ToolHandler for McpHandler {
             tool_response,
         })
     }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
-
-        let payload = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "mcp handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        let started = Instant::now();
-        let result = handle_mcp_tool_call(
-            Arc::clone(&session),
-            &turn,
-            call_id.clone(),
-            self.tool_info.server_name.clone(),
-            self.tool_info.tool.name.to_string(),
-            self.tool_name().to_string(),
-            payload,
-        )
-        .await;
-
-        Ok(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
-            wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.truncation_policy,
-        })
-    }
 }
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
@@ -146,6 +223,58 @@ fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
 
     serde_json::from_str(raw_arguments).unwrap_or_else(|_| Value::String(raw_arguments.to_string()))
 }
+
+fn build_mcp_search_text(info: &ToolInfo) -> String {
+    let tool_name = info.canonical_tool_name();
+    let mut schema_properties = info
+        .tool
+        .input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    schema_properties.sort();
+    let mut parts = vec![
+        flat_tool_name(&tool_name).into_owned(),
+        info.callable_name.clone(),
+        info.tool.name.to_string(),
+        info.server_name.clone(),
+    ];
+    if let Some(title) = info.tool.title.as_deref().map(str::trim)
+        && !title.is_empty()
+    {
+        parts.push(title.to_string());
+    }
+    if let Some(description) = info.tool.description.as_deref().map(str::trim)
+        && !description.is_empty()
+    {
+        parts.push(description.to_string());
+    }
+    if let Some(connector_name) = info.connector_name.as_deref().map(str::trim)
+        && !connector_name.is_empty()
+    {
+        parts.push(connector_name.to_string());
+    }
+    if let Some(namespace_description) = info.namespace_description.as_deref().map(str::trim)
+        && !namespace_description.is_empty()
+    {
+        parts.push(namespace_description.to_string());
+    }
+    parts.extend(
+        info.plugin_display_names
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|display_name| !display_name.is_empty())
+            .map(str::to_string),
+    );
+    parts.extend(schema_properties);
+    parts.join(" ")
+}
+
+#[cfg(test)]
+#[path = "mcp_search_tests.rs"]
+mod search_tests;
 
 #[cfg(test)]
 mod tests {

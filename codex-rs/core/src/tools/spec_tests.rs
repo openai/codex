@@ -16,10 +16,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
-use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
-use codex_tools::LoadableToolSpec;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -40,7 +38,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
-use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
@@ -187,8 +184,8 @@ fn assert_contains_tool_names(tools: &[ToolSpec], expected_subset: &[&str]) {
 
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
-        ConfigShellToolType::Default => Some("shell"),
-        ConfigShellToolType::Local => Some("local_shell"),
+        ConfigShellToolType::Default => Some("shell_command"),
+        ConfigShellToolType::Local => Some("shell_command"),
         ConfigShellToolType::UnifiedExec => None,
         ConfigShellToolType::Disabled => None,
         ConfigShellToolType::ShellCommand => Some("shell_command"),
@@ -275,29 +272,12 @@ fn build_specs(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_unavailable_tools(
-        config,
-        mcp_tools,
-        deferred_mcp_tools,
-        Vec::new(),
-        dynamic_tools,
-    )
-}
-
-fn build_specs_with_unavailable_tools(
-    config: &ToolsConfig,
-    mcp_tools: Option<Vec<ToolInfo>>,
-    deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    unavailable_called_tools: Vec<ToolName>,
-    dynamic_tools: &[DynamicToolSpec],
-) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
         deferred_mcp_tools,
-        unavailable_called_tools,
         /*discoverable_tools*/ None,
-        /*extension_tool_bundles*/ &[],
+        /*extension_tool_executors*/ &[],
         dynamic_tools,
     )
 }
@@ -356,9 +336,8 @@ async fn assert_model_tools(
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: &[],
         },
     );
@@ -367,7 +346,7 @@ async fn assert_model_tools(
         .iter()
         .map(ToolSpec::name)
         .collect::<Vec<_>>();
-    assert_eq!(&tool_names, &expected_tools,);
+    assert_eq!(&tool_names, &expected_tools);
 }
 
 async fn assert_default_model_tools(
@@ -398,14 +377,14 @@ async fn test_build_specs_gpt5_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -423,14 +402,14 @@ async fn test_build_specs_gpt51_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -450,14 +429,14 @@ async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -477,14 +456,14 @@ async fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -502,14 +481,14 @@ async fn test_gpt_5_1_codex_max_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -527,14 +506,14 @@ async fn test_codex_5_1_mini_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -552,14 +531,14 @@ async fn test_gpt_5_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -577,14 +556,14 @@ async fn test_gpt_5_1_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -604,14 +583,14 @@ async fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -826,9 +805,8 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             &tools_config,
             /*mcp_tools*/ None,
             /*deferred_mcp_tools*/ None,
-            Vec::new(),
             discoverable_tools.clone(),
-            /*extension_tool_bundles*/ &[],
+            /*extension_tool_executors*/ &[],
             &[],
         )
         .build();
@@ -843,7 +821,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
 }
 
 #[tokio::test]
-async fn search_tool_description_handles_no_enabled_mcp_tools() {
+async fn search_tool_is_hidden_without_deferred_tools() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -867,13 +845,11 @@ async fn search_tool_description_handles_no_enabled_mcp_tools() {
         &[],
     )
     .build();
-    let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = search_tool else {
-        panic!("expected tool_search tool");
-    };
-
-    assert!(description.contains("None currently enabled."));
-    assert!(!description.contains("{{source_descriptions}}"));
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name() == TOOL_SEARCH_TOOL_NAME)
+    );
 }
 
 #[tokio::test]
@@ -1009,59 +985,6 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
 }
 
 #[tokio::test]
-async fn tool_search_entries_skip_namespace_outputs_when_namespace_tools_are_disabled() {
-    let model_info = search_capable_model_info().await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
-    let available_models = Vec::new();
-    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::Disabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    tools_config.namespace_tools = false;
-    let mcp_tools = vec![mcp_tool_info(mcp_tool(
-        "echo",
-        "Echo",
-        serde_json::json!({"type": "object"}),
-    ))];
-    let dynamic_tools = vec![
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: "automation_update".to_string(),
-            description: "Create or update automations.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            defer_loading: true,
-        },
-        DynamicToolSpec {
-            namespace: None,
-            name: "plain_dynamic".to_string(),
-            description: "Plain dynamic tool.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-            defer_loading: true,
-        },
-    ];
-
-    let entries =
-        build_tool_search_entries_for_config(&tools_config, Some(&mcp_tools), &dynamic_tools);
-    let outputs = entries
-        .into_iter()
-        .map(|entry| entry.output)
-        .collect::<Vec<_>>();
-
-    assert_eq!(outputs.len(), 1);
-    match &outputs[0] {
-        LoadableToolSpec::Function(tool) => assert_eq!(tool.name, "plain_dynamic"),
-        LoadableToolSpec::Namespace(_) => panic!("namespace tool_search output should be hidden"),
-    }
-}
-
-#[tokio::test]
 async fn direct_mcp_tools_register_namespaced_handlers() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);
@@ -1093,55 +1016,6 @@ async fn direct_mcp_tools_register_namespaced_handlers() {
 
     assert!(registry.has_handler(&ToolName::namespaced("mcp__test_server__", "echo")));
     assert!(!registry.has_handler(&ToolName::plain("mcp__test_server__echo")));
-}
-
-#[tokio::test]
-async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
-    let config = test_config().await;
-    let model_info = construct_model_info_offline("gpt-5.4", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::Disabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let unavailable_tool = ToolName::namespaced("mcp__codex_apps__calendar", "_create_event");
-    let (tools, registry) = build_specs_with_unavailable_tools(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        vec![unavailable_tool],
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "mcp__codex_apps__calendar_create_event");
-    let ToolSpec::Function(ResponsesApiTool {
-        description,
-        parameters,
-        ..
-    }) = tool
-    else {
-        panic!("unavailable MCP tool should be exposed as a function tool");
-    };
-    assert!(description.contains("not currently available"));
-    assert_eq!(
-        parameters.additional_properties,
-        Some(AdditionalProperties::Boolean(false))
-    );
-    assert!(registry.has_handler(&ToolName::namespaced(
-        "mcp__codex_apps__calendar",
-        "_create_event"
-    )));
-    assert!(!registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
 }
 
 #[tokio::test]
@@ -1515,4 +1389,68 @@ async fn code_mode_only_restricts_model_tools_to_exec_tools() {
         &["exec", "wait"],
     )
     .await;
+}
+
+#[tokio::test]
+async fn code_mode_only_can_expose_multi_agent_v2_as_normal_tools() {
+    let config = test_config().await;
+    let model_info = construct_model_info_offline("gpt-5.4", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_multi_agent_v2_non_code_mode_only(/*multi_agent_v2_non_code_mode_only*/ true);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+    );
+    let model_visible_specs = router.model_visible_specs();
+    let tool_names = model_visible_specs
+        .iter()
+        .map(ToolSpec::name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_names,
+        vec![
+            "exec",
+            "wait",
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+        ]
+    );
+
+    let exec = find_tool(&model_visible_specs, "exec");
+    let ToolSpec::Freeform(exec) = exec else {
+        panic!("exec should be a freeform tool");
+    };
+    assert!(!exec.description.contains("spawn_agent"));
+    assert!(!exec.description.contains("wait_agent"));
+
+    let spawn_agent = find_tool(&model_visible_specs, "spawn_agent");
+    let ToolSpec::Function(spawn_agent) = spawn_agent else {
+        panic!("spawn_agent should be a function tool");
+    };
+    assert!(!spawn_agent.description.contains("exec tool declaration"));
 }

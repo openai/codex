@@ -7,15 +7,14 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::FunctionToolSpec;
-use codex_extension_api::ToolBundle;
-use codex_extension_api::ToolExecutor;
-use codex_extension_api::ToolFuture;
+use codex_extension_api::ExtensionToolExecutor;
+use codex_extension_api::ExtensionToolOutput;
+use codex_extension_api::ResponsesApiTool;
+use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_tool_api::ToolCall as ExtensionToolCall;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -27,7 +26,7 @@ use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
-use super::extension_tool_bundles;
+use super::extension_tool_executors;
 
 struct ExtensionEchoContributor;
 
@@ -36,38 +35,46 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<ToolBundle> {
-        vec![ToolBundle::new(
-            FunctionToolSpec {
-                name: "extension_echo".to_string(),
-                description: "Echoes arguments through an extension tool.".to_string(),
-                strict: true,
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "message": { "type": "string" },
-                    },
-                    "required": ["message"],
-                    "additionalProperties": false,
-                }),
-            },
-            Arc::new(ExtensionEchoExecutor),
-        )]
+    ) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+        vec![Arc::new(ExtensionEchoExecutor)]
     }
 }
 
 struct ExtensionEchoExecutor;
 
-impl ToolExecutor for ExtensionEchoExecutor {
-    fn execute<'a>(&'a self, call: ExtensionToolCall) -> ToolFuture<'a> {
+impl ExtensionToolExecutor for ExtensionEchoExecutor {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("extension_echo")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(ToolSpec::Function(ResponsesApiTool {
+            name: "extension_echo".to_string(),
+            description: "Echoes arguments through an extension tool.".to_string(),
+            strict: true,
+            parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" },
+                },
+                "required": ["message"],
+                "additionalProperties": false,
+            }))
+            .expect("extension schema should parse"),
+            output_schema: None,
+            defer_loading: None,
+        }))
+    }
+
+    fn handle(&self, call: ExtensionToolCall) -> codex_extension_api::ExtensionToolFuture<'_> {
         Box::pin(async move {
-            let arguments: serde_json::Value =
-                serde_json::from_str(&call.arguments).expect("test arguments should parse");
-            Ok(json!({
+            let arguments: serde_json::Value = serde_json::from_str(call.function_arguments()?)
+                .expect("test arguments should parse");
+            Ok(ExtensionToolOutput::new(json!({
                 "arguments": arguments,
                 "callId": call.call_id.clone(),
                 "ok": true,
-            }))
+            })))
         })
     }
 }
@@ -97,14 +104,13 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
 
-    let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
+    let parallel_tool_name = ["exec_command", "shell_command"]
         .into_iter()
         .find(|name| {
             router.tool_supports_parallel(&ToolCall {
@@ -177,9 +183,8 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
@@ -213,9 +218,8 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
@@ -232,7 +236,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
+async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
@@ -266,22 +270,12 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: Vec::new(),
+            extension_tool_executors: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
-            .is_some()
-    );
-    assert_eq!(
-        namespace_function_names(&router.specs(), "codex_app"),
-        vec![hidden_tool.to_string(), visible_tool.to_string()]
-    );
     assert_eq!(
         namespace_function_names(&router.model_visible_specs(), "codex_app"),
         vec![visible_tool.to_string()]
@@ -324,7 +318,7 @@ fn mcp_tool_info(
 }
 
 #[tokio::test]
-async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
+async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
 
@@ -333,19 +327,12 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(&session),
+            extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::plain("extension_echo"))
-            .is_some(),
-        "expected extension-provided tool spec to be registered"
-    );
     assert!(
         router
             .model_visible_specs()
@@ -362,7 +349,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
-
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),
@@ -414,7 +400,6 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             ToolSpec::Function(_)
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
-            | ToolSpec::LocalShell {}
             | ToolSpec::ImageGeneration { .. }
             | ToolSpec::WebSearch { .. }
             | ToolSpec::Namespace(_) => None,

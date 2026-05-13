@@ -1,8 +1,7 @@
 //! Inserts finalized history rows into terminal scrollback.
 //!
 //! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
-//! cell is an escape-sequence operation rather than a normal ratatui render. The mode determines
-//! how to create room for new history above the inline viewport.
+//! cell is an escape-sequence operation rather than a normal ratatui render.
 
 use std::fmt;
 use std::io;
@@ -35,28 +34,6 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-/// Selects the terminal escape strategy for inserting history lines above the viewport.
-///
-/// Standard terminals support `DECSTBM` scroll regions and Reverse Index (`ESC M`),
-/// which let us slide existing content down without redrawing it. Zellij silently
-/// drops or mishandles those sequences, so `Zellij` mode falls back to emitting
-/// newlines at the bottom of the screen and writing lines at absolute positions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertHistoryMode {
-    Standard,
-    Zellij,
-}
-
-impl InsertHistoryMode {
-    pub fn new(is_zellij: bool) -> Self {
-        if is_zellij {
-            Self::Zellij
-        } else {
-            Self::Standard
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryLineWrapPolicy {
     PreWrap,
@@ -72,38 +49,12 @@ pub fn insert_history_lines<B>(
 where
     B: Backend + Write,
 {
-    insert_history_lines_with_mode(terminal, lines, InsertHistoryMode::Standard)
+    insert_history_lines_with_wrap_policy(terminal, lines, HistoryLineWrapPolicy::PreWrap)
 }
 
-/// Insert `lines` above the viewport, using the escape strategy selected by `mode`.
-///
-/// In `Standard` mode this manipulates DECSTBM scroll regions to slide existing
-/// scrollback down and writes new lines into the freed space. In `Zellij` mode it
-/// emits newlines at the screen bottom to create space (since Zellij ignores scroll
-/// region escapes) and writes lines at computed absolute positions. Both modes
-/// update `terminal.viewport_area` so subsequent draw passes know where the
-/// viewport moved to. Resize reflow uses the same viewport-aware path after
-/// clearing old scrollback.
-pub fn insert_history_lines_with_mode<B>(
+pub fn insert_history_lines_with_wrap_policy<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
-    mode: InsertHistoryMode,
-) -> io::Result<()>
-where
-    B: Backend + Write,
-{
-    insert_history_lines_with_mode_and_wrap_policy(
-        terminal,
-        lines,
-        mode,
-        HistoryLineWrapPolicy::PreWrap,
-    )
-}
-
-pub fn insert_history_lines_with_mode_and_wrap_policy<B>(
-    terminal: &mut crate::custom_terminal::Terminal<B>,
-    lines: Vec<Line>,
-    mode: InsertHistoryMode,
     wrap_policy: HistoryLineWrapPolicy,
 ) -> io::Result<()>
 where
@@ -151,89 +102,55 @@ where
         wrapped.extend(line_wrapped);
     }
     let wrapped_lines = wrapped_rows as u16;
+    let cursor_top = if area.bottom() < screen_size.height {
+        // If the viewport is not at the bottom of the screen, scroll it down to make room.
+        // Don't scroll it past the bottom of the screen.
+        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
 
-    match mode {
-        InsertHistoryMode::Zellij => {
-            let space_below = screen_size.height.saturating_sub(area.bottom());
-            let shift_down = wrapped_lines.min(space_below);
-            let scroll_up_amount = wrapped_lines.saturating_sub(shift_down);
-
-            if scroll_up_amount > 0 {
-                // Scroll the entire screen up by emitting \n at the bottom
-                queue!(
-                    writer,
-                    MoveTo(/*x*/ 0, screen_size.height.saturating_sub(1))
-                )?;
-                for _ in 0..scroll_up_amount {
-                    queue!(writer, Print("\n"))?;
-                }
-            }
-
-            if shift_down > 0 {
-                area.y += shift_down;
-                should_update_area = true;
-            }
-
-            let cursor_top = area.top().saturating_sub(scroll_up_amount + shift_down);
-            queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
-
-            for (i, line) in wrapped.iter().enumerate() {
-                if i > 0 {
-                    queue!(writer, Print("\r\n"))?;
-                }
-                write_history_line(writer, line, wrap_width)?;
-            }
+        let top_1based = area.top() + 1;
+        queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
+        queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
+        for _ in 0..scroll_amount {
+            queue!(writer, Print("\x1bM"))?;
         }
-        InsertHistoryMode::Standard => {
-            let cursor_top = if area.bottom() < screen_size.height {
-                let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
+        queue!(writer, ResetScrollRegion)?;
 
-                let top_1based = area.top() + 1;
-                queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
-                queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
-                for _ in 0..scroll_amount {
-                    queue!(writer, Print("\x1bM"))?;
-                }
-                queue!(writer, ResetScrollRegion)?;
+        let cursor_top = area.top().saturating_sub(1);
+        area.y += scroll_amount;
+        should_update_area = true;
+        cursor_top
+    } else {
+        area.top().saturating_sub(1)
+    };
 
-                let cursor_top = area.top().saturating_sub(1);
-                area.y += scroll_amount;
-                should_update_area = true;
-                cursor_top
-            } else {
-                area.top().saturating_sub(1)
-            };
+    // Limit the scroll region to the lines from the top of the screen to the
+    // top of the viewport. With this in place, when we add lines inside this
+    // area, only the lines in this area will be scrolled. We place the cursor
+    // at the end of the scroll region, and add lines starting there.
+    //
+    // ┌─Screen───────────────────────┐
+    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
+    // │╭─Viewport───────────────────╮│
+    // ││                            ││
+    // │╰────────────────────────────╯│
+    // └──────────────────────────────┘
+    queue!(writer, SetScrollRegion(1..area.top()))?;
 
-            // Limit the scroll region to the lines from the top of the screen to the
-            // top of the viewport. With this in place, when we add lines inside this
-            // area, only the lines in this area will be scrolled. We place the cursor
-            // at the end of the scroll region, and add lines starting there.
-            //
-            // ┌─Screen───────────────────────┐
-            // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
-            // │┆                            ┆│
-            // │┆                            ┆│
-            // │┆                            ┆│
-            // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
-            // │╭─Viewport───────────────────╮│
-            // ││                            ││
-            // │╰────────────────────────────╯│
-            // └──────────────────────────────┘
-            queue!(writer, SetScrollRegion(1..area.top()))?;
+    // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
+    // terminal's last_known_cursor_position, which hopefully will still be accurate after we
+    // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
+    queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
 
-            // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
-            // terminal's last_known_cursor_position, which hopefully will still be accurate after we
-            // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-            queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
-
-            for line in &wrapped {
-                queue!(writer, Print("\r\n"))?;
-                write_history_line(writer, line, wrap_width)?;
-            }
-
-            queue!(writer, ResetScrollRegion)?;
-        }
+    for line in &wrapped {
+        queue!(writer, Print("\r\n"))?;
+        write_history_line(writer, line, wrap_width)?;
     }
+
+    queue!(writer, ResetScrollRegion)?;
 
     // Restore the cursor position to where it was before we started.
     queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
@@ -864,10 +781,9 @@ mod tests {
 
         let line = Line::from("alpha beta gamma delta epsilon zeta");
 
-        insert_history_lines_with_mode_and_wrap_policy(
+        insert_history_lines_with_wrap_policy(
             &mut term,
             vec![line],
-            InsertHistoryMode::Standard,
             HistoryLineWrapPolicy::Terminal,
         )
         .expect("insert raw history");
@@ -953,33 +869,5 @@ mod tests {
             url_row <= prompt_row + 2,
             "expected URL content to appear immediately after prompt (allowing at most one spacer row), got prompt_row={prompt_row}, url_row={url_row}, rows={rows:?}",
         );
-    }
-
-    #[test]
-    fn vt100_zellij_mode_inserts_history_and_updates_viewport() {
-        let width: u16 = 32;
-        let height: u16 = 8;
-        let backend = VT100Backend::new(width, height);
-        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 2);
-        term.set_viewport_area(viewport);
-
-        let line: Line<'static> = Line::from("zellij history");
-        insert_history_lines_with_mode(&mut term, vec![line], InsertHistoryMode::Zellij)
-            .expect("insert zellij history");
-
-        let start_row = 0;
-        let rows: Vec<String> = term
-            .backend()
-            .vt100()
-            .screen()
-            .rows(start_row, width)
-            .collect();
-        assert!(
-            rows.iter().any(|row| row.contains("zellij history")),
-            "expected zellij history row in screen output, rows: {rows:?}"
-        );
-        assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
-        assert_eq!(term.visible_history_rows(), 1);
     }
 }

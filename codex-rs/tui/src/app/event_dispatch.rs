@@ -57,11 +57,8 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_url.clone() {
-                        Some(websocket_url) => crate::AppServerTarget::Remote {
-                            websocket_url,
-                            auth_token: self.remote_app_server_auth_token.clone(),
-                        },
+                    &match self.remote_app_server_endpoint.clone() {
+                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
                         None => crate::AppServerTarget::Embedded,
                     },
                     self.state_db.clone(),

@@ -1688,6 +1688,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             hooks: None,
             enforce_residency: None,
@@ -2987,6 +2988,52 @@ fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
     );
 
     assert_eq!(
+        serde_json::to_value(PluginShareCheckoutParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+        }),
+    );
+
+    let plugin_path = if cfg!(windows) {
+        r"C:\Users\me\plugins\gmail"
+    } else {
+        "/Users/me/plugins/gmail"
+    };
+    let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+    let plugin_path_json = plugin_path.as_path().display().to_string();
+    let marketplace_path = if cfg!(windows) {
+        r"C:\Users\me\.agents\plugins\marketplace.json"
+    } else {
+        "/Users/me/.agents/plugins/marketplace.json"
+    };
+    let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+    let marketplace_path_json = marketplace_path.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(PluginShareCheckoutResponse {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            plugin_id: "gmail@codex-curated".to_string(),
+            plugin_name: "gmail".to_string(),
+            plugin_path,
+            marketplace_name: "codex-curated".to_string(),
+            marketplace_path,
+            remote_version: Some("1.2.3".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "pluginId": "gmail@codex-curated",
+            "pluginName": "gmail",
+            "pluginPath": plugin_path_json,
+            "marketplaceName": "codex-curated",
+            "marketplacePath": marketplace_path_json,
+            "remoteVersion": "1.2.3",
+        }),
+    );
+
+    assert_eq!(
         serde_json::to_value(PluginShareDeleteParams {
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
@@ -3007,6 +3054,7 @@ fn plugin_share_list_response_serializes_share_items() {
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     ),
+                    local_version: None,
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3027,6 +3075,7 @@ fn plugin_share_list_response_serializes_share_items() {
                 "plugin": {
                     "id": "gmail@chatgpt-global",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                    "localVersion": null,
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
@@ -3059,6 +3108,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
 }
 
