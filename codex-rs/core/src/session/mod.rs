@@ -1466,7 +1466,6 @@ impl Session {
             contributor.on_config_changed(
                 &self.services.session_extension_data,
                 &self.services.thread_extension_data,
-                self.conversation_id,
                 previous_config,
                 new_config,
             );

@@ -77,7 +77,6 @@ pub trait ConfigContributor<C>: Send + Sync {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-        _thread_id: ThreadId,
         _previous_config: &C,
         _new_config: &C,
     ) {
