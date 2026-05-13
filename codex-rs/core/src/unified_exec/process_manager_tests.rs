@@ -251,6 +251,7 @@ async fn startup_rejection_emits_begin_then_declined_end() {
         yield_time_ms: 1000,
         max_output_tokens: None,
         cwd: turn.cwd.clone(),
+        sandbox_cwd: turn.cwd.clone(),
         environment: turn
             .environments
             .primary_environment()
