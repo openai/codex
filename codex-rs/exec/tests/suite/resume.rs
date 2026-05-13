@@ -133,7 +133,7 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
     let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session with a unique marker in the content.
@@ -186,7 +186,7 @@ async fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Re
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
     let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session with a unique marker in the content.
@@ -239,7 +239,7 @@ async fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<(
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 5).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 5).await;
 
     let dir_a = TempDir::new()?;
     let dir_b = TempDir::new()?;
@@ -344,7 +344,7 @@ async fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<(
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
 
     // Seed a session.
     test.cmd_with_server(&server)
@@ -381,7 +381,7 @@ async fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
     let repo_root = exec_repo_root()?;
 
     // 1) First run: create a session
@@ -437,7 +437,7 @@ async fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<(
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
     let repo_root = exec_repo_root()?;
 
     let marker = format!("resume-config-{}", Uuid::new_v4());
@@ -512,7 +512,7 @@ async fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = mount_exec_responses(&server, 2).await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 2).await;
     let repo_root = exec_repo_root()?;
 
     let marker = format!("resume-image-{}", Uuid::new_v4());
