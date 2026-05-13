@@ -5197,6 +5197,50 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
 }
 
 #[tokio::test]
+async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
+    struct SessionStopMarker;
+    struct ThreadStopMarker;
+
+    struct ThreadStopRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        expected_thread_id: ThreadId,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
+        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+            assert_eq!(self.expected_thread_id, input.thread_id);
+            assert!(input.session_store.get::<SessionStopMarker>().is_some());
+            assert!(input.thread_store.get::<ThreadStopMarker>().is_some());
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadStopRecorder {
+        calls: Arc::clone(&calls),
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionStopMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadStopMarker);
+
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    drop(tx_sub);
+    let session = Arc::new(session);
+    submission_loop(session, Arc::clone(&turn_context.config), rx_sub).await;
+
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_allows_multiple_waiters() {
     let (session, _turn_context) = make_session_and_context().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
