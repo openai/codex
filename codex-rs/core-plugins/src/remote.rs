@@ -39,6 +39,7 @@ pub use share::RemotePluginShareTarget;
 pub use share::RemotePluginShareTargetRole;
 pub use share::RemotePluginShareUpdateDiscoverability;
 pub use share::RemotePluginShareUpdateTargetsResult;
+pub use share::checkout_remote_plugin_share;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;
 pub use share::load_plugin_share_remote_ids_by_local_path;
@@ -232,6 +233,9 @@ pub enum RemotePluginCatalogError {
 
     #[error("invalid plugin path `{path}`: {reason}")]
     InvalidPluginPath { path: PathBuf, reason: String },
+
+    #[error("remote plugin `{remote_plugin_id}` is not available for plugin/share/checkout")]
+    PluginShareCheckoutNotAvailable { remote_plugin_id: String },
 
     #[error("failed to archive plugin at `{path}`: {source}")]
     Archive {

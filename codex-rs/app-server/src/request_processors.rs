@@ -115,6 +115,8 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginShareCheckoutParams;
+use codex_app_server_protocol::PluginShareCheckoutResponse;
 use codex_app_server_protocol::PluginShareContext;
 use codex_app_server_protocol::PluginShareDeleteParams;
 use codex_app_server_protocol::PluginShareDeleteResponse;

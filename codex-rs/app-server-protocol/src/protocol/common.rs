@@ -649,6 +649,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginShareListResponse,
     },
+    PluginShareCheckout => "plugin/share/checkout" {
+        params: v2::PluginShareCheckoutParams,
+        serialization: global("config"),
+        response: v2::PluginShareCheckoutResponse,
+    },
     PluginShareDelete => "plugin/share/delete" {
         params: v2::PluginShareDeleteParams,
         serialization: global("config"),

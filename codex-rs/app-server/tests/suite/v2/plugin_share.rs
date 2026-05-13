@@ -12,6 +12,9 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginShareCheckoutResponse;
 use codex_app_server_protocol::PluginShareContext;
 use codex_app_server_protocol::PluginShareDeleteResponse;
 use codex_app_server_protocol::PluginShareDiscoverability;
@@ -27,6 +30,8 @@ use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -41,6 +46,8 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS: &str =
+    "CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS";
 
 #[tokio::test]
 async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
@@ -588,6 +595,335 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_share_checkout_adds_personal_marketplace_entry() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        "demo-plugin",
+        remote_plugin_bundle_tar_gz_bytes("demo-plugin")?,
+    )
+    .await;
+    mount_remote_plugin_detail_with_bundle(
+        &server,
+        "plugins_123",
+        "demo-plugin",
+        &bundle_url,
+        "WORKSPACE",
+    )
+    .await;
+    mount_empty_remote_installed_plugins(&server, "WORKSPACE").await;
+
+    let home_env = home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_env.as_str())),
+            ("USERPROFILE", Some(home_env.as_str())),
+            (TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/checkout",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+            })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginShareCheckoutResponse = to_response(response)?;
+
+    let plugin_path = AbsolutePathBuf::try_from(home.path().join("plugins/demo-plugin"))?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(home.path().join(".agents/plugins/marketplace.json"))?;
+    assert_eq!(
+        response,
+        PluginShareCheckoutResponse {
+            remote_plugin_id: "plugins_123".to_string(),
+            plugin_id: "demo-plugin@codex-curated".to_string(),
+            plugin_name: "demo-plugin".to_string(),
+            plugin_path: plugin_path.clone(),
+            marketplace_name: "codex-curated".to_string(),
+            marketplace_path: marketplace_path.clone(),
+            remote_version: Some("1.2.3".to_string()),
+        }
+    );
+    assert!(
+        plugin_path
+            .as_path()
+            .join(".codex-plugin/plugin.json")
+            .is_file()
+    );
+
+    let marketplace: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(marketplace_path.as_path())?)?;
+    assert_eq!(
+        marketplace,
+        json!({
+            "name": "codex-curated",
+            "interface": {
+                "displayName": "Personal",
+            },
+            "plugins": [
+                {
+                    "name": "demo-plugin",
+                    "source": {
+                        "source": "local",
+                        "path": "./plugins/demo-plugin",
+                    },
+                    "policy": {
+                        "installation": "AVAILABLE",
+                        "authentication": "ON_USE",
+                    },
+                },
+            ],
+        })
+    );
+
+    let mapping: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        codex_home
+            .path()
+            .join(".tmp/plugin-share-local-paths-v1.json"),
+    )?)?;
+    assert_eq!(
+        mapping,
+        json!({
+            "localPluginPathsByRemotePluginId": {
+                "plugins_123": plugin_path.clone(),
+            },
+        })
+    );
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![
+                codex_app_server_protocol::PluginListMarketplaceKind::Local,
+            ]),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "codex-curated");
+    assert_eq!(response.marketplaces[0].plugins[0].name, "demo-plugin");
+    assert_eq!(
+        response.marketplaces[0].plugins[0]
+            .share_context
+            .as_ref()
+            .map(|context| context.remote_plugin_id.as_str()),
+        Some("plugins_123")
+    );
+
+    std::fs::write(plugin_path.as_path().join("local-edit.txt"), "keep")?;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/checkout",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+            })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginShareCheckoutResponse = to_response(response)?;
+    assert_eq!(response.plugin_path, plugin_path);
+    assert_eq!(
+        std::fs::read_to_string(plugin_path.as_path().join("local-edit.txt"))?,
+        "keep"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_checkout_rejects_non_share_remote_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let bundle_url = format!("{}/bundles/global-plugin.tar.gz", server.uri());
+    mount_remote_plugin_detail_with_bundle(
+        &server,
+        "plugins_global",
+        "global-plugin",
+        &bundle_url,
+        "GLOBAL",
+    )
+    .await;
+    mount_empty_remote_installed_plugins(&server, "GLOBAL").await;
+
+    let home_env = home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_env.as_str())),
+            ("USERPROFILE", Some(home_env.as_str())),
+            (TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/checkout",
+            Some(json!({
+                "remotePluginId": "plugins_global",
+            })),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(
+        error
+            .error
+            .message
+            .contains("not available for plugin/share/checkout")
+    );
+    assert!(!home.path().join("plugins/global-plugin").exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_share_checkout_cleans_up_path_when_marketplace_update_fails() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_config(codex_home.path(), &format!("{}/backend-api", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let marketplace_path = home.path().join(".agents/plugins/marketplace.json");
+    std::fs::create_dir_all(
+        marketplace_path
+            .parent()
+            .expect("marketplace path has parent"),
+    )?;
+    std::fs::write(
+        &marketplace_path,
+        serde_json::to_string_pretty(&json!({
+            "name": "codex-curated",
+            "plugins": [
+                {
+                    "name": "demo-plugin",
+                    "source": {
+                        "source": "local",
+                        "path": "./other/demo-plugin",
+                    },
+                },
+            ],
+        }))?,
+    )?;
+
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        "demo-plugin",
+        remote_plugin_bundle_tar_gz_bytes("demo-plugin")?,
+    )
+    .await;
+    mount_remote_plugin_detail_with_bundle(
+        &server,
+        "plugins_123",
+        "demo-plugin",
+        &bundle_url,
+        "WORKSPACE",
+    )
+    .await;
+    mount_empty_remote_installed_plugins(&server, "WORKSPACE").await;
+
+    let home_env = home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_env.as_str())),
+            ("USERPROFILE", Some(home_env.as_str())),
+            (TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/checkout",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+            })),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(
+        error
+            .error
+            .message
+            .contains("marketplace already contains plugin `demo-plugin`")
+    );
+    assert!(!home.path().join("plugins/demo-plugin").exists());
+    assert!(
+        !codex_home
+            .path()
+            .join(".tmp/plugin-share-local-paths-v1.json")
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -823,6 +1159,85 @@ remote_plugin = true
     )
 }
 
+async fn mount_remote_plugin_bundle(
+    server: &MockServer,
+    plugin_name: &str,
+    body: Vec<u8>,
+) -> String {
+    let bundle_path = format!("/bundles/{plugin_name}.tar.gz");
+    Mock::given(method("GET"))
+        .and(path(bundle_path.clone()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/gzip")
+                .set_body_bytes(body),
+        )
+        .expect(1)
+        .mount(server)
+        .await;
+    format!("{}{}", server.uri(), bundle_path)
+}
+
+async fn mount_remote_plugin_detail_with_bundle(
+    server: &MockServer,
+    remote_plugin_id: &str,
+    plugin_name: &str,
+    bundle_url: &str,
+    scope: &str,
+) {
+    Mock::given(method("GET"))
+        .and(path(format!("/backend-api/ps/plugins/{remote_plugin_id}")))
+        .and(query_param("includeDownloadUrls", "true"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": remote_plugin_id,
+            "name": plugin_name,
+            "scope": scope,
+            "discoverability": "PRIVATE",
+            "share_url": "https://chatgpt.example/plugins/share/share-key-1",
+            "share_principals": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-owner__account-123",
+                    "role": "owner",
+                    "name": "Owner",
+                },
+            ],
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "version": "1.2.3",
+                "bundle_download_url": bundle_url,
+                "display_name": "Demo Plugin",
+                "description": "Demo plugin description",
+                "interface": {
+                    "short_description": "A demo plugin",
+                    "capabilities": ["Read", "Write"],
+                },
+                "skills": [],
+            },
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_empty_remote_installed_plugins(server: &MockServer, scope: &str) {
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", scope))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [],
+            "pagination": {
+                "next_page_token": null,
+            },
+        })))
+        .mount(server)
+        .await;
+}
+
 fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
     json!({
         "id": plugin_id,
@@ -933,6 +1348,32 @@ fn write_test_plugin(root: &Path, plugin_name: &str) -> std::io::Result<PathBuf>
         "# Example\n\nA test skill.\n",
     )?;
     Ok(plugin_path)
+}
+
+fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Result<Vec<u8>> {
+    let manifest = format!(r#"{{"name":"{plugin_name}"}}"#);
+    let skill = "# Example\n\nA test skill.\n";
+    let encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    for (path, contents, mode) in [
+        (
+            ".codex-plugin/plugin.json",
+            manifest.as_bytes(),
+            /*mode*/ 0o644,
+        ),
+        (
+            "skills/example/SKILL.md",
+            skill.as_bytes(),
+            /*mode*/ 0o644,
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(mode);
+        header.set_cksum();
+        tar.append_data(&mut header, path, contents)?;
+    }
+    Ok(tar.into_inner()?.finish()?)
 }
 
 fn write_corrupt_plugin_share_local_path_mapping(codex_home: &Path) -> std::io::Result<()> {

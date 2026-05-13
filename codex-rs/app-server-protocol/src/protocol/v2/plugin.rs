@@ -245,6 +245,26 @@ pub struct PluginShareListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PluginShareCheckoutParams {
+    pub remote_plugin_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareCheckoutResponse {
+    pub remote_plugin_id: String,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub plugin_path: AbsolutePathBuf,
+    pub marketplace_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+    pub remote_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginShareDeleteParams {
     pub remote_plugin_id: String,
 }
