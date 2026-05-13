@@ -1,3 +1,12 @@
+//! Builds a redacted doctor report attachment for feedback uploads.
+//!
+//! Feedback upload should never depend on doctor succeeding. This module runs
+//! the configured Codex executable as a subprocess, accepts only valid JSON from
+//! `codex doctor --json`, derives a small set of Sentry tags, and otherwise
+//! skips the attachment with a warning. Keeping the report generation out of the
+//! app-server process avoids sharing doctor internals across crates while still
+//! attaching exactly the same JSON a user could copy from the CLI.
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -12,11 +21,19 @@ use tracing::warn;
 const DOCTOR_FEEDBACK_REPORT_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_DOCTOR_TAG_VALUE_LEN: usize = 256;
 
+/// Redacted doctor report data that can be merged into a feedback upload.
 pub(crate) struct DoctorFeedbackReport {
+    /// JSON support report to upload as `codex-doctor-report.json`.
     pub(crate) attachment: FeedbackAttachment,
+    /// Low-cardinality Sentry tags derived from the report status and check ids.
     pub(crate) tags: BTreeMap<String, String>,
 }
 
+/// Runs `codex doctor --json` and returns a best-effort feedback attachment.
+///
+/// Failure to spawn Codex, finish before the timeout, or parse JSON means the
+/// feedback upload proceeds without the doctor report. Callers should merge the
+/// returned tags without overriding explicit client-provided tags.
 pub(crate) async fn doctor_feedback_report(config: &Config) -> Option<DoctorFeedbackReport> {
     let executable = config
         .codex_self_exe
@@ -134,6 +151,7 @@ fn doctor_report_tags(report: &Value) -> BTreeMap<String, String> {
     tags
 }
 
+/// Iterates checks from both the current keyed JSON shape and older array reports.
 fn check_values(checks: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
     match checks {
         Value::Array(values) => Box::new(values.iter()),

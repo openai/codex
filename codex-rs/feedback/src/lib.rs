@@ -27,6 +27,7 @@ pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
 pub use feedback_diagnostics::FeedbackDiagnostics;
 
+/// Filename used for the redacted `codex doctor --json` feedback attachment.
 pub const DOCTOR_REPORT_ATTACHMENT_FILENAME: &str = "codex-doctor-report.json";
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
@@ -345,17 +346,36 @@ pub struct FeedbackAttachmentPath {
     pub attachment_filename_override: Option<String>,
 }
 
+/// In-memory attachment to include in a feedback upload.
+///
+/// Use this for generated diagnostics that should not be materialized on disk,
+/// such as the redacted doctor report. File-backed artifacts should use
+/// `FeedbackAttachmentPath` so upload-time read failures can be logged and
+/// skipped independently.
 pub struct FeedbackAttachment {
+    /// Attachment filename shown in Sentry and in the feedback consent UI.
     pub filename: String,
+    /// Optional MIME type for consumers that render or classify attachments.
     pub content_type: Option<String>,
+    /// Attachment bytes captured before the upload starts.
     pub buffer: Vec<u8>,
 }
 
+/// Inputs that control one feedback upload to Sentry.
+///
+/// The caller is responsible for applying any user-consent gate before setting
+/// `include_logs` or passing diagnostic attachments. This type only describes
+/// what to upload once that decision has been made.
 pub struct FeedbackUploadOptions<'a> {
     pub classification: &'a str,
     pub reason: Option<&'a str>,
     pub tags: Option<&'a BTreeMap<String, String>>,
     pub include_logs: bool,
+    /// Generated attachments that are already buffered and safe to upload.
+    ///
+    /// These are included after `codex-logs.log` and before path-backed rollout
+    /// attachments. They are only passed by the caller after any user consent
+    /// gate has decided logs and diagnostics should be uploaded.
     pub extra_attachments: &'a [FeedbackAttachment],
     pub extra_attachment_paths: &'a [FeedbackAttachmentPath],
     pub session_source: Option<SessionSource>,

@@ -17,6 +17,11 @@ pub(super) trait DoctorProgress: Send + Sync {
     fn settle(&self);
 }
 
+/// Selects the progress implementation for the current output mode.
+///
+/// JSON output is always quiet so stdout remains valid JSON. Human output uses a
+/// transient stderr line only for interactive terminals, then clears it before
+/// the final report is printed.
 pub(super) fn doctor_progress(json: bool) -> std::sync::Arc<dyn DoctorProgress> {
     if should_show_progress(
         json,

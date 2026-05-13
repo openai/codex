@@ -1,3 +1,11 @@
+//! Converts raw doctor detail strings into human-oriented rows.
+//!
+//! Checks intentionally store details as simple redacted `label: value` strings
+//! so JSON serialization and human rendering share the same source data. This
+//! module owns the presentation-only transformations: collapsing noisy booleans,
+//! truncating long paths for terminal output, grouping repeated values, and
+//! keeping the `--all` expansion behavior out of check construction.
+
 use std::env;
 
 use super::DoctorCheck;

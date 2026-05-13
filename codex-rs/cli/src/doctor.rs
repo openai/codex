@@ -445,6 +445,12 @@ fn config_overrides_from_interactive(
     }
 }
 
+/// JSON support report emitted by `codex doctor --json`.
+///
+/// The report is keyed by check id so support tooling can fetch paths like
+/// `checks["terminal.metadata"]` without scanning arrays. Human rendering can
+/// reorder or group rows independently, but this JSON shape should stay stable
+/// across cosmetic output changes.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonDoctorReport {
@@ -455,6 +461,7 @@ struct JsonDoctorReport {
     checks: BTreeMap<String, JsonDoctorCheck>,
 }
 
+/// One redacted check in the JSON support report.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonDoctorCheck {
@@ -469,6 +476,7 @@ struct JsonDoctorCheck {
     duration_ms: u64,
 }
 
+/// JSON detail value that preserves repeated detail keys without inventing names.
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 enum JsonDetailValue {
@@ -519,6 +527,11 @@ fn redacted_json_check(check: &DoctorCheck) -> JsonDoctorCheck {
     }
 }
 
+/// Converts redacted `label: value` detail strings into JSON key/value fields.
+///
+/// Detail strings that do not follow the doctor detail convention are preserved
+/// as notes instead of being dropped. Repeated labels become arrays so callers
+/// can still retrieve the common scalar case directly while keeping all values.
 fn structured_json_details(details: &[String]) -> (BTreeMap<String, JsonDetailValue>, Vec<String>) {
     let mut structured: BTreeMap<String, JsonDetailValue> = BTreeMap::new();
     let mut notes = Vec::new();

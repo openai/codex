@@ -322,11 +322,13 @@ impl ResponsesWebsocketConnection {
     }
 }
 
+/// Client for connecting to the Responses WebSocket endpoint for one provider.
 pub struct ResponsesWebsocketClient {
     provider: Provider,
     auth: SharedAuthProvider,
 }
 
+/// Close frame information captured by a handshake probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponsesWebsocketClose {
     /// WebSocket close code returned by the server.
@@ -353,6 +355,7 @@ pub struct ResponsesWebsocketProbe {
 }
 
 impl ResponsesWebsocketClient {
+    /// Creates a Responses WebSocket client for an already-resolved provider and auth source.
     pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self {
         Self { provider, auth }
     }
@@ -391,6 +394,13 @@ impl ResponsesWebsocketClient {
         ))
     }
 
+    /// Opens a WebSocket connection long enough to validate the upgrade response.
+    ///
+    /// The probe uses the same URL construction, headers, authentication, TLS,
+    /// and custom-CA path as a real Responses WebSocket connection, but it does
+    /// not send a request frame. After the HTTP 101 upgrade succeeds, it waits
+    /// briefly for an immediate server close frame so diagnostics can distinguish
+    /// a usable connection from a policy rejection that closes right away.
     pub async fn probe_handshake(
         &self,
         extra_headers: HeaderMap,
