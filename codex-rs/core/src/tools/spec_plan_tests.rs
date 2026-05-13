@@ -704,6 +704,32 @@ fn view_image_tool_includes_detail_with_original_detail_support() {
 }
 
 #[test]
+fn view_image_tool_is_omitted_when_disabled() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_view_image_tool_enabled(false);
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
 fn disabled_environment_omits_environment_backed_tools() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

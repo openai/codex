@@ -106,6 +106,7 @@ pub struct ToolsConfig {
     pub web_search_config: Option<WebSearchConfig>,
     pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
+    pub view_image_tool_enabled: bool,
     pub search_tool: bool,
     pub namespace_tools: bool,
     pub tool_suggest: bool,
@@ -243,6 +244,7 @@ impl ToolsConfig {
             web_search_config: None,
             web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
+            view_image_tool_enabled: true,
             search_tool: include_search_tool,
             namespace_tools: true,
             tool_suggest: include_tool_suggest,
@@ -283,6 +285,11 @@ impl ToolsConfig {
         if !image_generation {
             self.image_gen_tool = false;
         }
+        self
+    }
+
+    pub fn with_view_image_tool_enabled(mut self, enabled: bool) -> Self {
+        self.view_image_tool_enabled = enabled;
         self
     }
 

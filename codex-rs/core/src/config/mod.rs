@@ -773,6 +773,9 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
+    /// Whether the `view_image` tool should be registered for interactive turns.
+    pub view_image_tool_enabled: bool,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1957,6 +1960,24 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_view_image_tool_enabled(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> bool {
+    config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.view_image)
+        .or(config_profile.tools_view_image)
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.view_image)
+        })
+        .unwrap_or(true)
+}
+
 fn resolve_multi_agent_v2_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -2592,6 +2613,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let view_image_tool_enabled = resolve_view_image_tool_enabled(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3161,6 +3183,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            view_image_tool_enabled,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

@@ -404,6 +404,26 @@ web_search = false
     );
 }
 
+#[tokio::test]
+async fn tools_view_image_false_disables_runtime_tool_config() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tools]
+view_image = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert!(!config.view_image_tool_enabled);
+    Ok(())
+}
+
 #[test]
 fn rejects_provider_auth_with_env_key() {
     let err = toml::from_str::<ConfigToml>(
@@ -7363,6 +7383,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: true,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
+            view_image_tool_enabled: true,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -7810,6 +7831,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        view_image_tool_enabled: true,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -7971,6 +7993,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        view_image_tool_enabled: true,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -8117,6 +8140,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        view_image_tool_enabled: true,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),

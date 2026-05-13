@@ -363,7 +363,7 @@ fn collect_handler_tools(
         handlers.push(Arc::new(TestSyncHandler));
     }
 
-    if config.environment_mode.has_environment() {
+    if config.environment_mode.has_environment() && config.view_image_tool_enabled {
         let include_environment_id =
             matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         handlers.push(Arc::new(ViewImageHandler::new(ViewImageToolOptions {

@@ -209,6 +209,7 @@ impl TurnContext {
         })
         .with_namespace_tools_capability(provider_capabilities.namespace_tools)
         .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_view_image_tool_enabled(self.tools_config.view_image_tool_enabled)
         .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
@@ -484,6 +485,7 @@ impl Session {
         })
         .with_namespace_tools_capability(provider_capabilities.namespace_tools)
         .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_view_image_tool_enabled(per_turn_config.view_image_tool_enabled)
         .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode_for_session(
             crate::tools::spec::tool_user_shell_type(user_shell),
