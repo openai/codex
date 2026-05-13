@@ -2860,6 +2860,156 @@ async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1_000;
+    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let early = timeout(
+        Duration::from_millis(/*millis*/ 20),
+        WaitAgentHandlerV2::default().handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "wait_agent",
+            function_payload(json!({})),
+        )),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "wait_agent should not return before the configured default timeout"
+    );
+
+    let output = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        WaitAgentHandlerV2::default().handle(invocation(
+            session,
+            turn,
+            "wait_agent",
+            function_payload(json!({})),
+        )),
+    )
+    .await
+    .expect("configured default should be shorter than the test timeout")
+    .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait timed out.".to_string(),
+            timed_out: true,
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_allows_zero_configured_timeout() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.min_wait_timeout_ms = 0;
+    config.multi_agent_v2.max_wait_timeout_ms = 0;
+    config.multi_agent_v2.default_wait_timeout_ms = 0;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        WaitAgentHandlerV2::default().handle(invocation(
+            session,
+            turn,
+            "wait_agent",
+            function_payload(json!({})),
+        )),
+    )
+    .await
+    .expect("zero timeout should complete immediately")
+    .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait timed out.".to_string(),
+            timed_out: true,
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_uses_configured_max_timeout() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 50;
+    config.multi_agent_v2.default_wait_timeout_ms = 1;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let early = timeout(
+        Duration::from_millis(/*millis*/ 20),
+        WaitAgentHandlerV2::default().handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "wait_agent",
+            function_payload(json!({"timeout_ms": 500})),
+        )),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "wait_agent should clamp explicit timeouts to the configured maximum"
+    );
+
+    let output = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        WaitAgentHandlerV2::default().handle(invocation(
+            session,
+            turn,
+            "wait_agent",
+            function_payload(json!({"timeout_ms": 500})),
+        )),
+    )
+    .await
+    .expect("configured maximum should be shorter than the test timeout")
+    .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait timed out.".to_string(),
+            timed_out: true,
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
 async fn wait_agent_returns_not_found_for_missing_agents() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();

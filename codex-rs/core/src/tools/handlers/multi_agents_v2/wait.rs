@@ -1,4 +1,6 @@
 use super::*;
+use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
+use crate::config::HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -40,19 +42,28 @@ impl ToolExecutor<ToolInvocation> for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let min_timeout_ms = turn
+        let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms.clamp(
+            HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS,
+            HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS,
+        );
+        let max_timeout_ms = turn
             .config
             .multi_agent_v2
-            .min_wait_timeout_ms
-            .clamp(1, MAX_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_owned(),
-                ));
+            .max_wait_timeout_ms
+            .clamp(min_timeout_ms, HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS);
+        let default_timeout_ms = turn
+            .config
+            .multi_agent_v2
+            .default_wait_timeout_ms
+            .clamp(min_timeout_ms, max_timeout_ms);
+        let timeout_ms = match args.timeout_ms {
+            Some(ms) if ms < HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "timeout_ms must be at least {HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS}"
+                )));
             }
-            ms => ms.clamp(min_timeout_ms, MAX_WAIT_TIMEOUT_MS),
+            Some(ms) => ms.clamp(min_timeout_ms, max_timeout_ms),
+            None => default_timeout_ms,
         };
 
         let mut mailbox_seq_rx = session.subscribe_mailbox_seq();

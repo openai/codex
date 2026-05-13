@@ -743,11 +743,15 @@ async fn spawn_agent_description_uses_configured_usage_hint_text() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
-    let wait_agent_min_timeout_ms = Some(60_000);
+async fn multi_agent_v2_wait_agent_schema_uses_configured_timeouts() {
+    let wait_agent_min_timeout_ms = Some(20_000);
+    let wait_agent_max_timeout_ms = Some(120_000);
+    let wait_agent_default_timeout_ms = Some(60_000);
     let tools_config = multi_agent_v2_tools_config()
         .await
-        .with_wait_agent_min_timeout_ms(wait_agent_min_timeout_ms);
+        .with_wait_agent_min_timeout_ms(wait_agent_min_timeout_ms)
+        .with_wait_agent_max_timeout_ms(wait_agent_max_timeout_ms)
+        .with_wait_agent_default_timeout_ms(wait_agent_default_timeout_ms);
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
@@ -767,7 +771,7 @@ async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
 
     assert_eq!(
         timeout_description,
-        Some("Optional timeout in milliseconds. Defaults to 60000, min 60000, max 3600000.")
+        Some("Optional timeout in milliseconds. Defaults to 60000, min 20000, max 120000.")
     );
 }
 

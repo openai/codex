@@ -122,6 +122,8 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
+    pub wait_agent_max_timeout_ms: Option<i64>,
+    pub wait_agent_default_timeout_ms: Option<i64>,
     pub request_user_input_available_modes: Vec<ModeKind>,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -259,6 +261,8 @@ impl ToolsConfig {
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
+            wait_agent_max_timeout_ms: None,
+            wait_agent_default_timeout_ms: None,
             request_user_input_available_modes: request_user_input_available_modes(features),
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -329,6 +333,22 @@ impl ToolsConfig {
         wait_agent_min_timeout_ms: Option<i64>,
     ) -> Self {
         self.wait_agent_min_timeout_ms = wait_agent_min_timeout_ms;
+        self
+    }
+
+    pub fn with_wait_agent_max_timeout_ms(
+        mut self,
+        wait_agent_max_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_max_timeout_ms = wait_agent_max_timeout_ms;
+        self
+    }
+
+    pub fn with_wait_agent_default_timeout_ms(
+        mut self,
+        wait_agent_default_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_default_timeout_ms = wait_agent_default_timeout_ms;
         self
     }
 

@@ -1,3 +1,5 @@
+use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
+use crate::config::HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
@@ -35,16 +37,37 @@ pub(crate) fn build_specs_with_discoverable_tools(
 ) -> ToolRegistryBuilder {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
-    let min_wait_timeout_ms = if config.multi_agent_v2 {
-        config
-            .wait_agent_min_timeout_ms
-            .unwrap_or(MIN_WAIT_TIMEOUT_MS)
-            .clamp(1, MAX_WAIT_TIMEOUT_MS)
-    } else {
-        MIN_WAIT_TIMEOUT_MS
-    };
-    let default_wait_timeout_ms =
-        DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
+    let (min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms) =
+        if config.multi_agent_v2 {
+            let raw_min_wait_timeout_ms = config
+                .wait_agent_min_timeout_ms
+                .unwrap_or(MIN_WAIT_TIMEOUT_MS);
+            let raw_max_wait_timeout_ms = config
+                .wait_agent_max_timeout_ms
+                .unwrap_or(MAX_WAIT_TIMEOUT_MS);
+            let raw_default_wait_timeout_ms = config
+                .wait_agent_default_timeout_ms
+                .unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+            let max_wait_timeout_ms = raw_max_wait_timeout_ms.clamp(
+                HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS,
+                HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS,
+            );
+            let min_wait_timeout_ms = raw_min_wait_timeout_ms
+                .clamp(HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS, max_wait_timeout_ms);
+            let default_wait_timeout_ms =
+                raw_default_wait_timeout_ms.clamp(min_wait_timeout_ms, max_wait_timeout_ms);
+            (
+                min_wait_timeout_ms,
+                max_wait_timeout_ms,
+                default_wait_timeout_ms,
+            )
+        } else {
+            (
+                MIN_WAIT_TIMEOUT_MS,
+                MAX_WAIT_TIMEOUT_MS,
+                DEFAULT_WAIT_TIMEOUT_MS,
+            )
+        };
     build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
@@ -57,7 +80,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             wait_agent_timeouts: WaitAgentTimeoutOptions {
                 default_timeout_ms: default_wait_timeout_ms,
                 min_timeout_ms: min_wait_timeout_ms,
-                max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+                max_timeout_ms: max_wait_timeout_ms,
             },
         },
     )

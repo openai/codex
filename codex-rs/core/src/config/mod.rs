@@ -176,7 +176,11 @@ pub(crate) const AGENTS_MD_MAX_BYTES: usize = DEFAULT_PROJECT_DOC_MAX_BYTES; // 
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
-pub(crate) const MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
+pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
+pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
+    DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
@@ -840,6 +844,8 @@ pub struct Config {
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub min_wait_timeout_ms: i64,
+    pub max_wait_timeout_ms: i64,
+    pub default_wait_timeout_ms: i64,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
@@ -853,6 +859,8 @@ impl Default for MultiAgentV2Config {
             max_concurrent_threads_per_session:
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
+            max_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS,
+            default_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
@@ -1979,6 +1987,14 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.min_wait_timeout_ms)
         .or_else(|| base.and_then(|config| config.min_wait_timeout_ms))
         .unwrap_or(default.min_wait_timeout_ms);
+    let max_wait_timeout_ms = profile
+        .and_then(|config| config.max_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.max_wait_timeout_ms))
+        .unwrap_or(default.max_wait_timeout_ms);
+    let default_wait_timeout_ms = profile
+        .and_then(|config| config.default_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.default_wait_timeout_ms))
+        .unwrap_or(default.default_wait_timeout_ms);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -2006,6 +2022,8 @@ fn resolve_multi_agent_v2_config(
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
         min_wait_timeout_ms,
+        max_wait_timeout_ms,
+        default_wait_timeout_ms,
         usage_hint_enabled,
         usage_hint_text,
         root_agent_usage_hint_text,
@@ -2085,6 +2103,22 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     }
 
     WebSearchMode::Disabled
+}
+
+fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Result<()> {
+    if value < HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at least {HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS}"),
+        ));
+    }
+    if value > HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at most {HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS}"),
+        ));
+    }
+    Ok(())
 }
 
 impl Config {
@@ -2660,18 +2694,22 @@ impl Config {
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
             ));
         }
-        if multi_agent_v2.min_wait_timeout_ms <= 0 {
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.min_wait_timeout_ms",
+            multi_agent_v2.min_wait_timeout_ms,
+        )?;
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.max_wait_timeout_ms",
+            multi_agent_v2.max_wait_timeout_ms,
+        )?;
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.default_wait_timeout_ms",
+            multi_agent_v2.default_wait_timeout_ms,
+        )?;
+        if multi_agent_v2.min_wait_timeout_ms > multi_agent_v2.max_wait_timeout_ms {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "features.multi_agent_v2.min_wait_timeout_ms must be at least 1",
-            ));
-        }
-        if multi_agent_v2.min_wait_timeout_ms > MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "features.multi_agent_v2.min_wait_timeout_ms must be at most {MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS}"
-                ),
+                "features.multi_agent_v2.min_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
