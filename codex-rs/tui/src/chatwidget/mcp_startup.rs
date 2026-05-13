@@ -190,16 +190,7 @@ impl ChatWidget {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
         }
 
-        let mcp_startup_owned_status = self
-            .status_state
-            .current_status
-            .header
-            .starts_with(MCP_STARTUP_SINGLE_HEADER_PREFIX)
-            || self
-                .status_state
-                .current_status
-                .header
-                .starts_with(MCP_STARTUP_MULTI_HEADER_PREFIX);
+        let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
         self.mcp_startup_ignore_updates_until_next_start = true;
         self.mcp_startup_allow_terminal_only_next_round = false;
@@ -248,6 +239,18 @@ impl ChatWidget {
         cancelled.sort();
         cancelled.dedup();
         self.finish_mcp_startup(failed, cancelled);
+    }
+
+    pub(super) fn status_header_is_mcp_startup_owned(&self) -> bool {
+        self.status_state
+            .current_status
+            .header
+            .starts_with(MCP_STARTUP_SINGLE_HEADER_PREFIX)
+            || self
+                .status_state
+                .current_status
+                .header
+                .starts_with(MCP_STARTUP_MULTI_HEADER_PREFIX)
     }
 
     pub(super) fn on_mcp_server_status_updated(

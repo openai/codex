@@ -13,10 +13,6 @@ use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::McpStartupCompleteEvent;
-use codex_protocol::protocol::McpStartupFailure;
-use codex_protocol::protocol::McpStartupStatus;
-use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnAbortReason;
@@ -111,87 +107,6 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         ops.iter().any(|op| matches!(op, Op::Shutdown)),
         "expected Shutdown op after cancellation"
     );
-}
-
-#[tokio::test]
-async fn forward_events_forwards_mcp_startup_events() {
-    let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let (tx_sub, _rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-    let (session, ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
-    let codex = Arc::new(Codex {
-        tx_sub,
-        rx_event: rx_events,
-        agent_status,
-        session: Arc::clone(&session),
-        session_loop_termination: completed_session_loop_termination(),
-    });
-
-    let (tx_out, rx_out) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let cancel = CancellationToken::new();
-    let forward = tokio::spawn(forward_events(
-        Arc::clone(&codex),
-        tx_out,
-        session,
-        ctx,
-        Arc::new(Mutex::new(HashMap::new())),
-        cancel,
-    ));
-
-    tx_events
-        .send(Event {
-            id: "starting".to_string(),
-            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
-                server: "github".to_string(),
-                status: McpStartupStatus::Starting,
-            }),
-        })
-        .await
-        .unwrap();
-    tx_events
-        .send(Event {
-            id: "failed".to_string(),
-            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
-                server: "github".to_string(),
-                status: McpStartupStatus::Failed {
-                    error: "The github MCP server is not logged in.".to_string(),
-                },
-            }),
-        })
-        .await
-        .unwrap();
-    tx_events
-        .send(Event {
-            id: "complete".to_string(),
-            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
-                ready: Vec::new(),
-                failed: vec![McpStartupFailure {
-                    server: "github".to_string(),
-                    error: "raw auth error".to_string(),
-                }],
-                cancelled: vec!["linear".to_string()],
-            }),
-        })
-        .await
-        .unwrap();
-    drop(tx_events);
-
-    timeout(Duration::from_secs(1), forward)
-        .await
-        .expect("forward_events hung")
-        .expect("forward_events join error");
-
-    let mut received = Vec::new();
-    while let Ok(event) = rx_out.try_recv() {
-        match event.msg {
-            EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_) => {
-                received.push(event.id);
-            }
-            _ => {}
-        }
-    }
-
-    assert_eq!(vec!["starting", "failed", "complete"], received);
 }
 
 #[tokio::test]

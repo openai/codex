@@ -162,18 +162,6 @@ async fn process_review_events(
                 ..
             })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::McpStartupUpdate(update) => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), EventMsg::McpStartupUpdate(update))
-                    .await;
-            }
-            EventMsg::McpStartupComplete(complete) => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), EventMsg::McpStartupComplete(complete))
-                    .await;
-            }
             EventMsg::TurnComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
                 let out = task_complete

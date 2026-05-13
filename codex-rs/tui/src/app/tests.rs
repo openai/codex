@@ -3395,7 +3395,7 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 }
 
 #[tokio::test]
-async fn side_thread_ignores_parent_mcp_startup_notifications() {
+async fn side_thread_ignores_global_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -3413,37 +3413,6 @@ async fn side_thread_ignores_parent_mcp_startup_notifications() {
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-                thread_id: parent_thread_id.to_string(),
-                name: "sentry".to_string(),
-                status: McpServerStartupState::Failed,
-                error: Some("sentry is not logged in".to_string()),
-            }),
-        ),
-    )
-    .await;
-
-    assert!(app_event_rx.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn primary_thread_ignores_child_mcp_startup_notifications() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    while app_event_rx.try_recv().is_ok() {}
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let parent_thread_id = ThreadId::new();
-    let child_thread_id = ThreadId::new();
-    app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(parent_thread_id);
-    app.side_threads
-        .insert(child_thread_id, SideThreadState::new(parent_thread_id));
-
-    app.handle_app_server_event(
-        &app_server,
-        codex_app_server_client::AppServerEvent::ServerNotification(
-            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-                thread_id: child_thread_id.to_string(),
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),

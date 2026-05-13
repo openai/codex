@@ -10859,15 +10859,11 @@
           },
           "status": {
             "$ref": "#/definitions/v2/McpServerStartupState"
-          },
-          "threadId": {
-            "type": "string"
           }
         },
         "required": [
           "name",
-          "status",
-          "threadId"
+          "status"
         ],
         "title": "McpServerStatusUpdatedNotification",
         "type": "object"

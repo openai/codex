@@ -195,10 +195,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     })
     .await?;
 
-    Ok(spawn_one_shot_event_bridge(io, child_cancel))
-}
-
-fn spawn_one_shot_event_bridge(io: Codex, child_cancel: CancellationToken) -> Codex {
+    // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
@@ -232,13 +229,13 @@ fn spawn_one_shot_event_bridge(io: Codex, child_cancel: CancellationToken) -> Co
     let (tx_closed, rx_closed) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     drop(rx_closed);
 
-    Codex {
+    Ok(Codex {
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
         session,
         session_loop_termination,
-    }
+    })
 }
 
 async fn forward_events(

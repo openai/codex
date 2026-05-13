@@ -4,7 +4,6 @@ use pretty_assertions::assert_eq;
 fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-            thread_id: "thread-id".to_string(),
             name: name.to_string(),
             status,
             error: None,
@@ -16,7 +15,6 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
 fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-            thread_id: "thread-id".to_string(),
             name: name.to_string(),
             status: McpServerStartupState::Failed,
             error: Some(error.to_string()),
@@ -59,6 +57,25 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn turn_start_preserves_active_mcp_startup_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Booting MCP server: schaltwerk"
+    );
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
+
     assert_eq!(chat.status_state.current_status.header, "Working");
 }
 
