@@ -1460,8 +1460,7 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_for_remote_nested_sessio
         return Ok(());
     };
 
-    let harness =
-        apply_patch_harness_with(|builder| nested_repo_relative_diff_builder(builder)).await?;
+    let harness = apply_patch_harness_with(nested_repo_relative_diff_builder).await?;
     assert_apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested(harness).await
 }
 
