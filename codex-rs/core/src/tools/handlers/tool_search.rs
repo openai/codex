@@ -114,17 +114,13 @@ impl ToolSearchHandler {
         query: &str,
         limit: usize,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        let results = self.search_result_entries(query, limit);
-        self.search_output_tools(results)
-    }
-
-    fn search_result_entries(&self, query: &str, limit: usize) -> Vec<&ToolSearchEntry> {
-        self.search_engine
+        let results = self
+            .search_engine
             .search(query, limit)
             .into_iter()
             .map(|result| result.document.id)
-            .filter_map(|id| self.entries.get(id))
-            .collect()
+            .filter_map(|id| self.entries.get(id));
+        self.search_output_tools(results)
     }
 
     fn search_output_tools<'a>(
