@@ -410,7 +410,7 @@ async fn post_tool_use_records_mcp_tool_payload_and_context() -> Result<()> {
     assert!(
         final_request
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&format!("<hook_context>{post_context}</hook_context>")),
         "follow-up request should include MCP post tool use additional context",
     );
     let output_item = final_request.function_call_output(call_id);

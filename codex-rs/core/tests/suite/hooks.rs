@@ -785,6 +785,7 @@ fn request_hook_prompt_texts(
 fn spilled_hook_output_path(text: &str) -> Option<&str> {
     text.lines()
         .find_map(|line| line.strip_prefix("Full hook output saved to: "))
+        .map(|path| path.trim_end_matches("</hook_context>"))
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -1367,9 +1368,9 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
 
     let request = response.single_request();
     assert!(
-        request
-            .message_input_texts("developer")
-            .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+        request.message_input_texts("developer").contains(&format!(
+            "<hook_context>{BLOCKED_PROMPT_CONTEXT}</hook_context>"
+        )),
         "second request should include developer context persisted from the blocked prompt",
     );
     assert!(
@@ -2135,7 +2136,7 @@ async fn pre_tool_use_records_additional_context_for_shell_command() -> Result<(
     assert!(
         requests[1]
             .message_input_texts("developer")
-            .contains(&pre_context.to_string()),
+            .contains(&format!("<hook_context>{pre_context}</hook_context>")),
         "follow-up request should include pre tool use additional context",
     );
     let output_item = requests[1].function_call_output(call_id);
@@ -2208,7 +2209,7 @@ async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> 
     assert!(
         requests[1]
             .message_input_texts("developer")
-            .contains(&pre_context.to_string()),
+            .contains(&format!("<hook_context>{pre_context}</hook_context>")),
         "follow-up request should include blocked pre tool use additional context",
     );
     let output_item = requests[1].function_call_output(call_id);
@@ -3207,7 +3208,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert!(
         requests[1]
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&format!("<hook_context>{post_context}</hook_context>")),
         "follow-up request should include post tool use additional context",
     );
     let output_item = requests[1].function_call_output(call_id);
@@ -3672,7 +3673,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
     assert!(
         requests[1]
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&format!("<hook_context>{post_context}</hook_context>")),
         "follow-up request should include apply_patch post tool use context",
     );
     assert!(
@@ -3761,7 +3762,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     assert!(
         requests[1]
             .message_input_texts("developer")
-            .contains(&post_context.to_string()),
+            .contains(&format!("<hook_context>{post_context}</hook_context>")),
         "follow-up request should include apply_patch post tool use context",
     );
     assert!(
