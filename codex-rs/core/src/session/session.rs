@@ -75,6 +75,13 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     pub(super) cwd: AbsolutePathBuf,
+    /// Workspace roots used to materialize symbolic `:project_roots`
+    /// permission entries for this thread.
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+    /// True when workspace roots came from an explicit caller request or
+    /// persisted thread state. False roots are the implicit default seeded from
+    /// cwd and should follow cwd-only updates.
+    pub(super) workspace_roots_explicit: bool,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -112,12 +119,13 @@ impl SessionConfiguration {
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        self.permission_profile()
+        let permission_profile = self.materialized_permission_profile();
+        permission_profile
             .to_legacy_sandbox_policy(&self.cwd)
             .unwrap_or_else(|_| {
                 let file_system_sandbox_policy = self.file_system_sandbox_policy();
                 codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile.get(),
+                    &permission_profile,
                     &file_system_sandbox_policy,
                     self.network_sandbox_policy(),
                     &self.cwd,
@@ -126,11 +134,19 @@ impl SessionConfiguration {
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.get().file_system_sandbox_policy()
+        self.materialized_permission_profile()
+            .file_system_sandbox_policy()
     }
 
     pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile.get().network_sandbox_policy()
+    }
+
+    fn materialized_permission_profile(&self) -> PermissionProfile {
+        self.permission_profile
+            .get()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -143,6 +159,7 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -154,7 +171,10 @@ impl SessionConfiguration {
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         let current_sandbox_policy = self.sandbox_policy();
+        let current_permission_profile = self.permission_profile();
         let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let current_unmaterialized_file_system_policy =
+            current_permission_profile.file_system_sandbox_policy();
         let current_network_sandbox_policy = self.network_sandbox_policy();
         let legacy_file_system_projection =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -165,18 +185,9 @@ impl SessionConfiguration {
         let file_system_policy_matches_legacy = current_file_system_sandbox_policy
             .is_semantically_equivalent_to(&legacy_file_system_projection, &self.cwd);
         let file_system_policy_has_rebindable_project_root_write =
-            current_file_system_sandbox_policy
-                .entries
-                .iter()
-                .any(|entry| {
-                    entry.access.can_write()
-                        && matches!(
-                            &entry.path,
-                            FileSystemPath::Special {
-                                value: FileSystemSpecialPath::ProjectRoots { subpath: None },
-                            }
-                        )
-                });
+            file_system_policy_has_rebindable_project_root_write(
+                &current_unmaterialized_file_system_policy,
+            );
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
@@ -221,7 +232,28 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
+        let should_rebind_implicit_workspace_roots = cwd_changed
+            && !self.workspace_roots_explicit
+            && self.workspace_roots.as_slice() == std::slice::from_ref(&self.cwd)
+            && file_system_policy_has_rebindable_project_root_write;
         next_configuration.cwd = absolute_cwd;
+
+        if let Some(workspace_roots) = updates.workspace_roots.clone() {
+            let mut workspace_roots: Vec<AbsolutePathBuf> = workspace_roots
+                .into_iter()
+                .map(|path| {
+                    AbsolutePathBuf::resolve_path_against_base(
+                        normalize_for_native_workdir(path.as_path()),
+                        next_configuration.cwd.as_path(),
+                    )
+                })
+                .collect();
+            dedupe_absolute_paths(&mut workspace_roots);
+            next_configuration.workspace_roots = workspace_roots;
+            next_configuration.workspace_roots_explicit = true;
+        } else if should_rebind_implicit_workspace_roots {
+            next_configuration.workspace_roots = vec![next_configuration.cwd.clone()];
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -253,26 +285,31 @@ impl SessionConfiguration {
                 ),
             )?;
             next_configuration.active_permission_profile = None;
-        } else if cwd_changed
-            && file_system_policy_matches_legacy
-            && file_system_policy_has_rebindable_project_root_write
-        {
-            // Preserve richer split policies across cwd-only updates; only
-            // rederive when the session is already using a structurally
-            // cwd-bound legacy bridge.
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    &current_sandbox_policy,
-                    &next_configuration.cwd,
-                    &current_file_system_sandbox_policy,
-                );
-            next_configuration.permission_profile.set(
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
-                    &file_system_sandbox_policy,
-                    current_network_sandbox_policy,
-                ),
-            )?;
+        } else {
+            if cwd_changed
+                && file_system_policy_matches_legacy
+                && should_rebind_implicit_workspace_roots
+            {
+                // Preserve richer split policies across cwd-only updates; only
+                // rederive when the session is already using a structurally
+                // cwd-bound legacy bridge.
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                        &current_sandbox_policy,
+                        &next_configuration.cwd,
+                        &current_file_system_sandbox_policy,
+                    );
+                next_configuration.permission_profile.set(
+                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                        SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
+                        &file_system_sandbox_policy,
+                        current_network_sandbox_policy,
+                    ),
+                )?;
+            }
+            if let Some(active_permission_profile) = updates.active_permission_profile.clone() {
+                next_configuration.active_permission_profile = Some(active_permission_profile);
+            }
         }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
@@ -306,9 +343,29 @@ impl SessionConfiguration {
     }
 }
 
+fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+}
+
+fn file_system_policy_has_rebindable_project_root_write(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> bool {
+    file_system_sandbox_policy.entries.iter().any(|entry| {
+        entry.access.can_write()
+            && matches!(
+                &entry.path,
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                }
+            )
+    })
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) workspace_roots: Option<Vec<PathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
@@ -425,6 +482,7 @@ impl Session {
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
+                                    workspace_roots: config.workspace_roots.clone(),
                                     model_provider: config.model_provider_id.clone(),
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
@@ -447,6 +505,7 @@ impl Session {
                                 include_archived: true,
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
+                                    workspace_roots: config.workspace_roots.clone(),
                                     model_provider: config.model_provider_id.clone(),
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
@@ -769,7 +828,7 @@ impl Session {
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                         spec,
                         current_exec_policy.as_ref(),
-                        config.permissions.permission_profile.get(),
+                        config.permissions.permission_profile_ref(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
@@ -833,7 +892,7 @@ impl Session {
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                     &config.permissions.approval_policy,
-                    &config.permissions.permission_profile,
+                    config.permissions.permission_profile_constraint(),
                 ))),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
@@ -935,6 +994,7 @@ impl Session {
                     permission_profile: session_configuration.permission_profile(),
                     active_permission_profile: session_configuration.active_permission_profile(),
                     cwd: session_configuration.cwd.clone(),
+                    workspace_roots: session_configuration.workspace_roots.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {

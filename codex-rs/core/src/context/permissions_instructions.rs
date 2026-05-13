@@ -30,6 +30,8 @@ const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
 const SANDBOX_MODE_WORKSPACE_WRITE: &str =
     include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
 const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
+const MAX_WRITABLE_ROOTS_IN_PROMPT: usize = 8;
+const MAX_WRITABLE_ROOT_LABEL_CHARS: usize = 160;
 
 static SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end())
@@ -256,15 +258,40 @@ fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<Stri
         return None;
     }
 
+    let total_roots = roots.len();
     let roots_list: Vec<String> = roots
         .iter()
-        .map(|r| format!("`{}`", r.root.to_string_lossy()))
+        .take(MAX_WRITABLE_ROOTS_IN_PROMPT)
+        .map(|r| {
+            format!(
+                "`{}`",
+                truncate_writable_root_label(&r.root.to_string_lossy())
+            )
+        })
         .collect();
-    Some(if roots_list.len() == 1 {
+    Some(if total_roots == 1 {
         format!(" The writable root is {}.", roots_list[0])
-    } else {
+    } else if total_roots == roots_list.len() {
         format!(" The writable roots are {}.", roots_list.join(", "))
+    } else {
+        format!(
+            " The writable roots include {}, and {} more.",
+            roots_list.join(", "),
+            total_roots - roots_list.len()
+        )
     })
+}
+
+fn truncate_writable_root_label(label: &str) -> String {
+    if label.chars().count() <= MAX_WRITABLE_ROOT_LABEL_CHARS {
+        return label.to_string();
+    }
+
+    label
+        .chars()
+        .take(MAX_WRITABLE_ROOT_LABEL_CHARS - 3)
+        .chain("...".chars())
+        .collect()
 }
 
 fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {

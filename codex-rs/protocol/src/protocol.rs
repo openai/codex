@@ -462,6 +462,10 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
 
+        /// Updated workspace roots for sandbox/tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_roots: Option<Vec<AbsolutePathBuf>>,
+
         /// Updated command approval policy.
         #[serde(skip_serializing_if = "Option::is_none")]
         approval_policy: Option<AskForApproval>,
@@ -1004,14 +1008,9 @@ pub enum SandboxPolicy {
     },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
-    /// working directory ("workspace").
+    /// thread workspace roots.
     #[serde(rename = "workspace-write")]
     WorkspaceWrite {
-        /// Additional folders (beyond cwd and possibly TMPDIR) that should be
-        /// writable from within the sandbox.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<AbsolutePathBuf>,
-
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
         #[serde(default)]
@@ -1121,7 +1120,6 @@ impl SandboxPolicy {
     /// not allow network access.
     pub fn new_workspace_write_policy() -> Self {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -1159,13 +1157,11 @@ impl SandboxPolicy {
             SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
             SandboxPolicy::ReadOnly { .. } => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
-                writable_roots,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
             } => {
-                // Start from explicitly configured writable roots.
-                let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
+                let mut roots: Vec<AbsolutePathBuf> = Vec::new();
 
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
@@ -2697,13 +2693,15 @@ impl fmt::Display for InternalSessionSource {
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
 /// now save that on TurnContext. base_instructions stores the base instructions for the session,
 /// and should be used when there is no config override.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[derive(Serialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
+    #[serde(default)]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub originator: String,
     pub cli_version: String,
     #[serde(default)]
@@ -2731,6 +2729,63 @@ pub struct SessionMeta {
     pub memory_mode: Option<String>,
 }
 
+impl<'de> Deserialize<'de> for SessionMeta {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            id: ThreadId,
+            forked_from_id: Option<ThreadId>,
+            timestamp: String,
+            cwd: PathBuf,
+            workspace_roots: Option<Vec<AbsolutePathBuf>>,
+            originator: String,
+            cli_version: String,
+            #[serde(default)]
+            source: SessionSource,
+            #[serde(default)]
+            thread_source: Option<ThreadSource>,
+            agent_nickname: Option<String>,
+            #[serde(default, alias = "agent_type")]
+            agent_role: Option<String>,
+            agent_path: Option<String>,
+            model_provider: Option<String>,
+            base_instructions: Option<BaseInstructions>,
+            #[serde(default)]
+            dynamic_tools: Option<Vec<DynamicToolSpec>>,
+            memory_mode: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let workspace_roots = wire.workspace_roots.unwrap_or_else(|| {
+            vec![
+                AbsolutePathBuf::relative_to_current_dir(&wire.cwd)
+                    .unwrap_or_else(|_| AbsolutePathBuf::resolve_path_against_base(&wire.cwd, "/")),
+            ]
+        });
+        Ok(Self {
+            id: wire.id,
+            forked_from_id: wire.forked_from_id,
+            timestamp: wire.timestamp,
+            cwd: wire.cwd,
+            workspace_roots,
+            originator: wire.originator,
+            cli_version: wire.cli_version,
+            source: wire.source,
+            thread_source: wire.thread_source,
+            agent_nickname: wire.agent_nickname,
+            agent_role: wire.agent_role,
+            agent_path: wire.agent_path,
+            model_provider: wire.model_provider,
+            base_instructions: wire.base_instructions,
+            dynamic_tools: wire.dynamic_tools,
+            memory_mode: wire.memory_mode,
+        })
+    }
+}
+
 impl Default for SessionMeta {
     fn default() -> Self {
         SessionMeta {
@@ -2738,6 +2793,7 @@ impl Default for SessionMeta {
             forked_from_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
+            workspace_roots: Vec::new(),
             originator: String::new(),
             cli_version: String::new(),
             source: SessionSource::default(),
@@ -2801,13 +2857,15 @@ pub struct TurnContextNetworkItem {
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
 /// latest durable baseline.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[derive(Serialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     pub cwd: PathBuf,
+    #[serde(default)]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2816,6 +2874,8 @@ pub struct TurnContextItem {
     pub sandbox_policy: SandboxPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2838,6 +2898,181 @@ pub struct TurnContextItem {
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,
+}
+
+#[derive(Debug, Clone)]
+struct RolloutSandboxPolicy {
+    policy: SandboxPolicy,
+    legacy_writable_roots: Vec<AbsolutePathBuf>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum RolloutSandboxPolicyWire {
+    DangerFullAccess,
+    ReadOnly {
+        #[serde(default)]
+        network_access: bool,
+    },
+    ExternalSandbox {
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
+    WorkspaceWrite {
+        #[serde(default)]
+        writable_roots: Vec<AbsolutePathBuf>,
+        #[serde(default)]
+        network_access: bool,
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+        #[serde(default)]
+        exclude_slash_tmp: bool,
+    },
+}
+
+impl From<RolloutSandboxPolicyWire> for RolloutSandboxPolicy {
+    fn from(value: RolloutSandboxPolicyWire) -> Self {
+        match value {
+            RolloutSandboxPolicyWire::DangerFullAccess => Self {
+                policy: SandboxPolicy::DangerFullAccess,
+                legacy_writable_roots: Vec::new(),
+            },
+            RolloutSandboxPolicyWire::ReadOnly { network_access } => Self {
+                policy: SandboxPolicy::ReadOnly { network_access },
+                legacy_writable_roots: Vec::new(),
+            },
+            RolloutSandboxPolicyWire::ExternalSandbox { network_access } => Self {
+                policy: SandboxPolicy::ExternalSandbox { network_access },
+                legacy_writable_roots: Vec::new(),
+            },
+            RolloutSandboxPolicyWire::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => Self {
+                policy: SandboxPolicy::WorkspaceWrite {
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                },
+                legacy_writable_roots: writable_roots,
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RolloutSandboxPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(RolloutSandboxPolicyWire::deserialize(deserializer)?.into())
+    }
+}
+
+impl RolloutSandboxPolicy {
+    fn workspace_roots_for_legacy_workspace_write(
+        &self,
+        cwd: &Path,
+    ) -> Option<Vec<AbsolutePathBuf>> {
+        if !matches!(self.policy, SandboxPolicy::WorkspaceWrite { .. }) {
+            return None;
+        }
+
+        let mut roots = Vec::new();
+        if let Ok(cwd) = AbsolutePathBuf::from_absolute_path(cwd) {
+            roots.push(cwd);
+        }
+        for root in &self.legacy_writable_roots {
+            if !roots.iter().any(|existing| existing == root) {
+                roots.push(root.clone());
+            }
+        }
+        Some(roots)
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnContextItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default)]
+            turn_id: Option<String>,
+            #[serde(default)]
+            trace_id: Option<String>,
+            cwd: PathBuf,
+            #[serde(default)]
+            workspace_roots: Option<Vec<AbsolutePathBuf>>,
+            current_date: Option<String>,
+            timezone: Option<String>,
+            approval_policy: AskForApproval,
+            sandbox_policy: RolloutSandboxPolicy,
+            #[serde(default)]
+            permission_profile: Option<PermissionProfile>,
+            #[serde(default)]
+            active_permission_profile: Option<ActivePermissionProfile>,
+            network: Option<TurnContextNetworkItem>,
+            #[serde(default)]
+            file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
+            model: String,
+            personality: Option<Personality>,
+            #[serde(default)]
+            collaboration_mode: Option<CollaborationMode>,
+            #[serde(default)]
+            realtime_active: Option<bool>,
+            effort: Option<ReasoningEffortConfig>,
+            summary: ReasoningSummaryConfig,
+            user_instructions: Option<String>,
+            developer_instructions: Option<String>,
+            final_output_json_schema: Option<Value>,
+            #[serde(default)]
+            truncation_policy: Option<TruncationPolicy>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let workspace_roots = match wire.workspace_roots {
+            Some(workspace_roots) => workspace_roots,
+            None => wire
+                .sandbox_policy
+                .workspace_roots_for_legacy_workspace_write(&wire.cwd)
+                .unwrap_or_else(|| {
+                    vec![
+                        AbsolutePathBuf::relative_to_current_dir(&wire.cwd).unwrap_or_else(|_| {
+                            AbsolutePathBuf::resolve_path_against_base(&wire.cwd, "/")
+                        }),
+                    ]
+                }),
+        };
+
+        Ok(Self {
+            turn_id: wire.turn_id,
+            trace_id: wire.trace_id,
+            cwd: wire.cwd,
+            workspace_roots,
+            current_date: wire.current_date,
+            timezone: wire.timezone,
+            approval_policy: wire.approval_policy,
+            sandbox_policy: wire.sandbox_policy.policy,
+            permission_profile: wire.permission_profile,
+            active_permission_profile: wire.active_permission_profile,
+            network: wire.network,
+            file_system_sandbox_policy: wire.file_system_sandbox_policy,
+            model: wire.model,
+            personality: wire.personality,
+            collaboration_mode: wire.collaboration_mode,
+            realtime_active: wire.realtime_active,
+            effort: wire.effort,
+            summary: wire.summary,
+            user_instructions: wire.user_instructions,
+            developer_instructions: wire.developer_instructions,
+            final_output_json_schema: wire.final_output_json_schema,
+            truncation_policy: wire.truncation_policy,
+        })
+    }
 }
 
 impl TurnContextItem {
@@ -3448,6 +3683,10 @@ pub struct SessionConfiguredEvent {
     /// session.
     pub cwd: AbsolutePathBuf,
 
+    /// Workspace roots used to realize symbolic `:project_roots` entries.
+    #[serde(default)]
+    pub workspace_roots: Vec<AbsolutePathBuf>,
+
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
@@ -3491,11 +3730,13 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             // `SessionConfiguredEvent` is persisted into rollout history. Older
             // rollouts only have `sandbox_policy`, so accept it on deserialize
             // and immediately project it into the canonical `permission_profile`.
-            sandbox_policy: Option<SandboxPolicy>,
+            sandbox_policy: Option<RolloutSandboxPolicy>,
             permission_profile: Option<PermissionProfile>,
             #[serde(default)]
             active_permission_profile: Option<ActivePermissionProfile>,
             cwd: AbsolutePathBuf,
+            #[serde(default)]
+            workspace_roots: Option<Vec<AbsolutePathBuf>>,
             reasoning_effort: Option<ReasoningEffortConfig>,
             initial_messages: Option<Vec<EventMsg>>,
             network_proxy: Option<SessionNetworkProxyRuntime>,
@@ -3503,16 +3744,24 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
         }
 
         let wire = Wire::deserialize(deserializer)?;
-        let permission_profile = match (wire.permission_profile, wire.sandbox_policy) {
+        let permission_profile = match (wire.permission_profile, wire.sandbox_policy.as_ref()) {
             (Some(permission_profile), _) => permission_profile,
             (None, Some(sandbox_policy)) => PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-                &sandbox_policy,
+                &sandbox_policy.policy,
                 wire.cwd.as_path(),
             ),
             (None, None) => {
                 return Err(serde::de::Error::missing_field("permission_profile"));
             }
         };
+        let workspace_roots = wire.workspace_roots.unwrap_or_else(|| {
+            wire.sandbox_policy
+                .as_ref()
+                .and_then(|sandbox_policy| {
+                    sandbox_policy.workspace_roots_for_legacy_workspace_write(wire.cwd.as_path())
+                })
+                .unwrap_or_else(|| vec![wire.cwd.clone()])
+        });
 
         Ok(Self {
             session_id: wire.session_id,
@@ -3528,6 +3777,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             permission_profile,
             active_permission_profile: wire.active_permission_profile,
             cwd: wire.cwd,
+            workspace_roots,
             reasoning_effort: wire.reasoning_effort,
             initial_messages: wire.initial_messages,
             network_proxy: wire.network_proxy,
@@ -4477,7 +4727,6 @@ mod tests {
     #[test]
     fn legacy_sandbox_policy_semantics_survive_split_bridge() {
         let cwd = TempDir::new().expect("tempdir");
-        let writable_root = AbsolutePathBuf::resolve_path_against_base("writable", cwd.path());
         let policies = [
             SandboxPolicy::DangerFullAccess,
             SandboxPolicy::ExternalSandbox {
@@ -4490,13 +4739,11 @@ mod tests {
                 network_access: false,
             },
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable_root],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: true,
@@ -5175,16 +5422,114 @@ mod tests {
     }
 
     #[test]
+    fn turn_context_item_migrates_legacy_workspace_write_writable_roots() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let extra_root = test_path_buf("/home/user/extra").abs();
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": cwd,
+            "approval_policy": "never",
+            "sandbox_policy": {
+                "type": "workspace-write",
+                "writable_roots": [extra_root],
+                "exclude_tmpdir_env_var": true,
+                "exclude_slash_tmp": true
+            },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(
+            item.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite {
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }
+        );
+        assert_eq!(item.workspace_roots, vec![cwd.abs(), extra_root]);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_migrates_missing_workspace_roots_to_cwd() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": cwd,
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "read-only" },
+            "permission_profile": PermissionProfile::workspace_write(),
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.workspace_roots, vec![cwd.abs()]);
+        assert_eq!(
+            item.permission_profile(),
+            PermissionProfile::workspace_write()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn session_meta_migrates_missing_workspace_roots_to_cwd() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let meta: SessionMeta = serde_json::from_value(json!({
+            "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "timestamp": "2025-01-05T12:00:00Z",
+            "cwd": cwd,
+            "originator": "codex",
+            "cli_version": "0.0.0",
+        }))?;
+
+        assert_eq!(meta.workspace_roots, vec![cwd.abs()]);
+        Ok(())
+    }
+
+    #[test]
+    fn session_meta_preserves_explicit_empty_workspace_roots() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let meta: SessionMeta = serde_json::from_value(json!({
+            "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "timestamp": "2025-01-05T12:00:00Z",
+            "cwd": cwd,
+            "workspace_roots": [],
+            "originator": "codex",
+            "cli_version": "0.0.0",
+        }))?;
+
+        assert_eq!(meta.workspace_roots, Vec::<AbsolutePathBuf>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn session_meta_preserves_legacy_agent_type_alias() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let meta: SessionMeta = serde_json::from_value(json!({
+            "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "timestamp": "2025-01-05T12:00:00Z",
+            "cwd": cwd,
+            "originator": "codex",
+            "cli_version": "0.0.0",
+            "agent_type": "explorer",
+        }))?;
+
+        assert_eq!(meta.agent_role.as_deref(), Some("explorer"));
+        Ok(())
+    }
+
+    #[test]
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
             trace_id: None,
             cwd: test_path_buf("/tmp"),
+            workspace_roots: Vec::new(),
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             permission_profile: None,
+            active_permission_profile: None,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
@@ -5257,6 +5602,7 @@ mod tests {
                 permission_profile: permission_profile.clone(),
                 active_permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
+                workspace_roots: Vec::new(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 initial_messages: None,
                 network_proxy: None,
@@ -5276,6 +5622,7 @@ mod tests {
                 "approvals_reviewer": "user",
                 "permission_profile": permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
+                "workspace_roots": [],
                 "reasoning_effort": "medium",
                 "rollout_path": format!("{}", rollout_file.path().display()),
             }
@@ -5301,6 +5648,41 @@ mod tests {
 
         let event: SessionConfiguredEvent = serde_json::from_value(value)?;
         assert_eq!(event.permission_profile, PermissionProfile::read_only());
+        assert_eq!(event.workspace_roots, vec![cwd.abs()]);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_legacy_session_configured_event_migrates_workspace_write_writable_roots()
+    -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let extra_root = test_path_buf("/home/user/extra").abs();
+        let value = json!({
+            "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "model": "codex-mini-latest",
+            "model_provider_id": "openai",
+            "approval_policy": "never",
+            "approvals_reviewer": "user",
+            "sandbox_policy": {
+                "type": "workspace-write",
+                "writable_roots": [extra_root],
+                "exclude_tmpdir_env_var": true,
+                "exclude_slash_tmp": true
+            },
+            "cwd": cwd,
+        });
+
+        let event: SessionConfiguredEvent = serde_json::from_value(value)?;
+        let expected_sandbox = SandboxPolicy::WorkspaceWrite {
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        assert_eq!(
+            event.permission_profile,
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, cwd.as_path())
+        );
+        assert_eq!(event.workspace_roots, vec![cwd.abs(), extra_root]);
         Ok(())
     }
 
