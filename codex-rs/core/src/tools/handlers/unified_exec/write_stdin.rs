@@ -4,6 +4,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
@@ -30,7 +31,7 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
-impl ToolHandler for WriteStdinHandler {
+impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     type Output = ExecCommandToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -39,18 +40,6 @@ impl ToolHandler for WriteStdinHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_write_stdin_tool())
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &Self::Output,
-    ) -> Option<PostToolUsePayload> {
-        post_unified_exec_tool_use_payload(invocation, result)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -97,5 +86,19 @@ impl ToolHandler for WriteStdinHandler {
             .await;
 
         Ok(response)
+    }
+}
+
+impl ToolHandler for WriteStdinHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        post_unified_exec_tool_use_payload(invocation, result)
     }
 }

@@ -201,10 +201,24 @@ pub(crate) struct PagerKeymap {
 }
 
 /// Generic list picker keybindings shared across popup list views.
+///
+/// These actions describe list intent rather than a specific widget layout.
+/// Vertical actions move the highlighted row, page and jump actions move within
+/// the current filtered row set, and horizontal actions are available to views
+/// that expose adjacent choices such as tabs, toolbar values, or ordered item
+/// movement. Views that also accept search text are responsible for checking
+/// `is_plain_text_key_event` before dispatching plain-character bindings so a
+/// configured `j`, `k`, `h`, or `l` does not steal query input.
 #[derive(Clone, Debug)]
 pub(crate) struct ListKeymap {
     pub(crate) move_up: Vec<KeyBinding>,
     pub(crate) move_down: Vec<KeyBinding>,
+    pub(crate) move_left: Vec<KeyBinding>,
+    pub(crate) move_right: Vec<KeyBinding>,
+    pub(crate) page_up: Vec<KeyBinding>,
+    pub(crate) page_down: Vec<KeyBinding>,
+    pub(crate) jump_top: Vec<KeyBinding>,
+    pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) accept: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
@@ -505,13 +519,6 @@ impl RuntimeKeymap {
             close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
         };
 
-        let list = ListKeymap {
-            move_up: resolve_local!(keymap, defaults, list, move_up),
-            move_down: resolve_local!(keymap, defaults, list, move_down),
-            accept: resolve_local!(keymap, defaults, list, accept),
-            cancel: resolve_local!(keymap, defaults, list, cancel),
-        };
-
         let approval = ApprovalKeymap {
             open_fullscreen: resolve_local!(keymap, defaults, approval, open_fullscreen),
             open_thread: resolve_local!(keymap, defaults, approval, open_thread),
@@ -521,6 +528,121 @@ impl RuntimeKeymap {
             deny: resolve_local!(keymap, defaults, approval, deny),
             decline: resolve_local!(keymap, defaults, approval, decline),
             cancel: resolve_local!(keymap, defaults, approval, cancel),
+        };
+
+        let list_move_up = resolve_local!(keymap, defaults, list, move_up);
+        let list_move_down = resolve_local!(keymap, defaults, list, move_down);
+        let list_accept = resolve_local!(keymap, defaults, list, accept);
+        let list_cancel = resolve_local!(keymap, defaults, list, cancel);
+        let mut configured_bindings_to_preserve = Vec::new();
+        for (configured, resolved) in [
+            (
+                keymap.global.open_transcript.as_ref(),
+                app.open_transcript.as_slice(),
+            ),
+            (
+                keymap.global.open_external_editor.as_ref(),
+                app.open_external_editor.as_slice(),
+            ),
+            (keymap.global.copy.as_ref(), app.copy.as_slice()),
+            (
+                keymap.global.clear_terminal.as_ref(),
+                app.clear_terminal.as_slice(),
+            ),
+            (
+                keymap.global.toggle_vim_mode.as_ref(),
+                app.toggle_vim_mode.as_slice(),
+            ),
+            (
+                keymap.global.toggle_fast_mode.as_ref(),
+                app.toggle_fast_mode.as_slice(),
+            ),
+            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+            (keymap.list.move_up.as_ref(), list_move_up.as_slice()),
+            (keymap.list.move_down.as_ref(), list_move_down.as_slice()),
+            (keymap.list.accept.as_ref(), list_accept.as_slice()),
+            (keymap.list.cancel.as_ref(), list_cancel.as_slice()),
+            (
+                keymap.approval.open_fullscreen.as_ref(),
+                approval.open_fullscreen.as_slice(),
+            ),
+            (
+                keymap.approval.open_thread.as_ref(),
+                approval.open_thread.as_slice(),
+            ),
+            (
+                keymap.approval.approve.as_ref(),
+                approval.approve.as_slice(),
+            ),
+            (
+                keymap.approval.approve_for_session.as_ref(),
+                approval.approve_for_session.as_slice(),
+            ),
+            (
+                keymap.approval.approve_for_prefix.as_ref(),
+                approval.approve_for_prefix.as_slice(),
+            ),
+            (keymap.approval.deny.as_ref(), approval.deny.as_slice()),
+            (
+                keymap.approval.decline.as_ref(),
+                approval.decline.as_slice(),
+            ),
+            (keymap.approval.cancel.as_ref(), approval.cancel.as_slice()),
+        ] {
+            if configured.is_none() {
+                continue;
+            }
+            for binding in resolved {
+                if !configured_bindings_to_preserve.contains(binding) {
+                    configured_bindings_to_preserve.push(*binding);
+                }
+            }
+        }
+
+        let list = ListKeymap {
+            move_up: list_move_up,
+            move_down: list_move_down,
+            move_left: resolve_new_list_bindings(
+                keymap.list.move_left.as_ref(),
+                &defaults.list.move_left,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.move_left",
+            )?,
+            move_right: resolve_new_list_bindings(
+                keymap.list.move_right.as_ref(),
+                &defaults.list.move_right,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.move_right",
+            )?,
+            page_up: resolve_new_list_bindings(
+                keymap.list.page_up.as_ref(),
+                &defaults.list.page_up,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.page_up",
+            )?,
+            page_down: resolve_new_list_bindings(
+                keymap.list.page_down.as_ref(),
+                &defaults.list.page_down,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.page_down",
+            )?,
+            jump_top: resolve_new_list_bindings(
+                keymap.list.jump_top.as_ref(),
+                &defaults.list.jump_top,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.jump_top",
+            )?,
+            jump_bottom: resolve_new_list_bindings(
+                keymap.list.jump_bottom.as_ref(),
+                &defaults.list.jump_bottom,
+                &configured_bindings_to_preserve,
+                "tui.keymap.list.jump_bottom",
+            )?,
+            accept: list_accept,
+            cancel: list_cancel,
         };
 
         let resolved = Self {
@@ -711,13 +833,21 @@ impl RuntimeKeymap {
                 move_up: default_bindings![
                     plain(KeyCode::Up),
                     ctrl(KeyCode::Char('p')),
+                    ctrl(KeyCode::Char('k')),
                     plain(KeyCode::Char('k'))
                 ],
                 move_down: default_bindings![
                     plain(KeyCode::Down),
                     ctrl(KeyCode::Char('n')),
+                    ctrl(KeyCode::Char('j')),
                     plain(KeyCode::Char('j'))
                 ],
+                move_left: default_bindings![plain(KeyCode::Left), ctrl(KeyCode::Char('h'))],
+                move_right: default_bindings![plain(KeyCode::Right), ctrl(KeyCode::Char('l'))],
+                page_up: default_bindings![plain(KeyCode::PageUp), ctrl(KeyCode::Char('b'))],
+                page_down: default_bindings![plain(KeyCode::PageDown), ctrl(KeyCode::Char('f'))],
+                jump_top: default_bindings![plain(KeyCode::Home)],
+                jump_bottom: default_bindings![plain(KeyCode::End)],
                 accept: default_bindings![plain(KeyCode::Enter)],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
@@ -835,7 +965,7 @@ impl RuntimeKeymap {
             MAIN_RESERVED_BINDINGS,
         )?;
 
-        validate_no_shadow(
+        validate_no_shadow_with_allowed_overlaps(
             "app",
             [
                 ("open_transcript", self.app.open_transcript.as_slice()),
@@ -852,6 +982,12 @@ impl RuntimeKeymap {
             [
                 ("list.move_up", self.list.move_up.as_slice()),
                 ("list.move_down", self.list.move_down.as_slice()),
+                ("list.move_left", self.list.move_left.as_slice()),
+                ("list.move_right", self.list.move_right.as_slice()),
+                ("list.page_up", self.list.page_up.as_slice()),
+                ("list.page_down", self.list.page_down.as_slice()),
+                ("list.jump_top", self.list.jump_top.as_slice()),
+                ("list.jump_bottom", self.list.jump_bottom.as_slice()),
                 ("list.accept", self.list.accept.as_slice()),
                 ("list.cancel", self.list.cancel.as_slice()),
                 (
@@ -872,6 +1008,11 @@ impl RuntimeKeymap {
                 ("approval.decline", self.approval.decline.as_slice()),
                 ("approval.cancel", self.approval.cancel.as_slice()),
             ],
+            [(
+                "clear_terminal",
+                "list.move_right",
+                key_hint::ctrl(KeyCode::Char('l')),
+            )],
         )?;
 
         // While the composer is focused, these main-surface handlers always
@@ -1123,6 +1264,12 @@ impl RuntimeKeymap {
             [
                 ("move_up", self.list.move_up.as_slice()),
                 ("move_down", self.list.move_down.as_slice()),
+                ("move_left", self.list.move_left.as_slice()),
+                ("move_right", self.list.move_right.as_slice()),
+                ("page_up", self.list.page_up.as_slice()),
+                ("page_down", self.list.page_down.as_slice()),
+                ("jump_top", self.list.jump_top.as_slice()),
+                ("jump_bottom", self.list.jump_bottom.as_slice()),
                 ("accept", self.list.accept.as_slice()),
                 ("cancel", self.list.cancel.as_slice()),
             ],
@@ -1152,6 +1299,12 @@ impl RuntimeKeymap {
         for (action, bindings) in [
             ("list.move_up", self.list.move_up.as_slice()),
             ("list.move_down", self.list.move_down.as_slice()),
+            ("list.move_left", self.list.move_left.as_slice()),
+            ("list.move_right", self.list.move_right.as_slice()),
+            ("list.page_up", self.list.page_up.as_slice()),
+            ("list.page_down", self.list.page_down.as_slice()),
+            ("list.jump_top", self.list.jump_top.as_slice()),
+            ("list.jump_bottom", self.list.jump_bottom.as_slice()),
             ("list.accept", self.list.accept.as_slice()),
             ("list.cancel", self.list.cancel.as_slice()),
             (
@@ -1219,14 +1372,6 @@ See the Codex keymap documentation for supported actions and examples."
         }
     }
     Ok(())
-}
-
-fn validate_no_shadow<const N: usize, const M: usize>(
-    context: &str,
-    primary: [(&'static str, &[KeyBinding]); N],
-    shadowed: [(&'static str, &[KeyBinding]); M],
-) -> Result<(), String> {
-    validate_no_shadow_with_allowed_overlaps(context, primary, shadowed, [])
 }
 
 fn validate_no_shadow_with_allowed_overlaps<const N: usize, const M: usize, const A: usize>(
@@ -1368,6 +1513,22 @@ fn resolve_bindings(
 ) -> Result<Vec<KeyBinding>, String> {
     let Some(spec) = configured else {
         return Ok(fallback.to_vec());
+    };
+    parse_bindings(spec, path)
+}
+
+fn resolve_new_list_bindings(
+    configured: Option<&KeybindingsSpec>,
+    fallback: &[KeyBinding],
+    configured_bindings_to_preserve: &[KeyBinding],
+    path: &str,
+) -> Result<Vec<KeyBinding>, String> {
+    let Some(spec) = configured else {
+        return Ok(fallback
+            .iter()
+            .copied()
+            .filter(|binding| !configured_bindings_to_preserve.contains(binding))
+            .collect());
     };
     parse_bindings(spec, path)
 }
@@ -1660,6 +1821,152 @@ mod tests {
     }
 
     #[test]
+    fn defaults_include_list_page_and_jump_actions() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.list.move_up,
+            vec![
+                key_hint::plain(KeyCode::Up),
+                key_hint::ctrl(KeyCode::Char('p')),
+                key_hint::ctrl(KeyCode::Char('k')),
+                key_hint::plain(KeyCode::Char('k')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.move_down,
+            vec![
+                key_hint::plain(KeyCode::Down),
+                key_hint::ctrl(KeyCode::Char('n')),
+                key_hint::ctrl(KeyCode::Char('j')),
+                key_hint::plain(KeyCode::Char('j')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.move_left,
+            vec![
+                key_hint::plain(KeyCode::Left),
+                key_hint::ctrl(KeyCode::Char('h')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.move_right,
+            vec![
+                key_hint::plain(KeyCode::Right),
+                key_hint::ctrl(KeyCode::Char('l')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.page_up,
+            vec![
+                key_hint::plain(KeyCode::PageUp),
+                key_hint::ctrl(KeyCode::Char('b')),
+            ]
+        );
+        assert_eq!(
+            runtime.list.page_down,
+            vec![
+                key_hint::plain(KeyCode::PageDown),
+                key_hint::ctrl(KeyCode::Char('f')),
+            ]
+        );
+        assert_eq!(runtime.list.jump_top, vec![key_hint::plain(KeyCode::Home)]);
+        assert_eq!(
+            runtime.list.jump_bottom,
+            vec![key_hint::plain(KeyCode::End)]
+        );
+    }
+
+    #[test]
+    fn configured_legacy_list_bindings_prune_new_default_overlaps() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.move_up = Some(one("page-up"));
+        keymap.list.move_down = Some(one("page-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.list.move_up, vec![key_hint::plain(KeyCode::PageUp)]);
+        assert_eq!(
+            runtime.list.move_down,
+            vec![key_hint::plain(KeyCode::PageDown)]
+        );
+        assert_eq!(
+            runtime.list.page_up,
+            vec![key_hint::ctrl(KeyCode::Char('b'))]
+        );
+        assert_eq!(
+            runtime.list.page_down,
+            vec![key_hint::ctrl(KeyCode::Char('f'))]
+        );
+    }
+
+    #[test]
+    fn configured_legacy_list_bindings_can_prune_all_new_default_keys() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.move_up = Some(KeybindingsSpec::Many(vec![
+            KeybindingSpec("page-up".to_string()),
+            KeybindingSpec("ctrl-b".to_string()),
+        ]));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.list.move_up,
+            vec![
+                key_hint::plain(KeyCode::PageUp),
+                key_hint::ctrl(KeyCode::Char('b')),
+            ]
+        );
+        assert_eq!(runtime.list.page_up, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_list_bindings_still_conflict_with_legacy_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.move_up = Some(one("page-up"));
+        keymap.list.page_up = Some(one("page-up"));
+
+        expect_conflict(&keymap, "move_up", "page_up");
+    }
+
+    #[test]
+    fn configured_app_bindings_prune_new_list_default_overlaps() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.copy = Some(one("page-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.app.copy, vec![key_hint::plain(KeyCode::PageDown)]);
+        assert_eq!(
+            runtime.list.page_down,
+            vec![key_hint::ctrl(KeyCode::Char('f'))]
+        );
+    }
+
+    #[test]
+    fn configured_approval_bindings_prune_new_list_default_overlaps() {
+        let mut keymap = TuiKeymap::default();
+        keymap.approval.approve = Some(one("home"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.approval.approve,
+            vec![key_hint::plain(KeyCode::Home)]
+        );
+        assert_eq!(runtime.list.jump_top, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_list_bindings_still_conflict_with_configured_approval_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.approval.approve = Some(one("home"));
+        keymap.list.jump_top = Some(one("home"));
+
+        expect_conflict(&keymap, "list.jump_top", "approval.approve");
+    }
+
+    #[test]
     fn vim_normal_defaults_include_insert_and_arrow_aliases() {
         let runtime = RuntimeKeymap::defaults();
 
@@ -1734,6 +2041,21 @@ mod tests {
         keymap.list.move_down = Some(one("up"));
 
         expect_conflict(&keymap, "move_up", "move_down");
+
+        let mut keymap = TuiKeymap::default();
+        keymap.list.move_left = Some(one("left"));
+        keymap.list.move_right = Some(one("left"));
+
+        expect_conflict(&keymap, "move_left", "move_right");
+    }
+
+    #[test]
+    fn rejects_conflicting_list_page_and_jump_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.page_up = Some(one("home"));
+        keymap.list.jump_top = Some(one("home"));
+
+        expect_conflict(&keymap, "page_up", "jump_top");
     }
 
     #[test]

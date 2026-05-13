@@ -621,12 +621,12 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global_shared_read("config"),
+        serialization: global_shared_read("plugin-read"),
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
-        serialization: global("config"),
+        serialization: global_shared_read("plugin-read"),
         response: v2::PluginReadResponse,
     },
     PluginSkillRead => "plugin/skill/read" {
@@ -648,6 +648,11 @@ client_request_definitions! {
         params: v2::PluginShareListParams,
         serialization: global("config"),
         response: v2::PluginShareListResponse,
+    },
+    PluginShareCheckout => "plugin/share/checkout" {
+        params: v2::PluginShareCheckoutParams,
+        serialization: global("config"),
+        response: v2::PluginShareCheckoutResponse,
     },
     PluginShareDelete => "plugin/share/delete" {
         params: v2::PluginShareDeleteParams,
@@ -1685,7 +1690,24 @@ mod tests {
         };
         assert_eq!(
             plugin_list.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "plugin-read"
+            ))
+        );
+
+        let plugin_read = ClientRequest::PluginRead {
+            request_id: request_id(),
+            params: v2::PluginReadParams {
+                marketplace_path: Some(absolute_path("/tmp/marketplace")),
+                remote_marketplace_name: None,
+                plugin_name: "plugin-a".to_string(),
+            },
+        };
+        assert_eq!(
+            plugin_read.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "plugin-read"
+            ))
         );
 
         let plugin_uninstall = ClientRequest::PluginUninstall {

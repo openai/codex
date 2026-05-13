@@ -26,6 +26,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -56,24 +57,6 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn ev_namespaced_function_call(
-    call_id: &str,
-    namespace: &str,
-    name: &str,
-    arguments: &str,
-) -> Value {
-    json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "function_call",
-            "call_id": call_id,
-            "namespace": namespace,
-            "name": name,
-            "arguments": arguments,
-        }
-    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -272,7 +255,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_namespaced_function_call(
+                ev_function_call_with_namespace(
                     historical_call_id,
                     unavailable_tool_namespace,
                     unavailable_tool_name,
@@ -299,7 +282,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
         vec![
             sse(vec![
                 ev_response_created("resp-3"),
-                ev_namespaced_function_call(
+                ev_function_call_with_namespace(
                     retry_call_id,
                     unavailable_tool_namespace,
                     unavailable_tool_name,

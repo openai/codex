@@ -531,8 +531,8 @@ pub struct Config {
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// This is the same `tui.alternate_screen` value from `config.toml`.
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
+    /// - `auto` (default): Use alternate screen.
+    /// - `always`: Always use alternate screen.
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
     /// Ordered list of status line item identifiers for the TUI.
@@ -667,6 +667,11 @@ pub struct Config {
 
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
+
+    /// Whether enabled hooks should run without requiring persisted hook trust for this session.
+    ///
+    /// This is a runtime-only knob populated from invocation overrides, not from config files.
+    pub bypass_hook_trust: bool,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -1886,6 +1891,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -2125,6 +2131,7 @@ impl Config {
             approvals_reviewer: mut constrained_approvals_reviewer,
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
+            allow_managed_hooks_only: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
@@ -2168,8 +2175,17 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            bypass_hook_trust,
             additional_writable_roots,
         } = overrides;
+        let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
+
+        if bypass_hook_trust {
+            startup_warnings.push(
+                "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
+                    .to_string(),
+            );
+        }
 
         if sandbox_mode.is_some() && permission_profile.is_some() {
             return Err(std::io::Error::new(
@@ -3102,6 +3118,7 @@ impl Config {
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
+            bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,
             codex_linux_sandbox_exe,

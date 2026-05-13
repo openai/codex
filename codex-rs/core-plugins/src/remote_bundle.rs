@@ -239,6 +239,26 @@ pub async fn download_and_install_remote_plugin_bundle(
     })?
 }
 
+pub(crate) async fn download_and_extract_remote_plugin_bundle_to_path(
+    bundle: ValidatedRemotePluginBundle,
+    destination: AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, RemotePluginBundleInstallError> {
+    let bundle_bytes = download_remote_plugin_bundle_with_limit(
+        &bundle.bundle_download_url,
+        /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_MAX_DOWNLOAD_BYTES,
+    )
+    .await?;
+    tokio::task::spawn_blocking(move || {
+        extract_remote_plugin_bundle_to_path(bundle, bundle_bytes, destination)
+    })
+    .await
+    .map_err(|err| {
+        RemotePluginBundleInstallError::InvalidBundle(format!(
+            "failed to join remote plugin bundle extraction task: {err}"
+        ))
+    })?
+}
+
 async fn download_remote_plugin_bundle_with_limit(
     bundle_download_url: &str,
     max_bytes: u64,
@@ -357,6 +377,63 @@ fn install_remote_plugin_bundle(
     store
         .install_with_version(plugin_root, bundle.plugin_id, bundle.plugin_version)
         .map_err(RemotePluginBundleInstallError::from)
+}
+
+fn extract_remote_plugin_bundle_to_path(
+    bundle: ValidatedRemotePluginBundle,
+    bundle_bytes: Vec<u8>,
+    destination: AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, RemotePluginBundleInstallError> {
+    if destination.as_path().exists() {
+        return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
+            "plugin checkout destination already exists: {}",
+            destination.display()
+        )));
+    }
+
+    let parent = destination.as_path().parent().ok_or_else(|| {
+        RemotePluginBundleInstallError::InvalidBundle(format!(
+            "plugin checkout destination has no parent: {}",
+            destination.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|source| {
+        RemotePluginBundleInstallError::io("failed to create plugin checkout directory", source)
+    })?;
+
+    let extract_dir = tempfile::Builder::new()
+        .prefix("remote-plugin-checkout-")
+        .tempdir_in(parent)
+        .map_err(|source| {
+            RemotePluginBundleInstallError::io(
+                "failed to create remote plugin bundle extraction directory",
+                source,
+            )
+        })?;
+
+    extract_plugin_bundle_tar_gz(&bundle_bytes, extract_dir.path())?;
+    let plugin_root = find_extracted_plugin_root(extract_dir.path())?;
+    let manifest = crate::manifest::load_plugin_manifest(&plugin_root).ok_or_else(|| {
+        RemotePluginBundleInstallError::InvalidBundle(
+            "remote plugin bundle did not contain a valid plugin.json".to_string(),
+        )
+    })?;
+    if manifest.name != bundle.plugin_id.plugin_name {
+        return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
+            "plugin.json name `{}` does not match remote plugin name `{}`",
+            manifest.name, bundle.plugin_id.plugin_name
+        )));
+    }
+
+    let staged_path = extract_dir.keep();
+    fs::rename(&staged_path, destination.as_path()).map_err(|source| {
+        RemotePluginBundleInstallError::io(
+            "failed to activate checked out plugin directory",
+            source,
+        )
+    })?;
+
+    Ok(destination)
 }
 
 fn extract_plugin_bundle_tar_gz(

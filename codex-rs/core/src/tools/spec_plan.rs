@@ -24,7 +24,6 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
-use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -45,16 +44,14 @@ use crate::tools::registry::AnyToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
+use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
-use codex_tools::ToolSearchSource;
-use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
-use codex_tools::collect_tool_search_source_infos;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -80,53 +77,24 @@ pub fn build_tool_registry_builder(
         .collect::<HashSet<_>>();
     let handlers = collect_handler_tools(config, params);
 
-    if config.code_mode_enabled {
-        let namespace_descriptions = params
-            .tool_namespaces
-            .into_iter()
-            .flatten()
-            .map(|(namespace, detail)| {
-                (
-                    namespace.clone(),
-                    codex_code_mode::ToolNamespaceDescription {
-                        name: detail.name.clone(),
-                        description: detail.description.clone().unwrap_or_default(),
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut code_mode_nested_tool_specs = handlers
-            .iter()
-            .filter_map(|handler| handler.spec())
-            .collect::<Vec<_>>();
-        code_mode_nested_tool_specs.extend(
-            params
-                .extension_tool_bundles
-                .iter()
-                .filter_map(|bundle| extension_tool_spec(bundle.spec()).ok()),
-        );
-        let mut enabled_tools =
-            collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
-        enabled_tools
-            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
-            create_code_mode_tool(
-                &enabled_tools,
-                &namespace_descriptions,
-                config.code_mode_only_enabled,
-                config.search_tool && !all_deferred_tools.is_empty(),
-            ),
-            code_mode_nested_tool_specs,
-        )));
-        builder.register_handler(Arc::new(CodeModeWaitHandler));
+    for handler in build_code_mode_handlers(
+        config,
+        &handlers,
+        params.extension_tool_executors,
+        config.search_tool && !all_deferred_tools.is_empty(),
+    ) {
+        builder.register_any_handler(handler);
     }
 
     let mut non_deferred_specs = Vec::new();
+    let mut deferred_search_infos = Vec::new();
     for handler in &handlers {
         let tool_name = handler.tool_name();
-        if !all_deferred_tools.contains(&tool_name)
-            && let Some(spec) = handler.spec()
-        {
+        if all_deferred_tools.contains(&tool_name) {
+            if let Some(search_info) = handler.search_info() {
+                deferred_search_infos.push(search_info);
+            }
+        } else if let Some(spec) = handler.spec() {
             non_deferred_specs.push(spec);
         }
     }
@@ -158,38 +126,54 @@ pub fn build_tool_registry_builder(
         builder.register_any_handler_without_spec(handler);
     }
 
-    if config.search_tool && config.namespace_tools && !all_deferred_tools.is_empty() {
-        let mut search_source_infos = params
-            .deferred_mcp_tools
-            .map(|mcp_tools| {
-                collect_tool_search_source_infos(mcp_tools.iter().map(|tool| ToolSearchSource {
-                    server_name: tool.server_name.as_str(),
-                    connector_name: tool.connector_name.as_deref(),
-                    description: tool.namespace_description.as_deref(),
-                }))
-            })
-            .unwrap_or_default();
-
-        if params.dynamic_tools.iter().any(|tool| {
-            all_deferred_tools.contains(&ToolName::new(tool.namespace.clone(), tool.name.clone()))
-        }) {
-            search_source_infos.push(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            });
-        }
-
-        builder.register_handler(Arc::new(ToolSearchHandler::new(
-            params.tool_search_entries.to_vec(),
-            search_source_infos,
-        )));
+    if config.search_tool && config.namespace_tools && !deferred_search_infos.is_empty() {
+        builder.register_handler(Arc::new(ToolSearchHandler::new(deferred_search_infos)));
     }
 
-    for bundle in params.extension_tool_bundles.iter().cloned() {
-        builder.register_tool_bundle(bundle);
+    for executor in params.extension_tool_executors.iter().cloned() {
+        builder.register_extension_tool_executor(executor);
     }
 
     builder
+}
+
+fn build_code_mode_handlers(
+    config: &ToolsConfig,
+    handlers: &[Arc<dyn AnyToolHandler>],
+    extension_tool_executors: &[Arc<dyn ExtensionToolExecutor>],
+    deferred_tools_available: bool,
+) -> Vec<Arc<dyn AnyToolHandler>> {
+    if !config.code_mode_enabled {
+        return vec![];
+    }
+
+    let mut code_mode_nested_tool_specs = handlers
+        .iter()
+        .filter_map(|handler| handler.spec())
+        .collect::<Vec<_>>();
+    code_mode_nested_tool_specs.extend(
+        extension_tool_executors
+            .iter()
+            .filter_map(|executor| executor.spec()),
+    );
+    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+    let mut enabled_tools =
+        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+    enabled_tools
+        .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+
+    vec![
+        Arc::new(CodeModeExecuteHandler::new(
+            create_code_mode_tool(
+                &enabled_tools,
+                &namespace_descriptions,
+                config.code_mode_only_enabled,
+                deferred_tools_available,
+            ),
+            code_mode_nested_tool_specs,
+        )),
+        Arc::new(CodeModeWaitHandler),
+    ]
 }
 
 fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
@@ -236,6 +220,28 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     }
 
     merged_specs
+}
+
+fn code_mode_namespace_descriptions(
+    specs: &[ToolSpec],
+) -> BTreeMap<String, codex_code_mode::ToolNamespaceDescription> {
+    let mut namespace_descriptions = BTreeMap::new();
+    for spec in specs {
+        let ToolSpec::Namespace(namespace) = spec else {
+            continue;
+        };
+
+        let entry = namespace_descriptions
+            .entry(namespace.name.clone())
+            .or_insert_with(|| codex_code_mode::ToolNamespaceDescription {
+                name: namespace.name.clone(),
+                description: namespace.description.clone(),
+            });
+        if entry.description.trim().is_empty() && !namespace.description.trim().is_empty() {
+            entry.description = namespace.description.clone();
+        }
+    }
+    namespace_descriptions
 }
 
 fn collect_handler_tools(

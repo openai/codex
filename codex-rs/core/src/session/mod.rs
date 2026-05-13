@@ -1317,7 +1317,16 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, permission_profile_changed, next_cwd, codex_home, session_source) = {
+        let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
+        let (
+            previous_config,
+            new_config,
+            previous_cwd,
+            permission_profile_changed,
+            next_cwd,
+            codex_home,
+            session_source,
+        ) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1327,6 +1336,10 @@ impl Session {
                 }
             };
 
+            let previous_config = notify_config_contributors
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
+            let new_config =
+                notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
             let previous_cwd = state.session_configuration.cwd.clone();
             let previous_permission_profile = state.session_configuration.permission_profile();
             let updated_permission_profile = updated.permission_profile();
@@ -1337,6 +1350,8 @@ impl Session {
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
             (
+                previous_config,
+                new_config,
                 previous_cwd,
                 permission_profile_changed,
                 next_cwd,
@@ -1345,6 +1360,7 @@ impl Session {
             )
         };
 
+        self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
             &next_cwd,
@@ -1397,8 +1413,11 @@ impl Session {
         // Refresh only the user layer from the incoming snapshot. Preserve thread-local
         // layers such as request/session overrides that were present when this session
         // was created.
-        let config = {
+        let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
+        let (previous_config, new_config, config) = {
             let mut state = self.state.lock().await;
+            let previous_config = notify_config_contributors
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.config_layer_stack = config
                 .config_layer_stack
@@ -1407,8 +1426,11 @@ impl Session {
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             let config = Arc::new(config);
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
-            config
+            let new_config = notify_config_contributors
+                .then(|| Self::build_effective_session_config(&state.session_configuration));
+            (previous_config, new_config, config)
         };
+        self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
         let hooks = build_hooks_for_config(
@@ -1426,6 +1448,27 @@ impl Session {
             &config,
         ) {
             self.services.hooks.store(Arc::new(hooks));
+        }
+    }
+
+    fn emit_config_changed_contributors(
+        &self,
+        previous_config: Option<&Config>,
+        new_config: Option<&Config>,
+    ) {
+        let (Some(previous_config), Some(new_config)) = (previous_config, new_config) else {
+            return;
+        };
+        if previous_config == new_config {
+            return;
+        }
+        for contributor in self.services.extensions.config_contributors() {
+            contributor.on_config_changed(
+                &self.services.session_extension_data,
+                &self.services.thread_extension_data,
+                previous_config,
+                new_config,
+            );
         }
     }
 
@@ -2694,11 +2737,15 @@ impl Session {
         {
             developer_sections.push(plugin_instructions.render());
         }
-        for contributor in self.services.extensions.context_contributors() {
-            for fragment in contributor.contribute(
-                &self.services.session_extension_data,
-                &self.services.thread_extension_data,
-            ) {
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+        for contributor in context_contributors {
+            for fragment in contributor
+                .contribute(
+                    &self.services.session_extension_data,
+                    &self.services.thread_extension_data,
+                )
+                .await
+            {
                 match fragment.slot() {
                     PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
                         developer_sections.push(fragment.text().to_string());
@@ -2858,8 +2905,22 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         if let Some(token_usage) = token_usage {
-            let mut state = self.state.lock().await;
-            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            let token_info = {
+                let mut state = self.state.lock().await;
+                state
+                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state.token_info()
+            };
+            if let Some(token_info) = token_info.as_ref() {
+                for contributor in self.services.extensions.token_usage_contributors() {
+                    contributor.on_token_usage(
+                        &self.services.session_extension_data,
+                        &self.services.thread_extension_data,
+                        turn_context.extension_data.as_ref(),
+                        token_info,
+                    );
+                }
+            }
         }
     }
 
@@ -3362,6 +3423,7 @@ async fn build_hooks_for_config(
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
+        bypass_hook_trust: config.bypass_hook_trust,
         config_layer_stack: Some(config.config_layer_stack.clone()),
         plugin_hook_sources,
         plugin_hook_load_warnings,

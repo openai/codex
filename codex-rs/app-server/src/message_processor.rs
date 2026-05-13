@@ -1099,6 +1099,9 @@ impl MessageProcessor {
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor.plugin_share_list(params).await
             }
+            ClientRequest::PluginShareCheckout { params, .. } => {
+                self.plugin_processor.plugin_share_checkout(params).await
+            }
             ClientRequest::PluginShareDelete { params, .. } => {
                 self.plugin_processor.plugin_share_delete(params).await
             }

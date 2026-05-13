@@ -429,6 +429,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -610,4 +611,22 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
         "config_write_error_code": code,
     }));
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_requirements_toml_to_api;
+    use codex_config::ConfigRequirementsToml;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn requirements_api_includes_allow_managed_hooks_only() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_managed_hooks_only: Some(true),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.hooks, None);
+    }
 }

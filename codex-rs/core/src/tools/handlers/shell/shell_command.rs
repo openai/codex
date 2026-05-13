@@ -21,6 +21,7 @@ use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
@@ -124,7 +125,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-impl ToolHandler for ShellCommandHandler {
+impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -140,56 +141,8 @@ impl ToolHandler for ShellCommandHandler {
         })
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
         self.options.is_some()
-    }
-
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
-            tool_name: HookToolName::bash(),
-            tool_input: serde_json::json!({ "command": command }),
-        })
-    }
-
-    fn with_updated_hook_input(
-        &self,
-        mut invocation: ToolInvocation,
-        updated_input: serde_json::Value,
-    ) -> Result<ToolInvocation, FunctionCallError> {
-        let ToolPayload::Function { arguments } = invocation.payload else {
-            return Err(FunctionCallError::RespondToModel(
-                "hook input rewrite received unsupported shell_command payload".to_string(),
-            ));
-        };
-        invocation.payload = ToolPayload::Function {
-            arguments: rewrite_function_string_argument(
-                &arguments,
-                "shell_command",
-                "command",
-                updated_hook_command(&updated_input)?,
-            )?,
-        };
-        Ok(invocation)
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &Self::Output,
-    ) -> Option<PostToolUsePayload> {
-        let tool_response =
-            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
-        let command = shell_command_payload_command(&invocation.payload)?;
-        Some(PostToolUsePayload {
-            tool_name: HookToolName::bash(),
-            tool_use_id: invocation.call_id.clone(),
-            tool_input: serde_json::json!({ "command": command }),
-            tool_response,
-        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -241,5 +194,55 @@ impl ToolHandler for ShellCommandHandler {
             shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await
+    }
+}
+
+impl ToolHandler for ShellCommandHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
+            tool_name: HookToolName::bash(),
+            tool_input: serde_json::json!({ "command": command }),
+        })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported shell_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "shell_command",
+                "command",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let command = shell_command_payload_command(&invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::bash(),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: serde_json::json!({ "command": command }),
+            tool_response,
+        })
     }
 }

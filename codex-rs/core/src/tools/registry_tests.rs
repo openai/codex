@@ -8,7 +8,7 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-impl ToolHandler for TestHandler {
+impl ToolExecutor<ToolInvocation> for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 
     fn tool_name(&self) -> codex_tools::ToolName {
@@ -22,6 +22,8 @@ impl ToolHandler for TestHandler {
         ))
     }
 }
+
+impl ToolHandler for TestHandler {}
 
 #[test]
 fn handler_looks_up_namespaced_aliases_explicitly() {
