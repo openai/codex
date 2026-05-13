@@ -1,5 +1,6 @@
 use super::CreateSeatbeltCommandArgsParams;
 use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use super::MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
@@ -106,6 +107,69 @@ fn base_policy_allows_node_cpu_sysctls() {
         MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
         "base policy must allow hardware model lookup for os.cpus()"
     );
+}
+
+#[test]
+fn full_disk_read_policy_keeps_appkit_platform_ipc_allowances() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    assert!(file_system_policy.has_full_disk_read_access());
+    assert!(!file_system_policy.include_platform_defaults());
+
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains("; allow read-only file operations\n(allow file-read*)"),
+        "workspace-write policy should retain full-disk read access:\n{policy}"
+    );
+    assert!(
+        !policy.contains(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS),
+        "full-disk read policy should skip restricted read-only platform defaults:\n{policy}"
+    );
+
+    for required in [
+        "(sysctl-name \"kern.bootargs\")",
+        "(sysctl-name \"kern.iossupportversion\")",
+        "(sysctl-name \"kern.willshutdown\")",
+        "(sysctl-name \"security.mac.lockdown_mode_state\")",
+        "(global-name \"com.apple.CoreServices.coreservicesd\")",
+        "(global-name \"com.apple.coreservices.launchservicesd\")",
+        "(global-name \"com.apple.hiservices-xpcservice\")",
+        "(global-name \"com.apple.lsd.mapdb\")",
+        "(global-name \"com.apple.windowserver.active\")",
+        "(allow system-socket (socket-domain AF_UNIX))",
+        "(allow network-bind (prefix \"/private/tmp/OSL_PIPE_\"))",
+    ] {
+        assert!(
+            policy.contains(required),
+            "workspace-write policy should include {required} from base policy:\n{policy}"
+        );
+    }
+
+    for overly_broad in [
+        "(global-name \"com.apple.windowserver\")",
+        "(global-name \"com.apple.ViewBridgeAuxiliary\")",
+        "(allow network-bind (local unix-socket (subpath \"/private/tmp\")))",
+        "(allow network-outbound (remote unix-socket (subpath \"/private/tmp\")))",
+    ] {
+        assert!(
+            !policy.contains(overly_broad),
+            "workspace-write policy should not include overly broad allowance {overly_broad}:\n{policy}"
+        );
+    }
 }
 
 #[test]

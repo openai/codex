@@ -55,7 +55,9 @@
   (sysctl-name "hw.vectorunit")
   (sysctl-name "machdep.cpu.brand_string")
   (sysctl-name "kern.argmax")
+  (sysctl-name "kern.bootargs")
   (sysctl-name "kern.hostname")
+  (sysctl-name "kern.iossupportversion")
   (sysctl-name "kern.maxfilesperproc")
   (sysctl-name "kern.maxproc")
   (sysctl-name "kern.osproductversion")
@@ -66,6 +68,8 @@
   (sysctl-name "kern.secure_kernel")
   (sysctl-name "kern.usrstack64")
   (sysctl-name "kern.version")
+  (sysctl-name "kern.willshutdown")
+  (sysctl-name "security.mac.lockdown_mode_state")
   (sysctl-name "sysctl.proc_cputype")
   (sysctl-name "vm.loadavg")
   (sysctl-name-prefix "hw.perflevel")
@@ -102,6 +106,16 @@
   (global-name "com.apple.PowerManagement.control")
 )
 
+; AppKit and CoreServices can be initialized by app-bundle CLIs even when
+; running in headless modes such as document conversion.
+(allow mach-lookup
+  (global-name "com.apple.CoreServices.coreservicesd")
+  (global-name "com.apple.coreservices.launchservicesd")
+  (global-name "com.apple.hiservices-xpcservice")
+  (global-name "com.apple.lsd.mapdb")
+  (global-name "com.apple.windowserver.active")
+)
+
 ; allow openpty()
 (allow pseudo-tty)
 (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
@@ -120,3 +134,8 @@
   (global-name "com.apple.cfprefsd.agent")
   (local-name "com.apple.cfprefsd.agent"))
 (allow user-preference-read)
+
+; LibreOffice uses a single-instance AF_UNIX pipe named OSL_PIPE_* under
+; /private/tmp even for headless document conversion.
+(allow system-socket (socket-domain AF_UNIX))
+(allow network-bind (prefix "/private/tmp/OSL_PIPE_"))
