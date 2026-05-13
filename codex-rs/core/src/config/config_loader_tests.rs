@@ -18,6 +18,7 @@ use codex_config::RequirementSource;
 use codex_config::SessionThreadConfig;
 use codex_config::StaticThreadConfigLoader;
 use codex_config::ThreadConfigSource;
+use codex_config::config_error_from_ignored_toml_fields;
 use codex_config::config_error_from_toml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -226,6 +227,143 @@ async fn returns_config_error_for_schema_error_in_user_config() {
         codex_config::config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
             .expect("schema error");
     assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = "model = \"gpt-5\"\nunknown_key = true";
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    let expected_config_error =
+        config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+            .expect("unknown field error");
+    assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "foo".to_string(),
+            TomlValue::String("bar".to_string()),
+        )])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key_with_relative_path_override() {
+    let tmp = tempdir().expect("tempdir");
+    let instructions_path = tmp.path().join("instructions.md");
+    std::fs::write(&instructions_path, "instructions").expect("write instructions");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![
+            (
+                "model_instructions_file".to_string(),
+                TomlValue::String("instructions.md".to_string()),
+            ),
+            ("foo".to_string(), TomlValue::String("bar".to_string())),
+        ])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![("features.foo".to_string(), TomlValue::Boolean(true))])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `features.foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = "[features]\nfoo = true";
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    assert_eq!(
+        config_error.message,
+        "unknown configuration field `features.foo`"
+    );
+    assert_eq!(config_error.range.start.line, 2);
+    assert_eq!(config_error.range.start.column, 1);
+}
+
+#[test]
+fn strict_config_points_to_unknown_nested_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = "[mcp_servers.local]\ncommand = \"echo\"\nunknown_key = true";
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let error = config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+        .expect("unknown field error");
+
+    assert_eq!(
+        error.message,
+        "unknown configuration field `mcp_servers.local.unknown_key`"
+    );
+    assert_eq!(error.range.start.line, 3);
+    assert_eq!(error.range.start.column, 1);
 }
 
 #[test]

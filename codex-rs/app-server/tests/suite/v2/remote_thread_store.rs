@@ -75,6 +75,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         config: Arc::new(config),
         cli_overrides: Vec::new(),
         loader_overrides,
+        strict_config: false,
         cloud_requirements: CloudRequirementsLoader::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),

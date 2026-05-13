@@ -2,11 +2,14 @@
 use super::macos::ManagedAdminConfigLayer;
 #[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
+use crate::config_toml::ConfigToml;
 use crate::diagnostics::config_error_from_toml;
 use crate::diagnostics::io_error_from_config_error;
 use crate::state::LoaderOverrides;
+use crate::strict_config::config_error_from_ignored_toml_value_fields;
 use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -39,6 +42,7 @@ pub(super) async fn load_config_layers_internal(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
     overrides: LoaderOverrides,
+    strict_config: bool,
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
     let LoaderOverrides {
@@ -57,19 +61,26 @@ pub(super) async fn load_config_layers_internal(
         managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
     )?;
 
-    let managed_config =
-        read_config_from_path(fs, &managed_config_path, /*log_missing_as_info*/ false)
-            .await?
-            .map(|managed_config| MangedConfigFromFile {
-                managed_config,
-                file: managed_config_path.clone(),
-            });
+    let managed_config = read_config_from_path(
+        fs,
+        &managed_config_path,
+        /*log_missing_as_info*/ false,
+        strict_config,
+    )
+    .await?
+    .map(|loaded| MangedConfigFromFile {
+        managed_config: loaded,
+        file: managed_config_path.clone(),
+    });
 
     #[cfg(target_os = "macos")]
-    let managed_preferences =
-        load_managed_admin_config_layer(managed_preferences_base64.as_deref())
-            .await?
-            .map(map_managed_admin_layer);
+    let managed_preferences = load_managed_admin_config_layer(
+        managed_preferences_base64.as_deref(),
+        strict_config,
+        codex_home,
+    )
+    .await?
+    .map(map_managed_admin_layer);
 
     #[cfg(not(target_os = "macos"))]
     let managed_preferences = None;
@@ -93,10 +104,14 @@ pub(super) async fn read_config_from_path(
     fs: &dyn ExecutorFileSystem,
     path: &AbsolutePathBuf,
     log_missing_as_info: bool,
+    strict_config: bool,
 ) -> io::Result<Option<TomlValue>> {
     match fs.read_file_text(path, /*sandbox*/ None).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
-            Ok(value) => Ok(Some(value)),
+            Ok(value) => {
+                validate_config_toml_strictly_if_requested(strict_config, path, &contents, &value)?;
+                Ok(Some(value))
+            }
             Err(err) => {
                 tracing::error!("Failed to parse {}: {err}", path.as_path().display());
                 let config_error = config_error_from_toml(path.as_path(), &contents, err.clone());
@@ -120,6 +135,38 @@ pub(super) async fn read_config_from_path(
             Err(err)
         }
     }
+}
+
+fn validate_config_toml_strictly_if_requested(
+    strict_config: bool,
+    path: &AbsolutePathBuf,
+    contents: &str,
+    value: &TomlValue,
+) -> io::Result<()> {
+    if !strict_config {
+        return Ok(());
+    }
+
+    let Some(base_dir) = path.as_path().parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Config file {} has no parent directory", path.display()),
+        ));
+    };
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    if let Some(config_error) = config_error_from_ignored_toml_value_fields::<ConfigToml>(
+        path.as_path(),
+        contents,
+        value.clone(),
+    ) {
+        return Err(io_error_from_config_error(
+            io::ErrorKind::InvalidData,
+            config_error,
+            /*source*/ None,
+        ));
+    }
+
+    Ok(())
 }
 
 /// Return the default managed config path.

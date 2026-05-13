@@ -239,6 +239,7 @@ async fn build_test_processor(
         config.codex_home.to_path_buf(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         Arg0DispatchPaths::default(),
         Arc::new(codex_config::NoopThreadConfigLoader),
