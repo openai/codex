@@ -145,6 +145,7 @@ async fn thread_title_falls_back_to_thread_id_when_unnamed() {
 #[tokio::test]
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_project_root(&mut chat, "my-project");
     chat.config.tui_status_line = Some(vec![
         "project-name".to_string(),
         "git-branch".to_string(),
