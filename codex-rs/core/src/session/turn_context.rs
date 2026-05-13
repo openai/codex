@@ -301,6 +301,7 @@ impl TurnContext {
     pub(crate) fn file_system_sandbox_context(
         &self,
         additional_permissions: Option<AdditionalPermissionProfile>,
+        cwd: &AbsolutePathBuf,
     ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
             self.permission_profile.to_runtime_permissions();
@@ -319,8 +320,7 @@ impl TurnContext {
         );
         FileSystemSandboxContext {
             permissions,
-            #[allow(deprecated)]
-            cwd: Some(self.cwd.clone()),
+            cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config

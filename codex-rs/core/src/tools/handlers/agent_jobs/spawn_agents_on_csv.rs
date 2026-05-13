@@ -7,6 +7,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::*;
 
@@ -67,9 +68,9 @@ pub async fn handle(
         ));
     }
 
+    let cwd = single_local_environment_cwd(&turn)?;
     let db = required_state_db(&session)?;
-    #[allow(deprecated)]
-    let input_path = turn.resolve_path(Some(args.csv_path));
+    let input_path = cwd.join(args.csv_path);
     let input_path_display = input_path.display().to_string();
     let csv_content = tokio::fs::read_to_string(&input_path)
         .await
@@ -142,10 +143,7 @@ pub async fn handle(
     let job_id = Uuid::new_v4().to_string();
     let output_csv_path = args.output_csv_path.map_or_else(
         || default_output_csv_path(&input_path, job_id.as_str()),
-        |path| {
-            #[allow(deprecated)]
-            turn.resolve_path(Some(path))
-        },
+        |path| cwd.join(path),
     );
     let job_suffix = &job_id[..8];
     let job_name = format!("agent-job-{job_suffix}");
@@ -289,4 +287,20 @@ pub async fn handle(
         ))
     })?;
     Ok(FunctionToolOutput::from_text(content, Some(true)))
+}
+
+fn single_local_environment_cwd(turn: &TurnContext) -> Result<&AbsolutePathBuf, FunctionCallError> {
+    let [turn_environment] = turn.environments.turn_environments.as_slice() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agents_on_csv requires exactly one local environment".to_string(),
+        ));
+    };
+
+    if turn_environment.environment.is_remote() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agents_on_csv is not supported for remote environments".to_string(),
+        ));
+    }
+
+    Ok(&turn_environment.cwd)
 }
