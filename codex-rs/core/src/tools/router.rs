@@ -13,7 +13,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -35,7 +34,6 @@ pub struct ToolCall {
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
 }
 
@@ -75,61 +73,25 @@ impl ToolRouter {
             .collect::<HashSet<_>>();
         let model_visible_specs = specs
             .iter()
-            .filter_map(|configured_tool| {
+            .filter_map(|spec| {
                 if config.code_mode_only_enabled
-                    && codex_code_mode::is_code_mode_nested_tool(configured_tool.name())
+                    && codex_code_mode::is_code_mode_nested_tool(spec.name())
                 {
                     return None;
                 }
 
-                filter_deferred_dynamic_tool_spec(
-                    configured_tool.spec.clone(),
-                    &deferred_dynamic_tools,
-                )
+                filter_deferred_dynamic_tool_spec(spec.clone(), &deferred_dynamic_tools)
             })
             .collect();
 
         Self {
             registry,
-            specs,
             model_visible_specs,
         }
     }
 
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.specs
-            .iter()
-            .map(|config| config.spec.clone())
-            .collect()
-    }
-
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
-    }
-
-    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        self.specs.iter().find_map(|config| match &config.spec {
-            ToolSpec::Function(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(config.spec.clone())
-            }
-            ToolSpec::Freeform(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(config.spec.clone())
-            }
-            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool)
-                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
-                        && tool.name == tool_name.name =>
-                {
-                    Some(ToolSpec::Function(tool.clone()))
-                }
-                _ => None,
-            }),
-            _ => None,
-        })
     }
 
     pub(crate) fn create_diff_consumer(
@@ -139,28 +101,10 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
-    fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
-        if tool_name.namespace.is_some() {
-            return false;
-        }
-
-        self.specs
-            .iter()
-            .filter(|config| config.supports_parallel_tool_calls)
-            .any(|config| match &config.spec {
-                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Namespace(_)
-                | ToolSpec::ToolSearch { .. }
-                | ToolSpec::ImageGeneration { .. }
-                | ToolSpec::WebSearch { .. } => false,
-            })
-    }
-
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
         self.registry
             .supports_parallel_tool_calls(&call.tool_name)
-            .unwrap_or_else(|| self.configured_tool_supports_parallel(&call.tool_name))
+            .unwrap_or(false)
     }
 
     #[instrument(level = "trace", skip_all, err)]

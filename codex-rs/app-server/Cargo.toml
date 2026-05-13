@@ -40,6 +40,7 @@ codex-extension-api = { workspace = true }
 codex-external-agent-migration = { workspace = true }
 codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
+codex-guardian = { workspace = true }
 codex-git-attribution = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }

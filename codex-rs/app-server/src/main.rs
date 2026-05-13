@@ -40,6 +40,10 @@ struct AppServerArgs {
     #[cfg(debug_assertions)]
     #[arg(long = "disable-plugin-startup-tasks-for-tests", hide = true)]
     disable_plugin_startup_tasks_for_tests: bool,
+
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,6 +63,7 @@ fn main() -> anyhow::Result<()> {
         if args.disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
+        runtime_options.remote_control_enabled = args.remote_control;
 
         run_main_with_transport_options(
             arg0_paths,

@@ -70,7 +70,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
     let mcp_tool_plan_inputs = mcp_tools.as_deref().map(map_mcp_tools_for_plan);
-    let deferred_mcp_tool_sources = deferred_mcp_tools.as_deref();
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let min_wait_timeout_ms = if config.multi_agent_v2 {
@@ -85,12 +84,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
     let deferred_dynamic_tools = dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
+        .filter(|tool| tool.defer_loading)
         .cloned()
         .collect::<Vec<_>>();
     let tool_search_entries = build_tool_search_entries_for_config(
         config,
-        deferred_mcp_tool_sources,
+        deferred_mcp_tools.as_deref(),
         &deferred_dynamic_tools,
     );
     let mut builder = build_tool_registry_builder(
@@ -99,7 +98,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             mcp_tools: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| inputs.mcp_tools.as_slice()),
-            deferred_mcp_tools: deferred_mcp_tool_sources,
+            deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             tool_namespaces: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| &inputs.tool_namespaces),

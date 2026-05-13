@@ -1872,6 +1872,7 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut should_emit_turn_diff = false;
+    let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -2098,7 +2099,8 @@ async fn try_run_sampling_request(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(&turn_context, snapshot).await;
+                sess.record_rate_limits_info(snapshot).await;
+                should_emit_token_count = true;
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
@@ -2116,8 +2118,9 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
-                sess.update_token_usage_info(&turn_context, token_usage.as_ref())
+                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
+                should_emit_token_count = true;
                 should_emit_turn_diff = true;
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
@@ -2244,6 +2247,14 @@ async fn try_run_sampling_request(
     }
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+
+    if should_emit_token_count {
+        // A tool call such as request_user_input can intentionally pause the turn. Emit token
+        // counts only after pending tools resolve so clients do not see progress events while the
+        // turn is waiting on the user. This also needs to happen before returning cancellation so
+        // token usage already recorded from the completed response is still persisted.
+        sess.send_token_count_event(&turn_context).await;
+    }
 
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);

@@ -162,6 +162,9 @@ pub struct ConfigToml {
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: Option<bool>,
 
+    /// Whether to inject the `<collaboration_mode>` developer block.
+    pub include_collaboration_mode_instructions: Option<bool>,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: Option<bool>,
 

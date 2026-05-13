@@ -17,7 +17,6 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_tools::AdditionalProperties;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::LoadableToolSpec;
@@ -163,11 +162,11 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
 }
 
 // Avoid order-based assertions; compare via set containment instead.
-fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
+fn assert_contains_tool_names(tools: &[ToolSpec], expected_subset: &[&str]) {
     use std::collections::HashSet;
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().map(ConfiguredToolSpec::name) {
+    for name in tools.iter().map(ToolSpec::name) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -194,7 +193,7 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     }
 }
 
-fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
+fn find_tool<'a>(tools: &'a [ToolSpec], expected_name: &str) -> &'a ToolSpec {
     tools
         .iter()
         .find(|tool| tool.name() == expected_name)
@@ -202,12 +201,12 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
 }
 
 fn find_namespace_function_tool<'a>(
-    tools: &'a [ConfiguredToolSpec],
+    tools: &'a [ToolSpec],
     expected_namespace: &str,
     expected_name: &str,
 ) -> &'a ResponsesApiTool {
     let namespace_tool = find_tool(tools, expected_namespace);
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
         panic!("expected namespace tool {expected_namespace}");
     };
     namespace
@@ -249,7 +248,7 @@ fn multi_agent_v2_spawn_agent_description(tools_config: &ToolsConfig) -> String 
     )
     .build();
     let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &spawn_agent.spec else {
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = spawn_agent else {
         panic!("spawn_agent should be a function tool");
     };
     description.clone()
@@ -326,7 +325,7 @@ async fn get_memory_requires_feature_flag() {
     )
     .build();
     assert!(
-        !tools.iter().any(|t| t.spec.name() == "get_memory"),
+        !tools.iter().any(|t| t.name() == "get_memory"),
         "get_memory should be disabled when memory_tool feature is off"
     );
 }
@@ -366,7 +365,7 @@ async fn assert_model_tools(
         .iter()
         .map(ToolSpec::name)
         .collect::<Vec<_>>();
-    assert_eq!(&tool_names, &expected_tools,);
+    assert_eq!(&tool_names, &expected_tools);
 }
 
 async fn assert_default_model_tools(
@@ -397,14 +396,14 @@ async fn test_build_specs_gpt5_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -422,14 +421,14 @@ async fn test_build_specs_gpt51_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -449,14 +448,14 @@ async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -476,14 +475,14 @@ async fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -501,14 +500,14 @@ async fn test_gpt_5_1_codex_max_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -526,14 +525,14 @@ async fn test_codex_5_1_mini_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -551,14 +550,14 @@ async fn test_gpt_5_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -576,14 +575,14 @@ async fn test_gpt_5_1_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -603,14 +602,14 @@ async fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
-            "web_search",
-            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
             "resume_agent",
             "wait_agent",
             "close_agent",
+            "web_search",
+            "image_generation",
         ],
     )
     .await;
@@ -778,7 +777,7 @@ async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
     )
     .build();
     let wait_agent = find_tool(&tools, "wait_agent");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &wait_agent.spec else {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = wait_agent else {
         panic!("wait_agent should be a function tool");
     };
     let timeout_description = parameters
@@ -842,7 +841,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
 }
 
 #[tokio::test]
-async fn search_tool_description_handles_no_enabled_mcp_tools() {
+async fn search_tool_is_hidden_without_deferred_tools() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -866,13 +865,11 @@ async fn search_tool_description_handles_no_enabled_mcp_tools() {
         &[],
     )
     .build();
-    let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
-        panic!("expected tool_search tool");
-    };
-
-    assert!(description.contains("None currently enabled."));
-    assert!(!description.contains("{{source_descriptions}}"));
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name() == TOOL_SEARCH_TOOL_NAME)
+    );
 }
 
 #[tokio::test]
@@ -916,7 +913,7 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
     )
     .build();
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
-    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
         panic!("expected tool_search tool");
     };
 
@@ -1004,7 +1001,7 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
 }
 
 #[tokio::test]
-async fn tool_search_entries_skip_namespace_outputs_when_namespace_tools_are_disabled() {
+async fn tool_search_entries_skip_mcp_outputs_when_namespace_tools_are_disabled() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -1049,11 +1046,15 @@ async fn tool_search_entries_skip_namespace_outputs_when_namespace_tools_are_dis
         .map(|entry| entry.output)
         .collect::<Vec<_>>();
 
-    assert_eq!(outputs.len(), 1);
-    match &outputs[0] {
-        LoadableToolSpec::Function(tool) => assert_eq!(tool.name, "plain_dynamic"),
-        LoadableToolSpec::Namespace(_) => panic!("namespace tool_search output should be hidden"),
-    }
+    assert_eq!(outputs.len(), 2);
+    assert!(outputs.iter().any(|output| match output {
+        LoadableToolSpec::Namespace(namespace) => namespace.name == "codex_app",
+        LoadableToolSpec::Function(_) => false,
+    }));
+    assert!(outputs.iter().any(|output| match output {
+        LoadableToolSpec::Function(tool) => tool.name == "plain_dynamic",
+        LoadableToolSpec::Namespace(_) => false,
+    }));
 }
 
 #[tokio::test]
@@ -1123,7 +1124,7 @@ async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
         description,
         parameters,
         ..
-    }) = &tool.spec
+    }) = tool
     else {
         panic!("unavailable MCP tool should be exposed as a function tool");
     };

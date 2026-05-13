@@ -496,6 +496,9 @@
             "plugin_hooks": {
               "type": "boolean"
             },
+            "plugin_sharing": {
+              "type": "boolean"
+            },
             "plugins": {
               "type": "boolean"
             },
@@ -620,6 +623,9 @@
           "type": "boolean"
         },
         "include_apps_instructions": {
+          "type": "boolean"
+        },
+        "include_collaboration_mode_instructions": {
           "type": "boolean"
         },
         "include_environment_context": {
@@ -2692,6 +2698,20 @@
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
         },
+        "pet": {
+          "default": null,
+          "description": "Pet id to preselect in the terminal pet picker.\n\nCustom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.",
+          "type": "string"
+        },
+        "pet_anchor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiPetAnchor"
+            }
+          ],
+          "default": "composer",
+          "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
+        },
         "raw_output_mode": {
           "default": false,
           "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
@@ -3436,6 +3456,24 @@
       },
       "type": "object"
     },
+    "TuiPetAnchor": {
+      "oneOf": [
+        {
+          "description": "Anchor the pet to the bottom of the current TUI composer viewport.",
+          "enum": [
+            "composer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anchor the pet to the physical bottom of the terminal screen.",
+          "enum": [
+            "screen-bottom"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,
       "description": "Vim normal-mode keybindings for modal editing inside text areas.\n\nActions that use uppercase letters (like `A` for append-line-end) should be specified as `shift-a` in config; the runtime matcher handles cross-terminal shift-reporting differences automatically.",
@@ -4138,6 +4176,9 @@
         "plugin_hooks": {
           "type": "boolean"
         },
+        "plugin_sharing": {
+          "type": "boolean"
+        },
         "plugins": {
           "type": "boolean"
         },
@@ -4324,6 +4365,10 @@
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_collaboration_mode_instructions": {
+      "description": "Whether to inject the `<collaboration_mode>` developer block.",
       "type": "boolean"
     },
     "include_environment_context": {

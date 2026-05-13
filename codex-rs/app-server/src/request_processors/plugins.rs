@@ -111,6 +111,7 @@ fn share_context_for_source(
             .cloned()
             .map(|remote_plugin_id| PluginShareContext {
                 remote_plugin_id,
+                remote_version: None,
                 discoverability: None,
                 share_url: None,
                 creator_account_user_id: None,
@@ -482,6 +483,8 @@ impl PluginRequestProcessor {
                                     );
                                     PluginSummary {
                                         id: plugin.id,
+                                        remote_plugin_id: None,
+                                        local_version: plugin.local_version,
                                         installed: plugin.installed,
                                         enabled: plugin.enabled,
                                         name: plugin.name,
@@ -532,7 +535,9 @@ impl PluginRequestProcessor {
         if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
         }
-        if marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe) {
+        if marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe)
+            && config.features.enabled(Feature::PluginSharing)
+        {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
         if !remote_sources.is_empty() {
@@ -672,17 +677,21 @@ impl PluginRequestProcessor {
                         )
                         .await
                         {
-                            Ok(Some(remote_share_context))
-                                if remote_share_context.share_principals.is_some() =>
-                            {
-                                Some(remote_plugin_share_context_to_info(remote_share_context))
-                            }
-                            Ok(Some(_)) => {
-                                warn!(
-                                    remote_plugin_id = %context.remote_plugin_id,
-                                    "remote shared plugin detail did not include share principals; returning local share mapping context"
-                                );
-                                Some(context)
+                            Ok(Some(remote_share_context)) => {
+                                if remote_share_context.share_principals.is_some() {
+                                    Some(remote_plugin_share_context_to_info(remote_share_context))
+                                } else {
+                                    let remote_version = remote_share_context.remote_version;
+                                    let remote_plugin_id = context.remote_plugin_id.clone();
+                                    warn!(
+                                        remote_plugin_id = %remote_plugin_id,
+                                        "remote shared plugin detail did not include share principals; returning local share mapping context with remote version"
+                                    );
+                                    Some(PluginShareContext {
+                                        remote_version,
+                                        ..context
+                                    })
+                                }
                             }
                             Ok(None) => {
                                 warn!(
@@ -723,6 +732,8 @@ impl PluginRequestProcessor {
                     marketplace_path: outcome.marketplace_path,
                     summary: PluginSummary {
                         id: outcome.plugin.id,
+                        remote_plugin_id: None,
+                        local_version: outcome.plugin.local_version,
                         name: outcome.plugin.name,
                         share_context,
                         source: marketplace_plugin_source_to_info(outcome.plugin.source),
@@ -838,6 +849,9 @@ impl PluginRequestProcessor {
         params: PluginShareSaveParams,
     ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        if !config.features.enabled(Feature::PluginSharing) {
+            return Err(invalid_request("plugin sharing is disabled"));
+        }
         let PluginShareSaveParams {
             plugin_path,
             remote_plugin_id,
@@ -1107,7 +1121,6 @@ impl PluginRequestProcessor {
                 )
             })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
-            let remote_plugin_id = &remote_detail.summary.id;
             return Err(invalid_request(format!(
                 "remote plugin {remote_plugin_id} is disabled by admin"
             )));
@@ -1587,6 +1600,8 @@ fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketpla
 fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginSummary {
     PluginSummary {
         id: summary.id,
+        remote_plugin_id: Some(summary.remote_plugin_id),
+        local_version: None,
         name: summary.name,
         share_context: summary
             .share_context
@@ -1607,6 +1622,7 @@ fn remote_plugin_share_context_to_info(
 ) -> PluginShareContext {
     PluginShareContext {
         remote_plugin_id: context.remote_plugin_id,
+        remote_version: context.remote_version,
         discoverability: Some(remote_plugin_share_discoverability_to_info(
             context.discoverability,
         )),
