@@ -210,13 +210,14 @@ fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
 
 fn build_mcp_search_text(info: &ToolInfo) -> String {
     let tool_name = info.canonical_tool_name();
-    let schema_properties = info
+    let mut schema_properties = info
         .tool
         .input_schema
         .get("properties")
         .and_then(serde_json::Value::as_object)
         .map(|map| map.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    schema_properties.sort();
     let mut parts = vec![
         flat_tool_name(&tool_name).into_owned(),
         info.callable_name.clone(),

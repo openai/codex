@@ -194,12 +194,13 @@ async fn request_dynamic_tool(
 }
 
 fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
-    let schema_properties = tool
+    let mut schema_properties = tool
         .input_schema
         .get("properties")
         .and_then(serde_json::Value::as_object)
         .map(|map| map.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    schema_properties.sort();
     let mut parts = vec![
         tool.name.clone(),
         tool.name.replace('_', " "),
