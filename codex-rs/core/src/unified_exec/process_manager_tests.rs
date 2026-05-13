@@ -271,10 +271,10 @@ async fn startup_failure_emits_begin_then_failed_end() {
         .exec_command(request, &context)
         .await
         .expect_err("empty unified exec command should fail");
-    assert!(matches!(
-        err,
-        crate::unified_exec::UnifiedExecError::MissingCommandLine
-    ));
+    assert!(
+        err.to_string().contains("missing command line for PTY"),
+        "unexpected startup error: {err}"
+    );
 
     let begin_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
         .await
