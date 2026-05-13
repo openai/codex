@@ -370,6 +370,7 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
+    #[allow(deprecated)]
     let display_root = turn_diff_display_root(
         &turn_context.cwd,
         turn_context.environments.primary_filesystem(),
