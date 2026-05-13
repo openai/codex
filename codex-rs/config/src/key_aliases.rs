@@ -1,6 +1,9 @@
 use toml::Value as TomlValue;
 use toml::map::Map as TomlMap;
 
+use codex_features::canonical_feature_for_key;
+use codex_features::feature_for_key;
+
 #[derive(Debug, Clone, Copy)]
 struct ConfigKeyAlias {
     table_path: &'static [&'static str],
@@ -26,6 +29,29 @@ pub(crate) fn normalize_key_aliases(path: &[String], table: &mut TomlMap<String,
                 .entry(alias.canonical_key.to_string())
                 .or_insert(value);
         }
+    }
+
+    if path.iter().map(String::as_str).eq(["features"]) {
+        normalize_feature_key_aliases(table);
+    }
+}
+
+fn normalize_feature_key_aliases(table: &mut TomlMap<String, TomlValue>) {
+    let legacy_keys: Vec<String> = table
+        .keys()
+        .filter(|key| canonical_feature_for_key(key).is_none())
+        .filter(|key| feature_for_key(key).is_some())
+        .cloned()
+        .collect();
+
+    for legacy_key in legacy_keys {
+        let Some(value) = table.remove(&legacy_key) else {
+            continue;
+        };
+        let Some(feature) = feature_for_key(&legacy_key) else {
+            continue;
+        };
+        table.entry(feature.key().to_string()).or_insert(value);
     }
 }
 
