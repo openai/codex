@@ -66,8 +66,8 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
         "previous_attribute": "# Format Rust and Python SDK code.",
         "commands": [
             "cargo fmt -- --config imports_granularity=Item 2>/dev/null",
-            "uv run --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
-            "uv run --project ../sdk/python --extra dev ruff format ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
         ],
     }
 
