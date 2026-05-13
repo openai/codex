@@ -2847,11 +2847,20 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
+        self.record_token_usage_info(turn_context, token_usage)
+            .await;
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn record_token_usage_info(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+    ) {
         if let Some(token_usage) = token_usage {
             let mut state = self.state.lock().await;
             state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
@@ -2892,11 +2901,15 @@ impl Session {
         turn_context: &TurnContext,
         new_rate_limits: RateLimitSnapshot,
     ) {
+        self.record_rate_limits_info(new_rate_limits).await;
+        self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn record_rate_limits_info(&self, new_rate_limits: RateLimitSnapshot) {
         {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
@@ -2927,7 +2940,7 @@ impl Session {
         state.set_server_reasoning_included(included);
     }
 
-    async fn send_token_count_event(&self, turn_context: &TurnContext) {
+    pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
         let (info, rate_limits) = {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
