@@ -9,6 +9,8 @@ use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInstalledParams;
+use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -122,6 +124,59 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
         "unexpected error: {:?}",
         response.marketplace_load_errors
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_installed_includes_installed_plugins_and_explicit_install_suggestions() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    write_openai_curated_marketplace(
+        codex_home.path(),
+        &["linear", "computer-use", "not-mentioned"],
+    )?;
+    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."linear@openai-curated"]
+enabled = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: Some(vec!["computer-use".to_string()]),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "openai-curated");
+    assert_eq!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![
+            ("linear@openai-curated".to_string(), true, true),
+            ("computer-use@openai-curated".to_string(), false, false),
+        ]
+    );
+    assert_eq!(response.marketplace_load_errors, Vec::new());
     Ok(())
 }
 
@@ -1705,6 +1760,77 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
             .marketplaces
             .iter()
             .all(|marketplace| marketplace.name != "chatgpt-global")
+    );
+    wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_installed_fetches_remote_installed_rows_without_remote_catalog_list() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        "linear",
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
+    let global_installed_body = remote_installed_plugin_body(&bundle_url, "1.2.3", true);
+    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "chatgpt-global");
+    assert_eq!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| {
+                (
+                    plugin.id.clone(),
+                    plugin.remote_plugin_id.clone(),
+                    plugin.installed,
+                    plugin.enabled,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![(
+            "linear@chatgpt-global".to_string(),
+            Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
+            true,
+            true,
+        )]
     );
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
