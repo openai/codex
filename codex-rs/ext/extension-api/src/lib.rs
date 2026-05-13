@@ -22,7 +22,6 @@ pub use contributors::ExtensionToolOutput;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
 pub use contributors::ThreadLifecycleContributor;
-pub use contributors::ThreadLifecycleFuture;
 pub use contributors::ThreadResumeInput;
 pub use contributors::ThreadStartInput;
 pub use contributors::ThreadStopInput;

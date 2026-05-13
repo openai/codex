@@ -12,8 +12,6 @@ mod tools;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
-pub use thread_lifecycle::ThreadLifecycleContributor;
-pub use thread_lifecycle::ThreadLifecycleFuture;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
@@ -28,6 +26,23 @@ pub trait ContextContributor: Send + Sync {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<PromptFragment>;
+}
+
+/// Contributor for host-owned thread lifecycle gates.
+///
+/// Implementations should use these callbacks to seed, rehydrate, or flush
+/// extension-private thread state. Heavy dependencies belong on the extension
+/// value created by the host, not in these inputs.
+pub trait ThreadLifecycleContributor<C>: Send + Sync {
+    /// Called after thread-scoped extension stores are created, before later
+    /// contributors can read from them.
+    fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
+
+    /// Called after the host constructs a runtime from persisted history.
+    fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+
+    /// Called before the host drops the thread runtime and thread-scoped store.
+    fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
 }
 
 /// Extension contribution that exposes native tools owned by a feature.
