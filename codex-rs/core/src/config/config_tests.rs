@@ -61,11 +61,13 @@ use codex_config::types::WindowsToml;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
@@ -381,6 +383,7 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            request_user_input: None,
         })
     );
 }
@@ -400,7 +403,48 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            request_user_input: None,
         })
+    );
+}
+
+#[test]
+fn tools_request_user_input_deserializes_registration_and_modes() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.request_user_input]
+enabled = false
+allowed_modes = ["plan", "default"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let request_user_input = cfg
+        .tools
+        .and_then(|tools| tools.request_user_input)
+        .expect("request_user_input tool config should deserialize");
+    assert_eq!(request_user_input.enabled, Some(false));
+    assert_eq!(
+        request_user_input.allowed_modes,
+        Some(vec![ModeKind::Plan, ModeKind::Default])
+    );
+}
+
+#[test]
+fn request_user_input_tool_config_defaults_to_plan_and_legacy_feature_adds_default() {
+    let cfg = ConfigToml::default();
+    let profile = ConfigProfile::default();
+
+    assert_eq!(
+        resolve_request_user_input_tool_config(&cfg, &profile, &Features::with_defaults()),
+        (true, vec![ModeKind::Plan])
+    );
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::DefaultModeRequestUserInput);
+    assert_eq!(
+        resolve_request_user_input_tool_config(&cfg, &profile, &features),
+        (true, vec![ModeKind::Plan, ModeKind::Default])
     );
 }
 
@@ -7363,6 +7407,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: true,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
+            request_user_input_tool_enabled: true,
+            request_user_input_allowed_modes: vec![ModeKind::Plan],
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -7810,6 +7856,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        request_user_input_tool_enabled: true,
+        request_user_input_allowed_modes: vec![ModeKind::Plan],
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -7971,6 +8019,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        request_user_input_tool_enabled: true,
+        request_user_input_allowed_modes: vec![ModeKind::Plan],
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -8117,6 +8167,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        request_user_input_tool_enabled: true,
+        request_user_input_allowed_modes: vec![ModeKind::Plan],
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),

@@ -437,6 +437,12 @@ impl Features {
                         Feature::UseLegacyLandlock,
                     );
                 }
+                "default_mode_request_user_input" => {
+                    self.record_legacy_usage_force(
+                        "features.default_mode_request_user_input",
+                        Feature::DefaultModeRequestUserInput,
+                    );
+                }
                 _ => {}
             }
             match feature_for_key(k) {
@@ -529,6 +535,17 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             let details =
                 "Remove this setting to stop opting into the legacy Linux sandbox behavior."
                     .to_string();
+            (summary, Some(details))
+        }
+        Feature::DefaultModeRequestUserInput => {
+            let label = match alias {
+                "features.default_mode_request_user_input" | "default_mode_request_user_input" => {
+                    "[features].default_mode_request_user_input"
+                }
+                _ => alias,
+            };
+            let summary = format!("`{label}` is deprecated and will be removed soon.");
+            let details = "Use `[tools.request_user_input].allowed_modes = [\"plan\", \"default\"]` in config.toml instead.".to_string();
             (summary, Some(details))
         }
         _ => {
@@ -1062,7 +1079,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Deprecated,
         default_enabled: false,
     },
     FeatureSpec {

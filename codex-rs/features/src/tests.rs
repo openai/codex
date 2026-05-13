@@ -120,6 +120,18 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn default_mode_request_user_input_is_deprecated_and_disabled_by_default() {
+    assert_eq!(
+        Feature::DefaultModeRequestUserInput.stage(),
+        Stage::Deprecated
+    );
+    assert_eq!(
+        Feature::DefaultModeRequestUserInput.default_enabled(),
+        false
+    );
+}
+
+#[test]
 fn remote_compaction_v2_is_under_development() {
     assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);
@@ -245,6 +257,30 @@ fn use_legacy_landlock_config_records_deprecation_notice() {
     assert_eq!(
         usages[0].details.as_deref(),
         Some("Remove this setting to stop opting into the legacy Linux sandbox behavior.")
+    );
+}
+
+#[test]
+fn default_mode_request_user_input_config_records_deprecation_notice() {
+    let mut entries = BTreeMap::new();
+    entries.insert("default_mode_request_user_input".to_string(), true);
+
+    let mut features = Features::with_defaults();
+    features.apply_map(&entries);
+
+    let usages = features.legacy_feature_usages().collect::<Vec<_>>();
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].alias, "features.default_mode_request_user_input");
+    assert_eq!(usages[0].feature, Feature::DefaultModeRequestUserInput);
+    assert_eq!(
+        usages[0].summary,
+        "`[features].default_mode_request_user_input` is deprecated and will be removed soon."
+    );
+    assert_eq!(
+        usages[0].details.as_deref(),
+        Some(
+            "Use `[tools.request_user_input].allowed_modes = [\"plan\", \"default\"]` in config.toml instead."
+        )
     );
 }
 

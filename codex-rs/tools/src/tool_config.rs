@@ -122,6 +122,7 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
+    pub request_user_input_tool_enabled: bool,
     pub request_user_input_available_modes: Vec<ModeKind>,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -259,6 +260,7 @@ impl ToolsConfig {
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
+            request_user_input_tool_enabled: true,
             request_user_input_available_modes: request_user_input_available_modes(features),
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -269,6 +271,16 @@ impl ToolsConfig {
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
         self.agent_type_description = agent_type_description;
+        self
+    }
+
+    pub fn with_request_user_input_config(
+        mut self,
+        enabled: bool,
+        available_modes: Vec<ModeKind>,
+    ) -> Self {
+        self.request_user_input_tool_enabled = enabled;
+        self.request_user_input_available_modes = available_modes;
         self
     }
 

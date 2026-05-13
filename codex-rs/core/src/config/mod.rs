@@ -78,6 +78,7 @@ use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -772,6 +773,12 @@ pub struct Config {
 
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
+
+    /// Whether to register the built-in request_user_input tool.
+    pub request_user_input_tool_enabled: bool,
+
+    /// Collaboration modes where request_user_input may be invoked.
+    pub request_user_input_allowed_modes: Vec<ModeKind>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1957,6 +1964,38 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_request_user_input_tool_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+    features: &Features,
+) -> (bool, Vec<ModeKind>) {
+    let base = config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.request_user_input.as_ref());
+    let profile = config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.request_user_input.as_ref());
+
+    let enabled = profile
+        .and_then(|config| config.enabled)
+        .or_else(|| base.and_then(|config| config.enabled))
+        .unwrap_or(true);
+    let mut allowed_modes = profile
+        .and_then(|config| config.allowed_modes.clone())
+        .or_else(|| base.and_then(|config| config.allowed_modes.clone()))
+        .unwrap_or_else(|| vec![ModeKind::Plan]);
+
+    if features.enabled(Feature::DefaultModeRequestUserInput)
+        && !allowed_modes.contains(&ModeKind::Default)
+    {
+        allowed_modes.push(ModeKind::Default);
+    }
+
+    (enabled, allowed_modes)
+}
+
 fn resolve_multi_agent_v2_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -2592,6 +2631,8 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let (request_user_input_tool_enabled, request_user_input_allowed_modes) =
+            resolve_request_user_input_tool_config(&cfg, &config_profile, &features);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3161,6 +3202,8 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            request_user_input_tool_enabled,
+            request_user_input_allowed_modes,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

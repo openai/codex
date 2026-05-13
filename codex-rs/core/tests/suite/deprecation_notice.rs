@@ -203,3 +203,50 @@ async fn emits_deprecation_notice_for_use_legacy_landlock() -> anyhow::Result<()
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn emits_deprecation_notice_for_default_mode_request_user_input() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let mut entries = BTreeMap::new();
+        entries.insert("default_mode_request_user_input".to_string(), true);
+        let mut features = config.features.get().clone();
+        features.apply_map(&entries);
+        config
+            .features
+            .set(features)
+            .expect("test config should allow managed feature map updates");
+    });
+
+    let TestCodex { codex, .. } = builder.build(&server).await?;
+
+    let notice = wait_for_event_match(&codex, |event| match event {
+        EventMsg::DeprecationNotice(ev)
+            if ev
+                .summary
+                .contains("[features].default_mode_request_user_input") =>
+        {
+            Some(ev.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    let DeprecationNoticeEvent { summary, details } = notice;
+    assert_eq!(
+        summary,
+        "`[features].default_mode_request_user_input` is deprecated and will be removed soon."
+            .to_string(),
+    );
+    assert_eq!(
+        details.as_deref(),
+        Some(
+            "Use `[tools.request_user_input].allowed_modes = [\"plan\", \"default\"]` in config.toml instead."
+        ),
+    );
+
+    Ok(())
+}

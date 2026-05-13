@@ -51,6 +51,10 @@ pub(super) async fn spawn_review_thread(
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
     .with_web_search_config(/*web_search_config*/ None)
+    .with_request_user_input_config(
+        config.request_user_input_tool_enabled,
+        config.request_user_input_allowed_modes.clone(),
+    )
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_environment_mode(parent_turn_context.tools_config.environment_mode)
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)

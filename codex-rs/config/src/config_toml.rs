@@ -38,6 +38,7 @@ use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -610,6 +611,22 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Configure registration and collaboration-mode availability for `request_user_input`.
+    #[serde(default)]
+    pub request_user_input: Option<RequestUserInputToolConfigToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RequestUserInputToolConfigToml {
+    /// Whether to register the built-in `request_user_input` tool.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    /// Collaboration modes where `request_user_input` may be invoked.
+    #[serde(default)]
+    pub allowed_modes: Option<Vec<ModeKind>>,
 }
 
 #[derive(Deserialize)]

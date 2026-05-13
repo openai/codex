@@ -869,6 +869,32 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
 }
 
 #[test]
+fn request_user_input_registration_respects_tool_config() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_request_user_input_config(/*enabled*/ false, vec![ModeKind::Plan]);
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, REQUEST_USER_INPUT_TOOL_NAME);
+}
+
+#[test]
 fn request_permissions_requires_feature_flag() {
     let model_info = model_info();
     let features = Features::with_defaults();

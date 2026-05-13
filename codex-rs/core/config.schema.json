@@ -1290,6 +1290,14 @@
       },
       "type": "object"
     },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default"
+      ],
+      "type": "string"
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -2276,6 +2284,25 @@
         }
       ]
     },
+    "RequestUserInputToolConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_modes": {
+          "default": null,
+          "description": "Collaboration modes where `request_user_input` may be invoked.",
+          "items": {
+            "$ref": "#/definitions/ModeKind"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": null,
+          "description": "Whether to register the built-in `request_user_input` tool.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2501,6 +2528,15 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "request_user_input": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestUserInputToolConfigToml"
+            }
+          ],
+          "default": null,
+          "description": "Configure registration and collaboration-mode availability for `request_user_input`."
+        },
         "view_image": {
           "default": null,
           "description": "Enable the `view_image` tool that lets the agent attach local images.",
