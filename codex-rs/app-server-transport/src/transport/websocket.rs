@@ -1,23 +1,173 @@
 use super::CHANNEL_CAPACITY;
 use super::ConnectionOrigin;
 use super::TransportEvent;
+use super::auth::WebsocketAuthPolicy;
+use super::auth::authorize_upgrade;
+use super::auth::is_unauthenticated_non_loopback_listener;
 use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
+use axum::Router;
+use axum::body::Body;
+use axum::body::Bytes;
+use axum::extract::ConnectInfo;
+use axum::extract::State;
+use axum::extract::ws::Message as AxumWebSocketMessage;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::http::HeaderMap;
+use axum::http::Request;
+use axum::http::StatusCode;
+use axum::http::header::ORIGIN;
+use axum::middleware;
+use axum::middleware::Next;
+use axum::response::IntoResponse;
+use axum::response::Response;
+use axum::routing::any;
+use axum::routing::get;
 use futures::SinkExt;
 use futures::StreamExt;
+use owo_colors::OwoColorize;
+use owo_colors::Stream;
+use owo_colors::Style;
+use std::io::Result as IoResult;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Bytes;
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message as TungsteniteWebSocketMessage;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 /// WebSocket clients can briefly lag behind normal turn output bursts while the
 /// writer task is healthy, so give them more headroom than internal channels.
 const WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY: usize = 32 * 1024;
 const _: () = assert!(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY > CHANNEL_CAPACITY);
+
+fn colorize(text: &str, style: Style) -> String {
+    text.if_supports_color(Stream::Stderr, |value| value.style(style))
+        .to_string()
+}
+
+#[allow(clippy::print_stderr)]
+fn print_websocket_startup_banner(addr: SocketAddr) {
+    let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
+    let listening_label = colorize("listening on:", Style::new().dimmed());
+    let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    let ready_label = colorize("readyz:", Style::new().dimmed());
+    let ready_url = colorize(&format!("http://{addr}/readyz"), Style::new().green());
+    let health_label = colorize("healthz:", Style::new().dimmed());
+    let health_url = colorize(&format!("http://{addr}/healthz"), Style::new().green());
+    let note_label = colorize("note:", Style::new().dimmed());
+    eprintln!("{title}");
+    eprintln!("  {listening_label} {listen_url}");
+    eprintln!("  {ready_label} {ready_url}");
+    eprintln!("  {health_label} {health_url}");
+    if addr.ip().is_loopback() {
+        eprintln!(
+            "  {note_label} binds localhost only (use SSH port-forwarding for remote access)"
+        );
+    } else {
+        eprintln!("  {note_label} websocket auth is required for non-localhost listeners");
+    }
+}
+
+#[derive(Clone)]
+struct WebSocketListenerState {
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    auth_policy: Arc<WebsocketAuthPolicy>,
+}
+
+async fn health_check_handler() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn reject_requests_with_origin_header(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.headers().contains_key(ORIGIN) {
+        warn!(
+            method = %request.method(),
+            uri = %request.uri(),
+            "rejecting websocket listener request with Origin header"
+        );
+        Err(StatusCode::FORBIDDEN)
+    } else {
+        Ok(next.run(request).await)
+    }
+}
+
+async fn websocket_upgrade_handler(
+    websocket: WebSocketUpgrade,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    State(state): State<WebSocketListenerState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(err) = authorize_upgrade(&headers, state.auth_policy.as_ref()) {
+        warn!(
+            %peer_addr,
+            message = err.message(),
+            "rejecting websocket client during upgrade"
+        );
+        return (err.status_code(), err.message()).into_response();
+    }
+    info!(%peer_addr, "websocket client connected");
+    websocket
+        .on_upgrade(move |stream| async move {
+            let (websocket_writer, websocket_reader) = stream.split();
+            run_websocket_connection(websocket_writer, websocket_reader, state.transport_event_tx)
+                .await;
+        })
+        .into_response()
+}
+
+pub async fn start_websocket_acceptor(
+    bind_address: SocketAddr,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    shutdown_token: CancellationToken,
+    auth_policy: WebsocketAuthPolicy,
+) -> IoResult<JoinHandle<()>> {
+    if is_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to start non-loopback websocket listener {bind_address} without auth; configure `--ws-auth capability-token` or `--ws-auth signed-bearer-token`"
+            ),
+        ));
+    }
+    let listener = TcpListener::bind(bind_address).await?;
+    let local_addr = listener.local_addr()?;
+    print_websocket_startup_banner(local_addr);
+    info!("app-server websocket listening on ws://{local_addr}");
+
+    let router = Router::new()
+        .route("/readyz", get(health_check_handler))
+        .route("/healthz", get(health_check_handler))
+        .fallback(any(websocket_upgrade_handler))
+        .layer(middleware::from_fn(reject_requests_with_origin_header))
+        .with_state(WebSocketListenerState {
+            transport_event_tx,
+            auth_policy: Arc::new(auth_policy),
+        });
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_token.cancelled().await;
+    });
+    Ok(tokio::spawn(async move {
+        if let Err(err) = server.await {
+            error!("websocket acceptor failed: {err}");
+        }
+        info!("websocket acceptor shutting down");
+    }))
+}
 
 pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
     websocket_writer: impl futures::sink::Sink<M, Error = SinkError> + Send + 'static,
@@ -36,7 +186,7 @@ pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
-            origin: ConnectionOrigin::UnixSocket,
+            origin: ConnectionOrigin::WebSocket,
             writer: writer_tx,
             disconnect_sender: Some(disconnect_token.clone()),
         })
@@ -93,6 +243,26 @@ pub(crate) trait AppServerWebSocketMessage: Sized {
     fn text(text: String) -> Self;
     fn pong(payload: Bytes) -> Self;
     fn into_incoming(self) -> Option<IncomingWebSocketMessage>;
+}
+
+impl AppServerWebSocketMessage for AxumWebSocketMessage {
+    fn text(text: String) -> Self {
+        Self::Text(text.into())
+    }
+
+    fn pong(payload: Bytes) -> Self {
+        Self::Pong(payload)
+    }
+
+    fn into_incoming(self) -> Option<IncomingWebSocketMessage> {
+        Some(match self {
+            Self::Text(text) => IncomingWebSocketMessage::Text(text.to_string()),
+            Self::Binary(_) => IncomingWebSocketMessage::Binary,
+            Self::Ping(payload) => IncomingWebSocketMessage::Ping(payload),
+            Self::Pong(_) => IncomingWebSocketMessage::Pong,
+            Self::Close(_) => IncomingWebSocketMessage::Close,
+        })
+    }
 }
 
 impl AppServerWebSocketMessage for TungsteniteWebSocketMessage {

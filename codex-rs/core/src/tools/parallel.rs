@@ -22,7 +22,6 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
-use codex_tools::ToolSpec;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -47,10 +46,6 @@ impl ToolCallRuntime {
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
         }
-    }
-
-    pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
-        self.router.find_spec(tool_name)
     }
 
     pub(crate) fn create_diff_consumer(

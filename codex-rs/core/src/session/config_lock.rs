@@ -133,6 +133,8 @@ fn save_config_resolved_fields(
     lock_config.model_verbosity = config.model_verbosity;
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
     lock_config.include_apps_instructions = Some(config.include_apps_instructions);
+    lock_config.include_collaboration_mode_instructions =
+        Some(config.include_collaboration_mode_instructions);
     lock_config.include_environment_context = Some(config.include_environment_context);
     lock_config.background_terminal_max_timeout = Some(config.background_terminal_max_timeout);
 

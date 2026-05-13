@@ -58,8 +58,10 @@ use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
+use codex_thread_store::UpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -454,6 +456,44 @@ impl ThreadManager {
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
+    }
+
+    /// Updates metadata for loaded and cold threads through one entrypoint.
+    ///
+    /// Loaded threads route through `CodexThread`/`LiveThread`, so metadata changes stay ordered
+    /// with live rollout writes. Cold threads go directly to the store, which owns unloaded JSONL
+    /// compatibility and SQLite metadata updates.
+    pub async fn update_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> CodexResult<StoredThread> {
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            if thread.config_snapshot().await.ephemeral {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "ephemeral thread does not support metadata updates: {thread_id}"
+                )));
+            }
+            return thread
+                .update_thread_metadata(patch, include_archived)
+                .await
+                .map_err(|err| thread_store_metadata_update_error(thread_id, err));
+        }
+        self.state
+            .thread_store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch,
+                include_archived,
+            })
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    CodexErr::ThreadNotFound(thread_id)
+                }
+                err => thread_store_metadata_update_error(thread_id, err),
+            })
     }
 
     /// List `thread_id` plus all known descendants in its spawn subtree.
@@ -1295,6 +1335,19 @@ fn thread_store_rollout_read_error(err: ThreadStoreError) -> CodexErr {
         ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
         ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
         err => CodexErr::Fatal(format!("failed to read thread by rollout path: {err}")),
+    }
+}
+
+fn thread_store_metadata_update_error(thread_id: ThreadId, err: ThreadStoreError) -> CodexErr {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
+        ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ThreadStoreError::Unsupported { operation } => CodexErr::UnsupportedOperation(format!(
+            "thread metadata update is not supported by this store: {operation}"
+        )),
+        err => CodexErr::Fatal(format!(
+            "failed to update thread metadata {thread_id}: {err}"
+        )),
     }
 }
 

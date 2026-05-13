@@ -25,7 +25,6 @@ use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec_plan_types::ToolNamespace;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
@@ -1579,20 +1578,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 
     let (tools, registry) = build_specs(
         &tools_config,
-        Some(HashMap::from([
-            (
-                ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
-                mcp_tool(
-                    "calendar_create_event",
-                    "Create calendar event",
-                    serde_json::json!({"type": "object"}),
-                ),
-            ),
-            (
-                ToolName::namespaced("mcp__rmcp__", "echo"),
-                mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
-            ),
-        ])),
+        /*mcp_tools*/ None,
         Some(vec![
             deferred_mcp_tool(
                 "_create_event",
@@ -1723,7 +1709,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 }
 
 #[test]
-fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
+fn no_search_tool_when_namespaces_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -1810,32 +1796,15 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
         panic!("expected tool_search tool");
     };
     assert!(description.contains("- Dynamic tools: Tools provided by the current Codex thread."));
-    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "codex_app"]);
-    assert_eq!(
-        tools
-            .iter()
-            .filter(|tool| tool.name() == "codex_app")
-            .count(),
-        1
-    );
-    assert_eq!(
-        namespace_function_names(&tools, "codex_app"),
-        vec![
-            "automation_update".to_string(),
-            "automation_list".to_string()
-        ]
-    );
-    for tool_name in ["automation_update", "automation_list"] {
-        let dynamic_tool = find_namespace_function_tool(&tools, "codex_app", tool_name);
-        assert_eq!(dynamic_tool.defer_loading, Some(true));
-    }
+    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
+    assert_lacks_tool_name(&tools, "codex_app");
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_update")));
     assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_list")));
 }
 
 #[test]
-fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
+fn search_tool_is_hidden_for_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -1875,9 +1844,12 @@ fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disab
         &dynamic_tools,
     );
 
-    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "plain_dynamic"]);
+    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
     assert_lacks_tool_name(&tools, "codex_app");
-    assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
+    assert_lacks_tool_name(&tools, "plain_dynamic");
+    assert!(!registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
+    assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_update")));
+    assert!(registry.has_handler(&ToolName::plain("plain_dynamic")));
 }
 
 #[test]
@@ -2427,26 +2399,6 @@ fn build_specs_with_discoverable_tools(
     extension_tool_bundles: &[codex_tool_api::ToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ToolSpec>, ToolRegistry) {
-    build_specs_with_optional_tool_namespaces(
-        config,
-        mcp_tools,
-        deferred_mcp_tools,
-        /*tool_namespaces*/ None,
-        discoverable_tools,
-        extension_tool_bundles,
-        dynamic_tools,
-    )
-}
-
-fn build_specs_with_optional_tool_namespaces(
-    config: &ToolsConfig,
-    mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    tool_namespaces: Option<HashMap<String, ToolNamespace>>,
-    discoverable_tools: Option<Vec<DiscoverableTool>>,
-    extension_tool_bundles: &[codex_tool_api::ToolBundle],
-    dynamic_tools: &[DynamicToolSpec],
-) -> (Vec<ToolSpec>, ToolRegistry) {
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
@@ -2458,13 +2410,11 @@ fn build_specs_with_optional_tool_namespaces(
         ToolRegistryBuildParams {
             mcp_tools: mcp_tool_inputs.as_deref(),
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-            tool_namespaces: tool_namespaces.as_ref(),
             discoverable_tools: discoverable_tools.as_deref(),
             extension_tool_bundles,
             dynamic_tools,
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
-            tool_search_entries: &[],
         },
     );
     builder.build()

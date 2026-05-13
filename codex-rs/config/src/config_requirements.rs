@@ -87,6 +87,7 @@ pub struct ConfigRequirements {
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -120,6 +121,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
             ),
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
@@ -688,6 +690,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub allow_managed_hooks_only: Option<bool>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -736,6 +739,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -772,6 +776,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes: _,
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
+            allow_managed_hooks_only: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -801,6 +806,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                allow_managed_hooks_only,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -828,6 +834,7 @@ impl ConfigRequirementsWithSources {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -845,6 +852,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -928,6 +936,7 @@ impl ConfigRequirementsToml {
             && self.allowed_sandbox_modes.is_none()
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.allow_managed_hooks_only.is_none()
             && self
                 .feature_requirements
                 .as_ref()
@@ -965,6 +974,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1200,6 +1210,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approvals_reviewer,
             permission_profile,
             web_search_mode,
+            allow_managed_hooks_only,
             feature_requirements,
             managed_hooks,
             mcp_servers,
@@ -1272,6 +1283,7 @@ mod tests {
             allowed_sandbox_modes,
             remote_sandbox_config: _,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1292,6 +1304,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_managed_hooks_only: allow_managed_hooks_only
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1306,6 +1320,32 @@ mod tests {
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
+    }
+
+    #[test]
+    fn deserialize_allow_managed_hooks_only() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = true
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(true));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allow_managed_hooks_only_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1339,6 +1379,7 @@ mod tests {
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            allow_managed_hooks_only: Some(true),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1367,6 +1408,10 @@ mod tests {
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
+                    enforce_source.clone(),
+                )),
+                allow_managed_hooks_only: Some(Sourced::new(
+                    /*value*/ true,
                     enforce_source.clone(),
                 )),
                 feature_requirements: Some(Sourced::new(
@@ -1411,6 +1456,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1458,6 +1504,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
