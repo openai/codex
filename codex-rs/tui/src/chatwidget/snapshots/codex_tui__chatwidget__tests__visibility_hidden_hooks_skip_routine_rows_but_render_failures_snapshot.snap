@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-expression: "format!(\"{routine_running_snapshot}\\n\\n{routine_completed_snapshot}\\n\\n{failed_snapshot}\")"
+expression: "format!(\"{routine_running_snapshot}\\n\\n{routine_completed_snapshot}\\n\\n{warning_snapshot}\\n\\n{failed_snapshot}\")"
 ---
 routine running
 live hooks:
@@ -13,6 +13,14 @@ live hooks:
 <empty>
 history:
 <empty>
+
+warning with hidden context
+live hooks:
+<empty>
+history:
+• PostToolUse hook (completed)
+  warning: review this managed hook warning
+
 
 failed
 live hooks:

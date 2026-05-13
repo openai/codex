@@ -2807,8 +2807,32 @@ async fn visibility_hidden_hooks_skip_routine_rows_but_render_failures_snapshot(
     let routine_completed_snapshot =
         hook_live_and_history_snapshot(&chat, "routine completed", &routine_history);
 
-    let mut failed_completed = hook_completed_run(
+    let mut warning_completed = hook_completed_run(
         "post-tool-use:1:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        vec![
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                text: "background context for the model".to_string(),
+            },
+            codex_app_server_protocol::HookOutputEntry {
+                kind: codex_app_server_protocol::HookOutputEntryKind::Warning,
+                text: "review this managed hook warning".to_string(),
+            },
+        ],
+    );
+    warning_completed.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_completed(&mut chat, warning_completed);
+    let warning_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let warning_snapshot =
+        hook_live_and_history_snapshot(&chat, "warning with hidden context", &warning_history);
+
+    let mut failed_completed = hook_completed_run(
+        "post-tool-use:2:/tmp/hooks.json",
         codex_app_server_protocol::HookEventName::PostToolUse,
         codex_app_server_protocol::HookRunStatus::Failed,
         vec![codex_app_server_protocol::HookOutputEntry {
@@ -2826,7 +2850,9 @@ async fn visibility_hidden_hooks_skip_routine_rows_but_render_failures_snapshot(
 
     assert_chatwidget_snapshot!(
         "visibility_hidden_hooks_skip_routine_rows_but_render_failures_snapshot",
-        format!("{routine_running_snapshot}\n\n{routine_completed_snapshot}\n\n{failed_snapshot}")
+        format!(
+            "{routine_running_snapshot}\n\n{routine_completed_snapshot}\n\n{warning_snapshot}\n\n{failed_snapshot}"
+        )
     );
 }
 
