@@ -6475,10 +6475,10 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     (session, turn_context)
 }
 
-struct GitAttributionTestContributor;
-struct GitAttributionTestState;
+struct PromptExtensionTestContributor;
+struct PromptExtensionTestState;
 
-impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
     fn contribute<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
@@ -6488,11 +6488,11 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     > {
         Box::pin(async move {
             thread_store
-                .get::<GitAttributionTestState>()
+                .get::<PromptExtensionTestState>()
                 .is_some()
                 .then(|| {
                     codex_extension_api::PromptFragment::developer_policy(
-                        "git attribution extension enabled",
+                        "prompt extension enabled",
                     )
                 })
                 .into_iter()
@@ -6501,21 +6501,21 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     }
 }
 
-fn git_attribution_test_registry()
+fn prompt_extension_test_registry()
 -> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    builder.prompt_contributor(Arc::new(PromptExtensionTestContributor));
     Arc::new(builder.build())
 }
 
 #[tokio::test]
-async fn build_initial_context_includes_git_attribution_from_extensions() {
+async fn build_initial_context_includes_prompt_fragments_from_extensions() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
     session
         .services
         .thread_extension_data
-        .insert(GitAttributionTestState);
+        .insert(PromptExtensionTestState);
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6524,15 +6524,15 @@ async fn build_initial_context_includes_git_attribution_from_extensions() {
         developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "expected git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "expected prompt extension developer text, got {developer_messages:?}"
     );
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+async fn build_initial_context_omits_prompt_fragments_without_extension_state() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6541,8 +6541,8 @@ async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() 
         !developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "did not expect git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "did not expect prompt extension developer text, got {developer_messages:?}"
     );
 }
 

@@ -177,14 +177,6 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Optional commit attribution text for commit message co-author trailers.
-    /// This top-level setting only takes effect when `[features].codex_git_commit`
-    /// is enabled.
-    ///
-    /// When enabled and unset, Codex uses `Codex <noreply@openai.com>`.
-    /// Set to an empty string to disable automatic commit attribution.
-    pub commit_attribution: Option<String>,
-
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
     pub forced_chatgpt_workspace_id: Option<String>,

@@ -477,15 +477,6 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional commit attribution text for commit message co-author trailers.
-    /// This top-level setting only takes effect when `[features].codex_git_commit`
-    /// is enabled.
-    ///
-    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
-    /// - `Some("")` or whitespace-only: disable commit attribution
-    /// - `Some("...")`: use the provided attribution text verbatim
-    pub commit_attribution: Option<String>,
-
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -2808,8 +2799,6 @@ impl Config {
             }
         });
 
-        let commit_attribution = cfg.commit_attribution;
-
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
@@ -3051,7 +3040,6 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
-            commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,

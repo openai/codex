@@ -1902,7 +1902,6 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-file-watcher",
- "codex-git-attribution",
  "codex-git-utils",
  "codex-guardian",
  "codex-hooks",
@@ -2909,16 +2908,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "codex-git-attribution"
-version = "0.0.0"
-dependencies = [
- "codex-core",
- "codex-extension-api",
- "codex-features",
- "pretty_assertions",
 ]
 
 [[package]]
