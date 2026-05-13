@@ -362,7 +362,15 @@ impl ApprovalOverlay {
                 } => history_cell::ApprovalDecisionSubject::NetworkAccess {
                     target: network_approval_target(network_approval_context, command),
                 },
-                _ => history_cell::ApprovalDecisionSubject::Command(command.to_vec()),
+                _ => {
+                    if let Some(target) = network_approval_command_target(command) {
+                        history_cell::ApprovalDecisionSubject::NetworkAccess {
+                            target: target.to_string(),
+                        }
+                    } else {
+                        history_cell::ApprovalDecisionSubject::Command(command.to_vec())
+                    }
+                }
             };
             let cell = history_cell::new_approval_decision_cell(
                 subject,
@@ -1139,6 +1147,21 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn render_history_cell_lines(
+        cell: &dyn crate::history_cell::HistoryCell,
+        width: u16,
+    ) -> Vec<String> {
+        cell.display_lines(width)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     fn normalize_snapshot_paths(rendered: String) -> String {
@@ -2146,6 +2169,73 @@ mod tests {
             "  renderable.rs this time".to_string(),
         ];
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn exec_history_cell_does_not_render_blank_action_for_empty_command() {
+        let approved = history_cell::new_approval_decision_cell(
+            history_cell::ApprovalDecisionSubject::Command(Vec::new()),
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        );
+        assert_eq!(
+            render_history_cell_lines(approved.as_ref(), /*width*/ 80),
+            vec!["✔ You approved this request this time".to_string()]
+        );
+
+        let approved_for_session = history_cell::new_approval_decision_cell(
+            history_cell::ApprovalDecisionSubject::Command(Vec::new()),
+            ReviewDecision::ApprovedForSession,
+            history_cell::ApprovalDecisionActor::User,
+        );
+        assert_eq!(
+            render_history_cell_lines(approved_for_session.as_ref(), /*width*/ 80),
+            vec!["✔ You approved this request every time this session".to_string()]
+        );
+    }
+
+    #[test]
+    fn network_access_command_history_uses_target_without_structured_context() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_overlay(
+            ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
+                id: "test".into(),
+                command: vec![
+                    "network-access".to_string(),
+                    "https://example.com:8443".to_string(),
+                ],
+                reason: None,
+                available_decisions: vec![
+                    CommandExecutionApprovalDecision::Accept,
+                    CommandExecutionApprovalDecision::Cancel,
+                ],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        let mut decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                decision = Some(cell);
+                break;
+            }
+        }
+        let decision = decision.expect("expected decision cell in history");
+        assert_eq!(
+            render_history_cell_lines(decision.as_ref(), /*width*/ 80),
+            vec![
+                "✔ You approved codex network access to https://example.com:8443 this time"
+                    .to_string(),
+            ]
+        );
     }
 
     #[test]
