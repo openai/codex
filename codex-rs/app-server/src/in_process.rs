@@ -430,7 +430,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 auth_manager,
                 installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
-                remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();

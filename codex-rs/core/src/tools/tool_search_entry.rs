@@ -11,7 +11,6 @@ use codex_tools::tool_search_result_source_to_loadable_tool_spec;
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
     pub(crate) output: LoadableToolSpec,
-    pub(crate) limit_bucket: Option<String>,
 }
 
 pub(crate) fn build_tool_search_entries(
@@ -78,7 +77,6 @@ fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json:
             connector_name: info.connector_name.as_deref(),
             description: info.namespace_description.as_deref(),
         })?,
-        limit_bucket: Some(info.server_name.clone()),
     })
 }
 
@@ -86,7 +84,6 @@ fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, 
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
         output: dynamic_tool_to_loadable_tool_spec(tool)?,
-        limit_bucket: None,
     })
 }
 

@@ -188,6 +188,8 @@ pub enum Feature {
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Enable remote plugin sharing flows.
+    PluginSharing,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
@@ -1008,6 +1010,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::PluginSharing,
+        key: "plugin_sharing",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ExternalMigration,
         key: "external_migration",
         stage: Stage::Experimental {
@@ -1118,7 +1126,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteControl,
         key: "remote_control",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
