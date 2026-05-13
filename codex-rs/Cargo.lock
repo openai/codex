@@ -3138,6 +3138,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-memories-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-memories-read",
+ "codex-tools",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "codex-memories-mcp"
 version = "0.0.0"
 dependencies = [
