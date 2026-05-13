@@ -1453,6 +1453,7 @@ mod tests {
             read_roots: None,
             read_roots_include_platform_defaults: false,
             write_roots: Some(override_roots.clone()),
+            deny_read_paths: None,
             deny_write_paths: None,
         };
 
