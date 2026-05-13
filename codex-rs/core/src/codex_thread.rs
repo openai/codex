@@ -262,6 +262,14 @@ impl CodexThread {
         self.codex.session.preview_settings(&updates).await
     }
 
+    pub async fn validate_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<()> {
+        self.preview_turn_context_overrides(overrides).await?;
+        Ok(())
+    }
+
     /// Apply persistent turn context overrides and return the effective state.
     pub async fn update_turn_context_overrides(
         &self,
