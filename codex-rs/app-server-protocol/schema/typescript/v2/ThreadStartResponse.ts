@@ -5,6 +5,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
@@ -16,7 +17,11 @@ instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**
  */
 approvalsReviewer: ApprovalsReviewer, /**
  * Legacy sandbox policy retained for compatibility. Experimental clients
- * should prefer `permissionProfile` when they need exact runtime
- * permissions.
+ * should prefer `permissionProfile`.
  */
-sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null};
+sandbox: SandboxPolicy, /**
+ * Exact effective permissions used by this thread. Read-only: clients may
+ * select permissions by id and update workspace roots, but cannot replace
+ * this value through lifecycle or turn APIs.
+ */
+permissionProfile: PermissionProfile | null, reasoningEffort: ReasoningEffort | null};

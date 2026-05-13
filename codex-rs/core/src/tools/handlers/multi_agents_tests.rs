@@ -3776,7 +3776,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.permission_profile,
+        turn.config.permissions.permission_profile_constraint(),
         turn.config.legacy_sandbox_policy(),
         turn_cwd.as_path(),
     );

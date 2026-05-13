@@ -2230,6 +2230,7 @@ async fn session_configured_clears_goal_status_footer() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -2239,6 +2240,36 @@ async fn session_configured_clears_goal_status_footer() {
 
     assert_eq!(chat.current_goal_status_indicator, None);
     assert!(chat.turn_lifecycle.budget_limited_turn_ids.is_empty());
+}
+
+#[tokio::test]
+async fn session_configured_syncs_workspace_roots_into_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let cwd = test_path_buf("/home/user/project").abs();
+    let extra_root = test_path_buf("/home/user/extra").abs();
+
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.4".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: None,
+        cwd: cwd.clone(),
+        workspace_roots: vec![cwd.clone(), extra_root.clone()],
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+
+    assert_eq!(chat.config_ref().workspace_roots, vec![cwd, extra_root]);
 }
 
 #[tokio::test]

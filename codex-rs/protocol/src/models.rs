@@ -335,21 +335,6 @@ pub struct ActivePermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,
-
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modifications: Vec<ActivePermissionProfileModification>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "snake_case")]
-    #[ts(rename_all = "snake_case")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
 }
 
 impl ActivePermissionProfile {
@@ -357,16 +342,7 @@ impl ActivePermissionProfile {
         Self {
             id: id.into(),
             extends: None,
-            modifications: Vec::new(),
         }
-    }
-
-    pub fn with_modifications(
-        mut self,
-        modifications: Vec<ActivePermissionProfileModification>,
-    ) -> Self {
-        self.modifications = modifications;
-        self
     }
 }
 
@@ -537,6 +513,20 @@ impl PermissionProfile {
         (
             self.file_system_sandbox_policy(),
             self.network_sandbox_policy(),
+        )
+    }
+
+    pub fn materialize_project_roots_with_workspace_roots(
+        &self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let (file_system_sandbox_policy, network_sandbox_policy) = self.to_runtime_permissions();
+        let file_system_sandbox_policy = file_system_sandbox_policy
+            .materialize_project_roots_with_workspace_roots(workspace_roots);
+        Self::from_runtime_permissions_with_enforcement(
+            self.enforcement(),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
         )
     }
 }
