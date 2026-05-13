@@ -1,10 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-fn drain_app_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
-    std::iter::from_fn(|| rx.try_recv().ok()).collect()
-}
-
 fn assert_collaboration_override(events: &[AppEvent], expected: ModeKind) {
     assert!(
         events.iter().any(|event| match event {

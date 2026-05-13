@@ -333,6 +333,12 @@ pub(super) fn drain_insert_history(
     out
 }
 
+pub(super) fn drain_app_events(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<AppEvent> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
+}
+
 pub(super) fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     let mut s = String::new();
     for line in lines {

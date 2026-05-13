@@ -19,7 +19,6 @@ use crossterm::event::KeyEvent;
 use strum::IntoEnumIterator;
 
 use super::ChatWidget;
-use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::key_hint::KeyBindingListExt;
 
@@ -107,11 +106,9 @@ impl ChatWidget {
             mask.mode = Some(ModeKind::Plan);
             mask.model = Some(current_model);
             mask.reasoning_effort = Some(Some(next_effort));
-            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
-            self.app_event_tx
-                .send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
-                    collaboration_mode,
-                )));
+            self.app_event_tx.send(AppEvent::CodexOp(
+                self.collaboration_mode_override_command(&mut mask),
+            ));
             self.app_event_tx
                 .send(AppEvent::UpdatePlanModeReasoningEffort(Some(next_effort)));
         } else {

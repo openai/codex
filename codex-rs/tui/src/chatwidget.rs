@@ -3377,16 +3377,9 @@ impl ChatWidget {
             .map(|mut mask| {
                 let name = mask.name.clone();
                 let is_current = current_kind == mask.mode;
-                if mask.mode == Some(ModeKind::Plan)
-                    && let Some(effort) = self.config.plan_mode_reasoning_effort
-                {
-                    mask.reasoning_effort = Some(Some(effort));
-                }
-                let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
+                let override_command = self.collaboration_mode_override_command(&mut mask);
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
-                        collaboration_mode.clone(),
-                    )));
+                    tx.send(AppEvent::CodexOp(override_command.clone()));
                     tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
                 })];
                 SelectionItem {
@@ -3501,11 +3494,9 @@ impl ChatWidget {
             mask.mode = Some(ModeKind::Plan);
             mask.model = Some(model.clone());
             mask.reasoning_effort = Some(effort);
-            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
+            let override_command = self.collaboration_mode_override_command(&mut mask);
             move |tx| {
-                tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
-                    collaboration_mode.clone(),
-                )));
+                tx.send(AppEvent::CodexOp(override_command.clone()));
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
@@ -3516,11 +3507,9 @@ impl ChatWidget {
             mask.mode = Some(ModeKind::Plan);
             mask.model = Some(model.clone());
             mask.reasoning_effort = Some(effort);
-            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
+            let override_command = self.collaboration_mode_override_command(&mut mask);
             move |tx| {
-                tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
-                    collaboration_mode.clone(),
-                )));
+                tx.send(AppEvent::CodexOp(override_command.clone()));
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
@@ -5249,17 +5238,22 @@ impl ChatWidget {
             self.active_collaboration_mask.as_ref(),
         ) {
             let mut next_mask = next_mask;
-            if next_mask.mode == Some(ModeKind::Plan)
-                && let Some(effort) = self.config.plan_mode_reasoning_effort
-            {
-                next_mask.reasoning_effort = Some(Some(effort));
-            }
-            let collaboration_mode = self.current_collaboration_mode.apply_mask(&next_mask);
-            self.app_event_tx
-                .send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
-                    collaboration_mode,
-                )));
+            let override_command = self.collaboration_mode_override_command(&mut next_mask);
+            self.app_event_tx.send(AppEvent::CodexOp(override_command));
             self.set_collaboration_mask(next_mask);
+        }
+    }
+
+    fn collaboration_mode_override_command(&self, mask: &mut CollaborationModeMask) -> AppCommand {
+        self.apply_plan_reasoning_override_to_mask(mask);
+        AppCommand::override_collaboration_mode(self.current_collaboration_mode.apply_mask(mask))
+    }
+
+    fn apply_plan_reasoning_override_to_mask(&self, mask: &mut CollaborationModeMask) {
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
         }
     }
 
@@ -5274,11 +5268,7 @@ impl ChatWidget {
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
-        if mask.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
-        {
-            mask.reasoning_effort = Some(Some(effort));
-        }
+        self.apply_plan_reasoning_override_to_mask(&mut mask);
         if mask.mode == Some(ModeKind::Plan) {
             self.dismissed_plan_mode_nudge_scopes
                 .insert(self.plan_mode_nudge_scope());

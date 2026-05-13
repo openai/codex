@@ -7,10 +7,6 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
-fn drain_app_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
-    std::iter::from_fn(|| rx.try_recv().ok()).collect()
-}
-
 fn assert_model_effort_override(
     events: &[AppEvent],
     expected_model: &str,
