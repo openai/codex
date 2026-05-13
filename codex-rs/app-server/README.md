@@ -67,7 +67,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
-- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy or experimental `permissions` profile selection, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
+- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, workspace roots, approval policy, approvals reviewer, and the active permission profile name. Supplying `permissions` reselects one of the thread's named permission profiles; clients cannot submit an arbitrary permission profile value through `turn/start`. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
@@ -122,9 +122,9 @@ Example with notification opt-out:
 ## API Overview
 
 - `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`.
-- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
-- `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
+- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Omitted permission fields preserve the stored permission profile; clients may replace `workspaceRoots` or select a server-defined profile by id with `permissions`, but they cannot send arbitrary `PermissionProfile` bodies. The legacy `sandbox` shorthand is accepted as a compatibility spelling only when it maps to a named permissions profile and cannot be combined with `permissions`.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Like resume, omitted permission fields preserve the source permission profile while allowing explicit `workspaceRoots`, named `permissions` profile selection, or legacy `sandbox` compatibility selection.
+- `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known; the full `PermissionProfile` value is not exposed by thread lifecycle responses.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -147,7 +147,7 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Prefer experimental `permissions` profile selection for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. It can update `workspaceRoots` and use experimental `permissions` to select a server-defined profile by id, but it cannot replace the thread's permission profile with arbitrary values. The legacy `sandboxPolicy` field is accepted as a compatibility spelling only when it is a no-op or maps to a named permissions profile. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -222,10 +222,11 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    "workspaceRoots": ["/Users/me/project"],
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     // Prefer experimental profile selection:
-    // "permissions": { "type": "profile", "id": ":workspace" }
+    // "permissions": ":workspace"
     // Do not send both "sandbox" and "permissions".
     "personality": "friendly",
     "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
@@ -259,7 +260,7 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`. When the stored session includes persisted token usage, the server emits `thread/tokenUsage/updated` immediately after the response so clients can render restored usage before the next turn starts. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`.
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`. When the stored session includes persisted token usage, the server emits `thread/tokenUsage/updated` immediately after the response so clients can render restored usage before the next turn starts. You can pass non-permission configuration overrides such as `approvalsReviewer`; omitted permission fields preserve the stored permission profile. Use `workspaceRoots` to replace the thread root list, and use `permissions` to select a server-defined profile by id. Older clients may still send `sandbox` when it maps to the same named profile selection.
 
 By default, `thread/resume` includes the reconstructed turn history in `thread.turns`. Experimental clients can pass `excludeTurns: true` to return only thread metadata and live resume state, then call `thread/turns/list` separately if they want to page the turn history over the network. In that mode the server also skips replaying restored `thread/tokenUsage/updated`, which avoids rebuilding turns just to attribute historical usage.
 
@@ -627,19 +628,14 @@ You can optionally specify config overrides on the new turn. If specified, these
     "input": [ { "type": "text", "text": "Run tests" } ],
     // Below are optional config overrides
     "cwd": "/Users/me/project",
+    "workspaceRoots": ["/Users/me/project", "/Users/me/project/packages/api"],
     // Experimental: turn-scoped environment selection.
     "environments": [
         { "environmentId": "local", "cwd": "/Users/me/project" }
     ],
     "approvalPolicy": "unlessTrusted",
-    "sandboxPolicy": {
-        "type": "workspaceWrite",
-        "writableRoots": ["/Users/me/project"],
-        "networkAccess": true
-    },
-    // Prefer experimental profile selection:
-    // "permissions": { "type": "profile", "id": ":workspace" }
-    // Do not send both "sandboxPolicy" and "permissions".
+    // Optional: select a named permission profile for this and later turns.
+    // "permissions": ":workspace"
     "model": "gpt-5.1-codex",
     "effort": "medium",
     "summary": "concise",
