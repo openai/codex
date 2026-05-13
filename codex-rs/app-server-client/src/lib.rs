@@ -25,6 +25,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use codex_app_server::app_server_control_socket_path;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
@@ -61,6 +62,7 @@ use tracing::warn;
 
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
+pub use crate::remote::RemoteAppServerEndpoint;
 
 /// Transitional access to core-only embedded app-server types.
 ///
@@ -952,6 +954,8 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::config::ConfigBuilder;
     use codex_core::init_state_db;
+    use codex_uds::UnixListener;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
@@ -961,6 +965,7 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
+    use tokio_tungstenite::accept_async;
     use tokio_tungstenite::accept_hdr_async;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::tungstenite::handshake::server::Request as WebSocketRequest;
@@ -1100,9 +1105,10 @@ mod tests {
         format!("ws://{addr}")
     }
 
-    async fn expect_remote_initialize(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) {
+    async fn expect_remote_initialize<S>(websocket: &mut tokio_tungstenite::WebSocketStream<S>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         let JSONRPCMessage::Request(request) = read_websocket_message(websocket).await else {
             panic!("expected initialize request");
         };
@@ -1123,9 +1129,12 @@ mod tests {
         assert_eq!(notification.method, "initialized");
     }
 
-    async fn read_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) -> JSONRPCMessage {
+    async fn read_websocket_message<S>(
+        websocket: &mut tokio_tungstenite::WebSocketStream<S>,
+    ) -> JSONRPCMessage
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         loop {
             let frame = websocket
                 .next()
@@ -1145,10 +1154,12 @@ mod tests {
         }
     }
 
-    async fn write_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    async fn write_websocket_message<S>(
+        websocket: &mut tokio_tungstenite::WebSocketStream<S>,
         message: JSONRPCMessage,
-    ) {
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         websocket
             .send(Message::Text(
                 serde_json::to_string(&message)
@@ -1213,8 +1224,10 @@ mod tests {
 
     fn test_remote_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
         RemoteAppServerConnectArgs {
-            websocket_url,
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url,
+                auth_token: None,
+            },
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
@@ -1454,6 +1467,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_unix_socket_typed_request_roundtrip_works() {
+        let socket_dir = TempDir::new().expect("socket dir");
+        let socket_path = AbsolutePathBuf::from_absolute_path(socket_dir.path().join("codex.sock"))
+            .expect("socket path should resolve");
+        let mut listener = UnixListener::bind(socket_path.as_path())
+            .await
+            .expect("listener should bind");
+        tokio::spawn(async move {
+            let stream = listener.accept().await.expect("accept should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected account/read request");
+            };
+            assert_eq!(request.method, "account/read");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .expect("response should serialize"),
+                }),
+            )
+            .await;
+            websocket.close(None).await.expect("close should succeed");
+        });
+        let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        })
+        .await
+        .expect("remote client should connect");
+
+        let response: GetAccountResponse = client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: RequestId::Integer(1),
+                params: codex_app_server_protocol::GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .expect("typed request should succeed");
+        assert_eq!(response.account, None);
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn remote_typed_request_accepts_large_single_frame_response() {
         let padding = "x".repeat((17 << 20) + 1024);
         let websocket_url = start_test_remote_server(move |mut websocket| async move {
@@ -1514,8 +1585,15 @@ mod tests {
         )
         .await;
         let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            auth_token: Some(auth_token),
-            ..test_remote_connect_args(websocket_url)
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url,
+                auth_token: Some(auth_token),
+            },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
         })
         .await
         .expect("remote client should connect");
@@ -1526,9 +1604,15 @@ mod tests {
     #[tokio::test]
     async fn remote_connect_rejects_non_loopback_ws_when_auth_configured() {
         let result = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            websocket_url: "ws://example.com:4500".to_string(),
-            auth_token: Some("remote-bearer-token".to_string()),
-            ..test_remote_connect_args("ws://127.0.0.1:1".to_string())
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "ws://example.com:4500".to_string(),
+                auth_token: Some("remote-bearer-token".to_string()),
+            },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
         })
         .await;
         let err = match result {
@@ -1706,13 +1790,8 @@ mod tests {
         })
         .await;
         let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            websocket_url,
-            auth_token: None,
-            client_name: "codex-app-server-client-test".to_string(),
-            client_version: "0.0.0-test".to_string(),
-            experimental_api: true,
-            opt_out_notification_methods: Vec::new(),
             channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
         })
         .await
         .expect("remote client should connect");

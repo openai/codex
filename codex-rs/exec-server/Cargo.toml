@@ -26,6 +26,7 @@ codex-utils-pty = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -861,10 +861,10 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
             .as_nanos()
     );
 
-    let (mut process, socket_path, _socket_dir) = spawn_websocket_server(codex_home.path()).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
-    let mut ws1 = connect_websocket(&socket_path).await?;
-    let mut ws2 = connect_websocket(&socket_path).await?;
+    let mut ws1 = connect_websocket(bind_addr).await?;
+    let mut ws2 = connect_websocket(bind_addr).await?;
 
     send_initialize_request(&mut ws1, /*id*/ 1, "ws_client_one").await?;
     read_initialize_response(&mut ws1, /*request_id*/ 1).await?;
@@ -929,7 +929,7 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     process
         .kill()
         .await
-        .context("failed to stop app-server process")?;
+        .context("failed to stop websocket app-server process")?;
     Ok(())
 }
 
