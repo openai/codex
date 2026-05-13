@@ -891,7 +891,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines

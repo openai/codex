@@ -3179,10 +3179,11 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.codex.session.clone();
 
+    let child_turn = parent_session.new_default_turn().await;
     let child_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            child_turn,
             "spawn_agent",
             function_payload(json!({"message": "hello child"})),
         ))

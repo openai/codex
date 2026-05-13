@@ -1688,6 +1688,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             hooks: None,
             enforce_residency: None,
@@ -3003,7 +3004,11 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    id: "gmail@chatgpt-global".to_string(),
+                    remote_plugin_id: Some(
+                        "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    ),
+                    local_version: None,
                     name: "gmail".to_string(),
                     share_context: None,
                     source: PluginSource::Remote,
@@ -3022,7 +3027,9 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "id": "gmail@chatgpt-global",
+                    "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                    "localVersion": null,
                     "name": "gmail",
                     "shareContext": null,
                     "source": { "type": "remote" },
@@ -3055,6 +3062,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.local_version, None);
     assert_eq!(summary.share_context, None);
 }
 

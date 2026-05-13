@@ -2331,7 +2331,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
             "cwd": turn_context.cwd,
             "transcript_path": null,
@@ -2391,7 +2391,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
             "cwd": turn_context.cwd,
             "transcript_path": null,

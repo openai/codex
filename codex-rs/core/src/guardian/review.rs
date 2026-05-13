@@ -659,9 +659,10 @@ pub(super) async fn run_guardian_review_session(
             fallback
         }
     };
+    let preferred_model_id = turn.provider.approval_review_preferred_model();
     let preferred_model = available_models
         .iter()
-        .find(|preset| preset.model == super::GUARDIAN_PREFERRED_MODEL);
+        .find(|preset| preset.model == preferred_model_id);
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
@@ -670,10 +671,7 @@ pub(super) async fn run_guardian_review_session(
                 .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
             Some(preset.default_reasoning_effort),
         );
-        (
-            super::GUARDIAN_PREFERRED_MODEL.to_string(),
-            reasoning_effort,
-        )
+        (preferred_model_id.to_string(), reasoning_effort)
     } else {
         let reasoning_effort = preferred_reasoning_effort(
             turn.model_info

@@ -1,6 +1,5 @@
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
 
@@ -17,6 +16,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -139,33 +140,12 @@ impl ToolHandler for ShellCommandHandler {
         })
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
-        };
-
-        serde_json::from_str::<ShellCommandToolCallParams>(arguments)
-            .map(|params| {
-                let use_login_shell = match Self::resolve_use_login_shell(
-                    params.login,
-                    invocation.turn.tools_config.allow_login_shell,
-                ) {
-                    Ok(use_login_shell) => use_login_shell,
-                    Err(_) => return true,
-                };
-                let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-                !is_known_safe_command(&command)
-            })
-            .unwrap_or(true)
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.options.is_some()
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -173,6 +153,27 @@ impl ToolHandler for ShellCommandHandler {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": command }),
         })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported shell_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "shell_command",
+                "command",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
     }
 
     fn post_tool_use_payload(

@@ -45,6 +45,7 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "ext/extension-api",
+    "ext/guardian",
     "ext/git-attribution",
     "external-agent-migration",
     "external-agent-sessions",
@@ -162,6 +163,7 @@ codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
+codex-guardian = { path = "ext/guardian" }
 codex-git-attribution = { path = "ext/git-attribution" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
@@ -226,7 +228,6 @@ codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
 codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
-codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
@@ -264,6 +265,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.28.1"
@@ -278,7 +280,6 @@ dotenvy = "0.15.7"
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
-env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 flate2 = "1.1.8"

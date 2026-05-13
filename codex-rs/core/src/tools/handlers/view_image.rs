@@ -133,16 +133,12 @@ impl ToolHandler for ViewImageHandler {
         };
         let cwd = turn_environment.cwd.clone();
         let abs_path = cwd.join(path);
-        let sandbox = turn_environment.environment.is_remote().then(|| {
-            let mut sandbox =
-                turn.file_system_sandbox_context(/*additional_permissions*/ None);
-            sandbox.cwd = Some(cwd.clone());
-            sandbox
-        });
+        let mut sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+        sandbox.cwd = Some(cwd.clone());
         let fs = turn_environment.environment.get_filesystem();
 
         let metadata = fs
-            .get_metadata(&abs_path, sandbox.as_ref())
+            .get_metadata(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -158,7 +154,7 @@ impl ToolHandler for ViewImageHandler {
             )));
         }
         let file_bytes = fs
-            .read_file(&abs_path, sandbox.as_ref())
+            .read_file(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -247,8 +243,15 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::ToolCallSource;
+    use crate::tools::context::ToolInvocation;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[test]
     fn code_mode_result_returns_image_url_object() {
@@ -267,6 +270,37 @@ mod tests {
                 "image_url": "data:image/png;base64,AAA",
                 "detail": "high",
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_passes_sandbox_context_for_local_filesystem_reads() {
+        let (session, mut turn) = make_session_and_context().await;
+        let image_path = turn.cwd.join("image.png");
+        std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
+        turn.permission_profile = PermissionProfile::read_only();
+
+        let result = ViewImageHandler::default()
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-view-image".to_string(),
+                tool_name: codex_tools::ToolName::plain("view_image"),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: json!({ "path": "image.png" }).to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected sandboxed filesystem error");
+        };
+        assert!(
+            message.contains("sandboxed filesystem operations require configured runtime paths"),
+            "{message}"
         );
     }
 }

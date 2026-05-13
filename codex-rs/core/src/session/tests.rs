@@ -542,7 +542,6 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -2837,10 +2836,6 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
-    assert!(!Arc::ptr_eq(
-        &updated.tool_call_gate,
-        &turn_context.tool_call_gate
-    ));
 }
 
 #[test]
@@ -5798,34 +5793,6 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 }
 
 #[tokio::test]
-async fn record_model_warning_appends_user_message() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let features = Features::with_defaults().into();
-    session.features = features;
-
-    session
-        .record_model_warning("too many unified exec processes", &turn_context)
-        .await;
-
-    let history = session.clone_history().await;
-    let history_items = history.raw_items();
-    let last = history_items.last().expect("warning recorded");
-
-    match last {
-        ResponseItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            assert_eq!(
-                content,
-                &vec![ContentItem::InputText {
-                    text: "Warning: too many unified exec processes".to_string(),
-                }]
-            );
-        }
-        other => panic!("expected user message, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
@@ -8639,7 +8606,6 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
