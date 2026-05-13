@@ -198,7 +198,7 @@ impl TurnContext {
         if features.enabled(Feature::DefaultModeRequestUserInput)
             && !request_user_input_available_modes.contains(&ModeKind::Default)
         {
-            request_user_input_available_modes.push(ModeKind::Default);
+            request_user_input_available_modes.insert(0, ModeKind::Default);
         }
         let provider_capabilities = self.provider.capabilities();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -491,7 +491,7 @@ impl Session {
             .enabled(Feature::DefaultModeRequestUserInput)
             && !request_user_input_allowed_modes.contains(&ModeKind::Default)
         {
-            request_user_input_allowed_modes.push(ModeKind::Default);
+            request_user_input_allowed_modes.insert(0, ModeKind::Default);
         }
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
