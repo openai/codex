@@ -26,6 +26,71 @@ pub struct RemotePluginShareSaveResult {
     pub share_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemotePluginShareAccessPolicy {
+    pub discoverability: Option<RemotePluginShareDiscoverability>,
+    pub share_targets: Option<Vec<RemotePluginShareTarget>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RemotePluginShareDiscoverability {
+    Listed,
+    Unlisted,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RemotePluginShareUpdateDiscoverability {
+    Unlisted,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemotePluginSharePrincipalType {
+    User,
+    Group,
+    Workspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemotePluginShareTarget {
+    pub principal_type: RemotePluginSharePrincipalType,
+    pub principal_id: String,
+    pub role: RemotePluginShareTargetRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RemotePluginSharePrincipal {
+    pub principal_type: RemotePluginSharePrincipalType,
+    pub principal_id: String,
+    pub role: RemotePluginSharePrincipalRole,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemotePluginShareTargetRole {
+    Reader,
+    Editor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemotePluginSharePrincipalRole {
+    Reader,
+    Editor,
+    Owner,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginShareUpdateTargetsResult {
+    pub principals: Vec<RemotePluginSharePrincipal>,
+    pub discoverability: RemotePluginShareDiscoverability,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RemoteWorkspacePluginUploadUrlRequest<'a> {
     filename: &'a str,
@@ -46,6 +111,10 @@ struct RemoteWorkspacePluginUploadUrlResponse {
 struct RemoteWorkspacePluginCreateRequest {
     file_id: String,
     etag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discoverability: Option<RemotePluginShareDiscoverability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_targets: Option<Vec<RemotePluginShareTarget>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -54,12 +123,25 @@ struct RemoteWorkspacePluginCreateResponse {
     share_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RemotePluginShareUpdateTargetsRequest {
+    discoverability: RemotePluginShareUpdateDiscoverability,
+    targets: Vec<RemotePluginShareTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RemotePluginShareUpdateTargetsResponse {
+    principals: Vec<RemotePluginSharePrincipal>,
+    discoverability: RemotePluginShareDiscoverability,
+}
+
 pub async fn save_remote_plugin_share(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     codex_home: &Path,
     plugin_path: &AbsolutePathBuf,
     remote_plugin_id: Option<&str>,
+    access_policy: RemotePluginShareAccessPolicy,
 ) -> Result<RemotePluginShareSaveResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let plugin_path_for_archive = plugin_path.as_path().to_path_buf();
@@ -82,6 +164,9 @@ pub async fn save_remote_plugin_share(
         .etag
         .ok_or(RemotePluginCatalogError::MissingUploadEtag)?;
     put_workspace_plugin_upload(&upload.upload_url, archive_bytes).await?;
+    let share_targets = access_policy.share_targets;
+    let share_targets =
+        ensure_unlisted_workspace_target(auth, access_policy.discoverability, share_targets)?;
     let response = finalize_workspace_plugin_upload(
         config,
         auth,
@@ -89,6 +174,8 @@ pub async fn save_remote_plugin_share(
         RemoteWorkspacePluginCreateRequest {
             file_id: upload.file_id,
             etag,
+            discoverability: access_policy.discoverability,
+            share_targets,
         },
     )
     .await?;
@@ -133,23 +220,54 @@ pub async fn list_remote_plugin_shares(
             .map(|plugin| (plugin.plugin.id.clone(), plugin))
             .collect::<BTreeMap<_, _>>();
     let local_plugin_paths =
-        local_paths::load_plugin_share_local_paths(codex_home).unwrap_or_else(|err| {
-            warn!("failed to load plugin share local path mapping: {err}");
-            BTreeMap::new()
-        });
+        local_paths::load_plugin_share_local_paths(codex_home).map_err(|err| {
+            RemotePluginCatalogError::UnexpectedResponse(format!(
+                "failed to load plugin share local path mapping: {err}"
+            ))
+        })?;
 
-    Ok(created_plugins
+    created_plugins
         .into_iter()
         .map(|plugin| {
-            let summary = build_remote_plugin_summary(&plugin, installed_by_id.get(&plugin.id));
-            let local_plugin_path = local_plugin_paths.get(&plugin.id).cloned();
-            RemotePluginShareSummary {
-                summary,
-                share_url: plugin.share_url,
-                local_plugin_path,
+            let summary = build_remote_plugin_summary(&plugin, installed_by_id.get(&plugin.id))?;
+            if summary
+                .share_context
+                .as_ref()
+                .and_then(|context| context.share_principals.as_ref())
+                .is_none()
+            {
+                return Err(RemotePluginCatalogError::UnexpectedResponse(format!(
+                    "created workspace plugin `{}` did not include share_principals",
+                    plugin.id
+                )));
             }
+            let local_plugin_path = local_plugin_paths.get(&plugin.id).cloned();
+            Ok(RemotePluginShareSummary {
+                summary,
+                local_plugin_path,
+            })
         })
-        .collect())
+        .collect()
+}
+
+pub fn load_plugin_share_remote_ids_by_local_path(
+    codex_home: &Path,
+) -> io::Result<BTreeMap<AbsolutePathBuf, String>> {
+    let local_paths = local_paths::load_plugin_share_local_paths(codex_home)?;
+    local_paths
+        .into_iter()
+        .map(|(remote_plugin_id, local_plugin_path)| {
+            if !is_valid_remote_plugin_id(&remote_plugin_id) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "invalid remote plugin id in share local path mapping: {remote_plugin_id}"
+                    ),
+                ));
+            }
+            Ok((local_plugin_path, remote_plugin_id))
+        })
+        .collect()
 }
 
 pub async fn delete_remote_plugin_share(
@@ -171,6 +289,68 @@ pub async fn delete_remote_plugin_share(
         );
     }
     Ok(())
+}
+
+pub async fn update_remote_plugin_share_targets(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    remote_plugin_id: &str,
+    targets: Vec<RemotePluginShareTarget>,
+    discoverability: RemotePluginShareUpdateDiscoverability,
+) -> Result<RemotePluginShareUpdateTargetsResult, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let target_discoverability = match discoverability {
+        RemotePluginShareUpdateDiscoverability::Unlisted => {
+            RemotePluginShareDiscoverability::Unlisted
+        }
+        RemotePluginShareUpdateDiscoverability::Private => {
+            RemotePluginShareDiscoverability::Private
+        }
+    };
+    let targets =
+        ensure_unlisted_workspace_target(auth, Some(target_discoverability), Some(targets))?
+            .unwrap_or_default();
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/ps/plugins/{remote_plugin_id}/shares");
+    let client = build_reqwest_client();
+    let request = authenticated_request(client.put(&url), auth)?.json(
+        &RemotePluginShareUpdateTargetsRequest {
+            discoverability,
+            targets,
+        },
+    );
+    let response: RemotePluginShareUpdateTargetsResponse = send_and_decode(request, &url).await?;
+    Ok(RemotePluginShareUpdateTargetsResult {
+        principals: response.principals,
+        discoverability: response.discoverability,
+    })
+}
+
+fn ensure_unlisted_workspace_target(
+    auth: &CodexAuth,
+    discoverability: Option<RemotePluginShareDiscoverability>,
+    targets: Option<Vec<RemotePluginShareTarget>>,
+) -> Result<Option<Vec<RemotePluginShareTarget>>, RemotePluginCatalogError> {
+    if discoverability != Some(RemotePluginShareDiscoverability::Unlisted) {
+        return Ok(targets);
+    }
+    let account_id = auth.get_account_id().ok_or_else(|| {
+        RemotePluginCatalogError::UnexpectedResponse(
+            "workspace plugin share requires an account id".to_string(),
+        )
+    })?;
+    let mut targets = targets.unwrap_or_default();
+    if !targets.iter().any(|target| {
+        target.principal_type == RemotePluginSharePrincipalType::Workspace
+            && target.principal_id == account_id
+    }) {
+        targets.push(RemotePluginShareTarget {
+            principal_type: RemotePluginSharePrincipalType::Workspace,
+            principal_id: account_id,
+            role: RemotePluginShareTargetRole::Reader,
+        });
+    }
+    Ok(Some(targets))
 }
 
 async fn fetch_created_workspace_plugins(

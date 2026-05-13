@@ -1,18 +1,18 @@
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LUID;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AdjustTokenPrivileges;
-use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
@@ -24,9 +24,6 @@ use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
 use windows_sys::Win32::Security::SetTokenInformation;
 
-use windows_sys::Win32::Security::TokenDefaultDacl;
-use windows_sys::Win32::Security::TokenGroups;
-use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -37,6 +34,9 @@ use windows_sys::Win32::Security::TOKEN_DUPLICATE;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Security::TOKEN_USER;
+use windows_sys::Win32::Security::TokenDefaultDacl;
+use windows_sys::Win32::Security::TokenGroups;
+use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
@@ -136,11 +136,7 @@ pub unsafe fn convert_string_sid_to_sid(s: &str) -> Option<*mut c_void> {
     }
     let mut psid: *mut c_void = std::ptr::null_mut();
     let ok = unsafe { ConvertStringSidToSidW(to_wide(s).as_ptr(), &mut psid) };
-    if ok != 0 {
-        Some(psid)
-    } else {
-        None
-    }
+    if ok != 0 { Some(psid) } else { None }
 }
 
 /// # Safety
@@ -276,7 +272,10 @@ unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     let token_user: TOKEN_USER = std::ptr::read_unaligned(user_buf.as_ptr() as *const TOKEN_USER);
     let sid_len = GetLengthSid(token_user.User.Sid);
     if sid_len == 0 {
-        return Err(anyhow!("GetLengthSid(TokenUser) failed: {}", GetLastError()));
+        return Err(anyhow!(
+            "GetLengthSid(TokenUser) failed: {}",
+            GetLastError()
+        ));
     }
     let mut user_sid_bytes = vec![0u8; sid_len as usize];
     if CopySid(

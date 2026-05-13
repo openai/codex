@@ -6,29 +6,72 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::tool_search_entry::ToolSearchInfo;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchSourceInfo;
+use codex_tools::ToolSpec;
+use codex_tools::default_namespace_description;
+use codex_tools::dynamic_tool_to_responses_api_tool;
 use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-pub struct DynamicToolHandler;
+pub struct DynamicToolHandler {
+    tool_name: ToolName,
+    spec: Option<ToolSpec>,
+    search_text: String,
+}
+
+impl DynamicToolHandler {
+    pub fn new(tool: &DynamicToolSpec) -> Option<Self> {
+        let tool_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
+        let output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
+        let spec = match tool.namespace.as_ref() {
+            Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+                name: namespace.clone(),
+                description: default_namespace_description(namespace),
+                tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
+            }),
+            None => ToolSpec::Function(output_tool),
+        };
+        Some(Self {
+            tool_name,
+            spec: Some(spec),
+            search_text: build_dynamic_search_text(tool),
+        })
+    }
+}
 
 impl ToolHandler for DynamicToolHandler {
     type Output = FunctionToolOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
+    fn spec(&self) -> Option<ToolSpec> {
+        self.spec.clone()
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        ToolSearchInfo::from_spec(
+            self.search_text.clone(),
+            self.spec()?,
+            Some(ToolSearchSourceInfo {
+                name: "Dynamic tools".to_string(),
+                description: Some("Tools provided by the current Codex thread.".to_string()),
+            }),
+        )
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -36,7 +79,6 @@ impl ToolHandler for DynamicToolHandler {
             session,
             turn,
             call_id,
-            tool_name,
             payload,
             ..
         } = invocation;
@@ -51,13 +93,19 @@ impl ToolHandler for DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
-            .await
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "dynamic tool call was cancelled before receiving a response".to_string(),
-                )
-            })?;
+        let response = request_dynamic_tool(
+            &session,
+            turn.as_ref(),
+            call_id,
+            self.tool_name.clone(),
+            args,
+        )
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "dynamic tool call was cancelled before receiving a response".to_string(),
+            )
+        })?;
 
         let DynamicToolResponse {
             content_items,
@@ -102,9 +150,11 @@ async fn request_dynamic_tool(
     }
 
     let started_at = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
     let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
         call_id: call_id.clone(),
         turn_id: turn_id.clone(),
+        started_at_ms,
         namespace: namespace.clone(),
         tool: tool.clone(),
         arguments: arguments.clone(),
@@ -116,6 +166,7 @@ async fn request_dynamic_tool(
         Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
             call_id,
             turn_id,
+            completed_at_ms: now_unix_timestamp_ms(),
             namespace,
             tool,
             arguments,
@@ -127,6 +178,7 @@ async fn request_dynamic_tool(
         None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
             call_id,
             turn_id,
+            completed_at_ms: now_unix_timestamp_ms(),
             namespace,
             tool,
             arguments,
@@ -140,3 +192,27 @@ async fn request_dynamic_tool(
 
     response
 }
+
+fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
+    let mut schema_properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    schema_properties.sort();
+    let mut parts = vec![
+        tool.name.clone(),
+        tool.name.replace('_', " "),
+        tool.description.clone(),
+    ];
+    if let Some(namespace) = &tool.namespace {
+        parts.push(namespace.clone());
+    }
+    parts.extend(schema_properties);
+    parts.join(" ")
+}
+
+#[cfg(test)]
+#[path = "dynamic_tests.rs"]
+mod tests;

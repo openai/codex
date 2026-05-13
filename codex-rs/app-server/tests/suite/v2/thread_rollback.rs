@@ -119,10 +119,15 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         .and_then(Value::as_object)
         .expect("thread/rollback result.thread must be an object");
     assert_eq!(rolled_back_thread.name, None);
+    assert_eq!(rolled_back_thread.session_id, thread.session_id);
     assert_eq!(
         thread_json.get("name"),
         Some(&Value::Null),
         "thread/rollback must serialize `name: null` when unset"
+    );
+    assert_eq!(
+        thread_json.get("sessionId").and_then(Value::as_str),
+        Some(thread.session_id.as_str())
     );
 
     assert_eq!(rolled_back_thread.turns.len(), 1);

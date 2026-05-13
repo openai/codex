@@ -137,6 +137,21 @@ pub(crate) async fn backfill_sessions(
     codex_home: &Path,
     default_provider: &str,
 ) {
+    backfill_sessions_with_lease(
+        runtime,
+        codex_home,
+        default_provider,
+        BACKFILL_LEASE_SECONDS,
+    )
+    .await;
+}
+
+pub(crate) async fn backfill_sessions_with_lease(
+    runtime: &codex_state::StateRuntime,
+    codex_home: &Path,
+    default_provider: &str,
+    backfill_lease_seconds: i64,
+) {
     let metric_client = codex_otel::global();
     let timer = metric_client
         .as_ref()
@@ -154,7 +169,7 @@ pub(crate) async fn backfill_sessions(
     if backfill_state.status == BackfillStatus::Complete {
         return;
     }
-    let claimed = match runtime.try_claim_backfill(BACKFILL_LEASE_SECONDS).await {
+    let claimed = match runtime.try_claim_backfill(backfill_lease_seconds).await {
         Ok(claimed) => claimed,
         Err(err) => {
             warn!(

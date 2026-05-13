@@ -533,200 +533,6 @@
         }
       ]
     },
-    "DeviceKeyCreateParams": {
-      "description": "Create a controller-local device key with a random key id.",
-      "properties": {
-        "accountUserId": {
-          "type": "string"
-        },
-        "clientId": {
-          "type": "string"
-        },
-        "protectionPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/DeviceKeyProtectionPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Defaults to `hardware_only` when omitted."
-        }
-      },
-      "required": [
-        "accountUserId",
-        "clientId"
-      ],
-      "type": "object"
-    },
-    "DeviceKeyProtectionPolicy": {
-      "description": "Protection policy for creating or loading a controller-local device key.",
-      "enum": [
-        "hardware_only",
-        "allow_os_protected_nonextractable"
-      ],
-      "type": "string"
-    },
-    "DeviceKeyPublicParams": {
-      "description": "Fetch a controller-local device key public key by id.",
-      "properties": {
-        "keyId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "keyId"
-      ],
-      "type": "object"
-    },
-    "DeviceKeySignParams": {
-      "description": "Sign an accepted structured payload with a controller-local device key.",
-      "properties": {
-        "keyId": {
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/definitions/DeviceKeySignPayload"
-        }
-      },
-      "required": [
-        "keyId",
-        "payload"
-      ],
-      "type": "object"
-    },
-    "DeviceKeySignPayload": {
-      "description": "Structured payloads accepted by `device/key/sign`.",
-      "oneOf": [
-        {
-          "description": "Payload bound to one remote-control controller websocket `/client` connection challenge.",
-          "properties": {
-            "accountUserId": {
-              "type": "string"
-            },
-            "audience": {
-              "$ref": "#/definitions/RemoteControlClientConnectionAudience"
-            },
-            "clientId": {
-              "type": "string"
-            },
-            "nonce": {
-              "type": "string"
-            },
-            "scopes": {
-              "description": "Must contain exactly `remote_control_controller_websocket`.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "sessionId": {
-              "description": "Backend-issued websocket session id that this proof authorizes.",
-              "type": "string"
-            },
-            "targetOrigin": {
-              "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
-              "type": "string"
-            },
-            "targetPath": {
-              "description": "Websocket route path that this proof authorizes.",
-              "type": "string"
-            },
-            "tokenExpiresAt": {
-              "description": "Remote-control token expiration as Unix seconds.",
-              "format": "int64",
-              "type": "integer"
-            },
-            "tokenSha256Base64url": {
-              "description": "SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "remoteControlClientConnection"
-              ],
-              "title": "RemoteControlClientConnectionDeviceKeySignPayloadType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "accountUserId",
-            "audience",
-            "clientId",
-            "nonce",
-            "scopes",
-            "sessionId",
-            "targetOrigin",
-            "targetPath",
-            "tokenExpiresAt",
-            "tokenSha256Base64url",
-            "type"
-          ],
-          "title": "RemoteControlClientConnectionDeviceKeySignPayload",
-          "type": "object"
-        },
-        {
-          "description": "Payload bound to a remote-control client `/client/enroll` ownership challenge.",
-          "properties": {
-            "accountUserId": {
-              "type": "string"
-            },
-            "audience": {
-              "$ref": "#/definitions/RemoteControlClientEnrollmentAudience"
-            },
-            "challengeExpiresAt": {
-              "description": "Enrollment challenge expiration as Unix seconds.",
-              "format": "int64",
-              "type": "integer"
-            },
-            "challengeId": {
-              "description": "Backend-issued enrollment challenge id that this proof authorizes.",
-              "type": "string"
-            },
-            "clientId": {
-              "type": "string"
-            },
-            "deviceIdentitySha256Base64url": {
-              "description": "SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
-              "type": "string"
-            },
-            "nonce": {
-              "type": "string"
-            },
-            "targetOrigin": {
-              "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
-              "type": "string"
-            },
-            "targetPath": {
-              "description": "HTTP route path that this proof authorizes.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "remoteControlClientEnrollment"
-              ],
-              "title": "RemoteControlClientEnrollmentDeviceKeySignPayloadType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "accountUserId",
-            "audience",
-            "challengeExpiresAt",
-            "challengeId",
-            "clientId",
-            "deviceIdentitySha256Base64url",
-            "nonce",
-            "targetOrigin",
-            "targetPath",
-            "type"
-          ],
-          "title": "RemoteControlClientEnrollmentDeviceKeySignPayload",
-          "type": "object"
-        }
-      ]
-    },
     "DynamicToolSpec": {
       "properties": {
         "deferLoading": {
@@ -1453,6 +1259,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2144,12 +1955,30 @@
       ],
       "type": "object"
     },
+    "PluginListMarketplaceKind": {
+      "enum": [
+        "local",
+        "workspace-directory",
+        "shared-with-me"
+      ],
+      "type": "string"
+    },
     "PluginListParams": {
       "properties": {
         "cwds": {
           "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "marketplaceKinds": {
+          "description": "Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus the default remote catalog when enabled by feature flag.",
+          "items": {
+            "$ref": "#/definitions/PluginListMarketplaceKind"
           },
           "type": [
             "array",
@@ -2197,11 +2026,37 @@
       ],
       "type": "object"
     },
+    "PluginShareDiscoverability": {
+      "enum": [
+        "LISTED",
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
     "PluginShareListParams": {
       "type": "object"
     },
+    "PluginSharePrincipalType": {
+      "enum": [
+        "user",
+        "group",
+        "workspace"
+      ],
+      "type": "string"
+    },
     "PluginShareSaveParams": {
       "properties": {
+        "discoverability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginShareDiscoverability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pluginPath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -2210,10 +2065,74 @@
             "string",
             "null"
           ]
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
         "pluginPath"
+      ],
+      "type": "object"
+    },
+    "PluginShareTarget": {
+      "properties": {
+        "principalId": {
+          "type": "string"
+        },
+        "principalType": {
+          "$ref": "#/definitions/PluginSharePrincipalType"
+        },
+        "role": {
+          "$ref": "#/definitions/PluginShareTargetRole"
+        }
+      },
+      "required": [
+        "principalId",
+        "principalType",
+        "role"
+      ],
+      "type": "object"
+    },
+    "PluginShareTargetRole": {
+      "enum": [
+        "reader",
+        "editor"
+      ],
+      "type": "string"
+    },
+    "PluginShareUpdateDiscoverability": {
+      "enum": [
+        "UNLISTED",
+        "PRIVATE"
+      ],
+      "type": "string"
+    },
+    "PluginShareUpdateTargetsParams": {
+      "properties": {
+        "discoverability": {
+          "$ref": "#/definitions/PluginShareUpdateDiscoverability"
+        },
+        "remotePluginId": {
+          "type": "string"
+        },
+        "shareTargets": {
+          "items": {
+            "$ref": "#/definitions/PluginShareTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "discoverability",
+        "remotePluginId",
+        "shareTargets"
       ],
       "type": "object"
     },
@@ -2262,6 +2181,28 @@
       "required": [
         "marketplaceName",
         "pluginNames"
+      ],
+      "type": "object"
+    },
+    "ProcessTerminalSize": {
+      "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
       ],
       "type": "object"
     },
@@ -2395,20 +2336,6 @@
           "type": "string"
         }
       ]
-    },
-    "RemoteControlClientConnectionAudience": {
-      "description": "Audience for a remote-control client connection device-key proof.",
-      "enum": [
-        "remote_control_client_websocket"
-      ],
-      "type": "string"
-    },
-    "RemoteControlClientEnrollmentAudience": {
-      "description": "Audience for a remote-control client enrollment device-key proof.",
-      "enum": [
-        "remote_control_client_enrollment"
-      ],
-      "type": "string"
     },
     "RequestId": {
       "anyOf": [
@@ -2852,6 +2779,28 @@
         },
         {
           "properties": {
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "context_compaction"
+              ],
+              "title": "ContextCompactionResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ContextCompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "enum": [
                 "other"
@@ -3212,13 +3161,6 @@
       ],
       "type": "object"
     },
-    "ServiceTier": {
-      "enum": [
-        "fast",
-        "flex"
-      ],
-      "type": "string"
-    },
     "SessionMigration": {
       "properties": {
         "cwd": {
@@ -3297,24 +3239,6 @@
       ],
       "type": "object"
     },
-    "SkillsListExtraRootsForCwd": {
-      "properties": {
-        "cwd": {
-          "type": "string"
-        },
-        "extraUserRoots": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "cwd",
-        "extraUserRoots"
-      ],
-      "type": "object"
-    },
     "SkillsListParams": {
       "properties": {
         "cwds": {
@@ -3327,17 +3251,6 @@
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
           "type": "boolean"
-        },
-        "perCwdExtraUserRoots": {
-          "default": null,
-          "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
-          "items": {
-            "$ref": "#/definitions/SkillsListExtraRootsForCwd"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         }
       },
       "type": "object"
@@ -3496,24 +3409,24 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "threadId": {
           "type": "string"
+        },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional client-supplied analytics source classification for this forked thread."
         }
       },
       "required": [
@@ -3907,20 +3820,9 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "threadId": {
@@ -3985,6 +3887,14 @@
       "enum": [
         "created_at",
         "updated_at"
+      ],
+      "type": "string"
+    },
+    "ThreadSource": {
+      "enum": [
+        "user",
+        "subagent",
+        "memory_consolidation"
       ],
       "type": "string"
     },
@@ -4096,20 +4006,9 @@
           ]
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sessionStartSource": {
@@ -4121,6 +4020,17 @@
               "type": "null"
             }
           ]
+        },
+        "threadSource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional client-supplied analytics source classification for this thread."
         }
       },
       "type": "object"
@@ -4183,6 +4093,31 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "TurnItemsView": {
+      "oneOf": [
+        {
+          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+          "enum": [
+            "notLoaded"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains only a display summary for this turn.",
+          "enum": [
+            "summary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TurnStartParams": {
       "properties": {
@@ -4265,22 +4200,11 @@
           "description": "Override the sandbox policy for this turn and subsequent turns."
         },
         "serviceTier": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Override the service tier for this turn and subsequent turns."
+          "description": "Override the service tier for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "summary": {
           "anyOf": [
@@ -5110,6 +5034,30 @@
         },
         "method": {
           "enum": [
+            "plugin/share/updateTargets"
+          ],
+          "title": "Plugin/share/updateTargetsRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareUpdateTargetsParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/updateTargetsRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "plugin/share/list"
           ],
           "title": "Plugin/share/listRequestMethod",
@@ -5173,78 +5121,6 @@
         "params"
       ],
       "title": "App/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "device/key/create"
-          ],
-          "title": "Device/key/createRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/DeviceKeyCreateParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Device/key/createRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "device/key/public"
-          ],
-          "title": "Device/key/publicRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/DeviceKeyPublicParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Device/key/publicRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "device/key/sign"
-          ],
-          "title": "Device/key/signRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/DeviceKeySignParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Device/key/signRequest",
       "type": "object"
     },
     {
@@ -5868,6 +5744,29 @@
         "params"
       ],
       "title": "WindowsSandbox/setupStartRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/readiness"
+          ],
+          "title": "WindowsSandbox/readinessRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "WindowsSandbox/readinessRequest",
       "type": "object"
     },
     {

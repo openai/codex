@@ -1,6 +1,9 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::truncate_middle_chars;
+
+const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPersistenceMode {
@@ -11,7 +14,7 @@ pub enum EventPersistenceMode {
 
 /// Whether a rollout `item` should be persisted in rollout files for the
 /// provided persistence `mode`.
-pub fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
+pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
@@ -19,6 +22,43 @@ pub fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
             true
         }
+    }
+}
+
+/// Return the canonical rollout items that should be persisted for a live append.
+pub fn persisted_rollout_items(
+    items: &[RolloutItem],
+    mode: EventPersistenceMode,
+) -> Vec<RolloutItem> {
+    let mut persisted = Vec::new();
+    for item in items {
+        if is_persisted_rollout_item(item, mode) {
+            persisted.push(sanitize_rollout_item_for_persistence(item.clone(), mode));
+        }
+    }
+    persisted
+}
+
+fn sanitize_rollout_item_for_persistence(
+    item: RolloutItem,
+    mode: EventPersistenceMode,
+) -> RolloutItem {
+    if mode != EventPersistenceMode::Extended {
+        return item;
+    }
+
+    match item {
+        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
+            event.aggregated_output = truncate_middle_chars(
+                &event.aggregated_output,
+                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
+            );
+            event.stdout.clear();
+            event.stderr.clear();
+            event.formatted_output.clear();
+            RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
+        }
+        _ => item,
     }
 }
 
@@ -37,7 +77,8 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -58,6 +99,7 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => false,
     }
 }
@@ -96,14 +138,16 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TokenCount(_)
-        | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::McpToolCallEnd(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
+        | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
@@ -117,9 +161,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
-        | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
-        | EventMsg::McpToolCallEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
@@ -139,7 +181,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
@@ -153,12 +194,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::PatchApplyBegin(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
-        | EventMsg::McpListToolsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
-        | EventMsg::ListSkillsResponse(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
@@ -171,7 +209,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::ImageGenerationBegin(_)
-        | EventMsg::SkillsUpdateAvailable
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)

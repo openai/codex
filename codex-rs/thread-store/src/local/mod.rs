@@ -19,7 +19,6 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -38,11 +37,23 @@ use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
+///
+/// Local storage has two compatibility surfaces. Rollout JSONL files are the
+/// durable replay format and remain readable without SQLite, including older
+/// files that encode metadata in `SessionMeta` items and name-index entries.
+/// The SQLite state DB, when available, is the queryable metadata index used by
+/// list/read paths for fast lookup.
+///
+/// Live appends still write canonical JSONL history, but append-derived
+/// metadata is observed above the store and applied through
+/// [`ThreadStore::update_thread_metadata`]. This implementation applies that
+/// patch literally to SQLite while keeping the JSONL/name-index compatibility
+/// behavior needed for SQLite-less reads, repair, and old local rollout files.
 #[derive(Clone)]
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
-    state_db: Arc<OnceCell<StateDbHandle>>,
+    state_db: Option<StateDbHandle>,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -76,30 +87,18 @@ impl std::fmt::Debug for LocalThreadStore {
 }
 
 impl LocalThreadStore {
-    /// Create a local store from process-scoped local storage configuration.
-    pub fn new(config: LocalThreadStoreConfig) -> Self {
+    /// Create a local store using an already initialized state DB handle.
+    pub fn new(config: LocalThreadStoreConfig, state_db: Option<StateDbHandle>) -> Self {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
-            state_db: Arc::new(OnceCell::new()),
+            state_db,
         }
     }
 
     /// Return the state DB handle used by local rollout writers.
     pub async fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db
-            .get_or_try_init(|| async {
-                codex_rollout::state_db::init_with_roots(
-                    self.config.codex_home.clone(),
-                    self.config.sqlite_home.clone(),
-                    self.config.default_model_provider_id.clone(),
-                )
-                .await
-                .ok_or(())
-            })
-            .await
-            .ok()
-            .cloned()
+        self.state_db.clone()
     }
 
     /// Read a local rollout-backed thread by path.
@@ -283,6 +282,8 @@ impl ThreadStore for LocalThreadStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use codex_protocol::ThreadId;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::EventMsg;
@@ -293,6 +294,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::LiveThread;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
@@ -302,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -349,9 +351,270 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn raw_append_items_does_not_update_sqlite_metadata() {
+        // This pins the ThreadStore contract: raw appends are history-only. Callers that need
+        // metadata updates must use LiveThread or call update_thread_metadata explicitly.
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("raw append")],
+            })
+            .await
+            .expect("append raw item");
+        store.flush_thread(thread_id).await.expect("flush thread");
+
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sqlite metadata read"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_observes_appended_items_into_sqlite_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .append_items(&[user_message_item("observed append")])
+            .await
+            .expect("append observed item");
+        live_thread.flush().await.expect("flush thread");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("observed append")
+        );
+        assert_eq!(metadata.preview.as_deref(), Some("observed append"));
+        assert_eq!(metadata.title, "observed append");
+    }
+
+    #[tokio::test]
+    async fn live_thread_shutdown_does_not_materialize_empty_thread_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+
+        live_thread.shutdown().await.expect("shutdown thread");
+
+        assert!(
+            !tokio::fs::try_exists(rollout_path.as_path())
+                .await
+                .expect("rollout path should be checkable")
+        );
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sqlite metadata read"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_shutdown_with_buffered_items_materializes_before_metadata_read() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+
+        live_thread
+            .append_items(&[RolloutItem::EventMsg(EventMsg::TokenCount(
+                codex_protocol::protocol::TokenCountEvent {
+                    info: None,
+                    rate_limits: None,
+                },
+            ))])
+            .await
+            .expect("append metadata-only item");
+        live_thread.shutdown().await.expect("shutdown thread");
+
+        assert!(
+            tokio::fs::try_exists(rollout_path.as_path())
+                .await
+                .expect("rollout path should be checkable")
+        );
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(metadata.rollout_path, rollout_path);
+    }
+
+    #[tokio::test]
+    async fn live_thread_resume_loads_history_before_observing_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let uuid = uuid::Uuid::from_u128(401);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
+        let live_thread = LiveThread::resume(
+            store,
+            ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: false,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: Some(home.path().to_path_buf()),
+                    model_provider: "different-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            },
+        )
+        .await
+        .expect("resume live thread");
+
+        live_thread
+            .append_items(&[user_message_item("new live append")])
+            .await
+            .expect("append after resume");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.created_at.to_rfc3339(),
+            "2025-01-03T17:00:00+00:00"
+        );
+        assert_eq!(metadata.model_provider, "test-provider");
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("Hello from user")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_resume_loads_history_from_explicit_external_rollout_path() {
+        let home = TempDir::new().expect("temp dir");
+        let external_home = TempDir::new().expect("external temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let uuid = uuid::Uuid::from_u128(402);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file(external_home.path(), "2025-01-03T17-30-00", uuid)
+            .expect("external session file");
+        let live_thread = LiveThread::resume(
+            store,
+            ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: false,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: Some(home.path().to_path_buf()),
+                    model_provider: "different-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            },
+        )
+        .await
+        .expect("resume external live thread");
+
+        live_thread
+            .append_items(&[user_message_item("new external append")])
+            .await
+            .expect("append after external resume");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.created_at.to_rfc3339(),
+            "2025-01-03T17:30:00+00:00"
+        );
+        assert_eq!(metadata.model_provider, "test-provider");
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("Hello from user")
+        );
+    }
+
+    #[tokio::test]
     async fn create_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
         let mut params = create_thread_params(thread_id);
         params.metadata.cwd = None;
@@ -371,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn discard_thread_drops_unmaterialized_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -410,7 +673,7 @@ mod tests {
         let config = test_config(home.path());
         let thread_id = ThreadId::default();
 
-        let first_store = LocalThreadStore::new(config.clone());
+        let first_store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
         first_store
             .create_thread(create_thread_params(thread_id))
             .await
@@ -439,7 +702,7 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let resumed_store = LocalThreadStore::new(config);
+        let resumed_store = LocalThreadStore::new(config, /*state_db*/ None);
         resumed_store
             .resume_thread(ResumeThreadParams {
                 thread_id,
@@ -470,7 +733,7 @@ mod tests {
     #[tokio::test]
     async fn create_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -490,7 +753,7 @@ mod tests {
     #[tokio::test]
     async fn resume_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -519,7 +782,7 @@ mod tests {
     #[tokio::test]
     async fn resume_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(407);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path =
@@ -548,7 +811,7 @@ mod tests {
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(404);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-04T10-00-00", uuid)
@@ -597,7 +860,7 @@ mod tests {
     async fn read_thread_uses_live_writer_rollout_path_for_external_resume() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(406);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-04T11-00-00", uuid)
@@ -636,7 +899,7 @@ mod tests {
     #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(405);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_archived_session_file(home.path(), "2025-01-04T10-30-00", uuid)
@@ -704,7 +967,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_by_rollout_path_includes_history() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -751,6 +1014,7 @@ mod tests {
             thread_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             metadata: thread_metadata(),

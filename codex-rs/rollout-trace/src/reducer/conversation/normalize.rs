@@ -121,13 +121,15 @@ fn normalize_model_item(
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
         }),
-        "compaction" | "compaction_summary" => Ok(NormalizedConversationItem {
-            role: ConversationRole::Assistant,
-            channel: Some(ConversationChannel::Summary),
-            kind: ConversationItemKind::Message,
-            body: compaction_body(item, raw_payload)?,
-            call_id: None,
-        }),
+        "compaction" | "compaction_summary" | "context_compaction" => {
+            Ok(NormalizedConversationItem {
+                role: ConversationRole::Assistant,
+                channel: Some(ConversationChannel::Summary),
+                kind: ConversationItemKind::Message,
+                body: compaction_body(item, raw_payload)?,
+                call_id: None,
+            })
+        }
         _ => bail!(
             "unsupported model item type {item_type} in payload {}",
             raw_payload.raw_payload_id

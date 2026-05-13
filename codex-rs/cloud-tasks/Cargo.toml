@@ -7,6 +7,7 @@ version.workspace = true
 [lib]
 name = "codex_cloud_tasks"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true

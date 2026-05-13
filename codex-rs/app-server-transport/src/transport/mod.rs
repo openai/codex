@@ -31,6 +31,7 @@ mod unix_socket_tests;
 mod websocket;
 
 pub use remote_control::RemoteControlHandle;
+pub use remote_control::RemoteControlStartConfig;
 pub use remote_control::start_remote_control;
 pub use stdio::start_stdio_connection;
 pub use unix_socket::start_control_socket_acceptor;
@@ -169,14 +170,6 @@ pub enum ConnectionOrigin {
     InProcess,
     WebSocket,
     RemoteControl,
-}
-
-impl ConnectionOrigin {
-    pub fn allows_device_key_requests(self) -> bool {
-        // Device-key endpoints are only for local connections that own the app-server instance.
-        // Do not include remote transports such as SSH or remote-control websocket connections.
-        matches!(self, Self::Stdio | Self::InProcess)
-    }
 }
 
 static CONNECTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);

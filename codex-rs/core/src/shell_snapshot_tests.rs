@@ -202,6 +202,7 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         ThreadId::new(),
         &dir.path().abs(),
         &shell,
+        /*state_db*/ None,
     )
     .await
     .expect("snapshot should be created");
@@ -227,14 +228,24 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let initial_snapshot =
-        ShellSnapshot::try_new(&dir.path().abs(), session_id, &dir.path().abs(), &shell)
-            .await
-            .expect("initial snapshot should be created");
-    let refreshed_snapshot =
-        ShellSnapshot::try_new(&dir.path().abs(), session_id, &dir.path().abs(), &shell)
-            .await
-            .expect("refreshed snapshot should be created");
+    let initial_snapshot = ShellSnapshot::try_new(
+        &dir.path().abs(),
+        session_id,
+        &dir.path().abs(),
+        &shell,
+        /*state_db*/ None,
+    )
+    .await
+    .expect("initial snapshot should be created");
+    let refreshed_snapshot = ShellSnapshot::try_new(
+        &dir.path().abs(),
+        session_id,
+        &dir.path().abs(),
+        &shell,
+        /*state_db*/ None,
+    )
+    .await
+    .expect("refreshed snapshot should be created");
     let initial_path = initial_snapshot.path.clone();
     let refreshed_path = refreshed_snapshot.path.clone();
 
@@ -428,7 +439,7 @@ async fn cleanup_stale_snapshots_removes_orphans_and_keeps_live() -> Result<()> 
     fs::write(&orphan_snapshot, "orphan").await?;
     fs::write(&invalid_snapshot, "invalid").await?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new()).await?;
+    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
 
     assert_eq!(live_snapshot.exists(), true);
     assert_eq!(orphan_snapshot.exists(), false);
@@ -451,7 +462,7 @@ async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
 
     set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new()).await?;
+    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
 
     assert_eq!(stale_snapshot.exists(), false);
     Ok(())
@@ -472,7 +483,7 @@ async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
 
     set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-    cleanup_stale_snapshots(&codex_home, active_session).await?;
+    cleanup_stale_snapshots(&codex_home, active_session, /*state_db*/ None).await?;
 
     assert_eq!(active_snapshot.exists(), true);
     Ok(())

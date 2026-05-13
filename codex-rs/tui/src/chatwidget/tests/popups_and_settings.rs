@@ -70,8 +70,10 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
@@ -655,6 +657,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),
@@ -695,6 +701,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
                 summary,
                 Some("Turn Figma files into implementation context."),
                 &["design-review", "extract-copy"],
+                &[
+                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (codex_app_server_protocol::HookEventName::Stop, 2),
+                ],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
             ),
@@ -1328,7 +1338,7 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     );
     chat.add_connectors_output();
     assert!(
-        chat.connectors_prefetch_in_flight,
+        chat.connectors.prefetch_in_flight,
         "expected /apps to trigger a forced connectors refresh"
     );
 
@@ -1465,7 +1475,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 
@@ -1606,8 +1616,8 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         .enable(Feature::Apps)
         .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
-    chat.connectors_prefetch_in_flight = true;
-    chat.connectors_force_refetch_pending = true;
+    chat.connectors.prefetch_in_flight = true;
+    chat.connectors.force_refetch_pending = true;
 
     let full_connectors = vec![AppInfo {
         id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
@@ -1624,7 +1634,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-    chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
+    chat.connectors.cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
         connectors: full_connectors.clone(),
     });
 
@@ -1633,10 +1643,10 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         /*is_final*/ true,
     );
 
-    assert!(chat.connectors_prefetch_in_flight);
-    assert!(!chat.connectors_force_refetch_pending);
+    assert!(chat.connectors.prefetch_in_flight);
+    assert!(!chat.connectors.force_refetch_pending);
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 }
@@ -1730,7 +1740,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 
@@ -1789,7 +1799,7 @@ async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot) if snapshot.connectors.len() == 1
     );
 
@@ -1890,7 +1900,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1916,6 +1926,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -1956,7 +1967,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -1989,6 +2000,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
                 "connector_1".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
+                    tools: None,
                 },
             )]),
         }),
@@ -2020,7 +2032,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -2091,7 +2103,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
     );
 
     assert_matches!(
-        &chat.connectors_cache,
+        &chat.connectors.cache,
         ConnectorsCacheState::Ready(snapshot)
             if snapshot
                 .connectors
@@ -2452,6 +2464,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         }],
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -2672,6 +2685,7 @@ async fn single_reasoning_option_skips_selection() {
         supported_reasoning_efforts: single_effort,
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker: true,

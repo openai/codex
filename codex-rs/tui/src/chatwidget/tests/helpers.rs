@@ -157,172 +157,38 @@ pub(super) async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
-    let mut bottom = BottomPane::new(BottomPaneParams {
-        app_event_tx: app_event_tx.clone(),
-        frame_requester: FrameRequester::test_dummy(),
-        has_input_focus: true,
-        enhanced_keys_supported: false,
-        placeholder_text: "Ask Codex to do anything".to_string(),
-        disable_paste_burst: false,
-        animations_enabled: cfg.animations,
-        skills: None,
-    });
-    bottom.set_collaboration_modes_enabled(/*enabled*/ true);
     let model_catalog = test_model_catalog(&cfg);
-    let reasoning_effort = None;
-    let base_mode = CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model: resolved_model.clone(),
-            reasoning_effort,
-            developer_instructions: None,
-        },
-    };
-    let current_collaboration_mode = base_mode;
-    let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
-    let effective_service_tier = cfg.service_tier;
-    let mut widget = ChatWidget {
-        app_event_tx,
-        codex_op_target: super::CodexOpTarget::Direct(op_tx),
-        bottom_pane: bottom,
-        active_cell: None,
-        active_cell_revision: 0,
+    let common = ChatWidgetInit {
         config: cfg,
-        effective_service_tier,
-        current_collaboration_mode,
-        active_collaboration_mask,
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx,
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
         has_chatgpt_account: false,
         model_catalog,
-        session_telemetry,
-        session_header: SessionHeader::new(resolved_model.clone()),
-        initial_user_message: None,
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
         status_account_display: None,
         runtime_model_provider_base_url: None,
-        token_info: None,
-        rate_limit_snapshots_by_limit_id: BTreeMap::new(),
-        refreshing_status_outputs: Vec::new(),
-        next_status_refresh_request_id: 0,
-        plan_type: None,
-        codex_rate_limit_reached_type: None,
-        rate_limit_warnings: RateLimitWarningState::default(),
-        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-        add_credits_nudge_email_in_flight: None,
-        adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
-        stream_controller: None,
-        plan_stream_controller: None,
-        clipboard_lease: None,
-        copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,
-        pending_guardian_review_status: PendingGuardianReviewStatus::default(),
-        recent_auto_review_denials: RecentAutoReviewDenials::default(),
-        terminal_title_status_kind: TerminalTitleStatusKind::Working,
-        last_agent_markdown: None,
-        agent_turn_markdowns: Vec::new(),
-        visible_user_turn_count: 0,
-        copy_history_evicted_by_rollback: false,
-        latest_proposed_plan_markdown: None,
-        saw_copy_source_this_turn: false,
-        running_commands: HashMap::new(),
-        collab_agent_metadata: HashMap::new(),
-        pending_collab_spawn_requests: HashMap::new(),
-        suppressed_exec_calls: HashSet::new(),
-        skills_all: Vec::new(),
-        skills_initial_state: None,
-        last_unified_wait: None,
-        unified_exec_wait_streak: None,
-        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-        task_complete_pending: false,
-        unified_exec_processes: Vec::new(),
-        agent_turn_running: false,
-        mcp_startup_status: None,
-        mcp_startup_expected_servers: None,
-        mcp_startup_ignore_updates_until_next_start: false,
-        mcp_startup_allow_terminal_only_next_round: false,
-        mcp_startup_pending_next_round: HashMap::new(),
-        mcp_startup_pending_next_round_saw_starting: false,
-        connectors_cache: ConnectorsCacheState::default(),
-        connectors_partial_snapshot: None,
-        plugin_install_apps_needing_auth: Vec::new(),
-        plugin_install_auth_flow: None,
-        plugins_active_tab_id: None,
-        newly_installed_marketplace_tab_id: None,
-        connectors_prefetch_in_flight: false,
-        connectors_force_refetch_pending: false,
-        ide_context: super::super::ide_context::IdeContextState::default(),
-        plugins_cache: PluginsCacheState::default(),
-        plugins_fetch_state: PluginListFetchState::default(),
-        interrupts: InterruptManager::new(),
-        reasoning_buffer: String::new(),
-        full_reasoning_buffer: String::new(),
-        current_status: StatusIndicatorState::working(),
-        active_hook_cell: None,
-        retry_status_header: None,
-        pending_status_indicator_restore: false,
-        suppress_queue_autosend: false,
-        thread_id: None,
-        dismissed_plan_mode_nudge_scopes: HashSet::new(),
-        last_turn_id: None,
-        budget_limited_turn_ids: HashSet::new(),
-        thread_name: None,
-        thread_rename_block_message: None,
-        active_side_conversation: false,
-        normal_placeholder_text: "Ask Codex to do anything".to_string(),
-        side_placeholder_text: "Check recently modified functions for compatibility".to_string(),
-        forked_from: None,
-        interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
-        frame_requester: FrameRequester::test_dummy(),
-        show_welcome_banner: true,
+        initial_plan_type: None,
+        model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
-        queued_user_messages: VecDeque::new(),
-        queued_user_message_history_records: VecDeque::new(),
-        user_turn_pending_start: false,
-        rejected_steers_queue: VecDeque::new(),
-        rejected_steer_history_records: VecDeque::new(),
-        pending_steers: VecDeque::new(),
-        submit_pending_steers_after_interrupt: false,
-        chat_keymap: crate::keymap::RuntimeKeymap::defaults().chat,
-        queued_message_edit_hint_binding: Some(crate::key_hint::alt(KeyCode::Up)),
-        suppress_session_configured_redraw: false,
-        suppress_initial_user_message_submit: false,
-        pending_notification: None,
-        quit_shortcut_expires_at: None,
-        quit_shortcut_key: None,
-        is_review_mode: false,
-        pre_review_token_info: None,
-        needs_final_message_separator: false,
-        had_work_activity: false,
-        saw_plan_update_this_turn: false,
-        saw_plan_item_this_turn: false,
-        last_plan_progress: None,
-        plan_delta_buffer: String::new(),
-        plan_item_active: false,
-        turn_runtime_metrics: RuntimeMetricsSummary::default(),
-        last_rendered_width: std::cell::Cell::new(None),
-        feedback: codex_feedback::CodexFeedback::new(),
-        current_rollout_path: None,
-        current_cwd: None,
-        instruction_source_paths: Vec::new(),
-        session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        last_terminal_title: None,
-        last_terminal_title_requires_action: false,
-        terminal_title_setup_original_items: None,
-        terminal_title_animation_origin: Instant::now(),
-        status_line_project_root_name_cache: None,
-        status_line_branch: None,
-        status_line_branch_cwd: None,
-        status_line_branch_pending: false,
-        status_line_branch_lookup_complete: false,
-        current_goal_status_indicator: None,
-        current_goal_status: None,
-        goal_status_active_turn_started_at: None,
-        external_editor_state: ExternalEditorState::Closed,
-        realtime_conversation: RealtimeConversationUiState::default(),
-        last_rendered_user_message_display: None,
-        last_non_retry_error: None,
+        session_telemetry,
     };
+    let mut widget = ChatWidget::new_with_op_target(common, super::CodexOpTarget::Direct(op_tx));
+    widget.transcript.active_cell = None;
+    widget.transcript.active_cell_revision = 0;
+    widget.normal_placeholder_text = "Ask Codex to do anything".to_string();
+    widget.side_placeholder_text =
+        "Check recently modified functions for compatibility".to_string();
+    widget
+        .bottom_pane
+        .set_placeholder_text(widget.normal_placeholder_text.clone());
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
 }
@@ -381,8 +247,12 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
-    let additional_speed_tiers = if supports_fast_mode {
-        vec![codex_protocol::openai_models::SPEED_TIER_FAST]
+    let service_tiers = if supports_fast_mode {
+        vec![json!({
+            "id": ServiceTier::Fast.request_value(),
+            "name": "fast",
+            "description": "Fastest inference with increased plan usage"
+        })]
     } else {
         Vec::new()
     };
@@ -396,7 +266,8 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "visibility": "list",
         "supported_in_api": true,
         "priority": priority,
-        "additional_speed_tiers": additional_speed_tiers,
+        "additional_speed_tiers": [],
+        "service_tiers": service_tiers,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
@@ -514,6 +385,7 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                     codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
                         thread_id: thread_id(chat),
                         turn_id: chat
+                            .turn_lifecycle
                             .last_turn_id
                             .clone()
                             .unwrap_or_else(|| "turn-1".to_string()),
@@ -546,6 +418,7 @@ pub(super) fn handle_error(
             will_retry: false,
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
@@ -578,6 +451,7 @@ pub(super) fn handle_stream_error_with_replay(
             will_retry: true,
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
@@ -604,6 +478,7 @@ pub(super) fn handle_model_verification(
         ServerNotification::ModelVerification(ModelVerificationNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
@@ -619,6 +494,7 @@ pub(super) fn handle_agent_message_delta(chat: &mut ChatWidget, delta: impl Into
             codex_app_server_protocol::AgentMessageDeltaNotification {
                 thread_id: thread_id(chat),
                 turn_id: chat
+                    .turn_lifecycle
                     .last_turn_id
                     .clone()
                     .unwrap_or_else(|| "turn-1".to_string()),
@@ -635,6 +511,7 @@ pub(super) fn handle_agent_reasoning_delta(chat: &mut ChatWidget, delta: impl In
         ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
@@ -651,9 +528,11 @@ pub(super) fn handle_agent_reasoning_final(chat: &mut ChatWidget) {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
                 summary: Vec::new(),
@@ -669,9 +548,11 @@ pub(super) fn handle_entered_review_mode(chat: &mut ChatWidget, review: impl Int
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            started_at_ms: 0,
             item: AppServerThreadItem::EnteredReviewMode {
                 id: "review-start".to_string(),
                 review: review.into(),
@@ -697,9 +578,11 @@ pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
             item: AppServerThreadItem::ExitedReviewMode {
                 id: "review-end".to_string(),
                 review: String::new(),
@@ -756,6 +639,7 @@ pub(super) fn handle_patch_apply_begin(
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id(chat),
             turn_id: turn_id.into(),
+            started_at_ms: 0,
             item: AppServerThreadItem::FileChange {
                 id: call_id.into(),
                 changes: file_update_changes_from_tui(changes),
@@ -777,6 +661,7 @@ pub(super) fn handle_patch_apply_end(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: turn_id.into(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::FileChange {
                 id: call_id.into(),
                 changes: file_update_changes_from_tui(changes),
@@ -796,6 +681,7 @@ pub(super) fn handle_view_image_tool_call(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::ImageView {
                 id: call_id.into(),
                 path,
@@ -815,6 +701,7 @@ pub(super) fn handle_image_generation_end(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
                 status: "completed".to_string(),
@@ -969,9 +856,11 @@ pub(super) fn handle_exec_begin(chat: &mut ChatWidget, item: AppServerThreadItem
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            started_at_ms: 0,
             item,
         }),
         /*replay_kind*/ None,
@@ -989,6 +878,7 @@ pub(super) fn terminal_interaction(
             codex_app_server_protocol::TerminalInteractionNotification {
                 thread_id: thread_id(chat),
                 turn_id: chat
+                    .turn_lifecycle
                     .last_turn_id
                     .clone()
                     .unwrap_or_else(|| "turn-1".to_string()),
@@ -1011,6 +901,7 @@ pub(super) fn complete_assistant_message(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::AgentMessage {
                 id: item_id.to_string(),
                 text: text.to_string(),
@@ -1053,6 +944,7 @@ pub(super) fn complete_user_message_for_inputs(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: item_id.to_string(),
                 content,
@@ -1070,6 +962,7 @@ pub(super) fn app_server_turn(
 ) -> AppServerTurn {
     AppServerTurn {
         id: turn_id.to_string(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
         items: Vec::new(),
         status,
         error,
@@ -1129,7 +1022,7 @@ pub(super) fn handle_turn_interrupted(chat: &mut ChatWidget, turn_id: &str) {
 }
 
 pub(super) fn handle_budget_limited_turn(chat: &mut ChatWidget, turn_id: &str) {
-    chat.budget_limited_turn_ids.insert(turn_id.to_string());
+    chat.turn_lifecycle.mark_budget_limited(turn_id.to_string());
     handle_turn_interrupted(chat, turn_id);
 }
 
@@ -1191,9 +1084,11 @@ pub(super) fn handle_exec_end(chat: &mut ChatWidget, item: AppServerThreadItem) 
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: thread_id(chat),
             turn_id: chat
+                .turn_lifecycle
                 .last_turn_id
                 .clone()
                 .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
             item,
         }),
         /*replay_kind*/ None,
@@ -1202,6 +1097,7 @@ pub(super) fn handle_exec_end(chat: &mut ChatWidget, item: AppServerThreadItem) 
 
 pub(super) fn active_blob(chat: &ChatWidget) -> String {
     let lines = chat
+        .transcript
         .active_cell
         .as_ref()
         .expect("active cell present")
@@ -1263,9 +1159,11 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
     chat.bottom_pane.set_task_running(/*running*/ true);
 
     // Seed two queued messages.
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
@@ -1278,9 +1176,9 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
         "second queued".to_string()
     );
     // And the queue should now contain only the remaining (older) item.
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
     );
 }
@@ -1416,7 +1314,10 @@ pub(super) fn plugins_test_summary(
 ) -> PluginSummary {
     PluginSummary {
         id: id.to_string(),
+        remote_plugin_id: None,
+        local_version: None,
         name: name.to_string(),
+        share_context: None,
         source: PluginSource::Local {
             path: plugins_test_absolute_path(&format!("plugins/{name}")),
         },
@@ -1430,6 +1331,7 @@ pub(super) fn plugins_test_summary(
             description,
             /*long_description*/ None,
         )),
+        keywords: Vec::new(),
     }
 }
 
@@ -1481,6 +1383,7 @@ pub(super) fn plugins_test_detail(
     summary: PluginSummary,
     description: Option<&str>,
     skills: &[&str],
+    hooks: &[(codex_app_server_protocol::HookEventName, usize)],
     apps: &[(&str, bool)],
     mcp_servers: &[&str],
 ) -> PluginDetail {
@@ -1500,6 +1403,18 @@ pub(super) fn plugins_test_detail(
                     "skills/{name}/SKILL.md"
                 ))),
                 enabled: true,
+            })
+            .collect(),
+        hooks: hooks
+            .iter()
+            .enumerate()
+            .flat_map(|(event_index, (event_name, handler_count))| {
+                (0..*handler_count).map(move |handler_index| {
+                    codex_app_server_protocol::PluginHookSummary {
+                        key: format!("plugin:{event_index}:{handler_index}"),
+                        event_name: *event_name,
+                    }
+                })
             })
             .collect(),
         apps: apps
@@ -1653,6 +1568,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_app_server_protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_app_server_protocol::HookEventName::PreCompact => "PreCompact",
+        codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_app_server_protocol::HookEventName::Stop => "Stop",

@@ -1,107 +1,126 @@
 use super::*;
+use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = CloseAgentResult;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("close_agent")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_close_agent_tool_v2())
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: CloseAgentArgs = parse_arguments(&arguments)?;
-        let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-        let receiver_agent = session
-            .services
-            .agent_control
-            .get_agent_metadata(agent_id)
-            .unwrap_or_default();
-        if receiver_agent
-            .agent_path
-            .as_ref()
-            .is_some_and(AgentPath::is_root)
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "root is not a spawned agent".to_string(),
-            ));
-        }
-        session
-            .send_event(
-                &turn,
-                CollabCloseBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
-                }
-                .into(),
-            )
-            .await;
-        let status = match session
-            .services
-            .agent_control
-            .subscribe_status(agent_id)
-            .await
-        {
-            Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-            Err(err) => {
-                let status = session.services.agent_control.get_status(agent_id).await;
-                session
-                    .send_event(
-                        &turn,
-                        CollabCloseEndEvent {
-                            call_id: call_id.clone(),
-                            sender_thread_id: session.conversation_id,
-                            receiver_thread_id: agent_id,
-                            receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                            receiver_agent_role: receiver_agent.agent_role.clone(),
-                            status,
-                        }
-                        .into(),
-                    )
-                    .await;
-                return Err(collab_agent_error(agent_id, err));
-            }
-        };
-        let result = session
-            .services
-            .agent_control
-            .close_agent(agent_id)
-            .await
-            .map_err(|err| collab_agent_error(agent_id, err))
-            .map(|_| ());
-        session
-            .send_event(
-                &turn,
-                CollabCloseEndEvent {
-                    call_id,
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
-                    status: status.clone(),
-                }
-                .into(),
-            )
-            .await;
-        result?;
-
-        Ok(CloseAgentResult {
-            previous_status: status,
-        })
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
+        Box::pin(handle_close_agent(invocation))
     }
+}
+
+async fn handle_close_agent(
+    invocation: ToolInvocation,
+) -> Result<CloseAgentResult, FunctionCallError> {
+    let ToolInvocation {
+        session,
+        turn,
+        payload,
+        call_id,
+        ..
+    } = invocation;
+    let arguments = function_arguments(payload)?;
+    let args: CloseAgentArgs = parse_arguments(&arguments)?;
+    let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
+    let receiver_agent = session
+        .services
+        .agent_control
+        .get_agent_metadata(agent_id)
+        .unwrap_or_default();
+    if receiver_agent
+        .agent_path
+        .as_ref()
+        .is_some_and(AgentPath::is_root)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "root is not a spawned agent".to_string(),
+        ));
+    }
+    session
+        .send_event(
+            &turn,
+            CollabCloseBeginEvent {
+                call_id: call_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
+                sender_thread_id: session.conversation_id,
+                receiver_thread_id: agent_id,
+            }
+            .into(),
+        )
+        .await;
+    let status = match session
+        .services
+        .agent_control
+        .subscribe_status(agent_id)
+        .await
+    {
+        Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
+        Err(err) => {
+            let status = session.services.agent_control.get_status(agent_id).await;
+            session
+                .send_event(
+                    &turn,
+                    CollabCloseEndEvent {
+                        call_id: call_id.clone(),
+                        completed_at_ms: now_unix_timestamp_ms(),
+                        sender_thread_id: session.conversation_id,
+                        receiver_thread_id: agent_id,
+                        receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                        receiver_agent_role: receiver_agent.agent_role.clone(),
+                        status,
+                    }
+                    .into(),
+                )
+                .await;
+            return Err(collab_agent_error(agent_id, err));
+        }
+    };
+    let result = session
+        .services
+        .agent_control
+        .close_agent(agent_id)
+        .await
+        .map_err(|err| collab_agent_error(agent_id, err))
+        .map(|_| ());
+    session
+        .send_event(
+            &turn,
+            CollabCloseEndEvent {
+                call_id,
+                completed_at_ms: now_unix_timestamp_ms(),
+                sender_thread_id: session.conversation_id,
+                receiver_thread_id: agent_id,
+                receiver_agent_nickname: receiver_agent.agent_nickname,
+                receiver_agent_role: receiver_agent.agent_role,
+                status: status.clone(),
+            }
+            .into(),
+        )
+        .await;
+    result?;
+
+    Ok(CloseAgentResult {
+        previous_status: status,
+    })
 }
 
 #[derive(Debug, Deserialize)]

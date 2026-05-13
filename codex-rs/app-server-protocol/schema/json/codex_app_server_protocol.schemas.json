@@ -83,6 +83,25 @@
       "title": "ApplyPatchApprovalResponse",
       "type": "object"
     },
+    "AttestationGenerateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "AttestationGenerateParams",
+      "type": "object"
+    },
+    "AttestationGenerateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "token": {
+          "description": "Opaque client attestation token.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "title": "AttestationGenerateResponse",
+      "type": "object"
+    },
     "ChatgptAuthTokensRefreshParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -817,6 +836,30 @@
             },
             "method": {
               "enum": [
+                "plugin/share/updateTargets"
+              ],
+              "title": "Plugin/share/updateTargetsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginShareUpdateTargetsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/share/updateTargetsRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/list"
               ],
               "title": "Plugin/share/listRequestMethod",
@@ -880,78 +923,6 @@
             "params"
           ],
           "title": "App/listRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "device/key/create"
-              ],
-              "title": "Device/key/createRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/DeviceKeyCreateParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Device/key/createRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "device/key/public"
-              ],
-              "title": "Device/key/publicRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/DeviceKeyPublicParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Device/key/publicRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "device/key/sign"
-              ],
-              "title": "Device/key/signRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/DeviceKeySignParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Device/key/signRequest",
           "type": "object"
         },
         {
@@ -1584,6 +1555,29 @@
             },
             "method": {
               "enum": [
+                "windowsSandbox/readiness"
+              ],
+              "title": "WindowsSandbox/readinessRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "WindowsSandbox/readinessRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/login/start"
               ],
               "title": "Account/login/startRequestMethod",
@@ -2171,6 +2165,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2180,6 +2179,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -2436,6 +2436,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -2445,6 +2450,7 @@
       },
       "required": [
         "itemId",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -2633,6 +2639,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3616,6 +3627,11 @@
             "null"
           ]
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this approval request started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -3627,6 +3643,7 @@
         "cwd",
         "itemId",
         "permissions",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -4246,6 +4263,48 @@
             "params"
           ],
           "title": "Command/exec/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/outputDelta"
+              ],
+              "title": "Process/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Final exit notification for a `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/exited"
+              ],
+              "title": "Process/exitedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessExitedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/exitedNotification",
           "type": "object"
         },
         {
@@ -5170,6 +5229,31 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "description": "Generate a fresh upstream attestation result on demand.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "attestation/generate"
+              ],
+              "title": "Attestation/generateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AttestationGenerateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Attestation/generateRequest",
           "type": "object"
         },
         {
@@ -7135,13 +7219,9 @@
             ]
           },
           "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "tools": {
@@ -7460,6 +7540,12 @@
       },
       "ConfigRequirements": {
         "properties": {
+          "allowManagedHooksOnly": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowedApprovalPolicies": {
             "items": {
               "$ref": "#/definitions/v2/AskForApproval"
@@ -7643,6 +7729,12 @@
               },
               "command": {
                 "type": "string"
+              },
+              "commandWindows": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "statusMessage": {
                 "type": [
@@ -7860,300 +7952,6 @@
           "summary"
         ],
         "title": "DeprecationNoticeNotification",
-        "type": "object"
-      },
-      "DeviceKeyAlgorithm": {
-        "description": "Device-key algorithm reported at enrollment and signing boundaries.",
-        "enum": [
-          "ecdsa_p256_sha256"
-        ],
-        "type": "string"
-      },
-      "DeviceKeyCreateParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Create a controller-local device key with a random key id.",
-        "properties": {
-          "accountUserId": {
-            "type": "string"
-          },
-          "clientId": {
-            "type": "string"
-          },
-          "protectionPolicy": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/DeviceKeyProtectionPolicy"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Defaults to `hardware_only` when omitted."
-          }
-        },
-        "required": [
-          "accountUserId",
-          "clientId"
-        ],
-        "title": "DeviceKeyCreateParams",
-        "type": "object"
-      },
-      "DeviceKeyCreateResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Device-key metadata and public key returned by create/public APIs.",
-        "properties": {
-          "algorithm": {
-            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
-          },
-          "keyId": {
-            "type": "string"
-          },
-          "protectionClass": {
-            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
-          },
-          "publicKeySpkiDerBase64": {
-            "description": "SubjectPublicKeyInfo DER encoded as base64.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "algorithm",
-          "keyId",
-          "protectionClass",
-          "publicKeySpkiDerBase64"
-        ],
-        "title": "DeviceKeyCreateResponse",
-        "type": "object"
-      },
-      "DeviceKeyProtectionClass": {
-        "description": "Platform protection class for a controller-local device key.",
-        "enum": [
-          "hardware_secure_enclave",
-          "hardware_tpm",
-          "os_protected_nonextractable"
-        ],
-        "type": "string"
-      },
-      "DeviceKeyProtectionPolicy": {
-        "description": "Protection policy for creating or loading a controller-local device key.",
-        "enum": [
-          "hardware_only",
-          "allow_os_protected_nonextractable"
-        ],
-        "type": "string"
-      },
-      "DeviceKeyPublicParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Fetch a controller-local device key public key by id.",
-        "properties": {
-          "keyId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "keyId"
-        ],
-        "title": "DeviceKeyPublicParams",
-        "type": "object"
-      },
-      "DeviceKeyPublicResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Device-key public metadata returned by `device/key/public`.",
-        "properties": {
-          "algorithm": {
-            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
-          },
-          "keyId": {
-            "type": "string"
-          },
-          "protectionClass": {
-            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
-          },
-          "publicKeySpkiDerBase64": {
-            "description": "SubjectPublicKeyInfo DER encoded as base64.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "algorithm",
-          "keyId",
-          "protectionClass",
-          "publicKeySpkiDerBase64"
-        ],
-        "title": "DeviceKeyPublicResponse",
-        "type": "object"
-      },
-      "DeviceKeySignParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Sign an accepted structured payload with a controller-local device key.",
-        "properties": {
-          "keyId": {
-            "type": "string"
-          },
-          "payload": {
-            "$ref": "#/definitions/v2/DeviceKeySignPayload"
-          }
-        },
-        "required": [
-          "keyId",
-          "payload"
-        ],
-        "title": "DeviceKeySignParams",
-        "type": "object"
-      },
-      "DeviceKeySignPayload": {
-        "description": "Structured payloads accepted by `device/key/sign`.",
-        "oneOf": [
-          {
-            "description": "Payload bound to one remote-control controller websocket `/client` connection challenge.",
-            "properties": {
-              "accountUserId": {
-                "type": "string"
-              },
-              "audience": {
-                "$ref": "#/definitions/v2/RemoteControlClientConnectionAudience"
-              },
-              "clientId": {
-                "type": "string"
-              },
-              "nonce": {
-                "type": "string"
-              },
-              "scopes": {
-                "description": "Must contain exactly `remote_control_controller_websocket`.",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "sessionId": {
-                "description": "Backend-issued websocket session id that this proof authorizes.",
-                "type": "string"
-              },
-              "targetOrigin": {
-                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
-                "type": "string"
-              },
-              "targetPath": {
-                "description": "Websocket route path that this proof authorizes.",
-                "type": "string"
-              },
-              "tokenExpiresAt": {
-                "description": "Remote-control token expiration as Unix seconds.",
-                "format": "int64",
-                "type": "integer"
-              },
-              "tokenSha256Base64url": {
-                "description": "SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "remoteControlClientConnection"
-                ],
-                "title": "RemoteControlClientConnectionDeviceKeySignPayloadType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "accountUserId",
-              "audience",
-              "clientId",
-              "nonce",
-              "scopes",
-              "sessionId",
-              "targetOrigin",
-              "targetPath",
-              "tokenExpiresAt",
-              "tokenSha256Base64url",
-              "type"
-            ],
-            "title": "RemoteControlClientConnectionDeviceKeySignPayload",
-            "type": "object"
-          },
-          {
-            "description": "Payload bound to a remote-control client `/client/enroll` ownership challenge.",
-            "properties": {
-              "accountUserId": {
-                "type": "string"
-              },
-              "audience": {
-                "$ref": "#/definitions/v2/RemoteControlClientEnrollmentAudience"
-              },
-              "challengeExpiresAt": {
-                "description": "Enrollment challenge expiration as Unix seconds.",
-                "format": "int64",
-                "type": "integer"
-              },
-              "challengeId": {
-                "description": "Backend-issued enrollment challenge id that this proof authorizes.",
-                "type": "string"
-              },
-              "clientId": {
-                "type": "string"
-              },
-              "deviceIdentitySha256Base64url": {
-                "description": "SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
-                "type": "string"
-              },
-              "nonce": {
-                "type": "string"
-              },
-              "targetOrigin": {
-                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
-                "type": "string"
-              },
-              "targetPath": {
-                "description": "HTTP route path that this proof authorizes.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "remoteControlClientEnrollment"
-                ],
-                "title": "RemoteControlClientEnrollmentDeviceKeySignPayloadType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "accountUserId",
-              "audience",
-              "challengeExpiresAt",
-              "challengeId",
-              "clientId",
-              "deviceIdentitySha256Base64url",
-              "nonce",
-              "targetOrigin",
-              "targetPath",
-              "type"
-            ],
-            "title": "RemoteControlClientEnrollmentDeviceKeySignPayload",
-            "type": "object"
-          }
-        ]
-      },
-      "DeviceKeySignResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "ASN.1 DER signature returned by `device/key/sign`.",
-        "properties": {
-          "algorithm": {
-            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
-          },
-          "signatureDerBase64": {
-            "description": "ECDSA signature DER encoded as base64.",
-            "type": "string"
-          },
-          "signedPayloadBase64": {
-            "description": "Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "algorithm",
-          "signatureDerBase64",
-          "signedPayloadBase64"
-        ],
-        "title": "DeviceKeySignResponse",
         "type": "object"
       },
       "DynamicToolCallOutputContentItem": {
@@ -9739,6 +9537,8 @@
           "preToolUse",
           "permissionRequest",
           "postToolUse",
+          "preCompact",
+          "postCompact",
           "sessionStart",
           "userPromptSubmit",
           "stop"
@@ -9767,6 +9567,9 @@
               "string",
               "null"
             ]
+          },
+          "currentHash": {
+            "type": "string"
           },
           "displayOrder": {
             "format": "int64",
@@ -9815,9 +9618,13 @@
             "format": "uint64",
             "minimum": 0.0,
             "type": "integer"
+          },
+          "trustStatus": {
+            "$ref": "#/definitions/v2/HookTrustStatus"
           }
         },
         "required": [
+          "currentHash",
           "displayOrder",
           "enabled",
           "eventName",
@@ -9826,7 +9633,8 @@
           "key",
           "source",
           "sourcePath",
-          "timeoutSec"
+          "timeoutSec",
+          "trustStatus"
         ],
         "type": "object"
       },
@@ -10016,6 +9824,15 @@
         "title": "HookStartedNotification",
         "type": "object"
       },
+      "HookTrustStatus": {
+        "enum": [
+          "managed",
+          "untrusted",
+          "trusted",
+          "modified"
+        ],
+        "type": "string"
+      },
       "HooksListEntry": {
         "properties": {
           "cwd": {
@@ -10109,6 +9926,11 @@
       "ItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "completedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this item lifecycle completed.",
+            "format": "int64",
+            "type": "integer"
+          },
           "item": {
             "$ref": "#/definitions/v2/ThreadItem"
           },
@@ -10120,6 +9942,7 @@
           }
         },
         "required": [
+          "completedAtMs",
           "item",
           "threadId",
           "turnId"
@@ -10134,6 +9957,11 @@
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
+          "completedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review completed.",
+            "format": "int64",
+            "type": "integer"
+          },
           "decisionSource": {
             "$ref": "#/definitions/v2/AutoReviewDecisionSource"
           },
@@ -10143,6 +9971,11 @@
           "reviewId": {
             "description": "Stable identifier for this review.",
             "type": "string"
+          },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
           },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
@@ -10160,9 +9993,11 @@
         },
         "required": [
           "action",
+          "completedAtMs",
           "decisionSource",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -10183,6 +10018,11 @@
             "description": "Stable identifier for this review.",
             "type": "string"
           },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
+          },
           "targetItemId": {
             "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
             "type": [
@@ -10201,6 +10041,7 @@
           "action",
           "review",
           "reviewId",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -10213,6 +10054,11 @@
           "item": {
             "$ref": "#/definitions/v2/ThreadItem"
           },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this item lifecycle started.",
+            "format": "int64",
+            "type": "integer"
+          },
           "threadId": {
             "type": "string"
           },
@@ -10222,6 +10068,7 @@
         },
         "required": [
           "item",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -10550,7 +10397,19 @@
             },
             "type": "array"
           },
+          "PostCompact": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "PostToolUse": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "PreCompact": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
             },
@@ -10595,7 +10454,9 @@
         },
         "required": [
           "PermissionRequest",
+          "PostCompact",
           "PostToolUse",
+          "PreCompact",
           "PreToolUse",
           "SessionStart",
           "Stop",
@@ -11212,6 +11073,7 @@
         "properties": {
           "additionalSpeedTiers": {
             "default": [],
+            "description": "Deprecated: use `serviceTiers` instead.",
             "items": {
               "type": "string"
             },
@@ -11257,6 +11119,13 @@
           },
           "model": {
             "type": "string"
+          },
+          "serviceTiers": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/ModelServiceTier"
+            },
+            "type": "array"
           },
           "supportedReasoningEfforts": {
             "items": {
@@ -11420,6 +11289,25 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelServiceTier": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "name"
+        ],
         "type": "object"
       },
       "ModelUpgradeInfo": {
@@ -11987,6 +11875,12 @@
               "null"
             ]
           },
+          "hooks": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginHookSummary"
+            },
+            "type": "array"
+          },
           "marketplaceName": {
             "type": "string"
           },
@@ -12018,10 +11912,26 @@
         },
         "required": [
           "apps",
+          "hooks",
           "marketplaceName",
           "mcpServers",
           "skills",
           "summary"
+        ],
+        "type": "object"
+      },
+      "PluginHookSummary": {
+        "properties": {
+          "eventName": {
+            "$ref": "#/definitions/v2/HookEventName"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventName",
+          "key"
         ],
         "type": "object"
       },
@@ -12212,6 +12122,14 @@
         ],
         "type": "object"
       },
+      "PluginListMarketplaceKind": {
+        "enum": [
+          "local",
+          "workspace-directory",
+          "shared-with-me"
+        ],
+        "type": "string"
+      },
       "PluginListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12219,6 +12137,16 @@
             "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "marketplaceKinds": {
+            "description": "Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus the default remote catalog when enabled by feature flag.",
+            "items": {
+              "$ref": "#/definitions/v2/PluginListMarketplaceKind"
             },
             "type": [
               "array",
@@ -12340,6 +12268,62 @@
         "title": "PluginReadResponse",
         "type": "object"
       },
+      "PluginShareContext": {
+        "properties": {
+          "creatorAccountUserId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "creatorName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "discoverability": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginShareDiscoverability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remotePluginId": {
+            "type": "string"
+          },
+          "remoteVersion": {
+            "default": null,
+            "description": "Version of the remote shared plugin release when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharePrincipals": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSharePrincipal"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "remotePluginId"
+        ],
+        "type": "object"
+      },
       "PluginShareDeleteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12358,6 +12342,14 @@
         "title": "PluginShareDeleteResponse",
         "type": "object"
       },
+      "PluginShareDiscoverability": {
+        "enum": [
+          "LISTED",
+          "UNLISTED",
+          "PRIVATE"
+        ],
+        "type": "string"
+      },
       "PluginShareListItem": {
         "properties": {
           "localPluginPath": {
@@ -12372,14 +12364,10 @@
           },
           "plugin": {
             "$ref": "#/definitions/v2/PluginSummary"
-          },
-          "shareUrl": {
-            "type": "string"
           }
         },
         "required": [
-          "plugin",
-          "shareUrl"
+          "plugin"
         ],
         "type": "object"
       },
@@ -12404,15 +12392,73 @@
         "title": "PluginShareListResponse",
         "type": "object"
       },
+      "PluginSharePrincipal": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "principalType": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          },
+          "role": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalRole"
+          }
+        },
+        "required": [
+          "name",
+          "principalId",
+          "principalType",
+          "role"
+        ],
+        "type": "object"
+      },
+      "PluginSharePrincipalRole": {
+        "enum": [
+          "reader",
+          "editor",
+          "owner"
+        ],
+        "type": "string"
+      },
+      "PluginSharePrincipalType": {
+        "enum": [
+          "user",
+          "group",
+          "workspace"
+        ],
+        "type": "string"
+      },
       "PluginShareSaveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "discoverability": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginShareDiscoverability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pluginPath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "remotePluginId": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "shareTargets": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginShareTarget"
+            },
+            "type": [
+              "array",
               "null"
             ]
           }
@@ -12438,6 +12484,83 @@
           "shareUrl"
         ],
         "title": "PluginShareSaveResponse",
+        "type": "object"
+      },
+      "PluginShareTarget": {
+        "properties": {
+          "principalId": {
+            "type": "string"
+          },
+          "principalType": {
+            "$ref": "#/definitions/v2/PluginSharePrincipalType"
+          },
+          "role": {
+            "$ref": "#/definitions/v2/PluginShareTargetRole"
+          }
+        },
+        "required": [
+          "principalId",
+          "principalType",
+          "role"
+        ],
+        "type": "object"
+      },
+      "PluginShareTargetRole": {
+        "enum": [
+          "reader",
+          "editor"
+        ],
+        "type": "string"
+      },
+      "PluginShareUpdateDiscoverability": {
+        "enum": [
+          "UNLISTED",
+          "PRIVATE"
+        ],
+        "type": "string"
+      },
+      "PluginShareUpdateTargetsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "discoverability": {
+            "$ref": "#/definitions/v2/PluginShareUpdateDiscoverability"
+          },
+          "remotePluginId": {
+            "type": "string"
+          },
+          "shareTargets": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginShareTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "discoverability",
+          "remotePluginId",
+          "shareTargets"
+        ],
+        "title": "PluginShareUpdateTargetsParams",
+        "type": "object"
+      },
+      "PluginShareUpdateTargetsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "discoverability": {
+            "$ref": "#/definitions/v2/PluginShareDiscoverability"
+          },
+          "principals": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginSharePrincipal"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "discoverability",
+          "principals"
+        ],
+        "title": "PluginShareUpdateTargetsResponse",
         "type": "object"
       },
       "PluginSkillReadParams": {
@@ -12589,8 +12712,41 @@
               }
             ]
           },
+          "keywords": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "localVersion": {
+            "default": null,
+            "description": "Version of the locally materialized plugin package when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
+          },
+          "remotePluginId": {
+            "description": "Backend remote plugin identifier when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shareContext": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginShareContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Remote sharing context associated with this plugin when available."
           },
           "source": {
             "$ref": "#/definitions/v2/PluginSource"
@@ -12640,6 +12796,122 @@
         "required": [
           "marketplaceName",
           "pluginNames"
+        ],
+        "type": "object"
+      },
+      "ProcessExitedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Final process exit notification for `process/spawn`.",
+        "properties": {
+          "exitCode": {
+            "description": "Process exit code.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stderr": {
+            "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+            "type": "string"
+          },
+          "stderrCapReached": {
+            "description": "Whether stderr reached `outputBytesCap`.\n\nIn streaming mode, stderr is empty and cap state is also reported on the final stderr `process/outputDelta` notification.",
+            "type": "boolean"
+          },
+          "stdout": {
+            "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+            "type": "string"
+          },
+          "stdoutCapReached": {
+            "description": "Whether stdout reached `outputBytesCap`.\n\nIn streaming mode, stdout is empty and cap state is also reported on the final stdout `process/outputDelta` notification.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exitCode",
+          "processHandle",
+          "stderr",
+          "stderrCapReached",
+          "stdout",
+          "stdoutCapReached"
+        ],
+        "title": "ProcessExitedNotification",
+        "type": "object"
+      },
+      "ProcessOutputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Base64-encoded output chunk emitted for a streaming `process/spawn` request.",
+        "properties": {
+          "capReached": {
+            "description": "True on the final streamed chunk for this stream when output was truncated by `outputBytesCap`.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Base64-encoded output bytes.",
+            "type": "string"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stream": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessOutputStream"
+              }
+            ],
+            "description": "Output stream this chunk belongs to."
+          }
+        },
+        "required": [
+          "capReached",
+          "deltaBase64",
+          "processHandle",
+          "stream"
+        ],
+        "title": "ProcessOutputDeltaNotification",
+        "type": "object"
+      },
+      "ProcessOutputStream": {
+        "description": "Stream label for `process/outputDelta` notifications.",
+        "oneOf": [
+          {
+            "description": "stdout stream. PTY mode multiplexes terminal output here.",
+            "enum": [
+              "stdout"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "stderr stream.",
+            "enum": [
+              "stderr"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "ProcessTerminalSize": {
+        "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+        "properties": {
+          "cols": {
+            "description": "Terminal width in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Terminal height in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
         ],
         "type": "object"
       },
@@ -12716,13 +12988,9 @@
             ]
           },
           "service_tier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "tools": {
@@ -13140,20 +13408,6 @@
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
       },
-      "RemoteControlClientConnectionAudience": {
-        "description": "Audience for a remote-control client connection device-key proof.",
-        "enum": [
-          "remote_control_client_websocket"
-        ],
-        "type": "string"
-      },
-      "RemoteControlClientEnrollmentAudience": {
-        "description": "Audience for a remote-control client enrollment device-key proof.",
-        "enum": [
-          "remote_control_client_enrollment"
-        ],
-        "type": "string"
-      },
       "RemoteControlConnectionStatus": {
         "enum": [
           "disabled",
@@ -13165,7 +13419,7 @@
       },
       "RemoteControlStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Current remote-control connection status and environment id exposed to clients.",
+        "description": "Current remote-control connection status and remote identity exposed to clients.",
         "properties": {
           "environmentId": {
             "type": [
@@ -13173,11 +13427,15 @@
               "null"
             ]
           },
+          "installationId": {
+            "type": "string"
+          },
           "status": {
             "$ref": "#/definitions/v2/RemoteControlConnectionStatus"
           }
         },
         "required": [
+          "installationId",
           "status"
         ],
         "title": "RemoteControlStatusChangedNotification",
@@ -13793,6 +14051,28 @@
           },
           {
             "properties": {
+              "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "context_compaction"
+                ],
+                "title": "ContextCompactionResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ContextCompactionResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
               "type": {
                 "enum": [
                   "other"
@@ -14229,13 +14509,6 @@
         "title": "ServerRequestResolvedNotification",
         "type": "object"
       },
-      "ServiceTier": {
-        "enum": [
-          "fast",
-          "flex"
-        ],
-        "type": "string"
-      },
       "SessionMigration": {
         "properties": {
           "cwd": {
@@ -14625,24 +14898,6 @@
         ],
         "type": "object"
       },
-      "SkillsListExtraRootsForCwd": {
-        "properties": {
-          "cwd": {
-            "type": "string"
-          },
-          "extraUserRoots": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "cwd",
-          "extraUserRoots"
-        ],
-        "type": "object"
-      },
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14656,17 +14911,6 @@
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"
-          },
-          "perCwdExtraUserRoots": {
-            "default": null,
-            "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
-            "items": {
-              "$ref": "#/definitions/v2/SkillsListExtraRootsForCwd"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
           }
         },
         "title": "SkillsListParams",
@@ -14950,6 +15194,10 @@
             "description": "Usually the first user message in the thread, if available.",
             "type": "string"
           },
+          "sessionId": {
+            "description": "Session id shared by threads that belong to the same session tree.",
+            "type": "string"
+          },
           "source": {
             "allOf": [
               {
@@ -14965,6 +15213,17 @@
               }
             ],
             "description": "Current runtime status for the thread."
+          },
+          "threadSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional analytics source classification for this thread."
           },
           "turns": {
             "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -14987,6 +15246,7 @@
           "id",
           "modelProvider",
           "preview",
+          "sessionId",
           "source",
           "status",
           "turns",
@@ -15162,24 +15422,24 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "threadId": {
             "type": "string"
+          },
+          "threadSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional client-supplied analytics source classification for this forked thread."
           }
         },
         "required": [
@@ -15238,13 +15498,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -16669,20 +16925,9 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "threadId": {
@@ -16745,13 +16990,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -16857,6 +17098,14 @@
         "enum": [
           "created_at",
           "updated_at"
+        ],
+        "type": "string"
+      },
+      "ThreadSource": {
+        "enum": [
+          "user",
+          "subagent",
+          "memory_consolidation"
         ],
         "type": "string"
       },
@@ -16969,20 +17218,9 @@
             ]
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "sessionStartSource": {
@@ -16994,6 +17232,17 @@
                 "type": "null"
               }
             ]
+          },
+          "threadSource": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional client-supplied analytics source classification for this thread."
           }
         },
         "title": "ThreadStartParams",
@@ -17049,13 +17298,9 @@
             "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ServiceTier"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "thread": {
@@ -17424,11 +17669,20 @@
             "type": "string"
           },
           "items": {
-            "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
+            "description": "Thread items currently included in this turn payload.",
             "items": {
               "$ref": "#/definitions/v2/ThreadItem"
             },
             "type": "array"
+          },
+          "itemsView": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/TurnItemsView"
+              }
+            ],
+            "default": "full",
+            "description": "Describes how much of `items` has been loaded for this turn."
           },
           "startedAt": {
             "description": "Unix timestamp (in seconds) when the turn started.",
@@ -17552,6 +17806,31 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "TurnInterruptResponse",
         "type": "object"
+      },
+      "TurnItemsView": {
+        "oneOf": [
+          {
+            "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+            "enum": [
+              "notLoaded"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "`items` contains only a display summary for this turn.",
+            "enum": [
+              "summary"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+            "enum": [
+              "full"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "TurnPlanStep": {
         "properties": {
@@ -17688,22 +17967,11 @@
             "description": "Override the sandbox policy for this turn and subsequent turns."
           },
           "serviceTier": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ServiceTier"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Override the service tier for this turn and subsequent turns."
+            "description": "Override the service tier for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "summary": {
             "anyOf": [
@@ -18134,6 +18402,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "WindowsSandboxReadiness": {
+        "enum": [
+          "ready",
+          "notConfigured",
+          "updateRequired"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxReadinessResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/WindowsSandboxReadiness"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WindowsSandboxReadinessResponse",
         "type": "object"
       },
       "WindowsSandboxSetupCompletedNotification": {

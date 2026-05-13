@@ -855,6 +855,7 @@ async fn fork_thread(
         nth_user_message,
         config.clone(),
         path,
+        /*thread_source*/ None,
         /*persist_extended_history*/ false,
         /*parent_trace*/ None,
     ))

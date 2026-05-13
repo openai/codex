@@ -23,6 +23,8 @@ pub struct DynamicToolCallRequest {
     pub call_id: String,
     pub turn_id: String,
     #[serde(default)]
+    pub started_at_ms: i64,
+    #[serde(default)]
     pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,

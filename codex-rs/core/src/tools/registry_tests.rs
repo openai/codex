@@ -1,19 +1,23 @@
 use super::*;
 use crate::tools::context::CallerVisibleRewriteOutput;
 use crate::tools::context::McpToolOutput;
+use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
+use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use codex_protocol::mcp::CallToolResult;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
 
-#[derive(Default)]
-struct TestHandler;
+struct TestHandler {
+    tool_name: codex_tools::ToolName,
+}
 
 impl ToolHandler for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> codex_tools::ToolName {
+        self.tool_name.clone()
     }
 
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -26,12 +30,16 @@ impl ToolHandler for TestHandler {
 
 #[test]
 fn handler_looks_up_namespaced_aliases_explicitly() {
-    let plain_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
-    let namespaced_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
     let namespace = "mcp__codex_apps__gmail";
     let tool_name = "gmail_get_recent_emails";
     let plain_name = codex_tools::ToolName::plain(tool_name);
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
+    let plain_handler = Arc::new(TestHandler {
+        tool_name: plain_name.clone(),
+    }) as Arc<dyn AnyToolHandler>;
+    let namespaced_handler = Arc::new(TestHandler {
+        tool_name: namespaced_name.clone(),
+    }) as Arc<dyn AnyToolHandler>;
     let registry = ToolRegistry::new(HashMap::from([
         (plain_name.clone(), Arc::clone(&plain_handler)),
         (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
@@ -85,10 +93,8 @@ fn caller_visible_rewrite_reaches_direct_and_code_mode_callers() {
 fn mcp_result_with_caller_visible_rewrite() -> AnyToolResult {
     AnyToolResult {
         call_id: "mcp-call-1".to_string(),
-        payload: ToolPayload::Mcp {
-            server: "memory".to_string(),
-            tool: "lookup".to_string(),
-            raw_arguments: "{}".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
         },
         result: Box::new(CallerVisibleRewriteOutput::new(
             Box::new(McpToolOutput {
@@ -107,4 +113,16 @@ fn mcp_result_with_caller_visible_rewrite() -> AnyToolResult {
         )),
         post_tool_use_payload: None,
     }
+}
+
+#[test]
+fn register_handler_adds_handler_and_spec() {
+    let mut builder = ToolRegistryBuilder::new();
+    builder.register_handler(Arc::new(GetGoalHandler));
+
+    let (specs, registry) = builder.build();
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0], create_get_goal_tool());
+    assert!(registry.has_handler(&codex_tools::ToolName::plain(GET_GOAL_TOOL_NAME)));
 }

@@ -261,7 +261,7 @@ fn parse_completed(
                         updated_tool_output = parsed.updated_tool_output;
                         updated_mcp_tool_output = parsed.updated_mcp_tool_output;
                     }
-                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
+                } else if output_parser::looks_like_json(&run_result.stdout) {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
@@ -316,6 +316,7 @@ fn parse_completed(
             updated_tool_output,
             updated_mcp_tool_output,
         },
+        completion_order: 0,
     }
 }
 

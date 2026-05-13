@@ -42,6 +42,12 @@ option(
   description : 'Path to Python 3, or empty to use python3',
 )
 option(
+  'support_setuid',
+  type : 'boolean',
+  description : 'Support setuid mode (deprecated)',
+  value : false,
+)
+option(
   'require_userns',
   type : 'boolean',
   description : 'require user namespaces by default when installed setuid',

@@ -12,11 +12,10 @@ use super::callbacks::yield_control_callback;
 
 pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), String> {
     let global = scope.get_current_context().global(scope);
-    let console = v8::String::new(scope, "console")
-        .ok_or_else(|| "failed to allocate global `console`".to_string())?;
-    if global.delete(scope, console.into()) != Some(true) {
-        return Err("failed to remove global `console`".to_string());
-    }
+    delete_global(scope, global, "console")?;
+    delete_global(scope, global, "Atomics")?;
+    delete_global(scope, global, "SharedArrayBuffer")?;
+    delete_global(scope, global, "WebAssembly")?;
 
     let tools = build_tools_object(scope)?;
     let all_tools = build_all_tools_value(scope)?;
@@ -140,5 +139,19 @@ fn set_global<'s>(
         Ok(())
     } else {
         Err(format!("failed to set global `{name}`"))
+    }
+}
+
+fn delete_global<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Result<(), String> {
+    let key = v8::String::new(scope, name)
+        .ok_or_else(|| format!("failed to allocate global `{name}`"))?;
+    if global.delete(scope, key.into()) == Some(true) {
+        Ok(())
+    } else {
+        Err(format!("failed to remove global `{name}`"))
     }
 }

@@ -3,9 +3,8 @@
 //!
 //! The app-server startup path should honor `experimental_thread_store`
 //! by routing all thread persistence through the configured store. This suite uses
-//! the thread-store crate's test-only in-memory store, which exercises the same
-//! config-driven selection path as a remote store without requiring the real gRPC
-//! service.
+//! the thread-store crate's test-only in-memory store to exercise the non-local
+//! config-driven selection path without touching local rollout or sqlite storage.
 //!
 //! The important failure mode is accidentally materializing local persistence
 //! while a non-local store is configured. After `thread/start` and a simple turn,
@@ -80,6 +79,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,

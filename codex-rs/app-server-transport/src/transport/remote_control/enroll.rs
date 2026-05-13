@@ -19,6 +19,7 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlEnrollment {
@@ -193,6 +194,7 @@ pub(crate) fn format_headers(headers: &HeaderMap) -> String {
 pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
+    installation_id: &str,
 ) -> io::Result<RemoteControlEnrollment> {
     let enroll_url = &remote_control_target.enroll_url;
     let server_name = gethostname().to_string_lossy().trim().to_string();
@@ -201,6 +203,7 @@ pub(super) async fn enroll_remote_control_server(
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
+        installation_id: installation_id.to_string(),
     };
     let client = build_reqwest_client();
     let mut auth_headers = HeaderMap::new();
@@ -210,6 +213,7 @@ pub(super) async fn enroll_remote_control_server(
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
         .headers(auth_headers)
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
+        .header(REMOTE_CONTROL_INSTALLATION_ID_HEADER, installation_id)
         .json(&request);
 
     let response = http_request.send().await.map_err(|err| {
@@ -459,6 +463,7 @@ mod tests {
                 auth_provider: codex_model_provider::unauthenticated_auth_provider(),
                 account_id: "account_id".to_string(),
             },
+            "11111111-1111-4111-8111-111111111111",
         )
         .await
         .expect_err("invalid response should fail to parse");

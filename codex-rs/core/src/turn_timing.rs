@@ -4,7 +4,6 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_otel::TURN_TTFM_DURATION_METRIC;
-use codex_otel::TURN_TTFT_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
@@ -21,9 +20,7 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
     else {
         return;
     };
-    turn_context
-        .session_telemetry
-        .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+    turn_context.session_telemetry.record_turn_ttft(duration);
 }
 
 pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &TurnItem) {
@@ -107,7 +104,7 @@ fn now_unix_timestamp_secs() -> i64 {
     now_unix_timestamp_ms() / 1000
 }
 
-fn now_unix_timestamp_ms() -> i64 {
+pub(crate) fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -186,7 +183,8 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }

@@ -28,7 +28,6 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
-use codex_protocol::message_history::HistoryEntry;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
@@ -44,7 +43,6 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
@@ -62,13 +60,17 @@ pub(crate) enum RealtimeAudioDeviceKind {
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,
     ReplaceExisting,
+    UpdateExisting {
+        status: ThreadGoalStatus,
+        token_budget: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct HistoryLookupResponse {
     pub(crate) offset: usize,
     pub(crate) log_id: u64,
-    pub(crate) entry: Option<HistoryEntry>,
+    pub(crate) entry: Option<String>,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -85,6 +87,12 @@ impl RealtimeAudioDeviceKind {
             Self::Speaker => "speaker",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsolidationScrollbackReflow {
+    IfResizeReflowRan,
+    Required,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,12 +158,36 @@ pub(crate) enum AppEvent {
         event: HistoryLookupResponse,
     },
 
+    /// Persist a submitted prompt in the cross-session message history.
+    AppendMessageHistoryEntry {
+        thread_id: ThreadId,
+        text: String,
+    },
+
+    /// Persist a branch discovered from an App git-action directive into thread metadata.
+    SyncThreadGitBranch {
+        thread_id: ThreadId,
+        branch: String,
+    },
+
+    /// Fetch a persistent cross-session message history entry by offset.
+    LookupMessageHistoryEntry {
+        thread_id: ThreadId,
+        offset: usize,
+        log_id: u64,
+    },
+
     /// Start a new session.
     NewSession,
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
     ClearUi,
+
+    /// Re-render the transcript using the selected scrollback rendering mode.
+    RawOutputModeChanged {
+        enabled: bool,
+    },
 
     /// Clear the current context, start a fresh session, and submit an initial user message.
     ///
@@ -222,6 +254,11 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
+    /// Open an editor for the current thread goal objective.
+    OpenThreadGoalEditor {
+        thread_id: Option<ThreadId>,
+    },
+
     /// Set or replace the current thread goal objective.
     SetThreadGoalObjective {
         thread_id: ThreadId,
@@ -279,6 +316,38 @@ pub(crate) enum AppEvent {
     /// Open the provided URL in the user's browser.
     OpenUrlInBrowser {
         url: String,
+    },
+
+    /// Persist a pet selection and reload the ambient pet.
+    PetSelected {
+        pet_id: String,
+    },
+
+    /// Persist terminal pets as disabled and remove the ambient pet.
+    PetDisabled,
+
+    /// Start loading the side preview for the pet picker.
+    PetPreviewRequested {
+        pet_id: String,
+    },
+
+    /// Result of loading the side preview for the pet picker.
+    PetPreviewLoaded {
+        request_id: u64,
+        result: Result<crate::pets::AmbientPet, String>,
+    },
+
+    /// Result of loading the selected ambient pet before config persistence.
+    PetSelectionLoaded {
+        request_id: u64,
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    },
+
+    /// Result of restoring the configured ambient pet during startup.
+    ConfiguredPetLoaded {
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
     },
 
     /// Refresh app connector state and mention bindings.
@@ -485,6 +554,10 @@ pub(crate) enum AppEvent {
     /// Begin buffering initial resume replay rows before they are written to scrollback.
     BeginInitialHistoryReplayBuffer,
 
+    /// Begin buffering thread-switch replay cells so the final scrollback write can reuse the
+    /// resize-reflow tail renderer.
+    BeginThreadSwitchHistoryReplayBuffer,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     /// Finish buffering initial resume replay after all replay events have been queued.
@@ -498,9 +571,15 @@ pub(crate) enum AppEvent {
     /// finalization. The `App` handler walks backward through `transcript_cells`
     /// to find the `AgentMessageCell` run and splices in the consolidated cell.
     /// The `cwd` keeps local file-link display stable across the final re-render.
+    /// `scrollback_reflow` lets table-tail finalization force the already-emitted
+    /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
+    /// `deferred_history_cell` lets callers add the final stream tail to the
+    /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
         source: String,
         cwd: PathBuf,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+        deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
@@ -548,7 +627,7 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<String>,
     },
 
     /// Open the device picker for a realtime microphone or speaker.
@@ -749,10 +828,26 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
+    /// Trust the current definition for a hook by stable hook key.
+    TrustHook {
+        key: String,
+        current_hash: String,
+    },
+
+    /// Trust the current definitions for one or more hooks by stable hook key.
+    TrustHooks {
+        updates: Vec<crate::hooks_rpc::HookTrustUpdate>,
+    },
+
     /// Result of persisting hook enabled state.
     HookEnabledSet {
         key: String,
         enabled: bool,
+        result: Result<(), String>,
+    },
+
+    /// Result of persisting hook trust state.
+    HookTrusted {
         result: Result<(), String>,
     },
 
@@ -823,6 +918,11 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
         branch: Option<String>,
     },
+    /// Async update of Git summary fields for status line rendering.
+    StatusLineGitSummaryUpdated {
+        cwd: PathBuf,
+        summary: crate::chatwidget::StatusLineGitSummary,
+    },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
         items: Vec<StatusLineItem>,
@@ -868,6 +968,9 @@ pub(crate) enum AppEvent {
         action: String,
         intent: KeymapEditIntent,
     },
+
+    /// Open the keymap keypress inspector.
+    OpenKeymapDebug,
 
     /// Apply a captured key to the selected keymap action.
     KeymapCaptured {

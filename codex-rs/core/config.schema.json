@@ -370,6 +370,9 @@
             "apps_mcp_path_override": {
               "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
             },
+            "auth_elicitation": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -475,16 +478,25 @@
             "memory_tool": {
               "type": "boolean"
             },
+            "mentions_v2": {
+              "type": "boolean"
+            },
             "multi_agent": {
               "type": "boolean"
             },
             "multi_agent_v2": {
               "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
+            "network_proxy": {
+              "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+            },
             "personality": {
               "type": "boolean"
             },
             "plugin_hooks": {
+              "type": "boolean"
+            },
+            "plugin_sharing": {
               "type": "boolean"
             },
             "plugins": {
@@ -494,6 +506,9 @@
               "type": "boolean"
             },
             "realtime_conversation": {
+              "type": "boolean"
+            },
+            "remote_compaction_v2": {
               "type": "boolean"
             },
             "remote_control": {
@@ -512,6 +527,9 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "responses_websocket_response_processed": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -607,6 +625,9 @@
         "include_apps_instructions": {
           "type": "boolean"
         },
+        "include_collaboration_mode_instructions": {
+          "type": "boolean"
+        },
         "include_environment_context": {
           "type": "boolean"
         },
@@ -658,18 +679,23 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            }
-          ],
-          "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
+          "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+          "type": "string"
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
         },
         "tools_view_image": {
           "type": "boolean"
+        },
+        "tui": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProfileTui"
+            }
+          ],
+          "default": null,
+          "description": "TUI settings scoped to this profile."
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
@@ -782,6 +808,16 @@
         },
         {
           "$ref": "#/definitions/MultiAgentV2ConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_NetworkProxyConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/NetworkProxyConfigToml"
         }
       ]
     },
@@ -939,6 +975,10 @@
             "command": {
               "type": "string"
             },
+            "commandWindows": {
+              "default": null,
+              "type": "string"
+            },
             "statusMessage": {
               "default": null,
               "type": "string"
@@ -996,6 +1036,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "trusted_hash": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1009,7 +1052,21 @@
           },
           "type": "array"
         },
+        "PostCompact": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreCompact": {
           "default": [],
           "items": {
             "$ref": "#/definitions/MatcherGroup"
@@ -1460,6 +1517,75 @@
       ],
       "type": "string"
     },
+    "NetworkProxyConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "type": "boolean"
+        },
+        "domains": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkProxyDomainPermissionToml"
+          },
+          "type": "object"
+        },
+        "enable_socks5": {
+          "type": "boolean"
+        },
+        "enable_socks5_udp": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/NetworkProxyModeToml"
+        },
+        "proxy_url": {
+          "type": "string"
+        },
+        "socks_url": {
+          "type": "string"
+        },
+        "unix_sockets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkProxyUnixSocketPermissionToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkProxyDomainPermissionToml": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyModeToml": {
+      "enum": [
+        "limited",
+        "full"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyUnixSocketPermissionToml": {
+      "enum": [
+        "allow",
+        "none"
+      ],
+      "type": "string"
+    },
     "NetworkToml": {
       "additionalProperties": false,
       "properties": {
@@ -1657,6 +1783,13 @@
           ],
           "description": "Optional metrics exporter"
         },
+        "span_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Attributes to add to every exported trace span.",
+          "type": "object"
+        },
         "trace_exporter": {
           "allOf": [
             {
@@ -1664,6 +1797,16 @@
             }
           ],
           "description": "Optional trace exporter"
+        },
+        "tracestate": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Semicolon-separated `key:value` fields to upsert into W3C tracestate members.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -1866,6 +2009,22 @@
           },
           "description": "Per-tool approval settings keyed by tool name.",
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ProfileTui": {
+      "additionalProperties": false,
+      "description": "TUI settings supported inside a named profile.",
+      "properties": {
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         }
       },
       "type": "object"
@@ -2150,10 +2309,11 @@
       },
       "type": "object"
     },
-    "ServiceTier": {
+    "SessionPickerViewMode": {
+      "description": "Preferred layout for the resume/fork session picker.",
       "enum": [
-        "fast",
-        "flex"
+        "comfortable",
+        "dense"
       ],
       "type": "string"
     },
@@ -2273,24 +2433,6 @@
             }
           },
           "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "endpoint": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "remote"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "endpoint",
             "type"
           ],
           "type": "object"
@@ -2438,6 +2580,7 @@
               "insert_newline": null,
               "kill_line_end": null,
               "kill_line_start": null,
+              "kill_whole_line": null,
               "move_down": null,
               "move_left": null,
               "move_line_end": null,
@@ -2455,6 +2598,8 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
+              "toggle_fast_mode": null,
+              "toggle_raw_output": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2552,6 +2697,34 @@
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "pet": {
+          "default": null,
+          "description": "Pet id to preselect in the terminal pet picker.\n\nCustom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.",
+          "type": "string"
+        },
+        "pet_anchor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiPetAnchor"
+            }
+          ],
+          "default": "composer",
+          "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
+        },
+        "raw_output_mode": {
+          "default": false,
+          "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         },
         "show_tooltips": {
           "default": true,
@@ -2808,6 +2981,14 @@
           ],
           "description": "Kill text from cursor to line start."
         },
+        "kill_whole_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Kill the current line."
+        },
         "move_down": {
           "allOf": [
             {
@@ -2935,6 +3116,22 @@
           ],
           "description": "Submit the current composer draft."
         },
+        "toggle_fast_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Fast mode."
+        },
+        "toggle_raw_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3015,6 +3212,7 @@
             "insert_newline": null,
             "kill_line_end": null,
             "kill_line_start": null,
+            "kill_whole_line": null,
             "move_down": null,
             "move_left": null,
             "move_line_end": null,
@@ -3039,6 +3237,8 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
+            "toggle_fast_mode": null,
+            "toggle_raw_output": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -3255,6 +3455,24 @@
         }
       },
       "type": "object"
+    },
+    "TuiPetAnchor": {
+      "oneOf": [
+        {
+          "description": "Anchor the pet to the bottom of the current TUI composer viewport.",
+          "enum": [
+            "composer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anchor the pet to the physical bottom of the terminal screen.",
+          "enum": [
+            "screen-bottom"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,
@@ -3746,7 +3964,7 @@
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "commit_attribution": {
-      "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
+      "description": "Optional commit attribution text for commit message co-author trailers. This top-level setting only takes effect when `[features].codex_git_commit` is enabled.\n\nWhen enabled and unset, Codex uses `Codex <noreply@openai.com>`. Set to an empty string to disable automatic commit attribution.",
       "type": "string"
     },
     "compact_prompt": {
@@ -3809,10 +4027,6 @@
       ],
       "description": "Experimental / do not use. Selects the thread store implementation."
     },
-    "experimental_thread_store_endpoint": {
-      "description": "Experimental / do not use. When set, app-server uses a remote thread store at this endpoint instead of the local filesystem/SQLite store.",
-      "type": "string"
-    },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
     },
@@ -3835,6 +4049,9 @@
         },
         "apps_mcp_path_override": {
           "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+        },
+        "auth_elicitation": {
+          "type": "boolean"
         },
         "browser_use": {
           "type": "boolean"
@@ -3941,16 +4158,25 @@
         "memory_tool": {
           "type": "boolean"
         },
+        "mentions_v2": {
+          "type": "boolean"
+        },
         "multi_agent": {
           "type": "boolean"
         },
         "multi_agent_v2": {
           "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
+        "network_proxy": {
+          "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+        },
         "personality": {
           "type": "boolean"
         },
         "plugin_hooks": {
+          "type": "boolean"
+        },
+        "plugin_sharing": {
           "type": "boolean"
         },
         "plugins": {
@@ -3960,6 +4186,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "remote_compaction_v2": {
           "type": "boolean"
         },
         "remote_control": {
@@ -3978,6 +4207,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "responses_websocket_response_processed": {
           "type": "boolean"
         },
         "responses_websockets": {
@@ -4135,6 +4367,10 @@
       "description": "Whether to inject the `<apps_instructions>` developer block.",
       "type": "boolean"
     },
+    "include_collaboration_mode_instructions": {
+      "description": "Whether to inject the `<collaboration_mode>` developer block.",
+      "type": "boolean"
+    },
     "include_environment_context": {
       "description": "Whether to inject the `<environment_context>` user block.",
       "type": "boolean"
@@ -4268,7 +4504,7 @@
     },
     "notify": {
       "default": null,
-      "description": "Deprecated optional external command to spawn for end-user notifications.",
+      "description": "Optional external command to spawn for end-user notifications.",
       "items": {
         "type": "string"
       },
@@ -4389,12 +4625,8 @@
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
     "service_tier": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ServiceTier"
-        }
-      ],
-      "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
+      "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+      "type": "string"
     },
     "shell_environment_policy": {
       "allOf": [

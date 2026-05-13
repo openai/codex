@@ -327,6 +327,18 @@ crate.annotation(
         "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @v8_targets//:rusty_v8_binding_for_target)",
     },
     crate = "v8",
+    # Keep the Rust feature aligned with the source-built Bazel artifacts.
+    # Windows MSVC still consumes upstream non-sandboxed prebuilts.
+    crate_features_select = {
+        "aarch64-apple-darwin": ["v8_enable_sandbox"],
+        "aarch64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "aarch64-unknown-linux-gnu": ["v8_enable_sandbox"],
+        "aarch64-unknown-linux-musl": ["v8_enable_sandbox"],
+        "x86_64-apple-darwin": ["v8_enable_sandbox"],
+        "x86_64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "x86_64-unknown-linux-gnu": ["v8_enable_sandbox"],
+        "x86_64-unknown-linux-musl": ["v8_enable_sandbox"],
+    },
     gen_build_script = "on",
     patch_args = ["-p1"],
     patches = [

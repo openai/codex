@@ -4,6 +4,10 @@
 
 export type FileChangeRequestApprovalParams = { threadId: string, turnId: string, itemId: string,
 /**
+ * Unix timestamp (in milliseconds) when this approval request started.
+ */
+startedAtMs: number,
+/**
  * Optional explanatory reason (e.g. request for extra write access).
  */
 reason?: string | null,

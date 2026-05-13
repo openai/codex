@@ -142,6 +142,11 @@ impl ExecServerHarness {
         Ok(())
     }
 
+    pub(crate) async fn send_raw_binary(&mut self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        self.websocket.send(Message::Binary(bytes.into())).await?;
+        Ok(())
+    }
+
     pub(crate) async fn next_event(&mut self) -> anyhow::Result<JSONRPCMessage> {
         self.next_event_with_timeout(EVENT_TIMEOUT).await
     }

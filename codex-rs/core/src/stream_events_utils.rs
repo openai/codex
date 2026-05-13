@@ -138,8 +138,11 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation =
-        record_stage1_output_usage_and_detect_memory_citation(turn_context, item).await;
+    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
+        sess.services.state_db.as_ref(),
+        item,
+    )
+    .await;
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -174,7 +177,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
 }
 
 async fn record_stage1_output_usage_and_detect_memory_citation(
-    turn_context: &TurnContext,
+    state_db_ctx: Option<&state_db::StateDbHandle>,
     item: &ResponseItem,
 ) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
@@ -190,7 +193,7 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
         return true;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
+    if let Some(db) = state_db_ctx {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
     true
@@ -225,7 +228,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
+    match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess
@@ -236,7 +239,7 @@ pub(crate) async fn handle_output_item_done(
             tracing::info!(
                 thread_id = %ctx.sess.conversation_id,
                 "ToolCall: {} {}",
-                call.tool_name.display(),
+                call.tool_name,
                 payload_preview
             );
 

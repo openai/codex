@@ -17,10 +17,33 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
+use crate::tools::handlers::view_image_spec::create_view_image_tool;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
-pub struct ViewImageHandler;
+pub struct ViewImageHandler {
+    options: ViewImageToolOptions,
+}
+
+impl Default for ViewImageHandler {
+    fn default() -> Self {
+        Self {
+            options: ViewImageToolOptions {
+                can_request_original_image_detail: false,
+                include_environment_id: false,
+            },
+        }
+    }
+}
+
+impl ViewImageHandler {
+    pub(crate) fn new(options: ViewImageToolOptions) -> Self {
+        Self { options }
+    }
+}
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -28,6 +51,8 @@ const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
 #[derive(Deserialize)]
 struct ViewImageArgs {
     path: String,
+    #[serde(default)]
+    environment_id: Option<String>,
     detail: Option<String>,
 }
 
@@ -39,8 +64,16 @@ enum ViewImageDetail {
 impl ToolHandler for ViewImageHandler {
     type Output = ViewImageOutput;
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("view_image")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_view_image_tool(self.options))
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -72,12 +105,16 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let args: ViewImageArgs = parse_arguments(&arguments)?;
+        let ViewImageArgs {
+            path,
+            environment_id,
+            detail,
+        } = parse_arguments(&arguments)?;
         // `view_image` accepts only its documented detail values: omit
         // `detail` for the default path or set it to `original`.
         // Other string values remain invalid rather than being silently
         // reinterpreted.
-        let detail = match args.detail.as_deref() {
+        let detail = match detail.as_deref() {
             None => None,
             Some("original") => Some(ViewImageDetail::Original),
             Some(detail) => {
@@ -87,21 +124,21 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let abs_path = turn.resolve_path(Some(args.path));
-        let Some(environment) = turn.primary_environment() else {
+        let Some(turn_environment) =
+            resolve_tool_environment(turn.as_ref(), environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let sandbox = environment
-            .environment
-            .is_remote()
-            .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
+        let cwd = turn_environment.cwd.clone();
+        let abs_path = cwd.join(path);
+        let mut sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
+        sandbox.cwd = Some(cwd.clone());
+        let fs = turn_environment.environment.get_filesystem();
 
-        let metadata = environment
-            .environment
-            .get_filesystem()
-            .get_metadata(&abs_path, sandbox.as_ref())
+        let metadata = fs
+            .get_metadata(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -116,10 +153,8 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = environment
-            .environment
-            .get_filesystem()
-            .read_file(&abs_path, sandbox.as_ref())
+        let file_bytes = fs
+            .read_file(&abs_path, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -208,8 +243,15 @@ impl ToolOutput for ViewImageOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::ToolCallSource;
+    use crate::tools::context::ToolInvocation;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[test]
     fn code_mode_result_returns_image_url_object() {
@@ -228,6 +270,37 @@ mod tests {
                 "image_url": "data:image/png;base64,AAA",
                 "detail": "high",
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_passes_sandbox_context_for_local_filesystem_reads() {
+        let (session, mut turn) = make_session_and_context().await;
+        let image_path = turn.cwd.join("image.png");
+        std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
+        turn.permission_profile = PermissionProfile::read_only();
+
+        let result = ViewImageHandler::default()
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-view-image".to_string(),
+                tool_name: codex_tools::ToolName::plain("view_image"),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: json!({ "path": "image.png" }).to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected sandboxed filesystem error");
+        };
+        assert!(
+            message.contains("sandboxed filesystem operations require configured runtime paths"),
+            "{message}"
         );
     }
 }

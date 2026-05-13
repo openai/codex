@@ -59,9 +59,11 @@ pub struct MarketplaceInterface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketplacePlugin {
     pub name: String,
+    pub local_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,11 +290,22 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             Err(err) => return Err(err),
         };
 
+        let local_version = plugin
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.version.clone());
+        let keywords = plugin
+            .manifest
+            .map(|manifest| manifest.keywords)
+            .unwrap_or_default();
+
         plugins.push(MarketplacePlugin {
             name: plugin.plugin_id.plugin_name,
+            local_version,
             source: plugin.source,
             policy: plugin.policy,
             interface: plugin.interface,
+            keywords,
         });
     }
 

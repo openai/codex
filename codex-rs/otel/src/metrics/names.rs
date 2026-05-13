@@ -1,6 +1,7 @@
 pub const TOOL_CALL_COUNT_METRIC: &str = "codex.tool.call";
 pub const TOOL_CALL_DURATION_METRIC: &str = "codex.tool.call.duration_ms";
 pub const TOOL_CALL_UNIFIED_EXEC_METRIC: &str = "codex.tool.unified_exec";
+pub const PROCESS_START_METRIC: &str = "codex.process.start";
 pub const API_CALL_COUNT_METRIC: &str = "codex.api_request";
 pub const API_CALL_DURATION_METRIC: &str = "codex.api_request.duration_ms";
 pub const SSE_EVENT_COUNT_METRIC: &str = "codex.sse_event";
@@ -27,13 +28,18 @@ pub const TURN_NETWORK_PROXY_METRIC: &str = "codex.turn.network_proxy";
 pub const TURN_MEMORY_METRIC: &str = "codex.turn.memory";
 pub const TURN_TOOL_CALL_METRIC: &str = "codex.turn.tool.call";
 pub const TURN_TOKEN_USAGE_METRIC: &str = "codex.turn.token_usage";
+pub const GOAL_CREATED_METRIC: &str = "codex.goal.created";
+pub const GOAL_COMPLETED_METRIC: &str = "codex.goal.completed";
+pub const GOAL_BUDGET_LIMITED_METRIC: &str = "codex.goal.budget_limited";
+pub const GOAL_TOKEN_COUNT_METRIC: &str = "codex.goal.token_count";
+pub const GOAL_DURATION_SECONDS_METRIC: &str = "codex.goal.duration_s";
 pub const PROFILE_USAGE_METRIC: &str = "codex.profile.usage";
 pub const CURATED_PLUGINS_STARTUP_SYNC_METRIC: &str = "codex.plugins.startup_sync";
 pub const CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC: &str = "codex.plugins.startup_sync.final";
 pub const HOOK_RUN_METRIC: &str = "codex.hooks.run";
 pub const HOOK_RUN_DURATION_METRIC: &str = "codex.hooks.run.duration_ms";
-pub const LEGACY_NOTIFY_CONFIGURED_METRIC: &str = "codex.notify.configured";
-pub const LEGACY_NOTIFY_RUN_METRIC: &str = "codex.notify.run";
+/// Duration for coarse startup phases, tagged by low-cardinality phase and status.
+pub const STARTUP_PHASE_DURATION_METRIC: &str = "codex.startup.phase.duration_ms";
 /// Total runtime of a startup prewarm attempt until it completes, tagged by final status.
 pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duration_ms";
 /// Age of the startup prewarm attempt when the first real turn resolves it, tagged by outcome.

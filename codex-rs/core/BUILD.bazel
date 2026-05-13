@@ -1,13 +1,5 @@
 load("//:defs.bzl", "codex_rust_crate")
 
-filegroup(
-    name = "model_availability_nux_fixtures",
-    srcs = [
-        "tests/cli_responses_fixture.sse",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
@@ -52,9 +44,12 @@ codex_rust_crate(
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
     extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",
         "//codex-rs/cli:codex",
+        "//codex-rs/windows-sandbox-rs:codex-command-runner",
+        "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
     ],
 )

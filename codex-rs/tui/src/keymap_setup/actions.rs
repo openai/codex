@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
+use crossterm::event::KeyEvent;
 
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
@@ -29,6 +30,8 @@ pub(super) struct KeymapActionDescriptor {
     pub(super) action: &'static str,
     /// Short user-facing explanation of what the action does.
     pub(super) description: &'static str,
+    /// Feature required before the action appears in `/keymap`.
+    required_feature: Option<KeymapActionFeature>,
 }
 
 const fn action(
@@ -42,6 +45,42 @@ const fn action(
         context_label,
         action,
         description,
+        required_feature: None,
+    }
+}
+
+const fn gated_action(
+    context: &'static str,
+    context_label: &'static str,
+    action: &'static str,
+    description: &'static str,
+    required_feature: KeymapActionFeature,
+) -> KeymapActionDescriptor {
+    KeymapActionDescriptor {
+        context,
+        context_label,
+        action,
+        description,
+        required_feature: Some(required_feature),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KeymapActionFeature {
+    FastMode,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct KeymapActionFilter {
+    pub(crate) fast_mode_enabled: bool,
+}
+
+impl KeymapActionDescriptor {
+    pub(super) fn is_visible(self, filter: KeymapActionFilter) -> bool {
+        match self.required_feature {
+            None => true,
+            Some(KeymapActionFeature::FastMode) => filter.fast_mode_enabled,
+        }
     }
 }
 
@@ -52,6 +91,8 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("global", "Global", "copy", "Copy the last agent response to the clipboard."),
     action("global", "Global", "clear_terminal", "Clear the terminal UI."),
     action("global", "Global", "toggle_vim_mode", "Turn Vim composer mode on or off."),
+    gated_action("global", "Global", "toggle_fast_mode", "Turn Fast mode on or off.", KeymapActionFeature::FastMode),
+    action("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode."),
     action("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort."),
     action("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort."),
     action("chat", "Chat", "edit_queued_message", "Edit the most recently queued message."),
@@ -74,6 +115,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("editor", "Editor", "delete_backward_word", "Delete the previous word."),
     action("editor", "Editor", "delete_forward_word", "Delete the next word."),
     action("editor", "Editor", "kill_line_start", "Delete from cursor to line start."),
+    action("editor", "Editor", "kill_whole_line", "Delete the current line."),
     action("editor", "Editor", "kill_line_end", "Delete from cursor to line end."),
     action("editor", "Editor", "yank", "Paste the kill buffer."),
     action("vim_normal", "Vim normal", "enter_insert", "Enter insert mode at the cursor."),
@@ -171,6 +213,8 @@ pub(super) fn binding_slot<'a>(
         ("global", "copy") => Some(&mut keymap.global.copy),
         ("global", "clear_terminal") => Some(&mut keymap.global.clear_terminal),
         ("global", "toggle_vim_mode") => Some(&mut keymap.global.toggle_vim_mode),
+        ("global", "toggle_fast_mode") => Some(&mut keymap.global.toggle_fast_mode),
+        ("global", "toggle_raw_output") => Some(&mut keymap.global.toggle_raw_output),
         ("chat", "decrease_reasoning_effort") => Some(&mut keymap.chat.decrease_reasoning_effort),
         ("chat", "increase_reasoning_effort") => Some(&mut keymap.chat.increase_reasoning_effort),
         ("chat", "edit_queued_message") => Some(&mut keymap.chat.edit_queued_message),
@@ -193,6 +237,7 @@ pub(super) fn binding_slot<'a>(
         ("editor", "delete_backward_word") => Some(&mut keymap.editor.delete_backward_word),
         ("editor", "delete_forward_word") => Some(&mut keymap.editor.delete_forward_word),
         ("editor", "kill_line_start") => Some(&mut keymap.editor.kill_line_start),
+        ("editor", "kill_whole_line") => Some(&mut keymap.editor.kill_whole_line),
         ("editor", "kill_line_end") => Some(&mut keymap.editor.kill_line_end),
         ("editor", "yank") => Some(&mut keymap.editor.yank),
         ("vim_normal", "enter_insert") => Some(&mut keymap.vim_normal.enter_insert),
@@ -272,6 +317,8 @@ pub(super) fn bindings_for_action<'a>(
         ("global", "copy") => Some(runtime_keymap.app.copy.as_slice()),
         ("global", "clear_terminal") => Some(runtime_keymap.app.clear_terminal.as_slice()),
         ("global", "toggle_vim_mode") => Some(runtime_keymap.app.toggle_vim_mode.as_slice()),
+        ("global", "toggle_fast_mode") => Some(runtime_keymap.app.toggle_fast_mode.as_slice()),
+        ("global", "toggle_raw_output") => Some(runtime_keymap.app.toggle_raw_output.as_slice()),
         ("chat", "decrease_reasoning_effort") => Some(runtime_keymap.chat.decrease_reasoning_effort.as_slice()),
         ("chat", "increase_reasoning_effort") => Some(runtime_keymap.chat.increase_reasoning_effort.as_slice()),
         ("chat", "edit_queued_message") => Some(runtime_keymap.chat.edit_queued_message.as_slice()),
@@ -294,6 +341,7 @@ pub(super) fn bindings_for_action<'a>(
         ("editor", "delete_backward_word") => Some(runtime_keymap.editor.delete_backward_word.as_slice()),
         ("editor", "delete_forward_word") => Some(runtime_keymap.editor.delete_forward_word.as_slice()),
         ("editor", "kill_line_start") => Some(runtime_keymap.editor.kill_line_start.as_slice()),
+        ("editor", "kill_whole_line") => Some(runtime_keymap.editor.kill_whole_line.as_slice()),
         ("editor", "kill_line_end") => Some(runtime_keymap.editor.kill_line_end.as_slice()),
         ("editor", "yank") => Some(runtime_keymap.editor.yank.as_slice()),
         ("vim_normal", "enter_insert") => Some(runtime_keymap.vim_normal.enter_insert.as_slice()),
@@ -372,5 +420,93 @@ pub(super) fn format_binding_summary(bindings: &[KeyBinding]) -> String {
         "unbound".to_string()
     } else {
         specs.join(", ")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum KeymapDebugBindingSource {
+    Custom,
+    CustomGlobal,
+    Default,
+}
+
+impl KeymapDebugBindingSource {
+    pub(super) const fn label(&self) -> &'static str {
+        match self {
+            Self::Custom => "Custom",
+            Self::CustomGlobal => "Custom global",
+            Self::Default => "Default",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct KeymapDebugActionMatch {
+    pub(super) context: &'static str,
+    pub(super) action: &'static str,
+    pub(super) label: String,
+    pub(super) description: &'static str,
+    pub(super) source: KeymapDebugBindingSource,
+}
+
+pub(super) fn matching_actions_for_key_event(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    event: KeyEvent,
+) -> Vec<KeymapDebugActionMatch> {
+    KEYMAP_ACTIONS
+        .iter()
+        .filter_map(|descriptor| {
+            let bindings =
+                bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)?;
+            bindings
+                .iter()
+                .any(|binding| binding.is_press(event))
+                .then(|| KeymapDebugActionMatch {
+                    context: descriptor.context,
+                    action: descriptor.action,
+                    label: action_label(descriptor.action),
+                    description: descriptor.description,
+                    source: debug_binding_source(keymap_config, descriptor),
+                })
+        })
+        .collect()
+}
+
+fn debug_binding_source(
+    keymap_config: &TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> KeymapDebugBindingSource {
+    let mut keymap_config = keymap_config.clone();
+    let Some(slot) = binding_slot(&mut keymap_config, descriptor.context, descriptor.action) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if slot.is_some() {
+        return KeymapDebugBindingSource::Custom;
+    }
+
+    let Some(global_slot) = global_fallback_slot(&mut keymap_config, descriptor) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if global_slot.is_some() {
+        KeymapDebugBindingSource::CustomGlobal
+    } else {
+        KeymapDebugBindingSource::Default
+    }
+}
+
+fn global_fallback_slot<'a>(
+    keymap: &'a mut TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> Option<&'a mut Option<KeybindingsSpec>> {
+    if descriptor.context != "composer" {
+        return None;
+    }
+
+    match descriptor.action {
+        "submit" => Some(&mut keymap.global.submit),
+        "queue" => Some(&mut keymap.global.queue),
+        "toggle_shortcuts" => Some(&mut keymap.global.toggle_shortcuts),
+        _ => None,
     }
 }
