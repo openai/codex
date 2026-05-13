@@ -2,7 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
-use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsManager;
@@ -123,7 +123,9 @@ async fn run_upgrade(
     args: UpgradeMarketplaceArgs,
 ) -> Result<()> {
     let UpgradeMarketplaceArgs { marketplace_name } = args;
-    let config = Config::load_with_cli_overrides(overrides)
+    let config = ConfigBuilder::default()
+        .cli_overrides(overrides)
+        .build()
         .await
         .context("failed to load configuration")?;
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
