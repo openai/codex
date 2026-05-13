@@ -17,7 +17,6 @@ pub(crate) struct TurnRequestProcessor {
     skills_watcher: Arc<SkillsWatcher>,
 }
 
-#[derive(Clone)]
 struct TurnContextOverrideRequest {
     cwd: Option<PathBuf>,
     approval_policy: Option<AskForApproval>,
@@ -48,42 +47,9 @@ impl TurnContextOverrideRequest {
     }
 }
 
-#[derive(Clone)]
 struct ResolvedTurnContextOverrides {
     has_any_overrides: bool,
-    cwd: Option<PathBuf>,
-    approval_policy: Option<codex_protocol::protocol::AskForApproval>,
-    approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
-    sandbox_policy: Option<codex_protocol::protocol::SandboxPolicy>,
-    permission_profile: Option<codex_protocol::models::PermissionProfile>,
-    active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
-    windows_sandbox_level: Option<WindowsSandboxLevel>,
-    model: Option<String>,
-    effort: Option<Option<ReasoningEffort>>,
-    summary: Option<codex_protocol::config_types::ReasoningSummary>,
-    service_tier: Option<Option<String>>,
-    collaboration_mode: Option<CollaborationMode>,
-    personality: Option<Personality>,
-}
-
-impl ResolvedTurnContextOverrides {
-    fn to_core_overrides(&self) -> CodexThreadTurnContextOverrides {
-        CodexThreadTurnContextOverrides {
-            cwd: self.cwd.clone(),
-            approval_policy: self.approval_policy,
-            approvals_reviewer: self.approvals_reviewer,
-            sandbox_policy: self.sandbox_policy.clone(),
-            permission_profile: self.permission_profile.clone(),
-            active_permission_profile: self.active_permission_profile.clone(),
-            windows_sandbox_level: self.windows_sandbox_level,
-            model: self.model.clone(),
-            effort: self.effort,
-            summary: self.summary,
-            service_tier: self.service_tier.clone(),
-            collaboration_mode: self.collaboration_mode.clone(),
-            personality: self.personality,
-        }
-    }
+    overrides: CodexThreadTurnContextOverrides,
 }
 
 impl TurnRequestProcessor {
@@ -449,26 +415,26 @@ impl TurnRequestProcessor {
                 (None, None)
             };
 
-        let resolved = ResolvedTurnContextOverrides {
+        Ok(ResolvedTurnContextOverrides {
             has_any_overrides,
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level: None,
-            model: request.model,
-            effort: request.effort,
-            summary: request.summary,
-            service_tier: request.service_tier,
-            collaboration_mode: request
-                .collaboration_mode
-                .map(|mode| self.normalize_turn_start_collaboration_mode(mode)),
-            personality: request.personality,
-        };
-
-        Ok(resolved)
+            overrides: CodexThreadTurnContextOverrides {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                windows_sandbox_level: None,
+                model: request.model,
+                effort: request.effort,
+                summary: request.summary,
+                service_tier: request.service_tier,
+                collaboration_mode: request
+                    .collaboration_mode
+                    .map(|mode| self.normalize_turn_start_collaboration_mode(mode)),
+                personality: request.personality,
+            },
+        })
     }
 
     async fn maybe_emit_turn_context_updated(
@@ -554,7 +520,7 @@ impl TurnRequestProcessor {
         let after_turn_context = if resolved_overrides.has_any_overrides {
             Some(thread_turn_context_from_snapshot(
                 &thread
-                    .preview_turn_context_overrides(resolved_overrides.to_core_overrides())
+                    .preview_turn_context_overrides(resolved_overrides.overrides.clone())
                     .await
                     .map_err(|err| {
                         invalid_request(format!("invalid turn context override: {err}"))
@@ -566,24 +532,25 @@ impl TurnRequestProcessor {
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = if resolved_overrides.has_any_overrides {
+            let overrides = resolved_overrides.overrides;
             Op::UserInputWithTurnContext {
                 items: mapped_items,
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
-                cwd: resolved_overrides.cwd,
-                approval_policy: resolved_overrides.approval_policy,
-                approvals_reviewer: resolved_overrides.approvals_reviewer,
-                sandbox_policy: resolved_overrides.sandbox_policy,
-                permission_profile: resolved_overrides.permission_profile,
-                active_permission_profile: resolved_overrides.active_permission_profile,
-                windows_sandbox_level: resolved_overrides.windows_sandbox_level,
-                model: resolved_overrides.model,
-                effort: resolved_overrides.effort,
-                summary: resolved_overrides.summary,
-                service_tier: resolved_overrides.service_tier,
-                collaboration_mode: resolved_overrides.collaboration_mode,
-                personality: resolved_overrides.personality,
+                cwd: overrides.cwd,
+                approval_policy: overrides.approval_policy,
+                approvals_reviewer: overrides.approvals_reviewer,
+                sandbox_policy: overrides.sandbox_policy,
+                permission_profile: overrides.permission_profile,
+                active_permission_profile: overrides.active_permission_profile,
+                windows_sandbox_level: overrides.windows_sandbox_level,
+                model: overrides.model,
+                effort: overrides.effort,
+                summary: overrides.summary,
+                service_tier: overrides.service_tier,
+                collaboration_mode: overrides.collaboration_mode,
+                personality: overrides.personality,
             }
         } else {
             Op::UserInput {
@@ -673,7 +640,7 @@ impl TurnRequestProcessor {
 
         let after_snapshot = if resolved_overrides.has_any_overrides {
             thread
-                .update_turn_context_overrides(resolved_overrides.to_core_overrides())
+                .update_turn_context_overrides(resolved_overrides.overrides)
                 .await
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?
         } else {
