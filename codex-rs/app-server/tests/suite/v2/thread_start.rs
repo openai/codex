@@ -14,6 +14,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
@@ -87,6 +88,56 @@ async fn thread_start_deprecates_persist_extended_history_true() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_selects_permission_profile_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let workspace_root = workspace.path().to_path_buf().abs();
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        active_permission_profile,
+        workspace_roots,
+        sandbox,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    assert_eq!(
+        active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(":workspace")
+    );
+    assert_eq!(workspace_roots, vec![workspace_root]);
+    assert_eq!(
+        sandbox,
+        SandboxPolicy::WorkspaceWrite {
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+            legacy_writable_roots: Vec::new(),
+        }
+    );
 
     Ok(())
 }
