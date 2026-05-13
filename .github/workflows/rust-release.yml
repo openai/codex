@@ -32,9 +32,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
+        env:
+          SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${SIGN_MACOS}" == "true" ]]; then
+            echo "❌  Manual rust-release runs must set sign_macos=false"
+            exit 1
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
