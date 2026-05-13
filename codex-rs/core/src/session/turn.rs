@@ -1096,6 +1096,7 @@ pub(crate) async fn built_tools(
                 &turn_context.config,
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
+                turn_context.originator.value(),
             )
             .await
             .map(|discoverable_tools| {
@@ -1735,6 +1736,7 @@ async fn try_run_sampling_request(
     );
     let mut stream = client_session
         .stream(
+            &turn_context.originator,
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,

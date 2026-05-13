@@ -41,6 +41,7 @@ use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
+use codex_login::default_client::Originator;
 use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
@@ -147,7 +148,11 @@ impl ConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureEnablementSetParams,
+        originator: Option<&Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let originator = originator
+            .cloned()
+            .unwrap_or_else(Originator::process_default);
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
         let response = self
             .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
@@ -159,7 +164,7 @@ impl ConfigRequestProcessor {
             )
             .await;
         if should_refresh_apps_list {
-            self.refresh_apps_list_after_experimental_feature_enablement_set()
+            self.refresh_apps_list_after_experimental_feature_enablement_set(originator)
                 .await;
         }
         Ok(None)
@@ -192,7 +197,10 @@ impl ConfigRequestProcessor {
         Ok(response)
     }
 
-    async fn refresh_apps_list_after_experimental_feature_enablement_set(&self) {
+    async fn refresh_apps_list_after_experimental_feature_enablement_set(
+        &self,
+        originator: Originator,
+    ) {
         let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
@@ -214,12 +222,18 @@ impl ConfigRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
+            let originator_value = originator.value().to_string();
             let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
+                connectors::list_all_connectors_with_options_and_originator(
+                    &config,
+                    /*force_refetch*/ true,
+                    &originator,
+                ),
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &config,
                     /*force_refetch*/ true,
                     &environment_manager,
+                    &originator_value,
                 ),
             );
             let all_connectors = match all_connectors_result {
@@ -242,10 +256,11 @@ impl ConfigRequestProcessor {
             };
 
             let data = connectors::with_app_enabled_state(
-                connectors::merge_connectors_with_accessible(
+                connectors::merge_connectors_with_accessible_for_originator(
                     all_connectors,
                     accessible_connectors,
                     /*all_connectors_loaded*/ true,
+                    &originator_value,
                 ),
                 &config,
             );

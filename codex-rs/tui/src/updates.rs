@@ -11,6 +11,7 @@ use crate::update_versions::is_source_build_version;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use codex_login::default_client::Originator;
 use codex_login::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
@@ -85,9 +86,10 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
 }
 
 async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> anyhow::Result<()> {
+    let originator = Originator::process_default();
     let latest_version = match action {
         Some(UpdateAction::BrewUpgrade) => {
-            let HomebrewCaskInfo { version } = create_client()
+            let HomebrewCaskInfo { version } = create_client(&originator)
                 .get(HOMEBREW_CASK_API_URL)
                 .send()
                 .await?
@@ -98,7 +100,7 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
         }
         Some(UpdateAction::NpmGlobalLatest) | Some(UpdateAction::BunGlobalLatest) => {
             let latest_version = fetch_latest_github_release_version().await?;
-            let package_info = create_client()
+            let package_info = create_client(&originator)
                 .get(npm_registry::PACKAGE_URL)
                 .send()
                 .await?
@@ -130,9 +132,10 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
 }
 
 async fn fetch_latest_github_release_version() -> anyhow::Result<String> {
+    let originator = Originator::process_default();
     let ReleaseInfo {
         tag_name: latest_tag_name,
-    } = create_client()
+    } = create_client(&originator)
         .get(LATEST_RELEASE_URL)
         .send()
         .await?

@@ -8,7 +8,7 @@ use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
-use codex_login::default_client::USER_AGENT_SUFFIX;
+use codex_login::default_client::Originator;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -210,14 +210,6 @@ impl MessageProcessor {
             return;
         }
 
-        let client_info = params.client_info;
-        let name = client_info.name;
-        let version = client_info.version;
-        let user_agent_suffix = format!("{name}; {version}");
-        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
-            *suffix = Some(user_agent_suffix);
-        }
-
         let server_info = Implementation {
             name: "codex-mcp-server".to_string(),
             title: Some("Codex".to_string()),
@@ -244,7 +236,11 @@ impl MessageProcessor {
             }
         };
         if let serde_json::Value::Object(ref mut obj) = server_info_value {
-            obj.insert("user_agent".to_string(), json!(get_codex_user_agent()));
+            let originator = Originator::process_default();
+            obj.insert(
+                "user_agent".to_string(),
+                json!(get_codex_user_agent(&originator)),
+            );
         }
 
         let mut result_value = match serde_json::to_value(InitializeResult {

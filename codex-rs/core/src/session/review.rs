@@ -28,7 +28,10 @@ pub(super) async fn spawn_review_thread(
     let available_models = sess
         .services
         .models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            Some(parent_turn_context.originator.clone()),
+        )
         .await;
     let shell_command_backend = shell_command_backend_for_features(review_features.get());
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
@@ -105,6 +108,7 @@ pub(super) async fn spawn_review_thread(
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
+        originator: parent_turn_context.originator.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
         user_instructions: None,

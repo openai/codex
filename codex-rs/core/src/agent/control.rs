@@ -303,6 +303,7 @@ impl AgentControl {
                     crate::session::session::AppServerClientMetadata {
                         client_name: None,
                         client_version: None,
+                        originator: None,
                     }
                 }
             };

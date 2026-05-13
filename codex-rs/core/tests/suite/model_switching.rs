@@ -418,7 +418,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
@@ -537,7 +537,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     test.codex
@@ -651,7 +651,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     test.codex
@@ -767,7 +767,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
     let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     test.codex
@@ -920,7 +920,9 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    let available_models = models_manager.list_models(RefreshStrategy::Online).await;
+    let available_models = models_manager
+        .list_models(RefreshStrategy::Online, /*originator*/ None)
+        .await;
     assert!(
         available_models
             .iter()

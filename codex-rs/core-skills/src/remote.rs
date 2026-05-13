@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
@@ -107,7 +108,8 @@ pub async fn list_remote_skills(
         query_params.push(("enabled", enabled));
     }
 
-    let client = build_reqwest_client();
+    let originator = Originator::process_default();
+    let client = build_reqwest_client(&originator);
     let request = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
@@ -146,7 +148,8 @@ pub async fn export_remote_skill(
 ) -> Result<RemoteSkillDownloadResult> {
     let auth = ensure_codex_backend_auth(auth)?;
 
-    let client = build_reqwest_client();
+    let originator = Originator::process_default();
+    let client = build_reqwest_client(&originator);
     let base_url = chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
     let request = client

@@ -248,12 +248,14 @@ impl CodexThread {
         &self,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<codex_login::default_client::Originator>,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.codex
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
+                originator,
                 mcp_elicitations_auto_deny,
             )
             .await

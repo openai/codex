@@ -106,6 +106,9 @@ async fn emits_warning_when_resumed_model_differs() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("resume conversation");

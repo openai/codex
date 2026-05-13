@@ -384,6 +384,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -391,6 +392,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            originator,
             request_context,
         )
         .await
@@ -413,12 +415,14 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await
         .map(|()| None)
@@ -430,12 +434,14 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await
         .map(|()| None)
@@ -691,6 +697,7 @@ impl ThreadRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -700,6 +707,7 @@ impl ThreadRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
+                originator,
                 mcp_elicitations_auto_deny,
             )
             .await
@@ -816,6 +824,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -882,13 +891,14 @@ impl ThreadRequestProcessor {
         let config_manager = self.config_manager.clone();
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
-        let thread_start_task = async move {
+        let thread_start_task = Box::pin(async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
                 config_manager,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
+                originator,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -903,7 +913,7 @@ impl ThreadRequestProcessor {
             {
                 outgoing.send_error(error_request_id, error).await;
             }
-        };
+        });
         self.background_tasks
             .spawn(thread_start_task.instrument(request_context.span()));
         Ok(())
@@ -973,6 +983,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -1101,6 +1112,9 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
+                app_server_client_name: app_server_client_name.clone(),
+                app_server_client_version: app_server_client_version.clone(),
+                originator: originator.clone(),
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -1124,6 +1138,7 @@ impl ThreadRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await?;
 
@@ -2306,6 +2321,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2354,6 +2370,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                originator.clone(),
             )
             .await
         {
@@ -2450,6 +2467,9 @@ impl ThreadRequestProcessor {
                 self.auth_manager.clone(),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
+                app_server_client_name.clone(),
+                app_server_client_version.clone(),
+                originator.clone(),
             )
             .await
         {
@@ -2463,6 +2483,7 @@ impl ThreadRequestProcessor {
                     codex_thread.as_ref(),
                     app_server_client_name,
                     app_server_client_version,
+                    originator,
                 )
                 .await
                 {
@@ -2615,6 +2636,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<bool, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -2702,6 +2724,7 @@ impl ThreadRequestProcessor {
                 existing_thread.as_ref(),
                 app_server_client_name,
                 app_server_client_version,
+                originator,
             )
             .await?;
 
@@ -3003,6 +3026,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3115,6 +3139,9 @@ impl ThreadRequestProcessor {
                 thread_source.map(Into::into),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
+                app_server_client_name.clone(),
+                app_server_client_version.clone(),
+                originator.clone(),
             )
             .await
             .map_err(|err| match err {
@@ -3129,6 +3156,7 @@ impl ThreadRequestProcessor {
             forked_thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await?;
 

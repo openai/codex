@@ -5,6 +5,7 @@ use codex_core::ModelClient;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_otel::SessionTelemetry;
@@ -123,8 +124,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         phase: None,
     }];
 
+    let originator = Originator::process_default();
     let mut stream = client_session
         .stream(
+            &originator,
             &prompt,
             &model_info,
             &session_telemetry,
@@ -251,8 +254,10 @@ async fn responses_stream_includes_subagent_header_on_other() {
         phase: None,
     }];
 
+    let originator = Originator::process_default();
     let mut stream = client_session
         .stream(
+            &originator,
             &prompt,
             &model_info,
             &session_telemetry,
@@ -368,8 +373,10 @@ async fn responses_respects_model_info_overrides_from_config() {
         phase: None,
     }];
 
+    let originator = Originator::process_default();
     let mut stream = client_session
         .stream(
+            &originator,
             &prompt,
             &model_info,
             &session_telemetry,

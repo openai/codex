@@ -123,6 +123,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
             &turn.config,
             auth.as_ref(),
             &accessible_connectors,
+            turn.originator.value(),
         )
         .await
         .map(|discoverable_tools| {
@@ -334,6 +335,7 @@ async fn refresh_missing_requested_connectors(
                 &turn.config,
                 auth,
                 &mcp_tools,
+                turn.originator.value(),
             );
             Some(accessible_connectors)
         }

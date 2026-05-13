@@ -50,7 +50,7 @@ pub use codex_extension_api::empty_extension_registry;
 pub use codex_features::Feature;
 pub use codex_features::Features;
 pub use codex_login::AuthManager;
-pub use codex_login::default_client::set_default_originator;
+pub use codex_login::default_client::Originator;
 pub use codex_model_provider_info::OPENAI_PROVIDER_ID;
 pub use codex_model_provider_info::built_in_model_providers;
 pub use codex_models_manager::manager::RefreshStrategy;

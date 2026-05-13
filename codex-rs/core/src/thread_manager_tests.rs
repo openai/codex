@@ -334,6 +334,9 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
             }],
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: None,
         })
         .await;
     let err = match result {
@@ -465,6 +468,9 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: None,
         })
         .await
         .expect("internal thread should start");
@@ -521,6 +527,9 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: None,
         })
         .await
         .expect("start source thread");
@@ -793,6 +802,9 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: None,
         })
         .await
         .expect("start source thread");
@@ -898,6 +910,9 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             auth_manager.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("seed rollout path in store");
@@ -975,7 +990,9 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*attestation_provider*/ None,
     );
 
-    let _ = manager.list_models(RefreshStrategy::Online).await;
+    let _ = manager
+        .list_models(RefreshStrategy::Online, /*originator*/ None)
+        .await;
     assert_eq!(models_mock.requests().len(), 1);
 }
 
@@ -1203,6 +1220,9 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("create source thread from completed history");
@@ -1317,6 +1337,9 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("create source thread from explicit partial history");
@@ -1408,6 +1431,9 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("create source thread from partial history");
@@ -1548,6 +1574,9 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
             auth_manager.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("create source thread");

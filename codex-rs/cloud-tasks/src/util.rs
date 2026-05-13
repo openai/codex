@@ -5,12 +5,7 @@ use reqwest::header::HeaderMap;
 
 use codex_core::config::Config;
 use codex_login::AuthManager;
-
-pub fn set_user_agent_suffix(suffix: &str) {
-    if let Ok(mut guard) = codex_login::default_client::USER_AGENT_SUFFIX.lock() {
-        guard.replace(suffix.to_string());
-    }
-}
+use codex_login::default_client::Originator;
 
 pub fn append_error_log(message: impl AsRef<str>) {
     let ts = Utc::now().to_rfc3339();
@@ -61,8 +56,9 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
     use reqwest::header::HeaderValue;
     use reqwest::header::USER_AGENT;
 
-    set_user_agent_suffix("codex_cloud_tasks_tui");
-    let ua = codex_login::default_client::get_codex_user_agent();
+    let originator = Originator::for_process("codex_cloud_tasks_tui".to_string())
+        .expect("codex_cloud_tasks_tui should be a valid originator header value");
+    let ua = codex_login::default_client::get_codex_user_agent(&originator);
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,

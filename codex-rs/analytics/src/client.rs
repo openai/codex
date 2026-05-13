@@ -31,6 +31,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -440,7 +441,8 @@ async fn send_track_events_request(auth: &CodexAuth, url: &str, events: Vec<Trac
 
     let payload = TrackEventsRequest { events };
 
-    let response = create_client()
+    let originator = Originator::process_default();
+    let response = create_client(&originator)
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())

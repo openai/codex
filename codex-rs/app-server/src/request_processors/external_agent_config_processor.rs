@@ -313,6 +313,9 @@ impl ExternalAgentConfigRequestProcessor {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                app_server_client_name: None,
+                app_server_client_version: None,
+                originator: None,
             })
             .await
             .map_err(|err| internal_error(format!("failed to import session: {err}")))?;

@@ -3,6 +3,7 @@ use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -204,7 +205,8 @@ pub(super) async fn enroll_remote_control_server(
         app_server_version: env!("CARGO_PKG_VERSION"),
         installation_id: installation_id.to_string(),
     };
-    let client = build_reqwest_client();
+    let originator = Originator::process_default();
+    let client = build_reqwest_client(&originator);
     let mut auth_headers = HeaderMap::new();
     auth.auth_provider.add_auth_headers(&mut auth_headers);
     let http_request = client

@@ -204,6 +204,9 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("fork from stored history");

@@ -6,7 +6,6 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
-use codex_login::default_client::originator;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -38,8 +37,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     mentioned_skills: &[SkillMetadata],
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
 ) {
-    let originator_value = originator().value;
-    if !is_first_party_originator(originator_value.as_str()) {
+    if !is_first_party_originator(turn_context.originator.value()) {
         // Only support first-party clients for now.
         return;
     }

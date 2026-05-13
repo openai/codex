@@ -48,6 +48,9 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("spawn conversation");
@@ -95,6 +98,9 @@ async fn suppresses_warning_when_configured() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
         .expect("spawn conversation");

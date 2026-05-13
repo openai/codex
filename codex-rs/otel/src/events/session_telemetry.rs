@@ -117,6 +117,11 @@ impl SessionTelemetry {
         self
     }
 
+    pub fn with_originator(mut self, originator: &str) -> Self {
+        self.metadata.originator = sanitize_metric_tag_value(originator);
+        self
+    }
+
     pub fn with_metrics_service_name(mut self, service_name: &str) -> Self {
         self.metadata.service_name = Some(sanitize_metric_tag_value(service_name));
         self

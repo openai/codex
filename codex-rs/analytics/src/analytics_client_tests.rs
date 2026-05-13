@@ -124,7 +124,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_login::default_client::DEFAULT_ORIGINATOR;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -965,7 +965,7 @@ fn app_mentioned_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
                 "app_name": "Calendar",
-                "product_client_id": originator().value,
+                "product_client_id": Originator::process_default().value().to_string(),
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
@@ -1003,7 +1003,7 @@ fn app_used_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "app_name": "Google Drive",
-                "product_client_id": originator().value,
+                "product_client_id": Originator::process_default().value().to_string(),
                 "invoke_type": "implicit",
                 "model_slug": "gpt-5"
             }
@@ -2774,7 +2774,7 @@ fn plugin_used_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": originator().value,
+                "product_client_id": Originator::process_default().value().to_string(),
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5"
@@ -2803,7 +2803,7 @@ fn plugin_management_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": originator().value
+                "product_client_id": Originator::process_default().value().to_string()
             }
         })
     );
@@ -3009,7 +3009,7 @@ async fn reducer_ingests_skill_invoked_fact() {
             "skill_id": expected_skill_id,
             "skill_name": "doc",
             "event_params": {
-                "product_client_id": originator().value,
+                "product_client_id": Originator::process_default().value().to_string(),
                 "skill_scope": "user",
                 "plugin_id": null,
                 "repo_url": null,
@@ -3170,7 +3170,7 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": originator().value
+                "product_client_id": Originator::process_default().value().to_string()
             }
         }])
     );

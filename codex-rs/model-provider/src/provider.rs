@@ -500,7 +500,9 @@ mod tests {
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
 
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let catalog = manager
+            .raw_model_catalog(RefreshStrategy::Online, /*originator*/ None)
+            .await;
         let model_ids = catalog
             .models
             .iter()
@@ -517,7 +519,7 @@ mod tests {
         );
 
         let default_model = manager
-            .list_models(RefreshStrategy::Online)
+            .list_models(RefreshStrategy::Online, /*originator*/ None)
             .await
             .into_iter()
             .find(|preset| preset.is_default)
@@ -542,7 +544,9 @@ mod tests {
             }),
         );
 
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let catalog = manager
+            .raw_model_catalog(RefreshStrategy::Online, /*originator*/ None)
+            .await;
 
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].slug, "custom-bedrock-model");
@@ -578,7 +582,9 @@ mod tests {
 
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let catalog = manager
+            .raw_model_catalog(RefreshStrategy::Online, /*originator*/ None)
+            .await;
 
         assert!(
             catalog

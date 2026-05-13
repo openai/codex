@@ -14,79 +14,111 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 use std::sync::RwLock;
-
-/// Set this to add a suffix to the User-Agent string.
-///
-/// It is not ideal that we're using a global singleton for this.
-/// This is primarily designed to differentiate MCP clients from each other.
-/// Because there can only be one MCP server per process, it should be safe for this to be a global static.
-/// However, future users of this should use this with caution as a result.
-/// In addition, we want to be confident that this value is used for ALL clients and doing that requires a
-/// lot of wiring and it's easy to miss code paths by doing so.
-/// See https://github.com/openai/codex/pull/3388/files for an example of what that would look like.
-/// Finally, we want to make sure this is set for ALL mcp clients without needing to know a special env var
-/// or having to set data that they already specified in the mcp initialize request somewhere else.
-///
-/// A space is automatically added between the suffix and the rest of the User-Agent string.
-/// The full user agent string is returned from the mcp initialize response.
-/// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
-pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
 pub use codex_config::ResidencyRequirement;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Originator {
-    pub value: String,
-    pub header_value: HeaderValue,
-}
-static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
-static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
-    LazyLock::new(|| RwLock::new(None));
-
-#[derive(Debug)]
-pub enum SetOriginatorError {
-    InvalidHeaderValue,
-    AlreadyInitialized,
+    kind: OriginatorKind,
 }
 
-fn get_originator_value(provided: Option<String>) -> Originator {
-    let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-        .ok()
-        .or(provided)
-        .unwrap_or(DEFAULT_ORIGINATOR.to_string());
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OriginatorKind {
+    Process { value: String },
+    AppServerClient { client: AppServerClient },
+}
 
-    match HeaderValue::from_str(&value) {
-        Ok(header_value) => Originator {
-            value,
-            header_value,
-        },
-        Err(e) => {
-            tracing::error!("Unable to turn originator override {value} into header value: {e}");
-            Originator {
-                value: DEFAULT_ORIGINATOR.to_string(),
-                header_value: HeaderValue::from_static(DEFAULT_ORIGINATOR),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppServerClient {
+    name: String,
+    version: String,
+}
+
+impl Originator {
+    pub fn process_default() -> Self {
+        let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+            .unwrap_or_else(|_| DEFAULT_ORIGINATOR.to_string());
+
+        match Self::for_process(value.clone()) {
+            Ok(originator) => originator,
+            Err(e) => {
+                tracing::error!(
+                    "Unable to turn originator override {value} into header value: {e}"
+                );
+                Self::for_process(DEFAULT_ORIGINATOR.to_string())
+                    .expect("default originator should be a valid HTTP header value")
             }
+        }
+    }
+
+    pub fn for_process(value: String) -> Result<Self, InvalidOriginator> {
+        validate_originator_value(&value)?;
+        Ok(Self {
+            kind: OriginatorKind::Process { value },
+        })
+    }
+
+    pub fn from_app_server_client(
+        name: String,
+        version: String,
+    ) -> Result<Self, InvalidOriginator> {
+        validate_originator_value(&name)?;
+        Ok(Self {
+            kind: OriginatorKind::AppServerClient {
+                client: AppServerClient { name, version },
+            },
+        })
+    }
+
+    pub fn value(&self) -> &str {
+        match &self.kind {
+            OriginatorKind::Process { value } => value,
+            OriginatorKind::AppServerClient { client } => client.name(),
+        }
+    }
+
+    pub fn app_server_client(&self) -> Option<&AppServerClient> {
+        match &self.kind {
+            OriginatorKind::Process { .. } => None,
+            OriginatorKind::AppServerClient { client } => Some(client),
         }
     }
 }
 
-pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
-    if HeaderValue::from_str(&value).is_err() {
-        return Err(SetOriginatorError::InvalidHeaderValue);
+impl AppServerClient {
+    pub fn name(&self) -> &str {
+        &self.name
     }
-    let originator = get_originator_value(Some(value));
-    let Ok(mut guard) = ORIGINATOR.write() else {
-        return Err(SetOriginatorError::AlreadyInitialized);
-    };
-    if guard.is_some() {
-        return Err(SetOriginatorError::AlreadyInitialized);
+
+    pub fn version(&self) -> &str {
+        &self.version
     }
-    *guard = Some(originator);
+}
+
+static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidOriginator {
+    InvalidHeaderValue,
+}
+
+impl std::fmt::Display for InvalidOriginator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidHeaderValue => f.write_str("invalid HTTP header value"),
+        }
+    }
+}
+
+impl std::error::Error for InvalidOriginator {}
+
+fn validate_originator_value(value: &str) -> Result<(), InvalidOriginator> {
+    HeaderValue::from_str(value).map_err(|_| InvalidOriginator::InvalidHeaderValue)?;
     Ok(())
 }
 
@@ -96,27 +128,6 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
         return;
     };
     *guard = enforce_residency;
-}
-
-pub fn originator() -> Originator {
-    if let Ok(guard) = ORIGINATOR.read()
-        && let Some(originator) = guard.as_ref()
-    {
-        return originator.clone();
-    }
-
-    if std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
-        let originator = get_originator_value(/*provided*/ None);
-        if let Ok(mut guard) = ORIGINATOR.write() {
-            match guard.as_ref() {
-                Some(originator) => return originator.clone(),
-                None => *guard = Some(originator.clone()),
-            }
-        }
-        return originator;
-    }
-
-    get_originator_value(/*provided*/ None)
 }
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
@@ -130,23 +141,18 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
-pub fn get_codex_user_agent() -> String {
+pub fn get_codex_user_agent(originator: &Originator) -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
-    let originator = originator();
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
-        originator.value.as_str(),
+        originator.value(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
         user_agent()
     );
-    let suffix = USER_AGENT_SUFFIX
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-    let suffix = suffix
+    let suffix = user_agent_suffix(originator)
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -184,13 +190,19 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         tracing::warn!(
             "Falling back to default Codex originator because base user agent string is invalid"
         );
-        originator().value
+        DEFAULT_ORIGINATOR.to_string()
     }
 }
 
+fn user_agent_suffix(originator: &Originator) -> Option<String> {
+    originator
+        .app_server_client()
+        .map(|client| format!("{}; {}", client.name(), client.version()))
+}
+
 /// Create an HTTP client with default `originator` and `User-Agent` headers set.
-pub fn create_client() -> CodexHttpClient {
-    let inner = build_reqwest_client();
+pub fn create_client(originator: &Originator) -> CodexHttpClient {
+    let inner = build_reqwest_client(originator);
     CodexHttpClient::new(inner)
 }
 
@@ -200,8 +212,12 @@ pub fn create_client() -> CodexHttpClient {
 /// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
 /// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
 /// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
-pub fn build_reqwest_client() -> reqwest::Client {
-    try_build_reqwest_client().unwrap_or_else(|error| {
+pub fn build_reqwest_client(originator: &Originator) -> reqwest::Client {
+    build_reqwest_client_with_headers(default_headers(originator))
+}
+
+fn build_reqwest_client_with_headers(headers: HeaderMap) -> reqwest::Client {
+    try_build_reqwest_client_with_headers(headers).unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
         with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
             .build()
@@ -219,8 +235,16 @@ pub fn build_reqwest_client() -> reqwest::Client {
 ///
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
 /// this method directly.
-pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
-    let mut builder = reqwest::Client::builder().default_headers(default_headers());
+pub fn try_build_reqwest_client(
+    originator: &Originator,
+) -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    try_build_reqwest_client_with_headers(default_headers(originator))
+}
+
+fn try_build_reqwest_client_with_headers(
+    headers: HeaderMap,
+) -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    let mut builder = reqwest::Client::builder().default_headers(headers);
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
@@ -229,10 +253,13 @@ pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransp
     build_reqwest_client_with_custom_ca(builder)
 }
 
-pub fn default_headers() -> HeaderMap {
+pub fn default_headers(originator: &Originator) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
-    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent()) {
+    let originator_header = HeaderValue::from_str(originator.value())
+        .expect("originator should have been validated as a header value");
+    headers.insert("originator", originator_header);
+    let user_agent = get_codex_user_agent(originator);
+    if let Ok(user_agent) = HeaderValue::from_str(&user_agent) {
         headers.insert(USER_AGENT, user_agent);
     }
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()

@@ -13,6 +13,7 @@ use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_plugin::PluginId;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -128,10 +129,15 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     auth: Option<&CodexAuth>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
+    let originator = Originator::process_default();
     let global = async {
         let scope = RemotePluginScope::Global;
         let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
+            config,
+            auth,
+            &originator,
+            scope,
+            /*include_download_urls*/ true,
         )
         .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
@@ -139,7 +145,11 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let workspace = async {
         let scope = RemotePluginScope::Workspace;
         let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
+            config,
+            auth,
+            &originator,
+            scope,
+            /*include_download_urls*/ true,
         )
         .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))

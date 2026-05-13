@@ -66,7 +66,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::default_headers;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
@@ -394,6 +396,14 @@ impl ModelClient {
         std::mem::take(&mut *cached_websocket_session)
     }
 
+    pub(crate) fn default_headers(&self, originator: &Originator) -> ApiHeaderMap {
+        default_headers(originator)
+    }
+
+    fn build_reqwest_client(&self, originator: &Originator) -> reqwest::Client {
+        build_reqwest_client(originator)
+    }
+
     fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
         *self
             .state
@@ -432,6 +442,7 @@ impl ModelClient {
     /// session-scoped.
     pub(crate) async fn compact_conversation_history(
         &self,
+        originator: &Originator,
         prompt: &Prompt,
         model_info: &ModelInfo,
         settings: CompactConversationRequestSettings,
@@ -442,7 +453,7 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let client_setup = self.current_client_setup().await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = ReqwestTransport::new(self.build_reqwest_client(originator));
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -516,6 +527,7 @@ impl ModelClient {
 
     pub(crate) async fn create_realtime_call_with_headers(
         &self,
+        originator: &Originator,
         sdp: String,
         session_config: ApiRealtimeSessionConfig,
         mut extra_headers: ApiHeaderMap,
@@ -530,7 +542,7 @@ impl ModelClient {
         sideband_headers.extend(sideband_websocket_auth_headers(
             client_setup.api_auth.as_ref(),
         ));
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = ReqwestTransport::new(self.build_reqwest_client(originator));
         let response =
             ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .create_with_session_and_headers(sdp, session_config, extra_headers)
@@ -551,6 +563,7 @@ impl ModelClient {
     /// `ModelClient` session-scoped.
     pub async fn summarize_memories(
         &self,
+        originator: &Originator,
         raw_memories: Vec<ApiRawMemory>,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -561,7 +574,7 @@ impl ModelClient {
         }
 
         let client_setup = self.current_client_setup().await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = ReqwestTransport::new(self.build_reqwest_client(originator));
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -800,6 +813,7 @@ impl ModelClient {
     #[allow(clippy::too_many_arguments)]
     async fn connect_websocket(
         &self,
+        originator: &Originator,
         session_telemetry: &SessionTelemetry,
         api_provider: codex_api::Provider,
         api_auth: SharedAuthProvider,
@@ -823,7 +837,7 @@ impl ModelClient {
             websocket_connect_timeout,
             ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
-                codex_login::default_client::default_headers(),
+                self.default_headers(originator),
                 turn_state,
                 Some(websocket_telemetry),
             ),
@@ -1067,6 +1081,7 @@ impl ModelClientSession {
     /// This performs only connection setup; it never sends prompt payloads.
     pub async fn preconnect_websocket(
         &mut self,
+        originator: &Originator,
         session_telemetry: &SessionTelemetry,
         _model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
@@ -1090,6 +1105,7 @@ impl ModelClientSession {
         let connection = self
             .client
             .connect_websocket(
+                originator,
                 session_telemetry,
                 client_setup.api_provider,
                 client_setup.api_auth,
@@ -1119,6 +1135,7 @@ impl ModelClientSession {
     )]
     async fn websocket_connection(
         &mut self,
+        originator: &Originator,
         params: WebsocketConnectParams<'_>,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let WebsocketConnectParams {
@@ -1145,6 +1162,7 @@ impl ModelClientSession {
             let new_conn = match self
                 .client
                 .connect_websocket(
+                    originator,
                     session_telemetry,
                     api_provider,
                     api_auth,
@@ -1209,6 +1227,7 @@ impl ModelClientSession {
     )]
     async fn stream_responses_api(
         &self,
+        originator: &Originator,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1225,7 +1244,7 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = ReqwestTransport::new(self.client.build_reqwest_client(originator));
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1322,6 +1341,7 @@ impl ModelClientSession {
     )]
     async fn stream_responses_websocket(
         &mut self,
+        originator: &Originator,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1371,17 +1391,20 @@ impl ModelClientSession {
             }
 
             match self
-                .websocket_connection(WebsocketConnectParams {
-                    session_telemetry,
-                    api_provider: client_setup.api_provider,
-                    api_auth: client_setup.api_auth,
-                    turn_metadata_header,
-                    options: &options,
-                    auth_context: request_auth_context,
-                    request_route_telemetry: RequestRouteTelemetry::for_endpoint(
-                        RESPONSES_ENDPOINT,
-                    ),
-                })
+                .websocket_connection(
+                    originator,
+                    WebsocketConnectParams {
+                        session_telemetry,
+                        api_provider: client_setup.api_provider,
+                        api_auth: client_setup.api_auth,
+                        turn_metadata_header,
+                        options: &options,
+                        auth_context: request_auth_context,
+                        request_route_telemetry: RequestRouteTelemetry::for_endpoint(
+                            RESPONSES_ENDPOINT,
+                        ),
+                    },
+                )
                 .await
             {
                 Ok(_) => {}
@@ -1485,6 +1508,7 @@ impl ModelClientSession {
     #[allow(clippy::too_many_arguments)]
     pub async fn prewarm_websocket(
         &mut self,
+        originator: &Originator,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1503,6 +1527,7 @@ impl ModelClientSession {
         let disabled_trace = InferenceTraceContext::disabled();
         match self
             .stream_responses_websocket(
+                originator,
                 prompt,
                 model_info,
                 session_telemetry,
@@ -1546,6 +1571,7 @@ impl ModelClientSession {
     /// branches.
     pub async fn stream(
         &mut self,
+        originator: &Originator,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1562,6 +1588,7 @@ impl ModelClientSession {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
+                            originator,
                             prompt,
                             model_info,
                             session_telemetry,
@@ -1583,6 +1610,7 @@ impl ModelClientSession {
                 }
 
                 self.stream_responses_api(
+                    originator,
                     prompt,
                     model_info,
                     session_telemetry,

@@ -70,7 +70,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     // Populate cache via initial refresh.
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     let cache_path = config.codex_home.join(CACHE_FILE);
@@ -134,7 +134,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     // Cached models remain usable offline.
     let offline_models = test
         .thread_manager
-        .list_models(RefreshStrategy::Offline)
+        .list_models(RefreshStrategy::Offline, /*originator*/ None)
         .await;
     assert!(
         offline_models
@@ -177,7 +177,7 @@ async fn uses_cache_when_version_matches() -> Result<()> {
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     assert!(
@@ -224,7 +224,7 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     assert!(
@@ -272,7 +272,7 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
         .await;
 
     assert!(

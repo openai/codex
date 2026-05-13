@@ -12,6 +12,7 @@ use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
+use codex_login::default_client::Originator;
 use codex_login::default_client::get_codex_user_agent;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
@@ -28,7 +29,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use util::append_error_log;
 use util::format_relative_time;
-use util::set_user_agent_suffix;
 
 struct ApplyJob {
     task_id: codex_cloud_tasks_client::TaskId,
@@ -49,8 +49,6 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     let base_url = std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
         .unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string());
 
-    set_user_agent_suffix(user_agent_suffix);
-
     #[cfg(debug_assertions)]
     if use_mock {
         return Ok(BackendContext {
@@ -59,7 +57,9 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         });
     }
 
-    let ua = get_codex_user_agent();
+    let originator = Originator::for_process(user_agent_suffix.to_string())
+        .expect("cloud task originator should be a valid header value");
+    let ua = get_codex_user_agent(&originator);
     let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
@@ -799,7 +799,10 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        get_codex_user_agent()
+        get_codex_user_agent(
+            &Originator::for_process("codex_cloud_tasks_tui".to_string())
+                .expect("codex_cloud_tasks_tui should be a valid originator header value")
+        )
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();

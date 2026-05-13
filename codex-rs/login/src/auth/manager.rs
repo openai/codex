@@ -31,6 +31,7 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
+use crate::default_client::Originator;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
@@ -203,7 +204,8 @@ impl CodexAuth {
         chatgpt_base_url: Option<&str>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        let client = create_client();
+        let originator = Originator::process_default();
+        let client = create_client(&originator);
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
@@ -423,7 +425,8 @@ impl CodexAuth {
             agent_identity: None,
         };
 
-        let client = create_client();
+        let originator = Originator::process_default();
+        let client = create_client(&originator);
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
@@ -493,7 +496,8 @@ async fn verified_agent_identity_record(
     chatgpt_base_url: &str,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-    let jwks = fetch_agent_identity_jwks(&build_reqwest_client(), chatgpt_base_url)
+    let originator = Originator::process_default();
+    let jwks = fetch_agent_identity_jwks(&build_reqwest_client(&originator), chatgpt_base_url)
         .await
         .map_err(std::io::Error::other)?;
     let claims = decode_agent_identity_jwt(jwt, Some(&jwks)).map_err(std::io::Error::other)?;

@@ -87,7 +87,9 @@ fn test_model_info(
 async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let available_models = manager.list_models(RefreshStrategy::Online).await;
+        let available_models = manager
+            .list_models(RefreshStrategy::Online, /*originator*/ None)
+            .await;
         if available_models.iter().any(|model| model.model == slug) {
             return;
         }

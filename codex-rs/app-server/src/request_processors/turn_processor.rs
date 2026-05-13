@@ -68,12 +68,14 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.turn_start_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await
         .map(|response| Some(response.into()))
@@ -163,8 +165,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        originator: Option<Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.review_start_inner(request_id, params)
+        self.review_start_inner(request_id, params, originator)
             .await
             .map(|()| None)
     }
@@ -332,6 +335,7 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.track_error_response(
@@ -351,6 +355,7 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            originator,
         )
         .await
         .inspect_err(|error| {
@@ -597,6 +602,7 @@ impl TurnRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -606,6 +612,7 @@ impl TurnRequestProcessor {
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
+                originator,
                 mcp_elicitations_auto_deny,
             )
             .await
@@ -922,6 +929,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
+        originator: Option<Originator>,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -960,6 +968,9 @@ impl TurnRequestProcessor {
                 /*thread_source*/ None,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
+                /*app_server_client_name*/ None,
+                /*app_server_client_version*/ None,
+                originator,
             )
             .await
             .map_err(|err| {
@@ -1031,6 +1042,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,
@@ -1058,6 +1070,7 @@ impl TurnRequestProcessor {
                     parent_thread,
                     review_request,
                     &display_text,
+                    originator,
                 )
                 .await?;
             }

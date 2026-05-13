@@ -24,6 +24,7 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -182,6 +183,9 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+    pub app_server_client_name: Option<String>,
+    pub app_server_client_version: Option<String>,
+    pub originator: Option<Originator>,
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -435,10 +439,14 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
-    pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
+    pub async fn list_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> Vec<ModelPreset> {
         self.state
             .models_manager
-            .list_models(refresh_strategy)
+            .list_models(refresh_strategy, originator)
             .await
     }
 
@@ -574,6 +582,9 @@ impl ThreadManager {
             metrics_service_name: None,
             parent_trace: None,
             environments,
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: None,
         }))
         .await
     }
@@ -603,6 +614,9 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
+            options.app_server_client_name,
+            options.app_server_client_version,
+            options.originator,
         ))
         .await
     }
@@ -651,6 +665,9 @@ impl ThreadManager {
             auth_manager,
             /*persist_extended_history*/ false,
             parent_trace,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -662,6 +679,9 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -680,6 +700,9 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            app_server_client_name,
+            app_server_client_version,
+            originator,
         ))
         .await
     }
@@ -705,6 +728,9 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -734,6 +760,9 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -821,6 +850,9 @@ impl ThreadManager {
             thread_source,
             persist_extended_history,
             parent_trace,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         )
         .await
     }
@@ -852,6 +884,9 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -863,6 +898,9 @@ impl ThreadManager {
             thread_source,
             persist_extended_history,
             parent_trace,
+            app_server_client_name,
+            app_server_client_version,
+            originator,
         )
         .await
     }
@@ -875,6 +913,9 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> CodexResult<NewThread> {
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
@@ -894,6 +935,9 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            app_server_client_name,
+            app_server_client_version,
+            originator,
         ))
         .await
     }
@@ -1040,6 +1084,9 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -1074,6 +1121,9 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -1109,6 +1159,9 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*originator*/ None,
         ))
         .await
     }
@@ -1128,6 +1181,9 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1144,6 +1200,9 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             user_shell_override,
+            app_server_client_name,
+            app_server_client_version,
+            originator,
         ))
         .await
     }
@@ -1165,6 +1224,9 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        originator: Option<Originator>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1213,6 +1275,9 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            app_server_client_name,
+            app_server_client_version,
+            originator,
             inherited_shell_snapshot,
             inherited_exec_policy,
             parent_rollout_thread_trace,

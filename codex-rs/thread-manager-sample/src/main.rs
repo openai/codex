@@ -34,6 +34,7 @@ use codex_core_api::Notice;
 use codex_core_api::OAuthCredentialsStoreMode;
 use codex_core_api::OPENAI_PROVIDER_ID;
 use codex_core_api::Op;
+use codex_core_api::Originator;
 use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
 use codex_core_api::Permissions;
@@ -42,6 +43,7 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -59,7 +61,6 @@ use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
 use codex_core_api::resolve_installation_id;
-use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 
 #[derive(Debug, Parser)]
@@ -82,10 +83,6 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_thread_manager_sample".to_string()) {
-        tracing::warn!("failed to set originator: {err:?}");
-    }
-
     let args = Args::parse();
     let prompt = if args.prompt.is_empty() {
         if std::io::stdin().is_terminal() {
@@ -132,10 +129,26 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         /*attestation_provider*/ None,
     );
 
+    let originator = Originator::for_process("codex_thread_manager_sample".to_string())
+        .expect("codex_thread_manager_sample should be a valid originator header value");
+    let environments = thread_manager.default_environment_selections(&config.cwd);
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config)
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: codex_core_api::InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments,
+            app_server_client_name: None,
+            app_server_client_version: None,
+            originator: Some(originator),
+        })
         .await
         .context("start Codex thread")?;
 
