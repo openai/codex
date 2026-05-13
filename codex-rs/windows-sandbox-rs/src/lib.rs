@@ -285,6 +285,7 @@ mod windows_impl {
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
+    use super::setup::effective_write_roots_for_setup;
     use super::spawn_prep::LegacyAclSids;
     use super::spawn_prep::allow_null_device_for_workspace_write;
     use super::spawn_prep::apply_legacy_session_acl_rules;
@@ -365,6 +366,7 @@ mod windows_impl {
             cwd,
             env_map,
             timeout_ms,
+            /*write_roots_override*/ None,
             &[],
             &[],
             use_private_desktop,
@@ -380,6 +382,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        write_roots_override: Option<&[PathBuf]>,
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
@@ -415,13 +418,27 @@ mod windows_impl {
         if !additional_deny_read_paths.is_empty() {
             anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
         }
-        let capability_roots = legacy_session_capability_roots(
-            &policy,
-            sandbox_policy_cwd,
-            &current_dir,
-            &env_map,
-            codex_home,
-        );
+        let effective_write_roots_override = write_roots_override.map(|write_roots| {
+            effective_write_roots_for_setup(
+                &policy,
+                sandbox_policy_cwd,
+                &current_dir,
+                &env_map,
+                codex_home,
+                Some(write_roots),
+            )
+        });
+        let capability_roots = if let Some(write_roots) = effective_write_roots_override.as_ref() {
+            write_roots.clone()
+        } else {
+            legacy_session_capability_roots(
+                &policy,
+                sandbox_policy_cwd,
+                &current_dir,
+                &env_map,
+                codex_home,
+            )
+        };
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
         allow_null_device_for_workspace_write(is_workspace_write);
         let persist_aces = is_workspace_write;
@@ -431,6 +448,7 @@ mod windows_impl {
             codex_home,
             &current_dir,
             &env_map,
+            effective_write_roots_override.as_deref(),
             &additional_deny_read_paths,
             &additional_deny_write_paths,
             LegacyAclSids {
@@ -615,6 +633,7 @@ mod windows_impl {
             codex_home,
             &current_dir,
             env_map,
+            /*write_roots_override*/ None,
             &[],
             &[],
             LegacyAclSids {
@@ -635,7 +654,6 @@ mod windows_impl {
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
                 network_access,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,

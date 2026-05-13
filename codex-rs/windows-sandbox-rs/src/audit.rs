@@ -14,7 +14,6 @@ use crate::token::world_sid;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;

@@ -3,6 +3,7 @@ use crate::acl::add_deny_write_ace;
 use crate::acl::allow_null_device;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::allow::protected_child_deny_paths_for_roots;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
@@ -280,13 +281,24 @@ pub(crate) fn apply_legacy_session_acl_rules(
     codex_home: &Path,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
+    write_roots_override: Option<&[PathBuf]>,
     additional_deny_read_paths: &[PathBuf],
     additional_deny_write_paths: &[PathBuf],
     acl_sids: LegacyAclSids<'_>,
     persist_aces: bool,
 ) -> Result<Vec<(PathBuf, String)>> {
-    let AllowDenyPaths { allow, mut deny } =
-        compute_allow_paths(policy, sandbox_policy_cwd, current_dir, env_map);
+    let AllowDenyPaths { allow, mut deny } = if let Some(write_roots) = write_roots_override {
+        AllowDenyPaths {
+            allow: write_roots
+                .iter()
+                .filter(|path| path.exists())
+                .cloned()
+                .collect(),
+            deny: protected_child_deny_paths_for_roots(write_roots, sandbox_policy_cwd),
+        }
+    } else {
+        compute_allow_paths(policy, sandbox_policy_cwd, current_dir, env_map)
+    };
     let mut guards: Vec<(PathBuf, String)> = Vec::new();
     unsafe {
         for path in additional_deny_write_paths {
@@ -523,7 +535,6 @@ mod tests {
     fn no_network_env_rewrite_skips_when_network_access_is_allowed() {
         assert!(!should_apply_network_block(
             &SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
