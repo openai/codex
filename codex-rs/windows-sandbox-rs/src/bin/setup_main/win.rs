@@ -28,7 +28,7 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_write_cap_sid_for_root;
-use codex_windows_sandbox::workspace_write_root_contains_path;
+use codex_windows_sandbox::workspace_write_root_overlaps_path;
 use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
@@ -125,9 +125,7 @@ fn workspace_write_cap_sids_for_path(
 ) -> Result<Vec<String>> {
     let mut sid_strs = Vec::new();
     for root in write_roots {
-        if workspace_write_root_contains_path(root, path)
-            || workspace_write_root_contains_path(path, root)
-        {
+        if workspace_write_root_overlaps_path(root, path) {
             sid_strs.push(workspace_write_cap_sid_for_root(
                 codex_home,
                 command_cwd,

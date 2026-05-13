@@ -6,6 +6,7 @@ use crate::allow::compute_allow_paths;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
+use crate::cap::workspace_write_root_overlaps_path;
 use crate::cap::workspace_write_root_specificity;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
@@ -237,6 +238,21 @@ fn matching_root_capability<'a>(
         .max_by_key(|root_sid| workspace_write_root_specificity(&root_sid.root))
 }
 
+fn deny_root_capabilities_for_path<'a>(
+    path: &Path,
+    root_sids: &'a [RootCapabilitySid],
+) -> Vec<&'a RootCapabilitySid> {
+    let matching_root_sids = root_sids
+        .iter()
+        .filter(|root_sid| workspace_write_root_overlaps_path(&root_sid.root, path))
+        .collect::<Vec<_>>();
+    if matching_root_sids.is_empty() {
+        root_sids.iter().collect()
+    } else {
+        matching_root_sids
+    }
+}
+
 pub(crate) fn allow_null_device_for_workspace_write(is_workspace_write: bool) {
     if !is_workspace_write {
         return;
@@ -292,27 +308,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
             }
         }
         for p in &deny {
-            let mut matched_any_root = false;
-            for root_sid in acl_sids.write_root_sids {
-                if !workspace_write_root_contains_path(&root_sid.root, p) {
-                    continue;
-                }
-                matched_any_root = true;
+            for root_sid in deny_root_capabilities_for_path(p, acl_sids.write_root_sids) {
                 if let Ok(added) = add_deny_write_ace(p, root_sid.sid.as_ptr())
                     && added
                     && !persist_aces
                 {
                     guards.push((p.clone(), root_sid.sid_str.clone()));
-                }
-            }
-            if !matched_any_root {
-                for root_sid in acl_sids.write_root_sids {
-                    if let Ok(added) = add_deny_write_ace(p, root_sid.sid.as_ptr())
-                        && added
-                        && !persist_aces
-                    {
-                        guards.push((p.clone(), root_sid.sid_str.clone()));
-                    }
                 }
             }
         }
@@ -427,6 +428,7 @@ pub(crate) fn prepare_elevated_spawn_context(
 #[cfg(test)]
 mod tests {
     use super::SandboxPolicy;
+    use super::deny_root_capabilities_for_path;
     use super::legacy_session_capability_roots;
     use super::prepare_legacy_spawn_context;
     use super::prepare_spawn_context_common;
@@ -545,6 +547,42 @@ mod tests {
         assert!(sid_strs.contains(&active_sid));
         assert!(!sid_strs.contains(&stale_sid));
         assert!(!sid_strs.contains(&caps.workspace));
+    }
+
+    #[test]
+    fn legacy_deny_path_includes_nested_active_root_sid() {
+        let temp = TempDir::new().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        let protected_dir = workspace.join(".codex");
+        let nested_root = protected_dir.join("nested-root");
+        let unrelated_root = temp.path().join("unrelated-root");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::fs::create_dir_all(&nested_root).expect("create nested root");
+        std::fs::create_dir_all(&unrelated_root).expect("create unrelated root");
+
+        let workspace_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("workspace sid");
+        let nested_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &nested_root)
+            .expect("nested sid");
+        let unrelated_sid =
+            workspace_write_cap_sid_for_root(&codex_home, &workspace, &unrelated_root)
+                .expect("unrelated sid");
+        let root_sids = root_capability_sids(
+            &codex_home,
+            &workspace,
+            vec![workspace.clone(), nested_root, unrelated_root],
+        )
+        .expect("root capabilities");
+
+        let deny_sid_strs = deny_root_capabilities_for_path(&protected_dir, &root_sids)
+            .into_iter()
+            .map(|root_sid| root_sid.sid_str.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(deny_sid_strs, vec![workspace_sid, nested_sid]);
+        assert!(!deny_sid_strs.contains(&unrelated_sid));
     }
 
     #[test]

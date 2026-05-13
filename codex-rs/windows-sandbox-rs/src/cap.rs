@@ -129,6 +129,10 @@ pub fn workspace_write_root_contains_path(root: &Path, path: &Path) -> bool {
     canonicalize_path(path).starts_with(canonicalize_path(root))
 }
 
+pub fn workspace_write_root_overlaps_path(root: &Path, path: &Path) -> bool {
+    workspace_write_root_contains_path(root, path) || workspace_write_root_contains_path(path, root)
+}
+
 pub fn workspace_write_root_specificity(root: &Path) -> usize {
     canonicalize_path(root).components().count()
 }

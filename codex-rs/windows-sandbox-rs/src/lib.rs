@@ -96,6 +96,8 @@ pub use cap::workspace_write_cap_sid_for_root;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_write_root_contains_path;
 #[cfg(target_os = "windows")]
+pub use cap::workspace_write_root_overlaps_path;
+#[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
