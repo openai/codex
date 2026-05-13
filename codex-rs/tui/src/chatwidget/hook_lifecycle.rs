@@ -43,6 +43,7 @@ impl ChatWidget {
         if completed_existing_run {
             self.bump_active_cell_revision();
         } else {
+            self.flush_answer_stream_with_separator();
             match self.active_hook_cell.as_mut() {
                 Some(cell) => {
                     cell.add_completed_run(completed);

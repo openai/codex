@@ -2857,6 +2857,56 @@ async fn visibility_hidden_hooks_skip_routine_rows_but_render_failures_snapshot(
 }
 
 #[tokio::test]
+async fn visibility_hidden_hook_completion_flushes_prior_assistant_text_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_agent_message_delta(&mut chat, "I found the relevant policy.\n");
+
+    let mut hidden_started = hook_started_run(
+        "post-tool-use:3:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        Some("checking output policy"),
+    );
+    hidden_started.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_started(&mut chat, hidden_started);
+
+    let mut hidden_warning = hook_completed_run(
+        "post-tool-use:3:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::PostToolUse,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        vec![codex_app_server_protocol::HookOutputEntry {
+            kind: codex_app_server_protocol::HookOutputEntryKind::Warning,
+            text: "review this managed hook warning".to_string(),
+        }],
+    );
+    hidden_warning.visibility_hint = codex_app_server_protocol::HookVisibilityHint::Hidden;
+    handle_hook_completed(&mut chat, hidden_warning);
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "visibility_hidden_hook_completion_flushes_prior_assistant_text_snapshot",
+        format!(
+            "active hooks:\n{}history:\n{history}",
+            active_hook_blob(&chat)
+        )
+    );
+
+    let assistant_index = history
+        .find("I found the relevant policy.")
+        .expect("assistant text should be flushed into history");
+    let hook_index = history
+        .find("PostToolUse hook (completed)")
+        .expect("visible hidden-hook completion should be in history");
+    assert!(
+        assistant_index < hook_index,
+        "assistant text should precede later hidden-hook output: {history:?}"
+    );
+}
+
+#[tokio::test]
 async fn completed_hook_output_precedes_following_assistant_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
