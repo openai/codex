@@ -66,11 +66,16 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
             .into_iter()
             .rev()
         {
-            let unix_prefix: String = "/tmp/project"
-                .chars()
-                .take(isolated_prefix.chars().count())
-                .collect();
-            text = text.replace(&format!("{isolated_prefix}…"), &format!("{unix_prefix}…"));
+            let normalized = if isolated_prefix.chars().count() >= "/tmp/project".chars().count() {
+                "/tmp/project".to_string()
+            } else {
+                let unix_prefix: String = "/tmp/project"
+                    .chars()
+                    .take(isolated_prefix.chars().count())
+                    .collect();
+                format!("{unix_prefix}…")
+            };
+            text = text.replace(&format!("{isolated_prefix}…"), &normalized);
         }
     }
 
