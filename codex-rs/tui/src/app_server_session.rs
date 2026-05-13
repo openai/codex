@@ -94,6 +94,8 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadTurnContextUpdateParams;
+use codex_app_server_protocol::ThreadTurnContextUpdateResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -121,6 +123,7 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -591,6 +594,58 @@ impl AppServerSession {
             })
             .await
             .wrap_err("turn/start failed in TUI")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn thread_turn_context_update(
+        &mut self,
+        thread_id: ThreadId,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+        permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        current_cwd: &Path,
+        model: Option<String>,
+        effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
+        summary: Option<codex_protocol::config_types::ReasoningSummary>,
+        service_tier: Option<Option<String>>,
+        collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
+        personality: Option<codex_protocol::config_types::Personality>,
+    ) -> Result<ThreadTurnContextUpdateResponse> {
+        let request_id = self.next_request_id();
+        let (sandbox_policy, permissions) = permission_profile
+            .as_ref()
+            .map(|permission_profile| {
+                let permission_cwd = cwd.as_deref().unwrap_or(current_cwd);
+                turn_permissions_overrides(
+                    permission_profile,
+                    active_permission_profile,
+                    permission_cwd,
+                    self.thread_params_mode(),
+                )
+            })
+            .unwrap_or((None, None));
+        self.client
+            .request_typed(ClientRequest::ThreadTurnContextUpdate {
+                request_id,
+                params: ThreadTurnContextUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer: approvals_reviewer.map(Into::into),
+                    sandbox_policy,
+                    permissions,
+                    model,
+                    service_tier,
+                    effort,
+                    summary,
+                    personality,
+                    collaboration_mode,
+                },
+            })
+            .await
+            .wrap_err("thread/turnContext/update failed in TUI")
     }
 
     pub(crate) async fn turn_interrupt(

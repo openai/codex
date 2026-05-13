@@ -88,7 +88,15 @@ impl ChatWidget {
             );
             return false;
         }
-        if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
+        if let Some(mut mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
+            if let Some(effort) = self.config.plan_mode_reasoning_effort {
+                mask.reasoning_effort = Some(Some(effort));
+            }
+            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
+            self.app_event_tx
+                .send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
+                    collaboration_mode,
+                )));
             self.set_collaboration_mask(mask);
             true
         } else {

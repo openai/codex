@@ -1244,6 +1244,30 @@
             },
             "method": {
               "enum": [
+                "thread/turnContext/update"
+              ],
+              "title": "Thread/turnContext/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTurnContextUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/turnContext/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/steer"
               ],
               "title": "Turn/steerRequestMethod",
@@ -3841,6 +3865,26 @@
             "params"
           ],
           "title": "Thread/status/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/turnContext/updated"
+              ],
+              "title": "Thread/turnContext/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTurnContextUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/turnContext/updatedNotification",
           "type": "object"
         },
         {
@@ -17472,6 +17516,250 @@
           "turnId"
         ],
         "title": "ThreadTokenUsageUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadTurnContext": {
+        "properties": {
+          "activePermissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ActivePermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approvalPolicy": {
+            "$ref": "#/definitions/v2/AskForApproval"
+          },
+          "approvalsReviewer": {
+            "$ref": "#/definitions/v2/ApprovalsReviewer"
+          },
+          "collaborationMode": {
+            "$ref": "#/definitions/v2/CollaborationMode"
+          },
+          "cwd": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelProvider": {
+            "type": "string"
+          },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxPolicy": {
+            "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "approvalPolicy",
+          "approvalsReviewer",
+          "collaborationMode",
+          "cwd",
+          "model",
+          "modelProvider",
+          "permissionProfile",
+          "sandboxPolicy"
+        ],
+        "type": "object"
+      },
+      "ThreadTurnContextUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "approvalPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AskForApproval"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the approval policy for subsequent turns."
+          },
+          "approvalsReviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override where approval requests are routed for review on subsequent turns."
+          },
+          "collaborationMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CollaborationMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set a pre-set collaboration mode for subsequent turns."
+          },
+          "cwd": {
+            "description": "Override the working directory for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning effort for subsequent turns."
+          },
+          "model": {
+            "description": "Override the model for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileSelectionParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Select a named permissions profile for subsequent turns. Cannot be combined with `sandboxPolicy`."
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the personality for subsequent turns."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the sandbox policy for subsequent turns."
+          },
+          "serviceTier": {
+            "description": "Override the service tier for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning summary for subsequent turns."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadTurnContextUpdateParams",
+        "type": "object"
+      },
+      "ThreadTurnContextUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnContext": {
+            "$ref": "#/definitions/v2/ThreadTurnContext"
+          }
+        },
+        "required": [
+          "turnContext"
+        ],
+        "title": "ThreadTurnContextUpdateResponse",
+        "type": "object"
+      },
+      "ThreadTurnContextUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnContext": {
+            "$ref": "#/definitions/v2/ThreadTurnContext"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnContext"
+        ],
+        "title": "ThreadTurnContextUpdatedNotification",
         "type": "object"
       },
       "ThreadUnarchiveParams": {

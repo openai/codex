@@ -2,6 +2,71 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn turn_context_updated_notification_refreshes_active_ui_state_without_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let cwd = test_path_buf("/tmp/turn-context").abs();
+    let permission_profile = PermissionProfile::workspace_write();
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: codex_protocol::config_types::Settings {
+            model: "gpt-5.2".to_string(),
+            reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+            developer_instructions: Some("Plan before editing.".to_string()),
+        },
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadTurnContextUpdated(
+            codex_app_server_protocol::ThreadTurnContextUpdatedNotification {
+                thread_id: ThreadId::new().to_string(),
+                turn_context: codex_app_server_protocol::ThreadTurnContext {
+                    model: "gpt-5.2".to_string(),
+                    model_provider: "openai".to_string(),
+                    service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+                    cwd: cwd.clone(),
+                    approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
+                    approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                    sandbox_policy: codex_app_server_protocol::SandboxPolicy::DangerFullAccess,
+                    permission_profile: permission_profile.clone().into(),
+                    active_permission_profile: None,
+                    effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+                    summary: Some(codex_protocol::config_types::ReasoningSummary::Detailed),
+                    personality: Some(Personality::Pragmatic),
+                    collaboration_mode: collaboration_mode.clone(),
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_model(), "gpt-5.2");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(codex_protocol::openai_models::ReasoningEffort::High)
+    );
+    assert_eq!(
+        chat.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
+    assert_eq!(chat.config_ref().cwd, cwd);
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        codex_protocol::protocol::AskForApproval::OnRequest
+    );
+    assert_eq!(
+        chat.config_ref().permissions.permission_profile(),
+        permission_profile
+    );
+    assert_eq!(
+        chat.config_ref().model_reasoning_summary,
+        Some(codex_protocol::config_types::ReasoningSummary::Detailed)
+    );
+    assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
+    assert_eq!(chat.current_collaboration_mode(), &collaboration_mode);
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let thread_id = ThreadId::new();

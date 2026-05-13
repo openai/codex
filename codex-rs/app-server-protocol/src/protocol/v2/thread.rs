@@ -13,7 +13,9 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -167,6 +169,88 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContextUpdateParams {
+    pub thread_id: String,
+    /// Override the working directory for subsequent turns.
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for subsequent turns.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy for subsequent turns.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Select a named permissions profile for subsequent turns. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permissions: Option<PermissionProfileSelectionParams>,
+    /// Override the model for subsequent turns.
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    /// Override the service tier for subsequent turns.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<String>>,
+    /// Override the reasoning effort for subsequent turns.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub effort: Option<Option<ReasoningEffort>>,
+    /// Override the reasoning summary for subsequent turns.
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    /// Override the personality for subsequent turns.
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+    /// Set a pre-set collaboration mode for subsequent turns.
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContext {
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<String>,
+    pub cwd: AbsolutePathBuf,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: Option<ReasoningSummary>,
+    pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContextUpdateResponse {
+    pub turn_context: ThreadTurnContext,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -1129,6 +1213,14 @@ pub struct ThreadStartedNotification {
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnContextUpdatedNotification {
+    pub thread_id: String,
+    pub turn_context: ThreadTurnContext,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

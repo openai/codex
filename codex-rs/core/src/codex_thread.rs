@@ -61,7 +61,9 @@ pub struct ThreadConfigSnapshot {
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
     pub thread_source: Option<ThreadSource>,
 }
@@ -236,11 +238,29 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
-    pub async fn validate_turn_context_overrides(
+    /// Preview persistent turn context overrides without committing them.
+    pub async fn preview_turn_context_overrides(
         &self,
         overrides: CodexThreadTurnContextOverrides,
-    ) -> ConstraintResult<()> {
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.preview_settings(&updates).await
+    }
+
+    /// Apply persistent turn context overrides and return the effective state.
+    pub async fn update_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.update_settings(updates).await?;
+        Ok(self.config_snapshot().await)
+    }
+
+    async fn turn_context_settings_update(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadTurnContextOverrides {
             cwd,
             approval_policy,
@@ -266,7 +286,7 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
             approval_policy,
             approvals_reviewer,
@@ -279,8 +299,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.

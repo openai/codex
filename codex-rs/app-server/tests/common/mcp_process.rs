@@ -89,6 +89,7 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadTurnContextUpdateParams;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
@@ -485,6 +486,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/rollback", params).await
+    }
+
+    /// Send a `thread/turnContext/update` JSON-RPC request.
+    pub async fn send_thread_turn_context_update_request(
+        &mut self,
+        params: ThreadTurnContextUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/turnContext/update", params).await
     }
 
     /// Send a `thread/list` JSON-RPC request.

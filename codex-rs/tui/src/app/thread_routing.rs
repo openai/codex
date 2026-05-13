@@ -686,7 +686,46 @@ impl App {
                 self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
-            AppCommand::OverrideTurnContext { .. } => Ok(true),
+            AppCommand::OverrideTurnContext {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                permission_profile,
+                windows_sandbox_level: _,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            } => {
+                let config = self.chat_widget.config_ref();
+                let current_cwd = config.cwd.to_path_buf();
+                let active_permission_profile =
+                    permission_profile.as_ref().and_then(|permission_profile| {
+                        (config.permissions.permission_profile() == permission_profile.clone())
+                            .then(|| config.permissions.active_permission_profile())
+                            .flatten()
+                    });
+                app_server
+                    .thread_turn_context_update(
+                        thread_id,
+                        cwd.clone(),
+                        *approval_policy,
+                        *approvals_reviewer,
+                        permission_profile.clone(),
+                        active_permission_profile,
+                        current_cwd.as_path(),
+                        model.clone(),
+                        *effort,
+                        *summary,
+                        service_tier.clone(),
+                        collaboration_mode.clone(),
+                        *personality,
+                    )
+                    .await?;
+                Ok(true)
+            }
             AppCommand::ApproveGuardianDeniedAction { event } => {
                 app_server
                     .thread_approve_guardian_denied_action(thread_id, event)

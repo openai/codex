@@ -145,7 +145,9 @@ impl SessionConfiguration {
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
+            collaboration_mode: self.collaboration_mode.clone(),
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
         }

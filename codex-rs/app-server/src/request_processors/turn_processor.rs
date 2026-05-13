@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -14,6 +15,75 @@ pub(crate) struct TurnRequestProcessor {
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
     skills_watcher: Arc<SkillsWatcher>,
+}
+
+#[derive(Clone)]
+struct TurnContextOverrideRequest {
+    cwd: Option<PathBuf>,
+    approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
+    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    permissions: Option<PermissionProfileSelectionParams>,
+    model: Option<String>,
+    service_tier: Option<Option<String>>,
+    effort: Option<Option<ReasoningEffort>>,
+    summary: Option<codex_protocol::config_types::ReasoningSummary>,
+    collaboration_mode: Option<CollaborationMode>,
+    personality: Option<Personality>,
+}
+
+impl TurnContextOverrideRequest {
+    fn has_any_overrides(&self) -> bool {
+        self.cwd.is_some()
+            || self.approval_policy.is_some()
+            || self.approvals_reviewer.is_some()
+            || self.sandbox_policy.is_some()
+            || self.permissions.is_some()
+            || self.model.is_some()
+            || self.service_tier.is_some()
+            || self.effort.is_some()
+            || self.summary.is_some()
+            || self.collaboration_mode.is_some()
+            || self.personality.is_some()
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedTurnContextOverrides {
+    has_any_overrides: bool,
+    cwd: Option<PathBuf>,
+    approval_policy: Option<codex_protocol::protocol::AskForApproval>,
+    approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
+    sandbox_policy: Option<codex_protocol::protocol::SandboxPolicy>,
+    permission_profile: Option<codex_protocol::models::PermissionProfile>,
+    active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
+    windows_sandbox_level: Option<WindowsSandboxLevel>,
+    model: Option<String>,
+    effort: Option<Option<ReasoningEffort>>,
+    summary: Option<codex_protocol::config_types::ReasoningSummary>,
+    service_tier: Option<Option<String>>,
+    collaboration_mode: Option<CollaborationMode>,
+    personality: Option<Personality>,
+}
+
+impl ResolvedTurnContextOverrides {
+    fn to_core_overrides(&self) -> CodexThreadTurnContextOverrides {
+        CodexThreadTurnContextOverrides {
+            cwd: self.cwd.clone(),
+            approval_policy: self.approval_policy,
+            approvals_reviewer: self.approvals_reviewer,
+            sandbox_policy: self.sandbox_policy.clone(),
+            permission_profile: self.permission_profile.clone(),
+            active_permission_profile: self.active_permission_profile.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            model: self.model.clone(),
+            effort: self.effort,
+            summary: self.summary,
+            service_tier: self.service_tier.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
+            personality: self.personality,
+        }
+    }
 }
 
 impl TurnRequestProcessor {
@@ -70,6 +140,16 @@ impl TurnRequestProcessor {
         params: ThreadInjectItemsParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_inject_items_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_turn_context_update(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadTurnContextUpdateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_turn_context_update_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -312,6 +392,105 @@ impl TurnRequestProcessor {
         Ok(())
     }
 
+    async fn resolve_turn_context_overrides(
+        &self,
+        base_snapshot: &ThreadConfigSnapshot,
+        request: TurnContextOverrideRequest,
+    ) -> Result<ResolvedTurnContextOverrides, JSONRPCErrorError> {
+        if request.sandbox_policy.is_some() && request.permissions.is_some() {
+            return Err(invalid_request(
+                "`permissions` cannot be combined with `sandboxPolicy`",
+            ));
+        }
+
+        let has_any_overrides = request.has_any_overrides();
+        let cwd = request.cwd;
+        let approval_policy = request.approval_policy.map(AskForApproval::to_core);
+        let approvals_reviewer = request
+            .approvals_reviewer
+            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = request.sandbox_policy.map(|p| p.to_core());
+        let (permission_profile, active_permission_profile) =
+            if let Some(permissions) = request.permissions {
+                let mut overrides = ConfigOverrides {
+                    cwd: cwd.clone(),
+                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                    ..Default::default()
+                };
+                apply_permission_profile_selection_to_config_overrides(
+                    &mut overrides,
+                    Some(permissions),
+                );
+                let config = self
+                    .config_manager
+                    .load_for_cwd(
+                        /*request_overrides*/ None,
+                        overrides,
+                        Some(base_snapshot.cwd.to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                // Startup config is allowed to fall back when requirements
+                // disallow a configured profile. An explicit turn context
+                // update is different: reject it before accepting the request.
+                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                    warning.contains("Configured value for `permission_profile` is disallowed")
+                }) {
+                    return Err(invalid_request(format!(
+                        "invalid turn context override: {warning}"
+                    )));
+                }
+                (
+                    Some(config.permissions.permission_profile()),
+                    config.permissions.active_permission_profile(),
+                )
+            } else {
+                (None, None)
+            };
+
+        let resolved = ResolvedTurnContextOverrides {
+            has_any_overrides,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model: request.model,
+            effort: request.effort,
+            summary: request.summary,
+            service_tier: request.service_tier,
+            collaboration_mode: request
+                .collaboration_mode
+                .map(|mode| self.normalize_turn_start_collaboration_mode(mode)),
+            personality: request.personality,
+        };
+
+        Ok(resolved)
+    }
+
+    async fn maybe_emit_turn_context_updated(
+        &self,
+        thread_id: &str,
+        before: &ThreadTurnContext,
+        after: ThreadTurnContext,
+    ) {
+        if before == &after {
+            return;
+        }
+
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadTurnContextUpdated(
+                ThreadTurnContextUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    turn_context: after,
+                },
+            ))
+            .await;
+    }
+
     async fn turn_start_inner(
         &self,
         request_id: ConnectionRequestId,
@@ -343,9 +522,8 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
-        let collaboration_mode = params
-            .collaboration_mode
-            .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
+        let before_snapshot = thread.config_snapshot().await;
+        let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
         let environment_selections = self.parse_environment_selections(params.environments)?;
 
         // Map v2 input items to core input items.
@@ -355,120 +533,57 @@ impl TurnRequestProcessor {
             .map(V2UserInput::into_core)
             .collect();
         let turn_has_input = !mapped_items.is_empty();
-
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.permissions.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
-
-        if params.sandbox_policy.is_some() && params.permissions.is_some() {
-            return Err(invalid_request(
-                "`permissions` cannot be combined with `sandboxPolicy`",
-            ));
-        }
-
-        let cwd = params.cwd;
-        let approval_policy = params.approval_policy.map(AskForApproval::to_core);
-        let approvals_reviewer = params
-            .approvals_reviewer
-            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile) =
-            if let Some(permissions) = params.permissions {
-                let snapshot = thread.config_snapshot().await;
-                let mut overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
-                let config = self
-                    .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
-                        Some(snapshot.cwd.to_path_buf()),
-                    )
+        let resolved_overrides = self
+            .resolve_turn_context_overrides(
+                &before_snapshot,
+                TurnContextOverrideRequest {
+                    cwd: params.cwd,
+                    approval_policy: params.approval_policy,
+                    approvals_reviewer: params.approvals_reviewer,
+                    sandbox_policy: params.sandbox_policy,
+                    permissions: params.permissions,
+                    model: params.model,
+                    service_tier: params.service_tier,
+                    effort: params.effort.map(Some),
+                    summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
+                    personality: params.personality,
+                },
+            )
+            .await?;
+        let after_turn_context = if resolved_overrides.has_any_overrides {
+            Some(thread_turn_context_from_snapshot(
+                &thread
+                    .preview_turn_context_overrides(resolved_overrides.to_core_overrides())
                     .await
-                    .map_err(|err| config_load_error(&err))?;
-                // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn request
-                // is different: reject it before accepting user input.
-                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
-                    warning.contains("Configured value for `permission_profile` is disallowed")
-                }) {
-                    return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
-                    )));
-                }
-                (
-                    Some(config.permissions.permission_profile()),
-                    config.permissions.active_permission_profile(),
-                )
-            } else {
-                (None, None)
-            };
-        let model = params.model;
-        let effort = params.effort.map(Some);
-        let summary = params.summary;
-        let service_tier = params.service_tier;
-        let personality = params.personality;
-
-        // If any overrides are provided, validate them synchronously so the
-        // request can fail before accepting user input. The actual update is
-        // still queued together with the input below to preserve submission order.
-        if has_any_overrides {
-            thread
-                .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
-                    cwd: cwd.clone(),
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy: sandbox_policy.clone(),
-                    permission_profile: permission_profile.clone(),
-                    active_permission_profile: active_permission_profile.clone(),
-                    windows_sandbox_level: None,
-                    model: model.clone(),
-                    effort,
-                    summary,
-                    service_tier: service_tier.clone(),
-                    collaboration_mode: collaboration_mode.clone(),
-                    personality,
-                })
-                .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
-        }
+                    .map_err(|err| {
+                        invalid_request(format!("invalid turn context override: {err}"))
+                    })?,
+            ))
+        } else {
+            None
+        };
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if has_any_overrides {
+        let turn_op = if resolved_overrides.has_any_overrides {
             Op::UserInputWithTurnContext {
                 items: mapped_items,
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level: None,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
+                cwd: resolved_overrides.cwd,
+                approval_policy: resolved_overrides.approval_policy,
+                approvals_reviewer: resolved_overrides.approvals_reviewer,
+                sandbox_policy: resolved_overrides.sandbox_policy,
+                permission_profile: resolved_overrides.permission_profile,
+                active_permission_profile: resolved_overrides.active_permission_profile,
+                windows_sandbox_level: resolved_overrides.windows_sandbox_level,
+                model: resolved_overrides.model,
+                effort: resolved_overrides.effort,
+                summary: resolved_overrides.summary,
+                service_tier: resolved_overrides.service_tier,
+                collaboration_mode: resolved_overrides.collaboration_mode,
+                personality: resolved_overrides.personality,
             }
         } else {
             Op::UserInput {
@@ -498,6 +613,14 @@ impl TurnRequestProcessor {
                 &config_snapshot.session_source,
             );
         }
+        if let Some(after_turn_context) = after_turn_context {
+            self.maybe_emit_turn_context_updated(
+                &params.thread_id,
+                &before_turn_context,
+                after_turn_context,
+            )
+            .await;
+        }
 
         self.outgoing
             .record_request_turn_id(&request_id, &turn_id)
@@ -514,6 +637,59 @@ impl TurnRequestProcessor {
         };
 
         Ok(TurnStartResponse { turn })
+    }
+
+    async fn thread_turn_context_update_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadTurnContextUpdateParams,
+    ) -> Result<ThreadTurnContextUpdateResponse, JSONRPCErrorError> {
+        let (_, thread) = self
+            .load_thread(&params.thread_id)
+            .await
+            .inspect_err(|error| {
+                self.track_error_response(request_id, error, /*error_type*/ None);
+            })?;
+        let before_snapshot = thread.config_snapshot().await;
+        let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
+        let resolved_overrides = self
+            .resolve_turn_context_overrides(
+                &before_snapshot,
+                TurnContextOverrideRequest {
+                    cwd: params.cwd,
+                    approval_policy: params.approval_policy,
+                    approvals_reviewer: params.approvals_reviewer,
+                    sandbox_policy: params.sandbox_policy,
+                    permissions: params.permissions,
+                    model: params.model,
+                    service_tier: params.service_tier,
+                    effort: params.effort,
+                    summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
+                    personality: params.personality,
+                },
+            )
+            .await?;
+
+        let after_snapshot = if resolved_overrides.has_any_overrides {
+            thread
+                .update_turn_context_overrides(resolved_overrides.to_core_overrides())
+                .await
+                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?
+        } else {
+            before_snapshot
+        };
+        let after_turn_context = thread_turn_context_from_snapshot(&after_snapshot);
+        self.maybe_emit_turn_context_updated(
+            &params.thread_id,
+            &before_turn_context,
+            after_turn_context.clone(),
+        )
+        .await;
+
+        Ok(ThreadTurnContextUpdateResponse {
+            turn_context: after_turn_context,
+        })
     }
 
     async fn thread_inject_items_response_inner(
@@ -1107,6 +1283,29 @@ impl TurnRequestProcessor {
             raw_events_enabled,
         )
         .await
+    }
+}
+
+fn thread_turn_context_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> ThreadTurnContext {
+    ThreadTurnContext {
+        model: config_snapshot.model.clone(),
+        model_provider: config_snapshot.model_provider_id.clone(),
+        service_tier: config_snapshot.service_tier.clone(),
+        cwd: config_snapshot.cwd.clone(),
+        approval_policy: config_snapshot.approval_policy.into(),
+        approvals_reviewer: config_snapshot.approvals_reviewer.into(),
+        sandbox_policy: thread_response_sandbox_policy(
+            &config_snapshot.permission_profile,
+            config_snapshot.cwd.as_path(),
+        ),
+        permission_profile: config_snapshot.permission_profile.clone().into(),
+        active_permission_profile: thread_response_active_permission_profile(
+            config_snapshot.active_permission_profile.clone(),
+        ),
+        effort: config_snapshot.reasoning_effort,
+        summary: config_snapshot.reasoning_summary,
+        personality: config_snapshot.personality,
+        collaboration_mode: config_snapshot.collaboration_mode.clone(),
     }
 }
 

@@ -5855,10 +5855,19 @@ impl ChatWidget {
             });
         let items: Vec<SelectionItem> = presets
             .into_iter()
-            .map(|mask| {
+            .map(|mut mask| {
                 let name = mask.name.clone();
                 let is_current = current_kind == mask.mode;
+                if mask.mode == Some(ModeKind::Plan)
+                    && let Some(effort) = self.config.plan_mode_reasoning_effort
+                {
+                    mask.reasoning_effort = Some(Some(effort));
+                }
+                let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
+                        collaboration_mode.clone(),
+                    )));
                     tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
                 })];
                 SelectionItem {
@@ -5894,6 +5903,10 @@ impl ChatWidget {
                 return;
             }
 
+            tx.send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+                model_for_action.clone(),
+                effort_for_action,
+            )));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
             tx.send(AppEvent::PersistModelSelection {
@@ -5965,21 +5978,39 @@ impl ChatWidget {
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
+            let mut mask = collaboration_modes::plan_mask_or_default(self.model_catalog.as_ref());
+            mask.mode = Some(ModeKind::Plan);
+            mask.model = Some(model.clone());
+            mask.reasoning_effort = Some(effort);
+            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
             move |tx| {
+                tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
+                    collaboration_mode.clone(),
+                )));
                 tx.send(AppEvent::UpdateModel(model.clone()));
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             }
         })];
-        let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::UpdateModel(model.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort));
-            tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
-            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model.clone(),
-                effort,
-            });
+        let all_modes_actions: Vec<SelectionAction> = vec![Box::new({
+            let mut mask = collaboration_modes::plan_mask_or_default(self.model_catalog.as_ref());
+            mask.mode = Some(ModeKind::Plan);
+            mask.model = Some(model.clone());
+            mask.reasoning_effort = Some(effort);
+            let collaboration_mode = self.current_collaboration_mode.apply_mask(&mask);
+            move |tx| {
+                tx.send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
+                    collaboration_mode.clone(),
+                )));
+                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model.clone(),
+                    effort,
+                });
+            }
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -6142,6 +6173,10 @@ impl ChatWidget {
                         effort: choice_effort,
                     });
                 } else {
+                    tx.send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+                        model_for_action.clone(),
+                        choice_effort,
+                    )));
                     tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                     tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
                     tx.send(AppEvent::PersistModelSelection {
@@ -6192,6 +6227,11 @@ impl ChatWidget {
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+                model.clone(),
+                effort,
+            )));
         self.app_event_tx.send(AppEvent::UpdateModel(model));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
@@ -7685,6 +7725,17 @@ impl ChatWidget {
             self.model_catalog.as_ref(),
             self.active_collaboration_mask.as_ref(),
         ) {
+            let mut next_mask = next_mask;
+            if next_mask.mode == Some(ModeKind::Plan)
+                && let Some(effort) = self.config.plan_mode_reasoning_effort
+            {
+                next_mask.reasoning_effort = Some(Some(effort));
+            }
+            let collaboration_mode = self.current_collaboration_mode.apply_mask(&next_mask);
+            self.app_event_tx
+                .send(AppEvent::CodexOp(AppCommand::override_collaboration_mode(
+                    collaboration_mode,
+                )));
             self.set_collaboration_mask(next_mask);
         }
     }
