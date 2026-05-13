@@ -500,7 +500,7 @@ fn auth_reachability_note(report: &DoctorReport) -> Option<DoctorNote> {
         return Some(DoctorNote {
             status: DisplayStatus::Warning,
             name: "auth",
-            summary: "ChatGPT websocket auth but API-key reachability mode".to_string(),
+            summary: "mixed auth signals: ChatGPT login plus API key env var; HTTP reachability uses API-key mode".to_string(),
         });
     }
     None
@@ -1214,7 +1214,9 @@ Run codex doctor without --summary for detailed diagnostics.
         assert!(rendered.contains("⚠ rollouts"));
         assert!(rendered.contains("⚠ sandbox"));
         assert!(rendered.contains("⚠ mcp"));
-        assert!(rendered.contains("⚠ auth"));
+        assert!(rendered.contains(
+            "⚠ auth         mixed auth signals: ChatGPT login plus API key env var; HTTP reachability uses API-key mode"
+        ));
         assert!(rendered.contains("○ app-server   not running (ephemeral mode)"));
         assert!(rendered.contains("5 ok · 1 idle · 5 notes · 1 warn · 0 fail degraded"));
     }

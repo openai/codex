@@ -62,6 +62,7 @@ use supports_color::Stream;
 
 mod background;
 mod output;
+mod progress;
 mod runtime;
 mod updates;
 
@@ -69,6 +70,8 @@ use background::background_server_check;
 use output::HumanOutputOptions;
 use output::redact_detail;
 use output::render_human_report;
+use progress::DoctorProgress;
+use progress::doctor_progress;
 use runtime::runtime_check;
 use runtime::search_check;
 use updates::updates_check;
@@ -76,6 +79,8 @@ use updates::updates_check;
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const WEBSOCKET_IMMEDIATE_CLOSE_GRACE: Duration = Duration::from_millis(250);
+const SLOW_CHECK_PROGRESS_THRESHOLD: Duration = Duration::from_secs(2);
+const SLOW_CHECK_PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 const PROXY_ENV_VARS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -225,52 +230,111 @@ async fn build_report(
     interactive: &TuiCli,
     arg0_paths: &Arg0DispatchPaths,
 ) -> DoctorReport {
+    let progress = doctor_progress(command.json);
     let mut checks = Vec::new();
-    checks.push(timed_check(|| installation_check(!command.summary)));
-    checks.push(timed_check(runtime_check));
-    checks.push(timed_check(search_check));
+    checks.push(run_sync_check("installation", progress.clone(), || {
+        installation_check(!command.summary)
+    }));
+    checks.push(run_sync_check("runtime", progress.clone(), runtime_check));
+    checks.push(run_sync_check("search", progress.clone(), search_check));
 
+    progress.begin("config");
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
     match &config_result {
         Ok(config) => {
             let auth_manager =
                 AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
-            checks.push(timed_check(|| config_check(config)));
-            checks.push(timed_check(|| auth_check(config)));
-            checks.push(timed_check(|| updates_check(config)));
-            checks.push(timed_check(network_check));
-            checks.push(
-                timed_check_async(|| websocket_reachability_check(config, Some(auth_manager)))
-                    .await,
+            let reachability_plan = provider_reachability_plan(config);
+            let (
+                config_check,
+                auth_check,
+                updates_check,
+                network_check,
+                websocket_check,
+                mcp_check,
+                sandbox_check,
+                terminal_check,
+                state_check,
+                background_server_check,
+                reachability_check,
+            ) = tokio::join!(
+                async { run_sync_check("config", progress.clone(), || config_check(config)) },
+                async { run_sync_check("auth", progress.clone(), || auth_check(config)) },
+                async { run_sync_check("updates", progress.clone(), || updates_check(config)) },
+                async { run_sync_check("network", progress.clone(), network_check) },
+                run_async_check(
+                    "websocket",
+                    progress.clone(),
+                    websocket_reachability_check(config, Some(auth_manager)),
+                ),
+                run_async_check("MCP", progress.clone(), mcp_check(config)),
+                async {
+                    run_sync_check("sandbox", progress.clone(), || {
+                        sandbox_check(config, arg0_paths)
+                    })
+                },
+                async { run_sync_check("terminal", progress.clone(), terminal_check) },
+                run_async_check("state", progress.clone(), state_check(config)),
+                async {
+                    run_sync_check("app-server", progress.clone(), || {
+                        background_server_check(config)
+                    })
+                },
+                run_async_check(
+                    "provider reachability",
+                    progress.clone(),
+                    provider_reachability_check(reachability_plan),
+                ),
             );
-            checks.push(timed_check_async(|| mcp_check(config)).await);
-            checks.push(timed_check(|| sandbox_check(config, arg0_paths)));
-            checks.push(timed_check(terminal_check));
-            checks.push(timed_check_async(|| state_check(config)).await);
-            checks.push(timed_check(|| background_server_check(config)));
+            checks.extend([
+                config_check,
+                auth_check,
+                updates_check,
+                network_check,
+                websocket_check,
+                mcp_check,
+                sandbox_check,
+                terminal_check,
+                state_check,
+                background_server_check,
+                reachability_check,
+            ]);
         }
         Err(err) => {
-            checks.push(timed_check(|| {
-                DoctorCheck::new(
-                    "config.load",
-                    "config",
-                    CheckStatus::Fail,
-                    "config could not be loaded",
-                )
-                .detail(err.to_string())
-                .remediation("Fix the reported config error, then rerun codex doctor.")
-            }));
-            checks.push(timed_check(network_check));
-            checks.push(timed_check(terminal_check));
-            checks.push(timed_check(fallback_state_check));
+            let reachability_plan = default_reachability_plan();
+            let (config_check, network_check, terminal_check, state_check, reachability_check) = tokio::join!(
+                async {
+                    run_sync_check("config", progress.clone(), || {
+                        DoctorCheck::new(
+                            "config.load",
+                            "config",
+                            CheckStatus::Fail,
+                            "config could not be loaded",
+                        )
+                        .detail(err.to_string())
+                        .remediation("Fix the reported config error, then rerun codex doctor.")
+                    })
+                },
+                async { run_sync_check("network", progress.clone(), network_check) },
+                async { run_sync_check("terminal", progress.clone(), terminal_check) },
+                async { run_sync_check("state", progress.clone(), fallback_state_check) },
+                run_async_check(
+                    "provider reachability",
+                    progress.clone(),
+                    provider_reachability_check(reachability_plan),
+                ),
+            );
+            checks.extend([
+                config_check,
+                network_check,
+                terminal_check,
+                state_check,
+                reachability_check,
+            ]);
         }
     }
 
-    let reachability_plan = config_result
-        .as_ref()
-        .map(provider_reachability_plan)
-        .unwrap_or_else(|_| default_reachability_plan());
-    checks.push(timed_check_async(|| provider_reachability_check(reachability_plan)).await);
+    progress.settle();
 
     let overall_status = overall_status(&checks);
     DoctorReport {
@@ -353,22 +417,46 @@ fn redacted_report(report: &DoctorReport) -> DoctorReport {
     redacted
 }
 
-fn timed_check(f: impl FnOnce() -> DoctorCheck) -> DoctorCheck {
+fn run_sync_check(
+    label: &'static str,
+    progress: Arc<dyn DoctorProgress>,
+    f: impl FnOnce() -> DoctorCheck,
+) -> DoctorCheck {
+    progress.begin(label);
     let start = Instant::now();
     let mut check = f();
     check.duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    progress.finish(label, check.status);
     check
 }
 
-async fn timed_check_async<F, Fut>(f: F) -> DoctorCheck
+async fn run_async_check<Fut>(
+    label: &'static str,
+    progress: Arc<dyn DoctorProgress>,
+    future: Fut,
+) -> DoctorCheck
 where
-    F: FnOnce() -> Fut,
     Fut: Future<Output = DoctorCheck>,
 {
+    progress.begin(label);
     let start = Instant::now();
-    let mut check = f().await;
-    check.duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-    check
+    tokio::pin!(future);
+    let mut progress_interval = tokio::time::interval(SLOW_CHECK_PROGRESS_INTERVAL);
+    loop {
+        tokio::select! {
+            mut check = &mut future => {
+                check.duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                progress.finish(label, check.status);
+                return check;
+            }
+            _ = progress_interval.tick() => {
+                let elapsed = start.elapsed();
+                if elapsed >= SLOW_CHECK_PROGRESS_THRESHOLD {
+                    progress.heartbeat(label, elapsed);
+                }
+            }
+        }
+    }
 }
 
 fn overall_status(checks: &[DoctorCheck]) -> CheckStatus {
@@ -2040,12 +2128,54 @@ mod tests {
     use std::io::Read;
     use std::io::Write;
     use std::net::TcpListener;
+    use std::sync::Mutex;
 
     use clap::Parser;
     use codex_protocol::config_types::SandboxMode;
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingProgress {
+        events: Mutex<Vec<String>>,
+    }
+
+    impl RecordingProgress {
+        fn events(&self) -> Vec<String> {
+            self.events.lock().expect("events lock").clone()
+        }
+    }
+
+    impl DoctorProgress for RecordingProgress {
+        fn begin(&self, label: &'static str) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("begin {label}"));
+        }
+
+        fn heartbeat(&self, label: &'static str, elapsed: Duration) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("heartbeat {label} {}", elapsed.as_secs()));
+        }
+
+        fn finish(&self, label: &'static str, status: CheckStatus) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("finish {label} {status:?}"));
+        }
+
+        fn settle(&self) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("settle".to_string());
+        }
+    }
 
     #[test]
     fn overall_status_prefers_fail() {
@@ -2054,6 +2184,39 @@ mod tests {
             DoctorCheck::new("b", "auth", CheckStatus::Fail, "fail"),
         ];
         assert_eq!(overall_status(&checks), CheckStatus::Fail);
+    }
+
+    #[test]
+    fn run_sync_check_notifies_progress() {
+        let progress_impl = Arc::new(RecordingProgress::default());
+        let progress: Arc<dyn DoctorProgress> = progress_impl.clone();
+
+        let check = run_sync_check("test", progress, || {
+            DoctorCheck::new("test", "test", CheckStatus::Ok, "ok")
+        });
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(
+            progress_impl.events(),
+            vec!["begin test".to_string(), "finish test Ok".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_async_check_notifies_progress() {
+        let progress_impl = Arc::new(RecordingProgress::default());
+        let progress: Arc<dyn DoctorProgress> = progress_impl.clone();
+
+        let check = run_async_check("test", progress, async {
+            DoctorCheck::new("test", "test", CheckStatus::Warning, "warning")
+        })
+        .await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(
+            progress_impl.events(),
+            vec!["begin test".to_string(), "finish test Warning".to_string()]
+        );
     }
 
     #[test]
