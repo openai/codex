@@ -571,7 +571,7 @@ impl MessageProcessor {
     pub(crate) fn process_client_request<'a>(
         self: &'a Arc<Self>,
         connection_id: ConnectionId,
-        request: ClientRequest,
+        request: Box<ClientRequest>,
         session: Arc<ConnectionSessionState>,
         outbound_initialized: &'a AtomicBool,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -579,8 +579,11 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id().clone(),
         };
-        let request_span =
-            crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
+        let request_span = crate::app_server_tracing::typed_request_span(
+            request.as_ref(),
+            connection_id,
+            &session,
+        );
         let request_context =
             RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
         tracing::trace!(
@@ -596,15 +599,14 @@ impl MessageProcessor {
                     // In-process clients do not have the websocket transport loop that performs
                     // post-initialize bookkeeping, so they still finalize outbound readiness in
                     // the shared request handler.
-                    let result = self
-                        .handle_client_request(
-                            request_id.clone(),
-                            request,
-                            Arc::clone(&session),
-                            Some(outbound_initialized),
-                            request_context.clone(),
-                        )
-                        .await;
+                    let result = Box::pin(self.handle_client_request(
+                        request_id.clone(),
+                        *request,
+                        Arc::clone(&session),
+                        Some(outbound_initialized),
+                        request_context.clone(),
+                    ))
+                    .await;
                     if let Err(error) = result {
                         self.outgoing.send_error(request_id.clone(), error).await;
                     }
@@ -627,10 +629,10 @@ impl MessageProcessor {
         tracing::info!("<- typed notification: {:?}", notification);
     }
 
-    async fn run_request_with_context<'a>(
+    async fn run_request_with_context(
         outgoing: Arc<OutgoingMessageSender>,
         request_context: RequestContext,
-        request_fut: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+        request_fut: Pin<Box<dyn Future<Output = ()> + Send + '_>>,
     ) {
         outgoing
             .register_request_context(request_context.clone())
@@ -769,12 +771,12 @@ impl MessageProcessor {
             return Ok(());
         }
 
-        self.dispatch_initialized_client_request(
+        Box::pin(self.dispatch_initialized_client_request(
             connection_request_id,
             codex_request,
             session,
             request_context,
-        )
+        ))
         .await
     }
 
@@ -812,15 +814,14 @@ impl MessageProcessor {
             rpc_gate,
             async move {
                 let processor_for_request = Arc::clone(&processor);
-                let result = processor_for_request
-                    .handle_initialized_client_request(
-                        connection_request_id,
-                        codex_request,
-                        request_context,
-                        app_server_client_name,
-                        client_version,
-                    )
-                    .await;
+                let result = Box::pin(processor_for_request.handle_initialized_client_request(
+                    connection_request_id,
+                    codex_request,
+                    request_context,
+                    app_server_client_name,
+                    client_version,
+                ))
+                .await;
                 if let Err(error) = result {
                     processor.outgoing.send_error(error_request_id, error).await;
                 }

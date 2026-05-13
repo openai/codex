@@ -1628,6 +1628,7 @@ mod tests {
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
+        assert_eq!(params.workspace_roots, Some(config.workspace_roots.clone()));
         assert_eq!(params.sandbox, None);
         assert_eq!(
             params.permissions,
@@ -1657,59 +1658,53 @@ mod tests {
 
     #[test]
     fn embedded_turn_permissions_use_active_profile_selection() {
-        let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile = ActivePermissionProfile::new(":workspace");
         let expected_permissions =
             permissions_selection_from_active_profile(active_permission_profile.clone());
 
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::workspace_write(),
-            Some(active_permission_profile),
-            cwd.as_path(),
-            ThreadParamsMode::Embedded,
-        );
+        let permissions =
+            turn_permissions_selection(Some(active_permission_profile), ThreadParamsMode::Embedded);
 
-        assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, Some(expected_permissions));
     }
 
     #[test]
-    fn embedded_turn_permissions_fall_back_to_sandbox_without_active_profile() {
-        let cwd = test_path_buf("/workspace/project").abs();
+    fn embedded_turn_workspace_roots_forward_current_roots() {
+        let workspace_root = test_path_buf("/workspace/project").abs();
+        let workspace_roots = vec![workspace_root];
 
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::read_only(),
+        let roots =
+            turn_workspace_roots_selection(workspace_roots.clone(), ThreadParamsMode::Embedded);
+
+        assert_eq!(roots, Some(workspace_roots));
+    }
+
+    #[test]
+    fn remote_turn_workspace_roots_omit_current_roots() {
+        let workspace_roots = vec![test_path_buf("/workspace/project").abs()];
+
+        let roots = turn_workspace_roots_selection(workspace_roots, ThreadParamsMode::Remote);
+
+        assert_eq!(roots, None);
+    }
+
+    #[test]
+    fn embedded_turn_permissions_omit_overrides_without_active_profile() {
+        let permissions = turn_permissions_selection(
             /*active_permission_profile*/ None,
-            cwd.as_path(),
             ThreadParamsMode::Embedded,
         );
 
-        assert_eq!(
-            sandbox_policy,
-            Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                network_access: false
-            })
-        );
         assert_eq!(permissions, None);
     }
 
     #[test]
-    fn remote_turn_permissions_use_sandbox_even_with_active_profile() {
-        let cwd = test_path_buf("/workspace/project").abs();
-
-        let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::read_only(),
+    fn remote_turn_permissions_omit_overrides_even_with_active_profile() {
+        let permissions = turn_permissions_selection(
             Some(ActivePermissionProfile::new(":read-only")),
-            cwd.as_path(),
             ThreadParamsMode::Remote,
         );
 
-        assert_eq!(
-            sandbox_policy,
-            Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                network_access: false
-            })
-        );
         assert_eq!(permissions, None);
     }
 
@@ -1719,7 +1714,7 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            config.permissions.permission_profile_ref(),
             config.cwd.as_path(),
         );
 
@@ -1745,12 +1740,15 @@ mod tests {
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
+        assert_eq!(start.workspace_roots, None);
+        assert_eq!(resume.workspace_roots, None);
+        assert_eq!(fork.workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
         assert_eq!(start.sandbox, expected_sandbox);
-        assert_eq!(resume.sandbox, expected_sandbox);
-        assert_eq!(fork.sandbox, expected_sandbox);
+        assert_eq!(resume.sandbox, None);
+        assert_eq!(fork.sandbox, None);
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
@@ -1826,7 +1824,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let remote_cwd = PathBuf::from("repo/on/server");
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            config.permissions.permission_profile_ref(),
             config.cwd.as_path(),
         );
 
@@ -1852,12 +1850,15 @@ mod tests {
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(resume.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(fork.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(start.workspace_roots, None);
+        assert_eq!(resume.workspace_roots, None);
+        assert_eq!(fork.workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
         assert_eq!(start.sandbox, expected_sandbox);
-        assert_eq!(resume.sandbox, expected_sandbox);
-        assert_eq!(fork.sandbox, expected_sandbox);
+        assert_eq!(resume.sandbox, None);
+        assert_eq!(fork.sandbox, None);
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
@@ -2015,6 +2016,7 @@ mod tests {
             model_provider: "openai".to_string(),
             service_tier: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            workspace_roots: Vec::new(),
             instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
             approval_policy: codex_app_server_protocol::AskForApproval::Never,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
@@ -2022,7 +2024,6 @@ mod tests {
                 .to_legacy_sandbox_policy(test_path_buf("/tmp/project").as_path())
                 .expect("read-only profile must be legacy-compatible")
                 .into(),
-            permission_profile: Some(read_only_profile.clone().into()),
             active_permission_profile: None,
             reasoning_effort: None,
         };
@@ -2045,7 +2046,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_thread_response_prefers_permission_profile_over_legacy_sandbox() {
+    async fn remote_thread_response_uses_legacy_sandbox_projection() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let cwd = test_path_buf("/tmp/project").abs();
@@ -2053,58 +2054,65 @@ mod tests {
             .to_legacy_sandbox_policy(cwd.as_path())
             .expect("read-only profile must be legacy-compatible")
             .into();
-        let response_profile = AppServerPermissionProfile::Managed {
-            file_system: PermissionProfileFileSystemPermissions::Restricted {
-                entries: vec![
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::Root,
-                        },
-                        access: FileSystemAccessMode::Read,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::ProjectRoots {
-                                subpath: Some(".env".into()),
-                            },
-                        },
-                        access: FileSystemAccessMode::None,
-                    },
-                ],
-                glob_scan_max_depth: None,
-            },
-            network: PermissionProfileNetworkPermissions { enabled: false },
-        };
-        let split_profile: PermissionProfile = response_profile.clone().into();
 
         assert_eq!(
             permission_profile_from_thread_response(
                 &fallback_sandbox,
-                Some(&response_profile),
                 cwd.as_path(),
+                &[],
                 &config,
                 ThreadParamsMode::Remote,
             ),
-            split_profile
+            PermissionProfile::read_only()
         );
     }
 
     #[tokio::test]
-    async fn embedded_thread_response_prefers_permission_profile_when_present() {
+    async fn remote_thread_response_uses_workspace_roots_with_legacy_sandbox() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let cwd = test_path_buf("/tmp/project").abs();
-        let response_profile = PermissionProfile::read_only().into();
+        let extra_root = test_path_buf("/workspace/cache").abs();
+        let expected = PermissionProfile::workspace_write_with(
+            std::slice::from_ref(&extra_root),
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        );
+
+        assert_eq!(
+            permission_profile_from_thread_response(
+                &codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                    network_access: false,
+                    exclude_tmpdir_env_var: false,
+                    exclude_slash_tmp: false,
+                    legacy_writable_roots: Vec::new(),
+                },
+                cwd.as_path(),
+                std::slice::from_ref(&extra_root),
+                &config,
+                ThreadParamsMode::Remote,
+            ),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_thread_response_uses_local_config_permission_profile() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let cwd = test_path_buf("/tmp/project").abs();
+        let expected = config.permissions.permission_profile();
 
         assert_eq!(
             permission_profile_from_thread_response(
                 &codex_app_server_protocol::SandboxPolicy::DangerFullAccess,
-                Some(&response_profile),
                 cwd.as_path(),
+                &[],
                 &config,
                 ThreadParamsMode::Embedded,
             ),
-            PermissionProfile::read_only()
+            expected
         );
     }
 
