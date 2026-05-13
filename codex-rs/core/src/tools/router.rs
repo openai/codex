@@ -17,11 +17,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::DiscoverableTool;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -66,21 +64,11 @@ impl ToolRouter {
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
-        let deferred_dynamic_tools = dynamic_tools
-            .iter()
-            .filter(|tool| tool.defer_loading)
-            .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
-            .collect::<HashSet<_>>();
         let model_visible_specs = specs
-            .iter()
-            .filter_map(|spec| {
-                if config.code_mode_only_enabled
-                    && codex_code_mode::is_code_mode_nested_tool(spec.name())
-                {
-                    return None;
-                }
-
-                filter_deferred_dynamic_tool_spec(spec.clone(), &deferred_dynamic_tools)
+            .into_iter()
+            .filter(|spec| {
+                !config.code_mode_only_enabled
+                    || !codex_code_mode::is_code_mode_nested_tool(spec.name())
             })
             .collect();
 
@@ -232,38 +220,6 @@ pub(crate) fn extension_tool_executors(session: &Session) -> Vec<Arc<dyn Extensi
         .collect()
 }
 
-fn filter_deferred_dynamic_tool_spec(
-    spec: ToolSpec,
-    deferred_dynamic_tools: &HashSet<ToolName>,
-) -> Option<ToolSpec> {
-    if deferred_dynamic_tools.is_empty() {
-        return Some(spec);
-    }
-
-    match spec {
-        ToolSpec::Function(tool) => {
-            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
-                None
-            } else {
-                Some(ToolSpec::Function(tool))
-            }
-        }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
-    }
-}
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;

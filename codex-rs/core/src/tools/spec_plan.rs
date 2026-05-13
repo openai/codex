@@ -44,7 +44,8 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
-use crate::tools::registry::AnyToolHandler;
+use crate::tools::registry::RegisteredTool;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
@@ -52,13 +53,11 @@ use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolEnvironmentMode;
-use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 pub fn build_tool_registry_builder(
@@ -66,40 +65,34 @@ pub fn build_tool_registry_builder(
     params: ToolRegistryBuildParams<'_>,
 ) -> ToolRegistryBuilder {
     let mut builder = ToolRegistryBuilder::new();
-    let all_deferred_tools = params
-        .deferred_mcp_tools
-        .into_iter()
-        .flatten()
-        .map(codex_mcp::ToolInfo::canonical_tool_name)
-        .chain(
-            params
-                .dynamic_tools
-                .iter()
-                .filter(|tool| tool.defer_loading)
-                .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone())),
-        )
-        .collect::<HashSet<_>>();
     let handlers = collect_handler_tools(config, params);
+    let deferred_tools_available = handlers
+        .iter()
+        .any(|handler| handler.exposure() == ToolExposure::Deferred);
 
     for handler in build_code_mode_handlers(
         config,
         &handlers,
         params.extension_tool_executors,
-        config.search_tool && !all_deferred_tools.is_empty(),
+        config.search_tool && deferred_tools_available,
     ) {
-        builder.register_any_handler(handler);
+        builder.register_tool(handler);
     }
 
     let mut non_deferred_specs = Vec::new();
     let mut deferred_search_infos = Vec::new();
     for handler in &handlers {
-        let tool_name = handler.tool_name();
-        if all_deferred_tools.contains(&tool_name) {
-            if let Some(search_info) = handler.search_info() {
-                deferred_search_infos.push(search_info);
+        match handler.exposure() {
+            ToolExposure::Direct => {
+                if let Some(spec) = handler.spec() {
+                    non_deferred_specs.push(spec);
+                }
             }
-        } else if let Some(spec) = handler.spec() {
-            non_deferred_specs.push(spec);
+            ToolExposure::Deferred => {
+                if let Some(search_info) = handler.search_info() {
+                    deferred_search_infos.push(search_info);
+                }
+            }
         }
     }
 
@@ -127,7 +120,7 @@ pub fn build_tool_registry_builder(
     }
 
     for handler in handlers {
-        builder.register_any_handler_without_spec(handler);
+        builder.register_tool_without_spec(handler);
     }
 
     if config.search_tool && config.namespace_tools && !deferred_search_infos.is_empty() {
@@ -143,10 +136,10 @@ pub fn build_tool_registry_builder(
 
 fn build_code_mode_handlers(
     config: &ToolsConfig,
-    handlers: &[Arc<dyn AnyToolHandler>],
+    handlers: &[Arc<dyn RegisteredTool>],
     extension_tool_executors: &[Arc<dyn ExtensionToolExecutor>],
     deferred_tools_available: bool,
-) -> Vec<Arc<dyn AnyToolHandler>> {
+) -> Vec<Arc<dyn RegisteredTool>> {
     if !config.code_mode_enabled {
         return vec![];
     }
@@ -251,9 +244,9 @@ fn code_mode_namespace_descriptions(
 fn collect_handler_tools(
     config: &ToolsConfig,
     params: ToolRegistryBuildParams<'_>,
-) -> Vec<Arc<dyn AnyToolHandler>> {
+) -> Vec<Arc<dyn RegisteredTool>> {
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
-    let mut handlers = Vec::<Arc<dyn AnyToolHandler>>::new();
+    let mut handlers = Vec::<Arc<dyn RegisteredTool>>::new();
 
     if config.environment_mode.has_environment() {
         let include_environment_id =
@@ -430,7 +423,10 @@ fn collect_handler_tools(
 
     if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
         for tool in deferred_mcp_tools {
-            handlers.push(Arc::new(McpHandler::new(tool.clone())));
+            handlers.push(Arc::new(McpHandler::with_exposure(
+                tool.clone(),
+                ToolExposure::Deferred,
+            )));
         }
     }
 

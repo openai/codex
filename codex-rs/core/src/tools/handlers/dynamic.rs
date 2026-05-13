@@ -6,6 +6,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -30,6 +31,7 @@ use tracing::warn;
 pub struct DynamicToolHandler {
     tool_name: ToolName,
     spec: Option<ToolSpec>,
+    exposure: ToolExposure,
     search_text: String,
 }
 
@@ -48,6 +50,11 @@ impl DynamicToolHandler {
         Some(Self {
             tool_name,
             spec: Some(spec),
+            exposure: if tool.defer_loading {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            },
             search_text: build_dynamic_search_text(tool),
         })
     }
@@ -62,6 +69,10 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         self.spec.clone()
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

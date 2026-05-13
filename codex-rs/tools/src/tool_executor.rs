@@ -5,6 +5,14 @@ use crate::ToolName;
 use crate::ToolOutput;
 use crate::ToolSpec;
 
+/// Controls whether a tool is exposed in the initial model-visible tool list
+/// or registered for later discovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolExposure {
+    Direct,
+    Deferred,
+}
+
 /// Shared runtime contract for model-visible tools.
 ///
 /// Implementations keep the model-visible spec tied to the executable runtime.
@@ -18,6 +26,10 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
 
     fn spec(&self) -> Option<ToolSpec> {
         None
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Direct
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

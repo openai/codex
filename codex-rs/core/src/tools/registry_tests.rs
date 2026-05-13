@@ -33,10 +33,10 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
     let plain_handler = Arc::new(TestHandler {
         tool_name: plain_name.clone(),
-    }) as Arc<dyn AnyToolHandler>;
+    }) as Arc<dyn RegisteredTool>;
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
-    }) as Arc<dyn AnyToolHandler>;
+    }) as Arc<dyn RegisteredTool>;
     let registry = ToolRegistry::new(HashMap::from([
         (plain_name.clone(), Arc::clone(&plain_handler)),
         (namespaced_name.clone(), Arc::clone(&namespaced_handler)),

@@ -35,6 +35,7 @@ use tracing::warn;
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
 pub use codex_tools::ToolExecutor;
+pub use codex_tools::ToolExposure;
 
 pub trait ToolHandler: ToolExecutor<ToolInvocation> {
     fn search_info(&self) -> Option<ToolSearchInfo> {
@@ -155,10 +156,16 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-pub(crate) trait AnyToolHandler: Send + Sync {
+/// Object-safe registry entry for heterogeneous tool handlers.
+///
+/// Concrete handlers keep their typed `ToolExecutor::Output`; the registry
+/// boxes that output only after typed hooks have run.
+pub(crate) trait RegisteredTool: Send + Sync {
     fn tool_name(&self) -> ToolName;
 
     fn spec(&self) -> Option<ToolSpec>;
+
+    fn exposure(&self) -> ToolExposure;
 
     fn search_info(&self) -> Option<ToolSearchInfo>;
 
@@ -186,7 +193,7 @@ pub(crate) trait AnyToolHandler: Send + Sync {
     ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>>;
 }
 
-impl<T> AnyToolHandler for T
+impl<T> RegisteredTool for T
 where
     T: ToolHandler,
 {
@@ -196,6 +203,10 @@ where
 
     fn spec(&self) -> Option<ToolSpec> {
         ToolExecutor::spec(self)
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExecutor::exposure(self)
     }
 
     fn search_info(&self) -> Option<ToolSearchInfo> {
@@ -253,11 +264,11 @@ where
 }
 
 pub struct ToolRegistry {
-    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<ToolName, Arc<dyn RegisteredTool>>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>) -> Self {
+    fn new(handlers: HashMap<ToolName, Arc<dyn RegisteredTool>>) -> Self {
         Self { handlers }
     }
 
@@ -272,10 +283,10 @@ impl ToolRegistry {
         T: ToolHandler + 'static,
     {
         let name = handler.tool_name();
-        Self::new(HashMap::from([(name, handler as Arc<dyn AnyToolHandler>)]))
+        Self::new(HashMap::from([(name, handler as Arc<dyn RegisteredTool>)]))
     }
 
-    fn handler(&self, name: &ToolName) -> Option<Arc<dyn AnyToolHandler>> {
+    fn handler(&self, name: &ToolName) -> Option<Arc<dyn RegisteredTool>> {
         self.handlers.get(name).map(Arc::clone)
     }
 
@@ -534,7 +545,7 @@ impl ToolRegistry {
 }
 
 pub struct ToolRegistryBuilder {
-    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<ToolName, Arc<dyn RegisteredTool>>,
     specs: Vec<ToolSpec>,
 }
 
@@ -554,29 +565,28 @@ impl ToolRegistryBuilder {
     where
         H: ToolHandler + 'static,
     {
-        self.register_any_handler(handler);
+        self.register_tool(handler);
     }
 
-    pub(crate) fn register_any_handler(&mut self, handler: Arc<dyn AnyToolHandler>) {
-        self.register_any_handler_internal(handler, /*include_spec*/ true);
+    pub(crate) fn register_tool(&mut self, handler: Arc<dyn RegisteredTool>) {
+        self.register_tool_internal(handler, /*include_spec*/ true);
     }
 
-    pub(crate) fn register_any_handler_without_spec(&mut self, handler: Arc<dyn AnyToolHandler>) {
-        self.register_any_handler_internal(handler, /*include_spec*/ false);
+    pub(crate) fn register_tool_without_spec(&mut self, handler: Arc<dyn RegisteredTool>) {
+        self.register_tool_internal(handler, /*include_spec*/ false);
     }
 
-    fn register_any_handler_internal(
-        &mut self,
-        handler: Arc<dyn AnyToolHandler>,
-        include_spec: bool,
-    ) {
+    fn register_tool_internal(&mut self, handler: Arc<dyn RegisteredTool>, include_spec: bool) {
         let name = handler.tool_name();
         if self.handlers.contains_key(&name) {
             error_or_panic(format!("handler for tool {name} already registered"));
             return;
         }
 
-        if include_spec && let Some(spec) = handler.spec() {
+        if include_spec
+            && handler.exposure() == ToolExposure::Direct
+            && let Some(spec) = handler.spec()
+        {
             self.push_spec(spec);
         }
 
@@ -590,12 +600,8 @@ impl ToolRegistryBuilder {
             return;
         }
 
-        if let Some(spec) = executor.spec() {
-            self.push_spec(spec);
-        }
-
-        let handler: Arc<dyn AnyToolHandler> = Arc::new(ExtensionToolHandler::new(executor));
-        self.handlers.insert(tool_name, handler);
+        let handler: Arc<dyn RegisteredTool> = Arc::new(ExtensionToolHandler::new(executor));
+        self.register_tool_internal(handler, /*include_spec*/ true);
     }
 
     pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {
