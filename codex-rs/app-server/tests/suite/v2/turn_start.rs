@@ -290,7 +290,9 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     write_test_skill(codex_home.path(), "alpha-skill")?;
     write_test_skill(codex_home.path(), "beta-skill")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        McpProcess::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -810,6 +812,70 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
     assert!(err.error.message.contains("invalid turn context override"));
     assert!(
         err.error.message.contains("allowed set [ReadOnly]"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+    let turn_started = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await;
+    assert!(
+        turn_started.is_err(),
+        "did not expect a turn/started notification after rejected permissions selection"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_unknown_permission_selection_before_starting_turn() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            permissions: Some("missing-profile".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        err.error
+            .message
+            .contains("default_permissions refers to undefined profile `missing-profile`"),
         "unexpected error message: {}",
         err.error.message
     );
@@ -1671,7 +1737,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1839,7 +1904,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
+async fn turn_start_updates_cwd_without_replacing_workspace_roots_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -1868,12 +1933,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done second")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(&server, responses).await;
+    create_config_toml_with_sandbox(
         &codex_home,
         &server.uri(),
         "untrusted",
         &BTreeMap::default(),
+        "read-only",
     )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -1893,7 +1960,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // first turn with workspace-write sandbox and first_cwd
+    // first turn with first_cwd as the thread's workspace root
     let first_turn = mcp
         .send_turn_start_request(TurnStartParams {
             environments: None,
@@ -1904,16 +1971,11 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
-            workspace_roots: Some(vec![first_cwd.try_into()?]),
+            workspace_roots: Some(vec![first_cwd.clone().try_into()?]),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-                legacy_writable_roots: Vec::new(),
-            }),
-            permissions: None,
+            sandbox_policy: None,
+            permissions: Some(":workspace".to_string()),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1935,7 +1997,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     mcp.clear_message_buffer();
 
-    // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
+    // second turn changes cwd only; workspace roots stay on first_cwd while
+    // exec begins in second_cwd.
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
             environments: None,
@@ -1949,7 +2012,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            sandbox_policy: None,
             permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
@@ -1997,11 +2060,133 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
+    let requests = response_mock.requests();
+    assert!(
+        requests.len() >= 3,
+        "expected at least 3 model requests, got {}",
+        requests.len()
+    );
+    let second_turn_developer_text = requests[2].message_input_texts("developer").join("\n");
+    let first_cwd_name = first_cwd
+        .file_name()
+        .expect("first cwd should have a final path component")
+        .to_string_lossy();
+    assert!(
+        second_turn_developer_text.contains(first_cwd_name.as_ref()),
+        "second turn developer instructions should retain first_cwd as a workspace root; got {second_turn_developer_text:?}"
+    );
+
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_legacy_workspace_sandbox_updates_workspace_roots_for_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let first_cwd = tmp.path().join("turn1");
+    let second_cwd = tmp.path().join("turn2");
+    std::fs::create_dir(&first_cwd)?;
+    std::fs::create_dir(&second_cwd)?;
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            create_final_assistant_message_sse_response("done first")?,
+            create_final_assistant_message_sse_response("done second")?,
+        ],
+    )
+    .await;
+    create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let first_turn = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "first turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(first_cwd.clone()),
+            workspace_roots: Some(vec![first_cwd.clone().try_into()?]),
+            permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let second_turn = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "second turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(second_cwd.clone()),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+                legacy_writable_roots: Vec::new(),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let second_turn_developer_text = requests[1].message_input_texts("developer").join("\n");
+    let second_cwd_name = second_cwd
+        .file_name()
+        .expect("second cwd should have a final path component")
+        .to_string_lossy();
+    assert!(
+        second_turn_developer_text.contains(second_cwd_name.as_ref()),
+        "legacy sandboxPolicy should rebind workspace roots to second_cwd; got {second_turn_developer_text:?}"
+    );
 
     Ok(())
 }
@@ -3322,7 +3507,6 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
                 text: "run a command".to_string(),
                 text_elements: Vec::new(),
             }],
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             ..Default::default()
         })
         .await?;
@@ -3418,7 +3602,8 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+async fn turn_start_accepts_legacy_sandbox_policy_and_does_not_persist_project_trust() -> Result<()>
+{
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -3452,7 +3637,12 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             cwd: Some(workspace.path().to_path_buf()),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+                legacy_writable_roots: Vec::new(),
+            }),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
