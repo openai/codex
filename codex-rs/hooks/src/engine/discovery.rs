@@ -50,6 +50,7 @@ struct HookHandlerSource<'a> {
 #[derive(Clone, Copy)]
 struct HookDiscoveryPolicy {
     allow_managed_hooks_only: bool,
+    bypass_hook_trust: bool,
 }
 
 impl HookDiscoveryPolicy {
@@ -77,6 +78,7 @@ pub(crate) fn discover_handlers(
                 .as_ref()
                 .is_some_and(|requirement| requirement.value)
         }),
+        bypass_hook_trust,
     };
 
     if let Some(config_layer_stack) = config_layer_stack {
@@ -135,7 +137,7 @@ pub(crate) fn discover_handlers(
                         key_source: source_path.display().to_string(),
                         source: hook_source,
                         is_managed,
-                        bypass_hook_trust,
+                        bypass_hook_trust: policy.bypass_hook_trust,
                         hook_states: &hook_states,
                         env: HashMap::new(),
                         plugin_id: None,
@@ -154,7 +156,6 @@ pub(crate) fn discover_handlers(
         &mut display_order,
         plugin_hook_sources,
         &hook_states,
-        bypass_hook_trust,
         policy,
     );
 
@@ -205,7 +206,6 @@ fn append_plugin_hook_sources(
     display_order: &mut i64,
     plugin_hook_sources: Vec<PluginHookSource>,
     hook_states: &HashMap<String, HookStateToml>,
-    bypass_hook_trust: bool,
     policy: HookDiscoveryPolicy,
 ) {
     for source in plugin_hook_sources {
@@ -240,7 +240,7 @@ fn append_plugin_hook_sources(
                 ),
                 source: HookSource::Plugin,
                 is_managed: false,
-                bypass_hook_trust,
+                bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
                 env,
                 plugin_id: Some(plugin_id),
