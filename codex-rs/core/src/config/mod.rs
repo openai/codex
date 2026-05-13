@@ -89,7 +89,6 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
@@ -242,10 +241,10 @@ pub struct Permissions {
     pub approval_policy: Constrained<AskForApproval>,
     /// Canonical effective runtime permissions after config requirements and
     /// runtime readable-root additions have been applied.
-    pub permission_profile: Constrained<PermissionProfile>,
+    permission_profile: Constrained<PermissionProfile>,
     /// Named or implicit built-in profile selected by config, rather than an
     /// ad-hoc override.
-    pub active_permission_profile: Option<ActivePermissionProfile>,
+    active_permission_profile: Option<ActivePermissionProfile>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -267,6 +266,35 @@ pub struct Permissions {
 }
 
 impl Permissions {
+    /// Build permissions from the two constrained values that are required for
+    /// a minimal in-process configuration.
+    pub fn from_approval_and_profile(
+        approval_policy: Constrained<AskForApproval>,
+        permission_profile: Constrained<PermissionProfile>,
+    ) -> Self {
+        Self {
+            approval_policy,
+            permission_profile,
+            active_permission_profile: None,
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
+        }
+    }
+
+    /// Borrow the constrained canonical profile. This is for code that must
+    /// preserve or inspect the active requirements wrapper without mutating it.
+    pub fn permission_profile_constraint(&self) -> &Constrained<PermissionProfile> {
+        &self.permission_profile
+    }
+
+    /// Borrow the canonical effective runtime permissions without cloning.
+    pub fn permission_profile_ref(&self) -> &PermissionProfile {
+        self.permission_profile.get()
+    }
+
     /// Effective runtime permissions after config requirements and runtime
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
@@ -276,6 +304,45 @@ impl Permissions {
     /// Named profile selected by config, if the current profile has one.
     pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
         self.active_permission_profile.clone()
+    }
+
+    /// Replace the full constrained profile value and clear any profile-name
+    /// sidecar because the new constraint may no longer match that name.
+    pub fn replace_permission_profile_constraint(
+        &mut self,
+        permission_profile: Constrained<PermissionProfile>,
+    ) {
+        self.permission_profile = permission_profile;
+        self.active_permission_profile = None;
+    }
+
+    /// Replace the full constrained profile value and preserve the active
+    /// profile sidecar when the caller has already validated both together.
+    pub fn replace_permission_profile_constraint_with_active_profile(
+        &mut self,
+        permission_profile: Constrained<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) {
+        self.permission_profile = permission_profile;
+        self.active_permission_profile = active_permission_profile;
+    }
+
+    /// Record the active profile id only if it still describes the current
+    /// canonical profile.
+    pub fn set_active_permission_profile_for_current_profile(
+        &mut self,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        expected_permission_profile: Option<&PermissionProfile>,
+    ) {
+        self.active_permission_profile =
+            match (active_permission_profile, expected_permission_profile) {
+                (Some(active_permission_profile), Some(expected_permission_profile))
+                    if self.permission_profile.get() == expected_permission_profile =>
+                {
+                    Some(active_permission_profile)
+                }
+                _ => None,
+            };
     }
 
     /// Effective filesystem sandbox policy derived from the canonical profile.
@@ -578,6 +645,10 @@ pub struct Config {
     /// directory for the session. All relative paths inside the business-logic
     /// layer are resolved against this path.
     pub cwd: AbsolutePathBuf,
+
+    /// Absolute roots that define the writable project/workspace set for
+    /// symbolic `:project_roots` permission entries.
+    pub workspace_roots: Vec<AbsolutePathBuf>,
 
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -1865,6 +1936,11 @@ fn apply_managed_filesystem_constraints(
     }
 }
 
+fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -1894,6 +1970,9 @@ pub struct ConfigOverrides {
     pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+    /// Explicit workspace roots for this session. When set, this is the full
+    /// root list rather than an additive override.
+    pub workspace_roots: Option<Vec<PathBuf>>,
 }
 
 /// Resolves the OSS provider from CLI override, profile config, or global config.
@@ -2177,6 +2256,7 @@ impl Config {
             ephemeral,
             bypass_hook_trust,
             additional_writable_roots,
+            workspace_roots: workspace_roots_override,
         } = overrides;
         let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
 
@@ -2273,11 +2353,10 @@ impl Config {
                 }
             }
         }))?;
-        let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
+        let requested_additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
-        let requested_additional_writable_roots = additional_writable_roots.clone();
         let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
             .get_active_project(
@@ -2319,12 +2398,7 @@ impl Config {
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
-        if !additional_writable_roots
-            .iter()
-            .any(|existing| existing == &memories_root)
-        {
-            additional_writable_roots.push(memories_root);
-        }
+        let internal_writable_roots = vec![memories_root];
 
         let profiles_are_active = default_permissions_override.is_some()
             || matches!(
@@ -2334,6 +2408,31 @@ impl Config {
             || permission_config_syntax.is_none();
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
+        let should_seed_legacy_workspace_roots =
+            default_permissions.is_none()
+                && matches!(
+                    permission_config_syntax,
+                    None | Some(PermissionConfigSyntax::Legacy)
+                );
+        let mut workspace_roots = match workspace_roots_override {
+            Some(workspace_roots) => workspace_roots
+                .into_iter()
+                .map(|path| {
+                    AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path())
+                })
+                .collect(),
+            None => {
+                let mut workspace_roots = vec![resolved_cwd.clone()];
+                workspace_roots.extend(requested_additional_writable_roots.clone());
+                if should_seed_legacy_workspace_roots
+                    && let Some(sandbox_workspace_write) = cfg.sandbox_workspace_write.as_ref()
+                {
+                    workspace_roots.extend(sandbox_workspace_write.writable_roots.clone());
+                }
+                workspace_roots
+            }
+        };
+        dedupe_absolute_paths(&mut workspace_roots);
         let (
             mut configured_network_proxy_config,
             permission_profile,
@@ -2370,10 +2469,7 @@ impl Config {
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_writable_roots(
-                        resolved_cwd.as_path(),
-                        &additional_writable_roots,
-                    );
+                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
                 permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
                     permission_profile.enforcement(),
                     &file_system_sandbox_policy,
@@ -2424,28 +2520,8 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                file_system_sandbox_policy = if using_implicit_builtin_profile {
-                    file_system_sandbox_policy
-                        .with_additional_legacy_workspace_writable_roots(
-                            &additional_writable_roots,
-                        )
-                } else {
-                    file_system_sandbox_policy.with_additional_writable_roots(
-                        resolved_cwd.as_path(),
-                        &additional_writable_roots,
-                    )
-                };
-                permission_profile = PermissionProfile::from_runtime_permissions(
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            } else if matches!(permission_profile, PermissionProfile::Managed { .. })
-                && !requested_additional_writable_roots.is_empty()
-            {
-                file_system_sandbox_policy = file_system_sandbox_policy.with_additional_writable_roots(
-                    resolved_cwd.as_path(),
-                    &requested_additional_writable_roots,
-                );
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
                 permission_profile = PermissionProfile::from_runtime_permissions(
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
@@ -2462,22 +2538,7 @@ impl Config {
                 // when doing so would lose roots, network, or tmp settings.
                 None
             } else {
-                let active_permission_profile = if !requested_additional_writable_roots.is_empty()
-                    && matches!(permission_profile, PermissionProfile::Managed { .. })
-                {
-                    ActivePermissionProfile::new(default_permissions).with_modifications(
-                        requested_additional_writable_roots
-                            .iter()
-                            .cloned()
-                            .map(|path| {
-                                ActivePermissionProfileModification::AdditionalWritableRoot { path }
-                            })
-                            .collect(),
-                    )
-                } else {
-                    ActivePermissionProfile::new(default_permissions)
-                };
-                Some(active_permission_profile)
+                Some(ActivePermissionProfile::new(default_permissions))
             };
             (
                 configured_network_proxy_config,
@@ -2516,25 +2577,25 @@ impl Config {
             }
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            // `additional_writable_roots` is a legacy workspace-write knob. It
-            // only applies when the derived managed profile has workspace-style
-            // write access to the project roots; read-only, disabled, external,
-            // and future non-workspace profiles must not silently grow extra
-            // write access.
+            // Internal writable roots only apply when the derived managed
+            // profile has workspace-style write access to the project roots;
+            // read-only, disabled, external, and future non-workspace profiles
+            // must not silently grow extra write access.
+            let materialized_file_system_sandbox_policy = permission_profile
+                .materialize_project_roots_with_workspace_roots(&workspace_roots)
+                .file_system_sandbox_policy();
             if matches!(permission_profile.enforcement(), SandboxEnforcement::Managed)
-                && file_system_sandbox_policy.can_write_path_with_cwd(
+                && materialized_file_system_sandbox_policy.can_write_path_with_cwd(
                     resolved_cwd.as_path(),
                     resolved_cwd.as_path(),
                 )
-                && !file_system_sandbox_policy.has_full_disk_write_access()
+                && !materialized_file_system_sandbox_policy.has_full_disk_write_access()
             {
-                // Keep legacy behavior for extra writable roots while storing
-                // the result as the canonical permission profile. Explicit
-                // extra roots are concrete paths, so their metadata carveouts
-                // are also concrete rather than symbolic `:project_roots`
-                // entries.
+                // Keep Codex runtime write access while storing the result as
+                // the canonical permission profile. Workspace roots themselves
+                // are held separately on the thread.
                 file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
+                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
                 permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
                     permission_profile.enforcement(),
                     &file_system_sandbox_policy,
@@ -3032,6 +3093,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
+            workspace_roots,
             startup_warnings,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
@@ -3323,7 +3385,7 @@ impl Config {
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
         !matches!(
-            self.permissions.permission_profile.get(),
+            self.permissions.permission_profile_ref(),
             PermissionProfile::Disabled
         ) && self
             .config_layer_stack
