@@ -1131,7 +1131,6 @@ impl Config {
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_path_override: self.apps_mcp_path_override.clone(),
-            new_apps_mcp_enabled: self.features.enabled(Feature::NewAppsMcp),
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
@@ -2616,6 +2615,7 @@ impl Config {
                 .and_then(|config| config.path.as_ref())
                 .or_else(|| base.and_then(|config| config.path.as_ref()))
                 .cloned()
+                .or_else(|| Some("/ps/mcp".to_string()))
         } else {
             None
         };

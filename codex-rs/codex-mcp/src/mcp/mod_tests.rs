@@ -18,7 +18,6 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         apps_mcp_path_override: None,
-        new_apps_mcp_enabled: false,
         codex_home,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         mcp_oauth_callback_port: None,
@@ -202,29 +201,6 @@ fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
     assert_eq!(
         codex_apps_mcp_url(&config),
         "https://chatgpt.com/backend-api/wham/apps"
-    );
-}
-
-#[test]
-fn codex_apps_mcp_url_uses_plugin_service_path_when_new_apps_mcp_is_enabled() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    config.new_apps_mcp_enabled = true;
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        "https://chatgpt.com/backend-api/ps/mcp"
-    );
-}
-
-#[test]
-fn codex_apps_mcp_url_prefers_path_override_over_new_apps_mcp() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp"));
-    config.apps_mcp_path_override = Some("/custom/mcp".to_string());
-    config.new_apps_mcp_enabled = true;
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        "https://chatgpt.com/backend-api/custom/mcp"
     );
 }
 

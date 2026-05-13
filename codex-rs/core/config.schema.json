@@ -490,9 +490,6 @@
             "network_proxy": {
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
-            "new_apps_mcp": {
-              "type": "boolean"
-            },
             "personality": {
               "type": "boolean"
             },
@@ -4172,9 +4169,6 @@
         },
         "network_proxy": {
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
-        },
-        "new_apps_mcp": {
-          "type": "boolean"
         },
         "personality": {
           "type": "boolean"
