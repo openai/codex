@@ -83,8 +83,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
         .await?;
     assert_eq!(response.result, serde_json::json!({}));
 
-    wait_for_file(&probe_file).await?;
-    assert_eq!(std::fs::read_to_string(&probe_file)?, "process");
+    wait_for_file_contents(&probe_file, "process").await?;
     std::fs::write(&release_file, "release")?;
 
     let exited = read_process_exited(&mut mcp).await?;
@@ -239,9 +238,9 @@ async fn read_process_exited(mcp: &mut McpProcess) -> Result<ProcessExitedNotifi
     serde_json::from_value(params).context("deserialize process/exited notification")
 }
 
-async fn wait_for_file(path: &Path) -> Result<()> {
+async fn wait_for_file_contents(path: &Path, expected: &str) -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, async {
-        while !path.exists() {
+        while std::fs::read_to_string(path).ok().as_deref() != Some(expected) {
             sleep(Duration::from_millis(20)).await;
         }
     })

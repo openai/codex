@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -501,13 +502,13 @@ impl MessageProcessor {
         self.account_processor.clear_external_auth();
     }
 
-    pub(crate) async fn process_request(
-        self: &Arc<Self>,
+    pub(crate) fn process_request<'a>(
+        self: &'a Arc<Self>,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
-        transport: &AppServerTransport,
+        transport: &'a AppServerTransport,
         session: Arc<ConnectionSessionState>,
-    ) {
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         let request_method = request.method.as_str();
         tracing::trace!(
             ?connection_id,
@@ -525,52 +526,55 @@ impl MessageProcessor {
             tracestate: trace.tracestate.clone(),
         });
         let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
-        Self::run_request_with_context(
-            Arc::clone(&self.outgoing),
-            request_context.clone(),
-            async {
-                let codex_request = serde_json::to_value(&request)
-                    .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    .and_then(|request_json| {
-                        serde_json::from_value::<ClientRequest>(request_json)
-                            .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    });
-                let result = match codex_request {
-                    Ok(codex_request) => {
-                        // Websocket callers finalize outbound readiness in lib.rs after mirroring
-                        // session state into outbound state and sending initialize notifications to
-                        // this specific connection. Passing `None` avoids marking the connection
-                        // ready too early from inside the shared request handler.
-                        self.handle_client_request(
-                            request_id.clone(),
-                            codex_request,
-                            Arc::clone(&session),
-                            /*outbound_initialized*/ None,
-                            request_context.clone(),
-                        )
-                        .await
+        Box::pin(async move {
+            Self::run_request_with_context(
+                Arc::clone(&self.outgoing),
+                request_context.clone(),
+                async move {
+                    let codex_request = serde_json::to_value(&request)
+                        .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+                        .and_then(|request_json| {
+                            serde_json::from_value::<ClientRequest>(request_json)
+                                .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+                        });
+                    let result = match codex_request {
+                        Ok(codex_request) => {
+                            // Websocket callers finalize outbound readiness in lib.rs after
+                            // mirroring session state into outbound state and sending initialize
+                            // notifications to this specific connection. Passing `None` avoids
+                            // marking the connection ready too early from inside the shared
+                            // request handler.
+                            self.handle_client_request(
+                                request_id.clone(),
+                                codex_request,
+                                Arc::clone(&session),
+                                /*outbound_initialized*/ None,
+                                request_context.clone(),
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = result {
+                        self.outgoing.send_error(request_id.clone(), error).await;
                     }
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    self.outgoing.send_error(request_id.clone(), error).await;
-                }
-            },
-        )
-        .await;
+                },
+            )
+            .await;
+        })
     }
 
     /// Handles a typed request path used by in-process embedders.
     ///
     /// This bypasses JSON request deserialization but keeps identical request
     /// semantics by delegating to `handle_client_request`.
-    pub(crate) async fn process_client_request(
-        self: &Arc<Self>,
+    pub(crate) fn process_client_request<'a>(
+        self: &'a Arc<Self>,
         connection_id: ConnectionId,
         request: ClientRequest,
         session: Arc<ConnectionSessionState>,
-        outbound_initialized: &AtomicBool,
-    ) {
+        outbound_initialized: &'a AtomicBool,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id().clone(),
@@ -584,28 +588,30 @@ impl MessageProcessor {
             request_id = ?request_id.request_id,
             "app-server typed request"
         );
-        Self::run_request_with_context(
-            Arc::clone(&self.outgoing),
-            request_context.clone(),
-            async {
-                // In-process clients do not have the websocket transport loop that performs
-                // post-initialize bookkeeping, so they still finalize outbound readiness in
-                // the shared request handler.
-                let result = self
-                    .handle_client_request(
-                        request_id.clone(),
-                        request,
-                        Arc::clone(&session),
-                        Some(outbound_initialized),
-                        request_context.clone(),
-                    )
-                    .await;
-                if let Err(error) = result {
-                    self.outgoing.send_error(request_id.clone(), error).await;
-                }
-            },
-        )
-        .await;
+        Box::pin(async move {
+            Self::run_request_with_context(
+                Arc::clone(&self.outgoing),
+                request_context.clone(),
+                async {
+                    // In-process clients do not have the websocket transport loop that performs
+                    // post-initialize bookkeeping, so they still finalize outbound readiness in
+                    // the shared request handler.
+                    let result = self
+                        .handle_client_request(
+                            request_id.clone(),
+                            request,
+                            Arc::clone(&session),
+                            Some(outbound_initialized),
+                            request_context.clone(),
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        self.outgoing.send_error(request_id.clone(), error).await;
+                    }
+                },
+            )
+            .await;
+        })
     }
 
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
