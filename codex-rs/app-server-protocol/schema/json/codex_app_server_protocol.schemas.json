@@ -7546,6 +7546,12 @@
               "null"
             ]
           },
+          "allowPluginSharing": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowedApprovalPolicies": {
             "items": {
               "$ref": "#/definitions/v2/AskForApproval"

@@ -324,11 +324,18 @@ async fn plugin_share_save_rejects_listed_discoverability() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_share_save_rejects_when_plugin_sharing_disabled() -> Result<()> {
+async fn plugin_share_save_rejects_when_plugin_sharing_disallowed_by_requirements() -> Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = TempDir::new()?;
     let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/requirements"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "contents": "allow_plugin_sharing = false\n",
+        })))
+        .mount(&server)
+        .await;
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -338,7 +345,6 @@ chatgpt_base_url = "{}/backend-api"
 [features]
 plugins = true
 remote_plugin = true
-plugin_sharing = false
 "#,
             server.uri()
         ),
@@ -347,6 +353,7 @@ plugin_sharing = false
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token")
             .account_id("account-123")
+            .plan_type("business")
             .chatgpt_user_id("user-123")
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
@@ -376,7 +383,14 @@ plugin_sharing = false
             .received_requests()
             .await
             .expect("wiremock should record requests")
-            .is_empty()
+            .iter()
+            .all(|request| {
+                !(request.method == "POST"
+                    && request
+                        .url
+                        .path()
+                        .starts_with("/backend-api/public/plugins/workspace"))
+            })
     );
     Ok(())
 }

@@ -3935,6 +3935,12 @@
             "null"
           ]
         },
+        "allowPluginSharing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"

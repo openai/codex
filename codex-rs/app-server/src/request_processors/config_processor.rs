@@ -430,6 +430,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
+        allow_plugin_sharing: requirements.allow_plugin_sharing,
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -623,10 +624,12 @@ mod tests {
     fn requirements_api_includes_allow_managed_hooks_only() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             allow_managed_hooks_only: Some(true),
+            allow_plugin_sharing: Some(false),
             ..ConfigRequirementsToml::default()
         });
 
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.allow_plugin_sharing, Some(false));
         assert_eq!(mapped.hooks, None);
     }
 }

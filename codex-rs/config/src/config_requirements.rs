@@ -88,6 +88,7 @@ pub struct ConfigRequirements {
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_plugin_sharing: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -122,6 +123,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             allow_managed_hooks_only: None,
+            allow_plugin_sharing: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
@@ -141,6 +143,13 @@ impl Default for ConfigRequirements {
 impl ConfigRequirements {
     pub fn exec_policy_source(&self) -> Option<&RequirementSource> {
         self.exec_policy.as_ref().map(|policy| &policy.source)
+    }
+
+    pub fn allow_plugin_sharing(&self) -> bool {
+        self.allow_plugin_sharing
+            .as_ref()
+            .map(|sourced| sourced.value)
+            .unwrap_or(true)
     }
 }
 
@@ -691,6 +700,7 @@ pub struct ConfigRequirementsToml {
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub allow_plugin_sharing: Option<bool>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -740,6 +750,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_plugin_sharing: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -777,6 +788,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
+            allow_plugin_sharing: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -807,6 +819,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
+                allow_plugin_sharing,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -835,6 +848,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_plugin_sharing,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -853,6 +867,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
+            allow_plugin_sharing: allow_plugin_sharing.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -937,6 +952,7 @@ impl ConfigRequirementsToml {
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
+            && self.allow_plugin_sharing.is_none()
             && self
                 .feature_requirements
                 .as_ref()
@@ -975,6 +991,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_plugin_sharing,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1211,6 +1228,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permission_profile,
             web_search_mode,
             allow_managed_hooks_only,
+            allow_plugin_sharing,
             feature_requirements,
             managed_hooks,
             mcp_servers,
@@ -1284,6 +1302,7 @@ mod tests {
             remote_sandbox_config: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_plugin_sharing,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1305,6 +1324,8 @@ mod tests {
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_managed_hooks_only: allow_managed_hooks_only
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_plugin_sharing: allow_plugin_sharing
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1349,6 +1370,34 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_allow_plugin_sharing() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_plugin_sharing = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_plugin_sharing, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allow_plugin_sharing_defaults_to_allowed() -> Result<()> {
+        let requirements: ConfigRequirements =
+            with_unknown_source(ConfigRequirementsToml::default()).try_into()?;
+        assert!(requirements.allow_plugin_sharing());
+
+        let requirements: ConfigRequirements = with_unknown_source(ConfigRequirementsToml {
+            allow_plugin_sharing: Some(false),
+            ..Default::default()
+        })
+        .try_into()?;
+        assert!(!requirements.allow_plugin_sharing());
+        Ok(())
+    }
+
+    #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -1380,6 +1429,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
+            allow_plugin_sharing: Some(false),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1412,6 +1462,10 @@ mod tests {
                 )),
                 allow_managed_hooks_only: Some(Sourced::new(
                     /*value*/ true,
+                    enforce_source.clone(),
+                )),
+                allow_plugin_sharing: Some(Sourced::new(
+                    /*value*/ false,
                     enforce_source.clone(),
                 )),
                 feature_requirements: Some(Sourced::new(
@@ -1457,6 +1511,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
+                allow_plugin_sharing: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1505,6 +1560,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
+                allow_plugin_sharing: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,

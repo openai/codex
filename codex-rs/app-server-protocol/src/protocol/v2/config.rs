@@ -358,6 +358,7 @@ pub struct ConfigRequirements {
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub allow_plugin_sharing: Option<bool>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,

@@ -2126,6 +2126,7 @@ impl Config {
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
+            allow_plugin_sharing: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,

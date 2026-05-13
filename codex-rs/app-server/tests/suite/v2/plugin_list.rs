@@ -24,6 +24,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -1898,9 +1899,16 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_list_omits_shared_with_me_kind_when_plugin_sharing_disabled() -> Result<()> {
+async fn plugin_list_omits_shared_with_me_when_sharing_disallowed_by_requirements() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/requirements"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "contents": "allow_plugin_sharing = false\n",
+        })))
+        .mount(&server)
+        .await;
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -1908,7 +1916,6 @@ async fn plugin_list_omits_shared_with_me_kind_when_plugin_sharing_disabled() ->
 
 [features]
 plugins = true
-plugin_sharing = false
 "#,
             server.uri()
         ),
@@ -1917,6 +1924,7 @@ plugin_sharing = false
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token")
             .account_id("account-123")
+            .plan_type("business")
             .chatgpt_user_id("user-123")
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,

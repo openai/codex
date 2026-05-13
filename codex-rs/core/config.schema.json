@@ -496,9 +496,6 @@
             "plugin_hooks": {
               "type": "boolean"
             },
-            "plugin_sharing": {
-              "type": "boolean"
-            },
             "plugins": {
               "type": "boolean"
             },
@@ -4174,9 +4171,6 @@
           "type": "boolean"
         },
         "plugin_hooks": {
-          "type": "boolean"
-        },
-        "plugin_sharing": {
           "type": "boolean"
         },
         "plugins": {

@@ -122,6 +122,7 @@ fn requirements_with_managed_hooks_only(
                 allow_managed_hooks_only,
                 RequirementSource::CloudRequirements,
             )),
+            allow_plugin_sharing: None,
             managed_hooks: managed_hooks.clone().map(|hooks| {
                 ConstrainedWithSource::new(
                     Constrained::allow_any(hooks),
@@ -132,6 +133,7 @@ fn requirements_with_managed_hooks_only(
         },
         ConfigRequirementsToml {
             allow_managed_hooks_only: Some(allow_managed_hooks_only),
+            allow_plugin_sharing: None,
             hooks: managed_hooks,
             ..ConfigRequirementsToml::default()
         },
