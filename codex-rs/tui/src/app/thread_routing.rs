@@ -603,6 +603,7 @@ impl App {
                             approvals_reviewer,
                             permission_profile.clone(),
                             active_permission_profile,
+                            config.workspace_roots.clone(),
                             model.to_string(),
                             *effort,
                             *summary,
