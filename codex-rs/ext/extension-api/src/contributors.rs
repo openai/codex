@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::ExtensionData;
 
@@ -64,6 +66,24 @@ pub trait TurnLifecycleContributor: Send + Sync {
 
     /// Called after the host aborts a running turn.
     fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+}
+
+/// Contributor for token usage checkpoints reported by the model provider.
+///
+/// Implementations should keep this callback cheap. The host calls it after
+/// updating cached token usage and before emitting the corresponding client
+/// token-count notification.
+pub trait TokenUsageContributor: Send + Sync {
+    /// Called each time the host records token usage from a model response.
+    fn on_token_usage(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+        _thread_id: ThreadId,
+        _turn_id: &str,
+        _token_usage: &TokenUsageInfo,
+    ) {
+    }
 }
 
 /// Extension contribution that exposes native tools owned by a feature.

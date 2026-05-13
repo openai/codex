@@ -2858,8 +2858,23 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         if let Some(token_usage) = token_usage {
-            let mut state = self.state.lock().await;
-            state.update_token_info_from_usage(token_usage, turn_context.model_context_window());
+            let token_info = {
+                let mut state = self.state.lock().await;
+                state
+                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state.token_info()
+            };
+            if let Some(token_info) = token_info.as_ref() {
+                for contributor in self.services.extensions.token_usage_contributors() {
+                    contributor.on_token_usage(
+                        &self.services.session_extension_data,
+                        &self.services.thread_extension_data,
+                        self.conversation_id,
+                        &turn_context.sub_id,
+                        token_info,
+                    );
+                }
+            }
         }
     }
 

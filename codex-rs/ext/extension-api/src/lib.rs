@@ -25,6 +25,7 @@ pub use contributors::ThreadLifecycleContributor;
 pub use contributors::ThreadResumeInput;
 pub use contributors::ThreadStartInput;
 pub use contributors::ThreadStopInput;
+pub use contributors::TokenUsageContributor;
 pub use contributors::ToolContributor;
 pub use contributors::TurnAbortInput;
 pub use contributors::TurnItemContributionFuture;
