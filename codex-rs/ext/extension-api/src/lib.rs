@@ -15,6 +15,7 @@ pub use codex_tools::ToolSpec;
 pub use codex_tools::parse_tool_input_schema;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::ApprovalReviewFuture;
+pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;
 pub use contributors::ExtensionToolExecutor;
 pub use contributors::ExtensionToolFuture;

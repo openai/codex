@@ -68,6 +68,23 @@ pub trait TurnLifecycleContributor: Send + Sync {
     fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
 }
 
+/// Contributor for host-owned configuration changes.
+///
+/// Implementations should treat the supplied values as immutable before/after
+/// snapshots of the effective thread configuration.
+pub trait ConfigContributor<C>: Send + Sync {
+    /// Called after the host commits a changed thread configuration.
+    fn on_config_changed(
+        &self,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+        _thread_id: ThreadId,
+        _previous_config: &C,
+        _new_config: &C,
+    ) {
+    }
+}
+
 /// Contributor for token usage checkpoints reported by the model provider.
 ///
 /// Implementations should keep this callback cheap. The host calls it after

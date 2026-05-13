@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::ApprovalReviewContributor;
 use crate::ApprovalReviewFuture;
+use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ThreadLifecycleContributor;
@@ -14,6 +15,7 @@ use crate::TurnLifecycleContributor;
 pub struct ExtensionRegistryBuilder<C> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
+    config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
@@ -26,6 +28,7 @@ impl<C> Default for ExtensionRegistryBuilder<C> {
         Self {
             thread_lifecycle_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
+            config_contributors: Vec::new(),
             token_usage_contributors: Vec::new(),
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
@@ -59,6 +62,11 @@ impl<C> ExtensionRegistryBuilder<C> {
         self.turn_lifecycle_contributors.push(contributor);
     }
 
+    /// Registers one config contributor.
+    pub fn config_contributor(&mut self, contributor: Arc<dyn ConfigContributor<C>>) {
+        self.config_contributors.push(contributor);
+    }
+
     /// Registers one token-usage contributor.
     pub fn token_usage_contributor(&mut self, contributor: Arc<dyn TokenUsageContributor>) {
         self.token_usage_contributors.push(contributor);
@@ -84,6 +92,7 @@ impl<C> ExtensionRegistryBuilder<C> {
         ExtensionRegistry {
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
+            config_contributors: self.config_contributors,
             token_usage_contributors: self.token_usage_contributors,
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
@@ -97,6 +106,7 @@ impl<C> ExtensionRegistryBuilder<C> {
 pub struct ExtensionRegistry<C> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
+    config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
@@ -113,6 +123,11 @@ impl<C> ExtensionRegistry<C> {
     /// Returns the registered turn-lifecycle contributors.
     pub fn turn_lifecycle_contributors(&self) -> &[Arc<dyn TurnLifecycleContributor>] {
         &self.turn_lifecycle_contributors
+    }
+
+    /// Returns the registered config contributors.
+    pub fn config_contributors(&self) -> &[Arc<dyn ConfigContributor<C>>] {
+        &self.config_contributors
     }
 
     /// Returns the registered token-usage contributors.

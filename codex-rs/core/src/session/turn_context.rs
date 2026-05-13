@@ -436,6 +436,18 @@ impl Session {
         per_turn_config
     }
 
+    pub(crate) fn build_effective_session_config(
+        session_configuration: &SessionConfiguration,
+    ) -> Config {
+        let mut config =
+            Self::build_per_turn_config(session_configuration, session_configuration.cwd.clone());
+        config.model = Some(session_configuration.collaboration_mode.model().to_string());
+        config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        config.permissions.active_permission_profile =
+            session_configuration.active_permission_profile.clone();
+        config
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_turn_context(
         thread_id: ThreadId,
@@ -584,6 +596,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
@@ -608,6 +621,11 @@ impl Session {
                         previous_permission_profile != next_permission_profile;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
+                    let previous_config = notify_config_contributors.then(|| {
+                        Self::build_effective_session_config(&state.session_configuration)
+                    });
+                    let new_config = notify_config_contributors
+                        .then(|| Self::build_effective_session_config(&next));
                     state.session_configuration = next.clone();
                     Ok((
                         next,
@@ -616,6 +634,8 @@ impl Session {
                         previous_cwd,
                         codex_home,
                         session_source,
+                        previous_config,
+                        new_config,
                     ))
                 }
                 Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
@@ -629,6 +649,8 @@ impl Session {
             previous_cwd,
             codex_home,
             session_source,
+            previous_config,
+            new_config,
         ) = match update_result {
             Ok(update) => update,
             Err(err) => {
@@ -656,6 +678,7 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
+        self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
 
         Ok(self
             .new_turn_from_configuration(

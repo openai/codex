@@ -1913,6 +1913,138 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 }
 
 #[tokio::test]
+async fn config_change_contributor_observes_effective_config_changes() {
+    struct SessionConfigMarker;
+    struct ThreadConfigMarker;
+
+    #[derive(Debug, PartialEq)]
+    struct RecordedConfigChange {
+        thread_id: ThreadId,
+        previous_model: Option<String>,
+        new_model: Option<String>,
+        previous_disabled_tools: Vec<ToolSuggestDisabledTool>,
+        new_disabled_tools: Vec<ToolSuggestDisabledTool>,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct ConfigRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedConfigChange>>>,
+    }
+
+    impl codex_extension_api::ConfigContributor<crate::config::Config> for ConfigRecorder {
+        fn on_config_changed(
+            &self,
+            session_store: &codex_extension_api::ExtensionData,
+            thread_store: &codex_extension_api::ExtensionData,
+            thread_id: ThreadId,
+            previous_config: &crate::config::Config,
+            new_config: &crate::config::Config,
+        ) {
+            self.records
+                .lock()
+                .expect("config change records lock")
+                .push(RecordedConfigChange {
+                    thread_id,
+                    previous_model: previous_config.model.clone(),
+                    new_model: new_config.model.clone(),
+                    previous_disabled_tools: previous_config.tool_suggest.disabled_tools.clone(),
+                    new_disabled_tools: new_config.tool_suggest.disabled_tools.clone(),
+                    saw_session_store: session_store.get::<SessionConfigMarker>().is_some(),
+                    saw_thread_store: thread_store.get::<ThreadConfigMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.config_contributor(Arc::new(ConfigRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionConfigMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadConfigMarker);
+
+    let original_model = session.collaboration_mode().await.model().to_string();
+    let original_disabled_tools = session
+        .get_config()
+        .await
+        .tool_suggest
+        .disabled_tools
+        .clone();
+    let next_model = if original_model == "gpt-5.4" {
+        "gpt-5.2"
+    } else {
+        "gpt-5.4"
+    };
+    let collaboration_mode = session.collaboration_mode().await.with_updates(
+        Some(next_model.to_string()),
+        /*effort*/ None,
+        /*developer_instructions*/ None,
+    );
+    session
+        .update_settings(SessionSettingsUpdate {
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await
+        .expect("update settings");
+
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " calendar " },
+  { type = "plugin", id = "slack@openai-curated" },
+]
+"#,
+    )
+    .expect("write user config");
+    let next_config = load_latest_config_for_session(&session).await;
+    session.refresh_runtime_config(next_config).await;
+
+    let expected_disabled_tools = vec![
+        ToolSuggestDisabledTool::connector("calendar"),
+        ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+    ];
+    let expected = vec![
+        RecordedConfigChange {
+            thread_id: session.conversation_id,
+            previous_model: Some(original_model),
+            new_model: Some(next_model.to_string()),
+            previous_disabled_tools: original_disabled_tools.clone(),
+            new_disabled_tools: original_disabled_tools.clone(),
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+        RecordedConfigChange {
+            thread_id: session.conversation_id,
+            previous_model: Some(next_model.to_string()),
+            new_model: Some(next_model.to_string()),
+            previous_disabled_tools: original_disabled_tools,
+            new_disabled_tools: expected_disabled_tools,
+            saw_session_store: true,
+            saw_thread_store: true,
+        },
+    ];
+    let actual = records
+        .lock()
+        .expect("config change records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, actual);
+}
+
+#[tokio::test]
 async fn record_initial_history_reconstructs_forked_transcript() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
