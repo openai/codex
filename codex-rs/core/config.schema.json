@@ -2344,7 +2344,7 @@
     },
     "ShellEnvironmentPolicyToml": {
       "additionalProperties": false,
-      "description": "Policy for building the `env` when spawning a process via either the `shell` or `local_shell` tool.",
+      "description": "Policy for building the `env` when spawning a process via shell-like tools.",
       "properties": {
         "exclude": {
           "description": "List of regular expressions.",

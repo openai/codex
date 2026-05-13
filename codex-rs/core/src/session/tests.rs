@@ -4,7 +4,6 @@ use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
-use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
@@ -69,7 +68,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::ExecCommandHandler;
-use crate::tools::handlers::ShellHandler;
+use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::UpdateGoalHandler;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
@@ -8339,7 +8338,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
     sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
         turn_context: tc.as_ref(),
-        tool_name: "shell",
+        tool_name: "shell_command",
     })
     .await?;
 
@@ -8575,7 +8574,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     .await;
     sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
         turn_context: tc.as_ref(),
-        tool_name: "shell",
+        tool_name: "shell_command",
     })
     .await?;
 
@@ -9006,7 +9005,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         id: None,
         status: None,
         call_id: "call-1".to_string(),
-        name: "shell".to_string(),
+        name: "shell_command".to_string(),
         input: "{}".to_string(),
     };
 
@@ -9029,7 +9028,10 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
 
     match err {
         FunctionCallError::Fatal(message) => {
-            assert_eq!(message, "tool shell invoked with incompatible payload");
+            assert_eq!(
+                message,
+                "tool shell_command invoked with incompatible payload"
+            );
         }
         other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
     }
@@ -9375,13 +9377,12 @@ async fn update_goal_tool_marks_goal_complete() {
 
 #[tokio::test]
 async fn rejects_escalated_permissions_when_policy_not_on_request() {
-    use crate::exec::ExecParams;
     use crate::exec_policy::ExecApprovalRequest;
     use crate::sandboxing::SandboxPermissions;
     use crate::tools::sandboxing::ExecApprovalRequirement;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::protocol::AskForApproval;
-    use std::collections::HashMap;
+    use codex_tools::ShellCommandBackendConfig;
 
     let (session, mut turn_context_raw) = make_session_and_context().await;
     // Ensure policy is NOT OnRequest so the early rejection path triggers
@@ -9392,44 +9393,16 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let session = Arc::new(session);
     let mut turn_context = Arc::new(turn_context_raw);
 
+    let command_script = "echo hi";
     let timeout_ms = 1000;
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
-    let params = ExecParams {
-        command: if cfg!(windows) {
-            vec![
-                "cmd.exe".to_string(),
-                "/C".to_string(),
-                "echo hi".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ]
-        },
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.clone(),
-        expiration: timeout_ms.into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
-        env: HashMap::new(),
-        network: None,
-        sandbox_permissions,
-        windows_sandbox_level: turn_context.windows_sandbox_level,
-        windows_sandbox_private_desktop: turn_context
-            .config
-            .permissions
-            .windows_sandbox_private_desktop,
-        justification: Some("test".to_string()),
-        arg0: None,
-    };
 
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let tool_name = "shell";
+    let tool_name = "shell_command";
     let call_id = "test-call".to_string();
 
-    let handler = ShellHandler::default();
+    let handler = ShellCommandHandler::from(ShellCommandBackendConfig::Classic);
     #[allow(deprecated)]
     let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
@@ -9443,11 +9416,11 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
-                    "command": params.command.clone(),
+                    "command": command_script,
                     "workdir": workdir,
-                    "timeout_ms": params.expiration.timeout_ms(),
-                    "sandbox_permissions": params.sandbox_permissions,
-                    "justification": params.justification.clone(),
+                    "timeout_ms": timeout_ms,
+                    "sandbox_permissions": sandbox_permissions,
+                    "justification": Some("test"),
                 })
                 .to_string(),
             },
@@ -9473,11 +9446,14 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
     let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
+    let command = session
+        .user_shell()
+        .derive_exec_args(command_script, turn_context.tools_config.allow_login_shell);
     let exec_approval_requirement = session
         .services
         .exec_policy
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-            command: &params.command,
+            command: &command,
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
             file_system_sandbox_policy: &file_system_sandbox_policy,

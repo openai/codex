@@ -2135,47 +2135,24 @@ async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> 
 
 #[derive(Clone, Copy)]
 enum BashRewriteSurface {
-    ContainerExec,
     ExecCommand,
-    LocalShell,
-    Shell,
     ShellCommand,
 }
 
 impl BashRewriteSurface {
     fn slug(self) -> &'static str {
         match self {
-            BashRewriteSurface::ContainerExec => "container-exec",
             BashRewriteSurface::ExecCommand => "exec-command",
-            BashRewriteSurface::LocalShell => "local-shell",
-            BashRewriteSurface::Shell => "shell",
             BashRewriteSurface::ShellCommand => "shell-command",
         }
     }
 
-    fn tool_call(self, call_id: &str, command: &[String], command_text: &str) -> Result<Value> {
+    fn tool_call(self, call_id: &str, command_text: &str) -> Result<Value> {
         match self {
-            BashRewriteSurface::ContainerExec => Ok(ev_function_call(
-                call_id,
-                "container.exec",
-                &serde_json::to_string(&serde_json::json!({ "command": command }))?,
-            )),
             BashRewriteSurface::ExecCommand => Ok(ev_function_call(
                 call_id,
                 "exec_command",
                 &serde_json::to_string(&serde_json::json!({ "cmd": command_text }))?,
-            )),
-            BashRewriteSurface::LocalShell => {
-                Ok(core_test_support::responses::ev_local_shell_call(
-                    call_id,
-                    "completed",
-                    command.iter().map(String::as_str).collect(),
-                ))
-            }
-            BashRewriteSurface::Shell => Ok(ev_function_call(
-                call_id,
-                "shell",
-                &serde_json::to_string(&serde_json::json!({ "command": command }))?,
             )),
             BashRewriteSurface::ShellCommand => Ok(ev_function_call(
                 call_id,
@@ -2185,33 +2162,19 @@ impl BashRewriteSurface {
         }
     }
 
-    fn original_command(self, marker: &Path) -> (Vec<String>, String) {
-        let command_text = format!("printf original > {}", marker.display());
+    fn original_command(self, marker: &Path) -> String {
         match self {
-            BashRewriteSurface::ContainerExec
-            | BashRewriteSurface::LocalShell
-            | BashRewriteSurface::Shell => {
-                let command = vec!["/bin/sh".to_string(), "-c".to_string(), command_text];
-                let command_text = codex_shell_command::parse_command::shlex_join(&command);
-                (command, command_text)
-            }
             BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
-                (Vec::new(), command_text)
+                format!("printf original > {}", marker.display())
             }
         }
     }
 
     fn rewritten_command(self, marker: &Path) -> String {
-        let command_text = format!("printf rewritten > {}", marker.display());
         match self {
-            BashRewriteSurface::ContainerExec
-            | BashRewriteSurface::LocalShell
-            | BashRewriteSurface::Shell => codex_shell_command::parse_command::shlex_join(&[
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                command_text,
-            ]),
-            BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => command_text,
+            BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
+                format!("printf rewritten > {}", marker.display())
+            }
         }
     }
 
@@ -2234,14 +2197,14 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
     let call_id = format!("pretooluse-{slug}-rewrite");
     let original_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-original-marker"));
     let rewritten_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-rewritten-marker"));
-    let (tool_command, original_command) = surface.original_command(&original_marker);
+    let original_command = surface.original_command(&original_marker);
     let rewritten_command = surface.rewritten_command(&rewritten_marker);
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                surface.tool_call(&call_id, &tool_command, &original_command)?,
+                surface.tool_call(&call_id, &original_command)?,
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -2293,21 +2256,6 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
     assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
 
     Ok(())
-}
-
-#[tokio::test]
-async fn pre_tool_use_rewrites_shell_before_execution() -> Result<()> {
-    assert_pre_tool_use_rewrites_bash_surface(BashRewriteSurface::Shell).await
-}
-
-#[tokio::test]
-async fn pre_tool_use_rewrites_container_exec_before_execution() -> Result<()> {
-    assert_pre_tool_use_rewrites_bash_surface(BashRewriteSurface::ContainerExec).await
-}
-
-#[tokio::test]
-async fn pre_tool_use_rewrites_local_shell_before_execution() -> Result<()> {
-    assert_pre_tool_use_rewrites_bash_surface(BashRewriteSurface::LocalShell).await
 }
 
 #[tokio::test]
@@ -2741,95 +2689,6 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     })];
     assert_eq!(expected_hook_inputs, json_hook_inputs);
     assert_eq!(expected_hook_inputs, toml_hook_inputs);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "pretooluse-local-shell";
-    let marker = std::env::temp_dir().join("pretooluse-local-shell-marker");
-    let command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        format!("printf blocked > {}", marker.display()),
-    ];
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_local_shell_call(
-                    call_id,
-                    "completed",
-                    command.iter().map(String::as_str).collect(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "local shell blocked"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", "blocked local shell")
-            {
-                panic!("failed to write pre tool use hook test fixture: {error}");
-            }
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover local shell marker")?;
-    }
-
-    test.submit_turn("run the blocked local shell command")
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("local shell output string");
-    assert!(
-        output.contains("Command blocked by PreToolUse hook: blocked local shell"),
-        "blocked local shell output should surface the hook reason",
-    );
-    assert!(
-        output.contains(&format!(
-            "Command: {}",
-            codex_shell_command::parse_command::shlex_join(&command)
-        )),
-        "blocked local shell output should surface the blocked command",
-    );
-    assert!(
-        !marker.exists(),
-        "blocked local shell command should not execute"
-    );
-
-    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
-    );
-    assert!(
-        hook_inputs[0]["turn_id"]
-            .as_str()
-            .is_some_and(|turn_id| !turn_id.is_empty())
-    );
 
     Ok(())
 }
@@ -3419,75 +3278,6 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("stop-output".to_string())
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "posttooluse-local-shell";
-    let command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "printf local-post-tool-output".to_string(),
-    ];
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_local_shell_call(
-                    call_id,
-                    "completed",
-                    command.iter().map(String::as_str).collect(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "local shell post hook context observed"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let post_context = "Remember the local shell post-tool note.";
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_post_tool_use_hook(home, Some("^Bash$"), "context", post_context)
-            {
-                panic!("failed to write post tool use hook test fixture: {error}");
-            }
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-
-    test.submit_turn("run the local shell command with post hook")
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&post_context.to_string()),
-        "follow-up request should include local shell post tool use additional context",
-    );
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
-    );
-    assert_eq!(
-        hook_inputs[0]["tool_response"],
-        Value::String("local-post-tool-output".to_string()),
     );
 
     Ok(())

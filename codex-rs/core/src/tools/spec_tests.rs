@@ -182,8 +182,8 @@ fn assert_contains_tool_names(tools: &[ToolSpec], expected_subset: &[&str]) {
 
 fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     match config.shell_type {
-        ConfigShellToolType::Default => Some("shell"),
-        ConfigShellToolType::Local => Some("local_shell"),
+        ConfigShellToolType::Default => Some("shell_command"),
+        ConfigShellToolType::Local => Some("shell_command"),
         ConfigShellToolType::UnifiedExec => None,
         ConfigShellToolType::Disabled => None,
         ConfigShellToolType::ShellCommand => Some("shell_command"),

@@ -16,7 +16,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
@@ -200,44 +199,6 @@ fn shell_command_handler_rejects_login_when_disallowed() {
         err.to_string()
             .contains("login shell is disabled by config"),
         "unexpected error: {err}"
-    );
-}
-
-#[tokio::test]
-async fn local_shell_pre_tool_use_payload_uses_joined_command() {
-    let payload = ToolPayload::LocalShell {
-        params: codex_protocol::models::ShellToolCallParams {
-            command: vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "printf hi".to_string(),
-            ],
-            workdir: None,
-            timeout_ms: None,
-            sandbox_permissions: None,
-            additional_permissions: None,
-            prefix_rule: None,
-            justification: None,
-        },
-    };
-    let (session, turn) = make_session_and_context().await;
-    let handler = LocalShellHandler::default();
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&ToolInvocation {
-            session: session.into(),
-            turn: turn.into(),
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
-            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-            call_id: "call-41".to_string(),
-            tool_name: codex_tools::ToolName::plain("local_shell"),
-            source: crate::tools::context::ToolCallSource::Direct,
-            payload,
-        }),
-        Some(crate::tools::registry::PreToolUsePayload {
-            tool_name: HookToolName::bash(),
-            tool_input: json!({ "command": "bash -lc 'printf hi'" }),
-        })
     );
 }
 

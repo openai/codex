@@ -110,7 +110,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         },
     );
 
-    let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
+    let parallel_tool_name = ["exec_command", "shell_command"]
         .into_iter()
         .find(|name| {
             router.tool_supports_parallel(&ToolCall {
@@ -399,7 +399,6 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             ToolSpec::Function(_)
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
-            | ToolSpec::LocalShell {}
             | ToolSpec::ImageGeneration { .. }
             | ToolSpec::WebSearch { .. }
             | ToolSpec::Namespace(_) => None,
