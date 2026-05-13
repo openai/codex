@@ -1557,7 +1557,12 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
 
     tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
     write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
-    write_project_hook_config(&repo_root.join(".codex"), None, "echo repo root hook").await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        /*foo*/ None,
+        "echo repo root hook",
+    )
+    .await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1611,9 +1616,24 @@ async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std
     tokio::fs::create_dir_all(repo_root.join(".git")).await?;
     tokio::fs::create_dir_all(&project_root).await?;
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
-    write_project_hook_config(&repo_root.join(".codex"), None, "echo repo root hook").await?;
-    write_project_hook_config(&project_root.join(".codex"), None, "echo project root hook").await?;
-    write_project_hook_config(&nested.join(".codex"), None, "echo nested hook").await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        /*foo*/ None,
+        "echo repo root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &project_root.join(".codex"),
+        /*foo*/ None,
+        "echo project root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &nested.join(".codex"),
+        /*foo*/ None,
+        "echo nested hook",
+    )
+    .await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
