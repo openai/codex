@@ -3487,6 +3487,39 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn thread_turn_context_update_params_support_partial_updates_and_explicit_nulls() {
+    let params: ThreadTurnContextUpdateParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "model": "gpt-5.2",
+        "serviceTier": null,
+        "effort": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.thread_id, "thread_123");
+    assert_eq!(params.model.as_deref(), Some("gpt-5.2"));
+    assert_eq!(params.service_tier, Some(None));
+    assert_eq!(params.effort, Some(None));
+    assert_eq!(params.cwd, None);
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(serialized.get("effort"), Some(&serde_json::Value::Null));
+    assert_eq!(serialized.get("cwd"), Some(&serde_json::Value::Null));
+
+    let without_overrides = ThreadTurnContextUpdateParams {
+        thread_id: "thread_123".to_string(),
+        ..Default::default()
+    };
+    let serialized_without_overrides =
+        serde_json::to_value(&without_overrides).expect("params should serialize");
+    assert_eq!(serialized_without_overrides.get("serviceTier"), None);
+    assert_eq!(serialized_without_overrides.get("effort"), None);
+}
+
+#[test]
 fn turn_start_params_round_trip_environments() {
     let cwd = test_absolute_path();
     let params: TurnStartParams = serde_json::from_value(json!({

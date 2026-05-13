@@ -102,7 +102,10 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    matches!(notification, ServerNotification::TurnCompleted(_))
+    matches!(
+        notification,
+        ServerNotification::TurnCompleted(_) | ServerNotification::ThreadTurnContextUpdated(_)
+    )
 }
 
 /// Input needed to start an in-process app-server runtime.
@@ -725,11 +728,19 @@ mod tests {
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_app_server_protocol::ThreadTurnContext;
+    use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::TempDir;
@@ -882,6 +893,33 @@ mod tests {
                     started_at: None,
                     completed_at: Some(0),
                     duration_ms: None,
+                },
+            })
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ThreadTurnContextUpdated(ThreadTurnContextUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_context: ThreadTurnContext {
+                    model: "gpt-5".to_string(),
+                    model_provider: "openai".to_string(),
+                    service_tier: None,
+                    cwd: test_path_buf("/tmp/project").abs(),
+                    approval_policy: codex_app_server_protocol::AskForApproval::Never,
+                    approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                    sandbox_policy: codex_app_server_protocol::SandboxPolicy::DangerFullAccess,
+                    permission_profile: PermissionProfile::read_only().into(),
+                    active_permission_profile: None,
+                    effort: None,
+                    summary: None,
+                    personality: None,
+                    collaboration_mode: CollaborationMode {
+                        mode: ModeKind::Default,
+                        settings: Settings {
+                            model: "gpt-5".to_string(),
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    },
                 },
             })
         ));

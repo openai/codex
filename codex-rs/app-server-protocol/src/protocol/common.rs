@@ -732,6 +732,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnStartResponse,
     },
+    ThreadTurnContextUpdate => "thread/turnContext/update" {
+        params: v2::ThreadTurnContextUpdateParams,
+        inspect_params: true,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTurnContextUpdateResponse,
+    },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
         inspect_params: true,
@@ -1432,6 +1438,7 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+    ThreadTurnContextUpdated => "thread/turnContext/updated" (v2::ThreadTurnContextUpdatedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
@@ -1531,6 +1538,9 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
@@ -1550,6 +1560,31 @@ mod tests {
     fn absolute_path(path: &str) -> AbsolutePathBuf {
         let path = format!("/{}", path.trim_start_matches('/'));
         test_path_buf(&path).abs()
+    }
+
+    fn sample_thread_turn_context(cwd: AbsolutePathBuf) -> v2::ThreadTurnContext {
+        v2::ThreadTurnContext {
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd,
+            approval_policy: v2::AskForApproval::OnFailure,
+            approvals_reviewer: v2::ApprovalsReviewer::User,
+            sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
+            permission_profile: v2::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            effort: None,
+            summary: None,
+            personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        }
     }
 
     fn request_id() -> RequestId {
@@ -1584,6 +1619,20 @@ mod tests {
         };
         assert_eq!(
             thread_resume_with_path.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: thread_id.clone()
+            })
+        );
+
+        let thread_turn_context_update = ClientRequest::ThreadTurnContextUpdate {
+            request_id: request_id(),
+            params: v2::ThreadTurnContextUpdateParams {
+                thread_id: thread_id.clone(),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            thread_turn_context_update.serialization_scope(),
             Some(ClientRequestSerializationScope::Thread {
                 thread_id: thread_id.clone()
             })
@@ -2264,6 +2313,40 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_turn_context_update_request() -> Result<()> {
+        let request = ClientRequest::ThreadTurnContextUpdate {
+            request_id: RequestId::Integer(5),
+            params: v2::ThreadTurnContextUpdateParams {
+                thread_id: "thread-1".to_string(),
+                model: Some("gpt-5.2".to_string()),
+                service_tier: Some(None),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/turnContext/update",
+                "id": 5,
+                "params": {
+                    "threadId": "thread-1",
+                    "cwd": null,
+                    "approvalPolicy": null,
+                    "approvalsReviewer": null,
+                    "sandboxPolicy": null,
+                    "permissions": null,
+                    "model": "gpt-5.2",
+                    "serviceTier": null,
+                    "summary": null,
+                    "personality": null,
+                    "collaborationMode": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_client_response() -> Result<()> {
         let cwd = absolute_path("/tmp");
         let response = ClientResponse::ThreadStart {
@@ -2350,6 +2433,72 @@ mod tests {
                 }
             }),
             serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_turn_context_response_and_notification() -> Result<()> {
+        let cwd = absolute_path("/tmp");
+        let turn_context = sample_thread_turn_context(cwd);
+        let response = ClientResponse::ThreadTurnContextUpdate {
+            request_id: RequestId::Integer(11),
+            response: v2::ThreadTurnContextUpdateResponse {
+                turn_context: turn_context.clone(),
+            },
+        };
+        let notification = ServerNotification::ThreadTurnContextUpdated(
+            v2::ThreadTurnContextUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_context,
+            },
+        );
+        let turn_context_json = json!({
+            "model": "gpt-5",
+            "modelProvider": "openai",
+            "serviceTier": null,
+            "cwd": absolute_path_string("tmp"),
+            "approvalPolicy": "on-failure",
+            "approvalsReviewer": "user",
+            "sandboxPolicy": {
+                "type": "dangerFullAccess"
+            },
+            "permissionProfile": {
+                "type": "disabled"
+            },
+            "activePermissionProfile": null,
+            "effort": null,
+            "summary": null,
+            "personality": null,
+            "collaborationMode": {
+                "mode": "default",
+                "settings": {
+                    "model": "gpt-5",
+                    "reasoning_effort": null,
+                    "developer_instructions": null
+                }
+            }
+        });
+
+        assert_eq!(
+            json!({
+                "method": "thread/turnContext/update",
+                "id": 11,
+                "response": {
+                    "turnContext": turn_context_json
+                }
+            }),
+            serde_json::to_value(&response)?,
+        );
+        assert_eq!(
+            json!({
+                "method": "thread/turnContext/updated",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnContext": turn_context_json
+                }
+            }),
+            serde_json::to_value(&notification)?,
         );
         Ok(())
     }
