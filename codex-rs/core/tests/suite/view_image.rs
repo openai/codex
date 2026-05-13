@@ -582,9 +582,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             /*sandbox*/ None,
         )
         .await?;
-    let png = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    )?;
+    let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
     test.fs()
         .write_file(&image_path, png, /*sandbox*/ None)
         .await?;
