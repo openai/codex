@@ -13,8 +13,8 @@ impl HookAdditionalContext {
 
 impl ContextualUserFragment for HookAdditionalContext {
     const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "";
-    const END_MARKER: &'static str = "";
+    const START_MARKER: &'static str = "<hook_context>";
+    const END_MARKER: &'static str = "</hook_context>";
 
     fn body(&self) -> String {
         self.text.clone()

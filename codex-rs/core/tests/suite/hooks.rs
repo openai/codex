@@ -180,6 +180,50 @@ else:
     Ok(())
 }
 
+fn write_parallel_session_start_hooks(home: &Path, contexts: &[&str]) -> Result<()> {
+    let hook_entries = contexts
+        .iter()
+        .enumerate()
+        .map(|(index, context)| {
+            let script_path = home.join(format!("session_start_hook_{index}.py"));
+            let context_json =
+                serde_json::to_string(context).context("serialize session start context")?;
+            let script = format!(
+                r#"import json
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": {context_json}
+    }}
+}}))
+"#
+            );
+            fs::write(&script_path, script).with_context(|| {
+                format!(
+                    "write session start hook script fixture at {}",
+                    script_path.display()
+                )
+            })?;
+            Ok(serde_json::json!({
+                "type": "command",
+                "command": format!("python3 {}", script_path.display()),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": hook_entries,
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_user_prompt_submit_hook(
     home: &Path,
     blocked_prompt: &str,
@@ -1060,6 +1104,56 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
     assert!(developer_message.contains("tokens truncated"));
     let path = spilled_hook_output_path(developer_message).context("spill path")?;
     assert_eq!(fs::read_to_string(path)?, additional_context);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parallel_session_start_additional_contexts_share_one_developer_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "merged hook context observed"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let contexts = ["first tide note", "second tide note"];
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_parallel_session_start_hooks(home, &contexts) {
+                panic!("failed to write parallel session start hook fixtures: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let merged_developer_messages = request
+        .input()
+        .iter()
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .filter(|item| {
+            let joined = item["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|content| content.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            contexts
+                .iter()
+                .all(|context| joined.contains(&format!("<hook_context>{context}</hook_context>")))
+        })
+        .count();
+    assert_eq!(merged_developer_messages, 1);
 
     Ok(())
 }

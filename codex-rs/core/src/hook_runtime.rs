@@ -33,6 +33,7 @@ use serde_json::Value;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
+use crate::context_manager::updates::build_developer_update_item;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -452,11 +453,13 @@ pub(crate) async fn record_additional_contexts(
 }
 
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
-    additional_contexts
+    let sections = additional_contexts
         .into_iter()
         .map(HookAdditionalContext::new)
-        .map(ContextualUserFragment::into)
-        .collect()
+        .map(|context| context.render())
+        .collect();
+
+    build_developer_update_item(sections).into_iter().collect()
 }
 
 async fn emit_hook_started_events(
@@ -616,36 +619,39 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
 
     #[test]
-    fn additional_context_messages_stay_separate_and_ordered() {
+    fn additional_context_messages_merge_and_preserve_order() {
         let messages = additional_context_messages(vec![
             "first tide note".to_string(),
             "second tide note".to_string(),
         ]);
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 1);
         assert_eq!(
             messages
                 .iter()
                 .map(|message| match message {
                     codex_protocol::models::ResponseItem::Message { role, content, .. } => {
-                        let text = content
+                        let texts = content
                             .iter()
                             .map(|item| match item {
-                                ContentItem::InputText { text } => text.as_str(),
+                                ContentItem::InputText { text } => text.clone(),
                                 ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => {
                                     panic!("expected input text content, got {item:?}")
                                 }
                             })
-                            .collect::<String>();
-                        (role.as_str(), text)
+                            .collect::<Vec<_>>();
+                        (role.as_str(), texts)
                     }
                     other => panic!("expected developer message, got {other:?}"),
                 })
                 .collect::<Vec<_>>(),
-            vec![
-                ("developer", "first tide note".to_string()),
-                ("developer", "second tide note".to_string()),
-            ],
+            vec![(
+                "developer",
+                vec![
+                    "<hook_context>first tide note</hook_context>".to_string(),
+                    "<hook_context>second tide note</hook_context>".to_string(),
+                ],
+            )],
         );
     }
 
