@@ -194,18 +194,24 @@ pub struct InProcessClientSender {
 }
 
 impl InProcessClientSender {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub fn request(
+        &self,
+        request: ClientRequest,
+    ) -> impl std::future::Future<Output = IoResult<PendingClientRequestResponse>> + '_ {
         let (response_tx, response_rx) = oneshot::channel();
-        self.try_send_client_message(InProcessClientMessage::Request {
+        let send_result = self.try_send_client_message(InProcessClientMessage::Request {
             request: Box::new(request),
             response_tx,
-        })?;
-        response_rx.await.map_err(|err| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                format!("in-process request response channel closed: {err}"),
-            )
-        })
+        });
+        async move {
+            send_result?;
+            response_rx.await.map_err(|err| {
+                IoError::new(
+                    ErrorKind::BrokenPipe,
+                    format!("in-process request response channel closed: {err}"),
+                )
+            })
+        }
     }
 
     pub fn notify(&self, notification: ClientNotification) -> IoResult<()> {
@@ -266,8 +272,11 @@ impl InProcessClientHandle {
     /// request IDs unique among concurrent requests; reusing an in-flight ID
     /// produces an `INVALID_REQUEST` response and can make request routing
     /// ambiguous in the caller.
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
-        self.client.request(request).await
+    pub fn request(
+        &self,
+        request: ClientRequest,
+    ) -> impl std::future::Future<Output = IoResult<PendingClientRequestResponse>> + '_ {
+        self.client.request(request)
     }
 
     /// Sends a typed client notification into the in-process runtime.
@@ -445,12 +454,12 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 let was_initialized = session.initialized();
                                 processor
                                     .process_client_request(
-                                    IN_PROCESS_CONNECTION_ID,
-                                    *request,
-                                    Arc::clone(&session),
-                                    &outbound_initialized,
-                                )
-                                .await;
+                                        IN_PROCESS_CONNECTION_ID,
+                                        request,
+                                        Arc::clone(&session),
+                                        &outbound_initialized,
+                                    )
+                                    .await;
                                 let opted_out_notification_methods_snapshot =
                                     session.opted_out_notification_methods();
                                 let experimental_api_enabled =
@@ -521,7 +530,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 message = client_rx.recv() => {
                     match message {
                         Some(InProcessClientMessage::Request { request, response_tx }) => {
-                            let request = *request;
                             let request_id = request.id().clone();
                             match pending_request_responses.entry(request_id.clone()) {
                                 Entry::Vacant(entry) => {
@@ -535,7 +543,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 }
                             }
 
-                            match processor_tx.try_send(ProcessorCommand::Request(Box::new(request))) {
+                            match processor_tx.try_send(ProcessorCommand::Request(request)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
                                     if let Some(response_tx) =
