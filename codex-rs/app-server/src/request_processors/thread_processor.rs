@@ -1,5 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::PermissionProfile;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -15,6 +17,95 @@ struct ThreadListFilters {
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
+}
+
+#[derive(Clone)]
+struct PersistedThreadPermissionState {
+    permission_profile: PermissionProfile,
+    active_permission_profile: Option<ActivePermissionProfile>,
+    workspace_roots: Vec<AbsolutePathBuf>,
+}
+
+fn absolute_path_from_history_path(
+    path: &Path,
+    base: Option<&AbsolutePathBuf>,
+) -> Option<AbsolutePathBuf> {
+    if let Ok(path) = AbsolutePathBuf::try_from(path) {
+        Some(path)
+    } else if let Some(base) = base {
+        Some(AbsolutePathBuf::resolve_path_against_base(
+            path,
+            base.as_path(),
+        ))
+    } else {
+        AbsolutePathBuf::relative_to_current_dir(path).ok()
+    }
+}
+
+fn persisted_thread_permission_state(
+    history: &InitialHistory,
+    fallback_cwd: Option<&Path>,
+    fallback_sandbox_policy: Option<&codex_protocol::protocol::SandboxPolicy>,
+) -> Option<PersistedThreadPermissionState> {
+    let mut cwd =
+        fallback_cwd.and_then(|cwd| absolute_path_from_history_path(cwd, /*base*/ None));
+    let mut workspace_roots = None;
+    let mut permission_profile = None;
+    let mut active_permission_profile = None;
+
+    for item in history.get_rollout_items() {
+        match item {
+            RolloutItem::SessionMeta(meta_line) => {
+                cwd = absolute_path_from_history_path(meta_line.meta.cwd.as_path(), cwd.as_ref())
+                    .or(cwd);
+                workspace_roots = Some(if meta_line.meta.workspace_roots.is_empty() {
+                    cwd.iter().cloned().collect()
+                } else {
+                    meta_line.meta.workspace_roots
+                });
+            }
+            RolloutItem::TurnContext(context) => {
+                cwd = absolute_path_from_history_path(context.cwd.as_path(), cwd.as_ref()).or(cwd);
+                workspace_roots = Some(context.workspace_roots);
+                let context_cwd = cwd
+                    .as_ref()
+                    .map(AbsolutePathBuf::as_path)
+                    .unwrap_or(context.cwd.as_path());
+                permission_profile = Some(context.permission_profile.unwrap_or_else(|| {
+                    PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                        &context.sandbox_policy,
+                        context_cwd,
+                    )
+                }));
+                if context.active_permission_profile.is_some() {
+                    active_permission_profile = context.active_permission_profile;
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::SessionConfigured(event)) => {
+                cwd = Some(event.cwd.clone());
+                workspace_roots = Some(event.workspace_roots);
+                permission_profile = Some(event.permission_profile);
+                active_permission_profile = event.active_permission_profile;
+            }
+            RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) => {
+            }
+        }
+    }
+
+    if permission_profile.is_none() {
+        let cwd = cwd.as_ref()?;
+        let fallback_sandbox_policy = fallback_sandbox_policy?;
+        permission_profile = Some(PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            fallback_sandbox_policy,
+            cwd.as_path(),
+        ));
+    }
+
+    Some(PersistedThreadPermissionState {
+        permission_profile: permission_profile?,
+        active_permission_profile,
+        workspace_roots: workspace_roots.unwrap_or_else(|| cwd.into_iter().collect()),
+    })
 }
 
 fn collect_resume_override_mismatches(
@@ -802,6 +893,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -835,6 +927,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -1160,7 +1253,12 @@ impl ThreadRequestProcessor {
 
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
             config_snapshot.cwd.as_path(),
+        );
+        let permission_profile = thread_response_permission_profile(
+            &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
@@ -1175,7 +1273,8 @@ impl ThreadRequestProcessor {
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            permission_profile: Some(permission_profile.into()),
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -1212,10 +1311,11 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
+        workspace_roots: Option<Vec<AbsolutePathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -1225,6 +1325,8 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
+            workspace_roots: workspace_roots
+                .map(|roots| roots.into_iter().map(|root| root.to_path_buf()).collect()),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -2349,6 +2451,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2379,11 +2482,22 @@ impl ThreadRequestProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
+        let persisted_permission_state = persisted_thread_permission_state(
+            &thread_history,
+            history_cwd.as_deref(),
+            resume_source_thread
+                .as_ref()
+                .map(|thread| &thread.sandbox_policy),
+        );
+        let permissions_were_explicit = permissions.is_some();
+        let sandbox_was_explicit = sandbox.is_some();
+        let workspace_roots_were_explicit = workspace_roots.is_some();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2392,6 +2506,29 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if !permissions_were_explicit
+            && !sandbox_was_explicit
+            && let Some(persisted_permission_state) = persisted_permission_state.as_ref()
+        {
+            typesafe_overrides.permission_profile =
+                Some(persisted_permission_state.permission_profile.clone());
+        }
+        if !workspace_roots_were_explicit {
+            if let Some(persisted_permission_state) = persisted_permission_state.as_ref() {
+                typesafe_overrides.workspace_roots = Some(
+                    persisted_permission_state
+                        .workspace_roots
+                        .iter()
+                        .map(AbsolutePathBuf::to_path_buf)
+                        .collect(),
+                );
+            } else if let Some(root) = history_cwd
+                .as_deref()
+                .and_then(|cwd| absolute_path_from_history_path(cwd, /*base*/ None))
+            {
+                typesafe_overrides.workspace_roots = Some(vec![root.to_path_buf()]);
+            }
+        }
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -2400,7 +2537,7 @@ impl ThreadRequestProcessor {
         .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -2412,6 +2549,17 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if !permissions_were_explicit
+            && !sandbox_was_explicit
+            && let Some(persisted_permission_state) = persisted_permission_state
+        {
+            config
+                .permissions
+                .set_active_permission_profile_for_current_profile(
+                    persisted_permission_state.active_permission_profile,
+                    Some(&persisted_permission_state.permission_profile),
+                );
+        }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
@@ -2505,7 +2653,12 @@ impl ThreadRequestProcessor {
                 let config_snapshot = codex_thread.config_snapshot().await;
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
+                    &config_snapshot.workspace_roots,
                     config_snapshot.cwd.as_path(),
+                );
+                let permission_profile = thread_response_permission_profile(
+                    &config_snapshot.permission_profile,
+                    &config_snapshot.workspace_roots,
                 );
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
@@ -2525,7 +2678,8 @@ impl ThreadRequestProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
+                    permission_profile: Some(permission_profile.into()),
+                    workspace_roots: config_snapshot.workspace_roots,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -2985,6 +3139,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3045,11 +3200,24 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
+        let fork_history = InitialHistory::Forked(history_items.clone());
+        let persisted_permission_state = persisted_thread_permission_state(
+            &fork_history,
+            history_cwd.as_deref(),
+            Some(&source_thread.sandbox_policy),
+        )
+        .ok_or_else(|| {
+            invalid_request("thread history is missing persisted permission configuration")
+        })?;
+        let permissions_were_explicit = permissions.is_some();
+        let sandbox_was_explicit = sandbox.is_some();
+        let workspace_roots_were_explicit = workspace_roots.is_some();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3058,13 +3226,34 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if !permissions_were_explicit && !sandbox_was_explicit {
+            typesafe_overrides.permission_profile =
+                Some(persisted_permission_state.permission_profile.clone());
+        }
+        if !workspace_roots_were_explicit {
+            typesafe_overrides.workspace_roots = Some(
+                persisted_permission_state
+                    .workspace_roots
+                    .iter()
+                    .map(AbsolutePathBuf::to_path_buf)
+                    .collect(),
+            );
+        }
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = self
+        let mut config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        if !permissions_were_explicit && !sandbox_was_explicit {
+            config
+                .permissions
+                .set_active_permission_profile_for_current_profile(
+                    persisted_permission_state.active_permission_profile,
+                    Some(&persisted_permission_state.permission_profile),
+                );
+        }
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -3168,7 +3357,12 @@ impl ThreadRequestProcessor {
         let config_snapshot = forked_thread.config_snapshot().await;
         let sandbox = thread_response_sandbox_policy(
             &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
             config_snapshot.cwd.as_path(),
+        );
+        let permission_profile = thread_response_permission_profile(
+            &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
@@ -3183,7 +3377,8 @@ impl ThreadRequestProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            permission_profile: Some(permission_profile.into()),
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };

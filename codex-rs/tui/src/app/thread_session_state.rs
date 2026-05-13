@@ -25,11 +25,13 @@ impl App {
             .config_ref()
             .permissions
             .active_permission_profile();
+        let workspace_roots = self.chat_widget.config_ref().workspace_roots.clone();
         let update_session = |session: &mut ThreadSessionState| {
             session.approval_policy = approval_policy;
             session.approvals_reviewer = approvals_reviewer;
             session.permission_profile = permission_profile.clone();
             session.active_permission_profile = active_permission_profile.clone();
+            session.workspace_roots = workspace_roots.clone();
         };
 
         if self.primary_thread_id == Some(active_thread_id)
@@ -53,6 +55,7 @@ impl App {
     ) -> ThreadSessionState {
         let permission_profile = self.current_permission_profile();
         let active_permission_profile = self.current_active_permission_profile();
+        let workspace_roots = self.chat_widget.config_ref().workspace_roots.clone();
         let mut session = self
             .primary_session_configured
             .clone()
@@ -71,6 +74,7 @@ impl App {
                 permission_profile: permission_profile.clone(),
                 active_permission_profile: active_permission_profile.clone(),
                 cwd: thread.cwd.clone(),
+                workspace_roots: workspace_roots.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 message_history: None,
@@ -81,6 +85,7 @@ impl App {
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
+        session.workspace_roots = workspace_roots;
         session.permission_profile = permission_profile;
         session.active_permission_profile = active_permission_profile;
         session.instruction_source_paths = Vec::new();
@@ -146,6 +151,7 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: cwd.abs(),
+            workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,

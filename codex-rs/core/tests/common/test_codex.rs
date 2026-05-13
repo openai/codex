@@ -515,6 +515,7 @@ impl TestCodexBuilder {
             load_default_config_for_test(home).await
         };
         config.cwd = cwd_override;
+        config.workspace_roots = vec![config.cwd.clone()];
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
@@ -539,6 +540,7 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+        config.workspace_roots = vec![config.cwd.clone()];
         ensure_test_model_catalog(&mut config)?;
 
         if config.include_apply_patch_tool {

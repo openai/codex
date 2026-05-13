@@ -332,6 +332,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         codex_home,
         &common.current_dir,
         &env_map,
+        /*write_roots_override*/ None,
         &[],
         &additional_deny_write_paths,
         LegacyAclSids {
