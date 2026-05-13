@@ -334,6 +334,8 @@ pub struct InProcessClientStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
+    /// Whether config API paths should reject unknown config fields.
+    pub strict_config: bool,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
@@ -400,6 +402,7 @@ impl InProcessClientStartArgs {
             config: self.config,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
+            strict_config: self.strict_config,
             cloud_requirements: self.cloud_requirements,
             thread_config_loader,
             feedback: self.feedback,
@@ -1025,6 +1028,7 @@ mod tests {
             config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
@@ -2109,6 +2113,7 @@ mod tests {
             config: config.clone(),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
@@ -2149,6 +2154,7 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,

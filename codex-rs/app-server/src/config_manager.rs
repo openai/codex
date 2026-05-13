@@ -30,6 +30,7 @@ pub(crate) struct ConfigManager {
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     arg0_paths: Arg0DispatchPaths,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
@@ -40,6 +41,7 @@ impl ConfigManager {
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        strict_config: bool,
         cloud_requirements: CloudRequirementsLoader,
         arg0_paths: Arg0DispatchPaths,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
@@ -49,6 +51,7 @@ impl ConfigManager {
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
             loader_overrides,
+            strict_config,
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
             arg0_paths,
             thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
@@ -217,6 +220,7 @@ impl ConfigManager {
             .codex_home(self.codex_home.clone())
             .cli_overrides(merged_cli_overrides)
             .loader_overrides(self.loader_overrides.clone())
+            .strict_config(self.strict_config)
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
@@ -245,7 +249,10 @@ impl ConfigManager {
             &self.codex_home,
             cwd,
             &self.current_cli_overrides(),
-            self.loader_overrides.clone(),
+            codex_config::ConfigLoadOptions {
+                loader_overrides: self.loader_overrides.clone(),
+                strict_config: self.strict_config,
+            },
             self.current_cloud_requirements(),
             thread_config_loader.as_ref(),
         )
@@ -280,6 +287,7 @@ impl ConfigManager {
             codex_home,
             cli_overrides,
             loader_overrides,
+            /*strict_config*/ false,
             cloud_requirements,
             Arg0DispatchPaths::default(),
             Arc::new(codex_config::NoopThreadConfigLoader),

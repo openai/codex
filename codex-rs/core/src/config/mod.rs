@@ -15,7 +15,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
@@ -136,9 +135,11 @@ mod otel;
 mod permissions;
 #[cfg(test)]
 mod schema;
+pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+pub use codex_config::LoaderOverrides;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
@@ -897,6 +898,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
@@ -920,6 +922,11 @@ impl ConfigBuilder {
 
     pub fn loader_overrides(mut self, loader_overrides: LoaderOverrides) -> Self {
         self.loader_overrides = Some(loader_overrides);
+        self
+    }
+
+    pub fn strict_config(mut self, strict_config: bool) -> Self {
+        self.strict_config = strict_config;
         self
     }
 
@@ -952,6 +959,7 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
@@ -974,7 +982,10 @@ impl ConfigBuilder {
             &codex_home,
             Some(cwd),
             &cli_overrides,
-            loader_overrides,
+            ConfigLoadOptions {
+                loader_overrides,
+                strict_config,
+            },
             cloud_requirements,
             thread_config_loader
                 .as_deref()
@@ -1276,35 +1287,28 @@ impl Config {
     }
 }
 
-/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
-/// with [ConfigToml] directly means that [ConfigRequirements] have not been
-/// applied yet, which risks failing to enforce required constraints.
-pub async fn load_config_as_toml_with_cli_overrides(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-) -> std::io::Result<ConfigToml> {
-    load_config_as_toml_with_cli_and_loader_overrides(
-        codex_home,
-        cwd,
-        cli_overrides,
-        LoaderOverrides::default(),
-    )
-    .await
-}
-
 pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
 ) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_load_options(codex_home, cwd, cli_overrides, loader_overrides)
+        .await
+}
+
+pub async fn load_config_as_toml_with_cli_and_load_options(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
-        loader_overrides,
+        options,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
