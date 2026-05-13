@@ -1269,6 +1269,15 @@ impl App {
         )
     }
 
+    pub(super) fn should_prepare_startup_tooltip_override(
+        session_selection: &SessionSelection,
+    ) -> bool {
+        matches!(
+            session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        )
+    }
+
     pub(super) fn should_prompt_for_paused_goal_after_startup_resume(
         session_selection: &SessionSelection,
         initial_prompt: &Option<String>,
