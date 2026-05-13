@@ -43,7 +43,6 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) extension_tool_bundles: Vec<ExtensionToolBundle>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
@@ -54,7 +53,6 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
             extension_tool_bundles,
             dynamic_tools,
@@ -63,7 +61,6 @@ impl ToolRouter {
             config,
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
             &extension_tool_bundles,
             dynamic_tools,

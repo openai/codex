@@ -623,10 +623,6 @@ impl ToolRegistryBuilder {
         self.handlers.insert(tool_name, handler);
     }
 
-    pub(crate) fn specs(&self) -> &[ToolSpec] {
-        &self.specs
-    }
-
     pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)

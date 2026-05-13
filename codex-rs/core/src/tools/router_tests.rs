@@ -97,7 +97,6 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -177,7 +176,6 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -213,7 +211,6 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -266,7 +263,6 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: &dynamic_tools,
@@ -323,7 +319,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: extension_tool_bundles(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),

@@ -1,6 +1,5 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::flat_tool_name;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
@@ -11,15 +10,9 @@ use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
-use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
-use codex_tools::JsonSchema;
-use codex_tools::ResponsesApiTool;
-use codex_tools::ToolName;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
-use std::collections::HashSet;
-use std::sync::Arc;
 
 pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     match user_shell.shell_type {
@@ -35,14 +28,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<Vec<ToolInfo>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     extension_tool_bundles: &[ExtensionToolBundle],
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    use crate::tools::handlers::UnavailableToolHandler;
-    use crate::tools::handlers::unavailable_tool_message;
-
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let min_wait_timeout_ms = if config.multi_agent_v2 {
@@ -55,7 +44,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     };
     let default_wait_timeout_ms =
         DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
-    let mut builder = build_tool_registry_builder(
+    build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
             mcp_tools: mcp_tools.as_deref(),
@@ -70,42 +59,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
         },
-    );
-    let mut existing_spec_names = builder
-        .specs()
-        .iter()
-        .map(|configured_tool| configured_tool.name().to_string())
-        .collect::<HashSet<_>>();
-
-    for unavailable_tool in unavailable_called_tools {
-        let tool_name = flat_tool_name(&unavailable_tool).into_owned();
-        if existing_spec_names.insert(tool_name.clone()) {
-            let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
-                name: tool_name.clone(),
-                description: unavailable_tool_message(
-                    &tool_name,
-                    "Calling this placeholder returns an error explaining that the tool is unavailable.",
-                ),
-                strict: false,
-                parameters: JsonSchema::object(
-                    Default::default(),
-                    /*required*/ None,
-                    Some(AdditionalProperties::Boolean(false)),
-                ),
-                output_schema: None,
-                defer_loading: None,
-            });
-            builder.register_handler(Arc::new(UnavailableToolHandler::new(
-                unavailable_tool,
-                spec,
-            )));
-        } else {
-            builder.register_handler(Arc::new(UnavailableToolHandler::without_spec(
-                unavailable_tool,
-            )));
-        }
-    }
-    builder
+    )
 }
 
 #[cfg(test)]

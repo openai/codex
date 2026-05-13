@@ -16,7 +16,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
-use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
@@ -271,27 +270,10 @@ fn build_specs(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_unavailable_tools(
-        config,
-        mcp_tools,
-        deferred_mcp_tools,
-        Vec::new(),
-        dynamic_tools,
-    )
-}
-
-fn build_specs_with_unavailable_tools(
-    config: &ToolsConfig,
-    mcp_tools: Option<Vec<ToolInfo>>,
-    deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    unavailable_called_tools: Vec<ToolName>,
-    dynamic_tools: &[DynamicToolSpec],
-) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
         config,
         mcp_tools,
         deferred_mcp_tools,
-        unavailable_called_tools,
         /*discoverable_tools*/ None,
         /*extension_tool_bundles*/ &[],
         dynamic_tools,
@@ -352,7 +334,6 @@ async fn assert_model_tools(
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: &[],
@@ -822,7 +803,6 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             &tools_config,
             /*mcp_tools*/ None,
             /*deferred_mcp_tools*/ None,
-            Vec::new(),
             discoverable_tools.clone(),
             /*extension_tool_bundles*/ &[],
             &[],
@@ -1030,55 +1010,6 @@ async fn direct_mcp_tools_register_namespaced_handlers() {
 
     assert!(registry.has_handler(&ToolName::namespaced("mcp__test_server__", "echo")));
     assert!(!registry.has_handler(&ToolName::plain("mcp__test_server__echo")));
-}
-
-#[tokio::test]
-async fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
-    let config = test_config().await;
-    let model_info = construct_model_info_offline("gpt-5.4", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::Disabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let unavailable_tool = ToolName::namespaced("mcp__codex_apps__calendar", "_create_event");
-    let (tools, registry) = build_specs_with_unavailable_tools(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        vec![unavailable_tool],
-        &[],
-    )
-    .build();
-
-    let tool = find_tool(&tools, "mcp__codex_apps__calendar_create_event");
-    let ToolSpec::Function(ResponsesApiTool {
-        description,
-        parameters,
-        ..
-    }) = tool
-    else {
-        panic!("unavailable MCP tool should be exposed as a function tool");
-    };
-    assert!(description.contains("not currently available"));
-    assert_eq!(
-        parameters.additional_properties,
-        Some(AdditionalProperties::Boolean(false))
-    );
-    assert!(registry.has_handler(&ToolName::namespaced(
-        "mcp__codex_apps__calendar",
-        "_create_event"
-    )));
-    assert!(!registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
 }
 
 #[tokio::test]
