@@ -737,7 +737,7 @@ async fn handle_mcp_elicitation(
             }
             response = parent_session.request_mcp_server_elicitation(
                 parent_ctx,
-                parent_request_id,
+                parent_request_id.clone(),
                 McpServerElicitationRequestParams {
                     thread_id: parent_session.conversation_id.to_string(),
                     turn_id: Some(parent_ctx.sub_id.clone()),

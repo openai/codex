@@ -26,13 +26,117 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use core_test_support::PathBufExt;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::sse;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::timeout;
+
+fn rmcp_request_id(request_id: codex_protocol::mcp::RequestId) -> rmcp::model::RequestId {
+    match request_id {
+        codex_protocol::mcp::RequestId::String(value) => {
+            rmcp::model::RequestId::String(value.into())
+        }
+        codex_protocol::mcp::RequestId::Integer(value) => rmcp::model::RequestId::Number(value),
+    }
+}
+
+#[tokio::test]
+async fn codex_delegate_routes_mcp_elicitation_response_back_to_child() {
+    let (parent_session, parent_ctx, rx_parent_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let (tx_child_events, rx_child_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (tx_child_submissions, rx_child_submissions) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let child = Arc::new(Codex {
+        tx_sub: tx_child_submissions,
+        rx_event: rx_child_events,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+    let (tx_out, _rx_out) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let forward = tokio::spawn(forward_events(
+        Arc::clone(&child),
+        tx_out,
+        Arc::clone(&parent_session),
+        Arc::clone(&parent_ctx),
+        Arc::new(Mutex::new(HashMap::new())),
+        CancellationToken::new(),
+    ));
+
+    tx_child_events
+        .send(Event {
+            id: "child-event".to_string(),
+            msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                turn_id: Some("child-turn-1".to_string()),
+                server_name: "maas_confluence".to_string(),
+                id: codex_protocol::mcp::RequestId::String("child-request-1".to_string()),
+                request: ElicitationRequest::Form {
+                    meta: None,
+                    message: "Allow this request?".to_string(),
+                    requested_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                    }),
+                },
+            }),
+        })
+        .await
+        .expect("send child elicitation");
+
+    let request_event = timeout(Duration::from_secs(1), rx_parent_events.recv())
+        .await
+        .expect("parent elicitation timed out")
+        .expect("parent elicitation missing");
+    let EventMsg::ElicitationRequest(request) = request_event.msg else {
+        panic!("expected ElicitationRequest event");
+    };
+    assert_eq!(request.turn_id, Some(parent_ctx.sub_id.clone()));
+    assert_eq!(request.server_name, "maas_confluence");
+
+    parent_session
+        .resolve_elicitation(
+            "maas_confluence".to_string(),
+            rmcp_request_id(request.id),
+            codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: Some(serde_json::json!({ "persist": "session" })),
+            },
+        )
+        .await
+        .expect("parent elicitation should resolve");
+
+    assert_eq!(
+        timeout(Duration::from_secs(1), rx_child_submissions.recv())
+            .await
+            .expect("child elicitation response timed out")
+            .expect("child elicitation response missing")
+            .op,
+        Op::ResolveElicitation {
+            server_name: "maas_confluence".to_string(),
+            request_id: codex_protocol::mcp::RequestId::String("child-request-1".to_string()),
+            decision: codex_protocol::approvals::ElicitationAction::Accept,
+            content: Some(serde_json::json!({})),
+            meta: Some(serde_json::json!({ "persist": "session" })),
+        }
+    );
+
+    drop(tx_child_events);
+    timeout(Duration::from_secs(1), forward)
+        .await
+        .expect("forward_events hung")
+        .expect("forward_events join error");
+}
 
 #[tokio::test]
 async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
@@ -333,15 +437,18 @@ async fn handle_mcp_elicitation_routes_response_back_to_delegate() {
     assert_eq!(request.turn_id, Some(parent_ctx.sub_id.clone()));
     assert_eq!(request.server_name, "maas_confluence");
 
-    crate::session::handlers::resolve_elicitation(
-        &parent_session,
-        "maas_confluence".to_string(),
-        request.id,
-        codex_protocol::approvals::ElicitationAction::Accept,
-        Some(serde_json::json!({})),
-        Some(serde_json::json!({ "persist": "session" })),
-    )
-    .await;
+    parent_session
+        .resolve_elicitation(
+            "maas_confluence".to_string(),
+            rmcp_request_id(request.id),
+            codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: Some(serde_json::json!({ "persist": "session" })),
+            },
+        )
+        .await
+        .expect("parent elicitation should resolve");
 
     timeout(Duration::from_secs(1), handle)
         .await
@@ -435,24 +542,30 @@ async fn handle_mcp_elicitation_namespaces_routed_parent_request_ids() {
     assert_eq!(second_request.server_name, "maas_confluence");
     assert_ne!(first_request.id, second_request.id);
 
-    crate::session::handlers::resolve_elicitation(
-        &parent_session,
-        "maas_confluence".to_string(),
-        first_request.id,
-        codex_protocol::approvals::ElicitationAction::Decline,
-        None,
-        None,
-    )
-    .await;
-    crate::session::handlers::resolve_elicitation(
-        &parent_session,
-        "maas_confluence".to_string(),
-        second_request.id,
-        codex_protocol::approvals::ElicitationAction::Accept,
-        Some(serde_json::json!({})),
-        None,
-    )
-    .await;
+    parent_session
+        .resolve_elicitation(
+            "maas_confluence".to_string(),
+            rmcp_request_id(first_request.id),
+            codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Decline,
+                content: None,
+                meta: None,
+            },
+        )
+        .await
+        .expect("first parent elicitation should resolve");
+    parent_session
+        .resolve_elicitation(
+            "maas_confluence".to_string(),
+            rmcp_request_id(second_request.id),
+            codex_rmcp_client::ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            },
+        )
+        .await
+        .expect("second parent elicitation should resolve");
 
     timeout(Duration::from_secs(1), first_handle)
         .await
