@@ -24,14 +24,6 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
         false
     }
 
-    /// Returns `true` if the invocation might mutate the user's environment.
-    ///
-    /// Implementations should remain defensive and return `true` whenever the
-    /// exact effect of an invocation is uncertain.
-    fn is_mutating(&self, _invocation: &Invocation) -> impl Future<Output = bool> + Send {
-        async { false }
-    }
-
     fn handle(
         &self,
         invocation: Invocation,

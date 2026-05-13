@@ -308,10 +308,6 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
         Some(create_apply_patch_freeform_tool(self.multi_environment))
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,

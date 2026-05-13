@@ -97,7 +97,6 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -177,7 +176,6 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
                     "query_with_delay",
                 ),
             ]),
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -213,7 +211,6 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
@@ -232,7 +229,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
+async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
@@ -266,22 +263,12 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: Vec::new(),
             dynamic_tools: &dynamic_tools,
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
-            .is_some()
-    );
-    assert_eq!(
-        namespace_function_names(&router.specs(), "codex_app"),
-        vec![hidden_tool.to_string(), visible_tool.to_string()]
-    );
     assert_eq!(
         namespace_function_names(&router.model_visible_specs(), "codex_app"),
         vec![visible_tool.to_string()]
@@ -332,19 +319,12 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
-            unavailable_called_tools: Vec::new(),
             discoverable_tools: None,
             extension_tool_bundles: extension_tool_bundles(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
 
-    assert!(
-        router
-            .find_spec(&ToolName::plain("extension_echo"))
-            .is_some(),
-        "expected extension-provided tool spec to be registered"
-    );
     assert!(
         router
             .model_visible_specs()
@@ -361,7 +341,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         call_id: "call-extension".to_string(),
     })?
     .expect("function_call should produce a tool call");
-
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),

@@ -349,13 +349,7 @@ impl PidBackend {
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
-            } => vec![
-                "--enable",
-                "remote_control",
-                "app-server",
-                "--listen",
-                "unix://",
-            ],
+            } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
             } => vec!["app-server", "--listen", "unix://"],

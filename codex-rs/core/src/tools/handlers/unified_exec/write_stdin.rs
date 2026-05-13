@@ -42,10 +42,6 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         Some(create_write_stdin_tool())
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,

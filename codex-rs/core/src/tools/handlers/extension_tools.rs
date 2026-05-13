@@ -80,10 +80,6 @@ impl ToolExecutor<ToolInvocation> for BundledToolHandler {
         Some(self.spec.clone())
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let arguments = self
             .arguments_from_payload(&invocation.payload)
@@ -180,7 +176,6 @@ mod tests {
     use crate::tools::hook_names::HookToolName;
     use crate::tools::registry::PostToolUsePayload;
     use crate::tools::registry::PreToolUsePayload;
-    use crate::tools::registry::ToolExecutor;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
 
@@ -193,7 +188,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exposes_generic_hook_payloads_and_is_conservatively_mutating() {
+    async fn exposes_generic_hook_payloads() {
         let bundle = codex_tool_api::ToolBundle::new(
             codex_tool_api::FunctionToolSpec {
                 name: "extension_echo".to_string(),
@@ -229,7 +224,6 @@ mod tests {
             value: json!({ "ok": true }),
         };
 
-        assert!(ToolExecutor::is_mutating(&handler, &invocation).await);
         assert_eq!(
             ToolHandler::pre_tool_use_payload(&handler, &invocation),
             Some(PreToolUsePayload {

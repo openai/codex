@@ -22,13 +22,13 @@ use crate::tools::handlers::extension_tools::BundledToolHandler;
 use crate::tools::handlers::extension_tools::extension_tool_spec;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
+use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tool_api::ToolBundle as ExtensionToolBundle;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
@@ -38,6 +38,10 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 pub use codex_tools::ToolExecutor;
 
 pub trait ToolHandler: ToolExecutor<ToolInvocation> {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        None
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
@@ -152,12 +156,16 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-trait AnyToolHandler: Send + Sync {
+pub(crate) trait AnyToolHandler: Send + Sync {
+    fn tool_name(&self) -> ToolName;
+
+    fn spec(&self) -> Option<ToolSpec>;
+
+    fn search_info(&self) -> Option<ToolSearchInfo>;
+
     fn supports_parallel_tool_calls(&self) -> bool;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
-
-    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool>;
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
@@ -183,16 +191,24 @@ impl<T> AnyToolHandler for T
 where
     T: ToolHandler,
 {
+    fn tool_name(&self) -> ToolName {
+        ToolExecutor::tool_name(self)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        ToolExecutor::spec(self)
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        ToolHandler::search_info(self)
+    }
+
     fn supports_parallel_tool_calls(&self) -> bool {
         ToolExecutor::supports_parallel_tool_calls(self)
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         ToolHandler::matches_kind(self, payload)
-    }
-
-    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool> {
-        Box::pin(ToolExecutor::is_mutating(self, invocation))
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -277,7 +293,8 @@ impl ToolRegistry {
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
-        Some(self.handler(name)?.supports_parallel_tool_calls())
+        let handler = self.handler(name)?;
+        Some(handler.supports_parallel_tool_calls())
     }
 
     #[expect(
@@ -396,7 +413,6 @@ impl ToolRegistry {
             }
         }
 
-        let is_mutating = handler.is_mutating(&invocation).await;
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
         let log_payload = invocation.payload.log_payload();
@@ -412,11 +428,6 @@ impl ToolRegistry {
                     let handler = handler.clone();
                     let response_cell = &response_cell;
                     async move {
-                        if is_mutating {
-                            tracing::trace!("waiting for tool gate");
-                            invocation_for_tool.turn.tool_call_gate.wait_ready().await;
-                            tracing::trace!("tool gate released");
-                        }
                         match handler.handle_any(invocation_for_tool).await {
                             Ok(result) => {
                                 let preview = result.result.log_preview();
@@ -526,24 +537,17 @@ impl ToolRegistry {
 pub struct ToolRegistryBuilder {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
     specs: Vec<ToolSpec>,
-    code_mode_enabled: bool,
 }
 
 impl ToolRegistryBuilder {
-    pub fn new(code_mode_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
             specs: Vec::new(),
-            code_mode_enabled,
         }
     }
 
     pub(crate) fn push_spec(&mut self, spec: ToolSpec) {
-        let spec = if self.code_mode_enabled {
-            codex_tools::augment_tool_spec_for_code_mode(spec)
-        } else {
-            spec
-        };
         self.specs.push(spec);
     }
 
@@ -551,17 +555,32 @@ impl ToolRegistryBuilder {
     where
         H: ToolHandler + 'static,
     {
+        self.register_any_handler(handler);
+    }
+
+    pub(crate) fn register_any_handler(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ true);
+    }
+
+    pub(crate) fn register_any_handler_without_spec(&mut self, handler: Arc<dyn AnyToolHandler>) {
+        self.register_any_handler_internal(handler, /*include_spec*/ false);
+    }
+
+    fn register_any_handler_internal(
+        &mut self,
+        handler: Arc<dyn AnyToolHandler>,
+        include_spec: bool,
+    ) {
         let name = handler.tool_name();
         if self.handlers.contains_key(&name) {
             error_or_panic(format!("handler for tool {name} already registered"));
             return;
         }
 
-        if let Some(spec) = handler.spec() {
+        if include_spec && let Some(spec) = handler.spec() {
             self.push_spec(spec);
         }
 
-        let handler: Arc<dyn AnyToolHandler> = handler;
         self.handlers.insert(name, handler);
     }
 
@@ -587,10 +606,6 @@ impl ToolRegistryBuilder {
         self.handlers.insert(tool_name, handler);
     }
 
-    pub(crate) fn specs(&self) -> &[ToolSpec] {
-        &self.specs
-    }
-
     pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
@@ -603,7 +618,6 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
         _ => format!("unsupported call: {tool_name}"),
     }
 }
-
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;

@@ -1,6 +1,5 @@
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
 
@@ -144,27 +143,6 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         self.options.is_some()
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
-        };
-
-        serde_json::from_str::<ShellCommandToolCallParams>(arguments)
-            .map(|params| {
-                let use_login_shell = match Self::resolve_use_login_shell(
-                    params.login,
-                    invocation.turn.tools_config.allow_login_shell,
-                ) {
-                    Ok(use_login_shell) => use_login_shell,
-                    Err(_) => return true,
-                };
-                let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-                !is_known_safe_command(&command)
-            })
-            .unwrap_or(true)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

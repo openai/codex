@@ -37,14 +37,12 @@ pub struct ToolCall {
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    specs: Vec<ToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) extension_tool_bundles: Vec<ExtensionToolBundle>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
@@ -55,7 +53,6 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
             extension_tool_bundles,
             dynamic_tools,
@@ -64,7 +61,6 @@ impl ToolRouter {
             config,
             mcp_tools,
             deferred_mcp_tools,
-            unavailable_called_tools,
             discoverable_tools,
             &extension_tool_bundles,
             dynamic_tools,
@@ -90,42 +86,12 @@ impl ToolRouter {
 
         Self {
             registry,
-            specs,
             model_visible_specs,
         }
     }
 
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.specs.clone()
-    }
-
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
-    }
-
-    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        self.specs.iter().find_map(|spec| match spec {
-            ToolSpec::Function(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Freeform(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(spec.clone())
-            }
-            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool)
-                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
-                        && tool.name == tool_name.name =>
-                {
-                    Some(ToolSpec::Function(tool.clone()))
-                }
-                _ => None,
-            }),
-            _ => None,
-        })
     }
 
     pub(crate) fn create_diff_consumer(

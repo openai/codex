@@ -1,6 +1,5 @@
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellToolCallParams;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 
 use crate::exec::ExecCapturePolicy;
@@ -77,16 +76,6 @@ impl ToolExecutor<ToolInvocation> for ShellHandler {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         self.options.is_some()
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
-        };
-
-        serde_json::from_str::<ShellToolCallParams>(arguments)
-            .map(|params| !is_known_safe_command(&params.command))
-            .unwrap_or(true)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
