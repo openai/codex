@@ -20,6 +20,8 @@ use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -56,8 +58,10 @@ use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
+use codex_thread_store::UpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -201,6 +205,7 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
+    extensions: Arc<ExtensionRegistry<Config>>,
     thread_store: Arc<dyn ThreadStore>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
@@ -242,6 +247,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
@@ -270,6 +276,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                extensions,
                 thread_store,
                 attestation_provider,
                 auth_manager,
@@ -370,6 +377,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                extensions: empty_extension_registry(),
                 thread_store,
                 attestation_provider: None,
                 auth_manager,
@@ -448,6 +456,44 @@ impl ThreadManager {
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
+    }
+
+    /// Updates metadata for loaded and cold threads through one entrypoint.
+    ///
+    /// Loaded threads route through `CodexThread`/`LiveThread`, so metadata changes stay ordered
+    /// with live rollout writes. Cold threads go directly to the store, which owns unloaded JSONL
+    /// compatibility and SQLite metadata updates.
+    pub async fn update_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> CodexResult<StoredThread> {
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            if thread.config_snapshot().await.ephemeral {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "ephemeral thread does not support metadata updates: {thread_id}"
+                )));
+            }
+            return thread
+                .update_thread_metadata(patch, include_archived)
+                .await
+                .map_err(|err| thread_store_metadata_update_error(thread_id, err));
+        }
+        self.state
+            .thread_store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch,
+                include_archived,
+            })
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    CodexErr::ThreadNotFound(thread_id)
+                }
+                err => thread_store_metadata_update_error(thread_id, err),
+            })
     }
 
     /// List `thread_id` plus all known descendants in its spawn subtree.
@@ -559,6 +605,36 @@ impl ThreadManager {
             /*user_shell_override*/ None,
         ))
         .await
+    }
+
+    // TODO(jif) merge with fork_agent
+    /// Spawn a subagent by forking persisted history from `forked_from_thread_id`.
+    pub async fn spawn_subagent(
+        &self,
+        forked_from_thread_id: ThreadId,
+        mut options: StartThreadOptions,
+    ) -> CodexResult<NewThread> {
+        let fork_source = self.get_thread(forked_from_thread_id).await?;
+        // Persist queued rollout updates before reading the fork snapshot.
+        fork_source.ensure_rollout_materialized().await;
+        fork_source.flush_rollout().await?;
+        let stored_thread = fork_source
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ true,
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to read subagent fork source {forked_from_thread_id}: {err}"
+                ))
+            })?;
+        let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
+        options.initial_history = fork_history_from_snapshot(
+            ForkSnapshot::Interrupted,
+            history,
+            InterruptedTurnHistoryMarker::from_config(&options.config),
+        );
+        self.start_thread_with_options(options).await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -1129,6 +1205,7 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
+            extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
             session_source,
             thread_source,
@@ -1258,6 +1335,19 @@ fn thread_store_rollout_read_error(err: ThreadStoreError) -> CodexErr {
         ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
         ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
         err => CodexErr::Fatal(format!("failed to read thread by rollout path: {err}")),
+    }
+}
+
+fn thread_store_metadata_update_error(thread_id: ThreadId, err: ThreadStoreError) -> CodexErr {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => CodexErr::ThreadNotFound(thread_id),
+        ThreadStoreError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ThreadStoreError::Unsupported { operation } => CodexErr::UnsupportedOperation(format!(
+            "thread metadata update is not supported by this store: {operation}"
+        )),
+        err => CodexErr::Fatal(format!(
+            "failed to update thread metadata {thread_id}: {err}"
+        )),
     }
 }
 

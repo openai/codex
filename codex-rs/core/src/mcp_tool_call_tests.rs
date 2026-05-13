@@ -1122,6 +1122,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
+        rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
@@ -2330,7 +2331,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
             "cwd": turn_context.cwd,
             "transcript_path": null,
@@ -2390,7 +2391,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
             "cwd": turn_context.cwd,
             "transcript_path": null,

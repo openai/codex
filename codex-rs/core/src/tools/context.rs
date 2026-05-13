@@ -58,23 +58,10 @@ pub struct ToolInvocation {
 
 #[derive(Clone, Debug)]
 pub enum ToolPayload {
-    Function {
-        arguments: String,
-    },
-    ToolSearch {
-        arguments: SearchToolCallParams,
-    },
-    Custom {
-        input: String,
-    },
-    LocalShell {
-        params: ShellToolCallParams,
-    },
-    Mcp {
-        server: String,
-        tool: String,
-        raw_arguments: String,
-    },
+    Function { arguments: String },
+    ToolSearch { arguments: SearchToolCallParams },
+    Custom { input: String },
+    LocalShell { params: ShellToolCallParams },
 }
 
 impl ToolPayload {
@@ -84,7 +71,6 @@ impl ToolPayload {
             ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
-            ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
 }
@@ -363,10 +349,6 @@ impl ToolOutput for AbortedToolOutput {
                 execution: "client".to_string(),
                 tools: Vec::new(),
             },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                output: CallToolResult::from_error_text(self.message.clone()),
-            },
             _ => function_tool_response(
                 call_id,
                 payload,
@@ -515,10 +497,8 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
         },
         ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
         ResponseInputItem::McpToolCallOutput { output, .. } => {
-            output.code_mode_result(&ToolPayload::Mcp {
-                server: String::new(),
-                tool: String::new(),
-                raw_arguments: String::new(),
+            output.code_mode_result(&ToolPayload::Function {
+                arguments: String::new(),
             })
         }
     }

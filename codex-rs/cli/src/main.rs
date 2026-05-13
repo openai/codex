@@ -129,7 +129,7 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// [experimental] Start a headless app-server with remote control enabled.
+    /// [experimental] Ensure the app-server daemon is running with remote control enabled.
     RemoteControl,
 
     /// Launch the Codex desktop app (opens the app installer if missing).
@@ -428,6 +428,10 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -506,10 +510,10 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Enable remote_control for future starts and a currently running managed daemon.
+    /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
-    /// Disable remote_control for future starts and a currently running managed daemon.
+    /// Disable remote control for future starts and a currently running managed daemon.
     DisableRemoteControl,
 
     /// Stop the local app server daemon.
@@ -532,7 +536,7 @@ struct AppServerProxyCommand {
 
 #[derive(Debug, Args)]
 struct AppServerBootstrapCommand {
-    /// Launch the managed app-server with remote_control enabled.
+    /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
 }
@@ -718,9 +722,9 @@ struct FeatureToggles {
 
 #[derive(Debug, Default, Parser, Clone)]
 struct InteractiveRemoteOptions {
-    /// Connect the TUI to a remote app server websocket endpoint.
+    /// Connect the TUI to a remote app server endpoint.
     ///
-    /// Accepted forms: `ws://host:port` or `wss://host:port`.
+    /// Accepted forms: `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`.
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 
@@ -773,14 +777,6 @@ enum FeaturesSubcommand {
 struct FeatureSetArgs {
     /// Feature key to update (for example: unified_exec).
     feature: String,
-}
-
-const REMOTE_CONTROL_FEATURE_OVERRIDE: &str = "features.remote_control=true";
-
-fn enable_remote_control_for_invocation(config_overrides: &mut CliConfigOverrides) {
-    config_overrides
-        .raw_overrides
-        .push(REMOTE_CONTROL_FEATURE_OVERRIDE.to_string());
 }
 
 fn stage_str(stage: Stage) -> &'static str {
@@ -899,6 +895,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let AppServerCommand {
                 subcommand,
                 listen,
+                remote_control,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -911,7 +908,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
-                    codex_app_server::run_main_with_transport(
+                    let runtime_options = codex_app_server::AppServerRuntimeOptions {
+                        remote_control_enabled: remote_control,
+                        ..Default::default()
+                    };
+                    codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
                         codex_config::LoaderOverrides::default(),
@@ -919,6 +920,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
+                        runtime_options,
                     )
                     .await?;
                 }
@@ -995,17 +997,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "remote-control",
             )?;
-            enable_remote_control_for_invocation(&mut root_config_overrides);
-            codex_app_server::run_main_with_transport(
-                arg0_paths.clone(),
-                root_config_overrides,
-                codex_config::LoaderOverrides::default(),
-                /*default_analytics_enabled*/ false,
-                codex_app_server::AppServerTransport::Off,
-                codex_protocol::protocol::SessionSource::Cli,
-                codex_app_server::AppServerWebsocketAuthSettings::default(),
-            )
-            .await?;
+            let output = codex_app_server_daemon::ensure_remote_control_started().await?;
+            println!("{}", serde_json::to_string(&output)?);
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -1716,27 +1709,39 @@ async fn run_interactive_tui(
         }
     }
 
-    let normalized_remote = remote
+    let mut remote_endpoint = remote
         .as_deref()
-        .map(codex_tui::normalize_remote_addr)
+        .map(codex_tui::resolve_remote_addr)
         .transpose()
         .map_err(std::io::Error::other)?;
-    if remote_auth_token_env.is_some() && normalized_remote.is_none() {
-        return Ok(AppExitInfo::fatal(
-            "`--remote-auth-token-env` requires `--remote`.",
-        ));
+    if let Some(remote_auth_token_env) = remote_auth_token_env {
+        let Some(endpoint) = remote_endpoint.as_mut() else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires `--remote`.",
+            ));
+        };
+        if !codex_tui::remote_addr_supports_auth_token(endpoint) {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        }
+        let auth_token = read_remote_auth_token_from_env_var(&remote_auth_token_env)
+            .map_err(std::io::Error::other)?;
+        let codex_tui::RemoteAppServerEndpoint::WebSocket {
+            auth_token: slot, ..
+        } = endpoint
+        else {
+            return Ok(AppExitInfo::fatal(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        };
+        *slot = Some(auth_token);
     }
-    let remote_auth_token = remote_auth_token_env
-        .as_deref()
-        .map(read_remote_auth_token_from_env_var)
-        .transpose()
-        .map_err(std::io::Error::other)?;
     codex_tui::run_main(
         interactive,
         arg0_paths,
         codex_config::LoaderOverrides::default(),
-        normalized_remote,
-        remote_auth_token,
+        remote_endpoint,
     )
     .await
 }
@@ -2402,6 +2407,7 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -2416,32 +2422,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_override_is_appended_after_root_toggles() {
-        let mut config_overrides = CliConfigOverrides::default();
-        config_overrides
-            .raw_overrides
-            .push("features.remote_control=false".to_string());
-
-        enable_remote_control_for_invocation(&mut config_overrides);
-
-        assert_eq!(
-            config_overrides.raw_overrides,
-            vec![
-                "features.remote_control=false".to_string(),
-                REMOTE_CONTROL_FEATURE_OVERRIDE.to_string(),
-            ]
-        );
-    }
-
-    #[test]
     fn reject_remote_flag_for_remote_control() {
-        let cli = MultitoolCli::try_parse_from([
-            "codex",
-            "--remote",
-            "ws://127.0.0.1:1234",
-            "remote-control",
-        ])
-        .expect("parse");
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://", "remote-control"])
+            .expect("parse");
         assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
 
         let err = reject_remote_mode_for_subcommand(
@@ -2456,9 +2439,9 @@ mod tests {
 
     #[test]
     fn remote_flag_parses_for_interactive_root() {
-        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "ws://127.0.0.1:4500"])
+        let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://codex.sock"])
             .expect("parse");
-        assert_eq!(cli.remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_eq!(cli.remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]
@@ -2480,14 +2463,14 @@ mod tests {
     #[test]
     fn remote_flag_parses_for_resume_subcommand() {
         let cli =
-            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "ws://127.0.0.1:4500"])
+            MultitoolCli::try_parse_from(["codex", "resume", "--remote", "unix://codex.sock"])
                 .expect("parse");
         let Subcommand::Resume(ResumeCommand { remote, .. }) =
             cli.subcommand.expect("resume present")
         else {
             panic!("expected resume subcommand");
         };
-        assert_eq!(remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+        assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
     }
 
     #[test]

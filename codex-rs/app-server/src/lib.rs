@@ -8,7 +8,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
@@ -83,6 +82,7 @@ mod config_manager_service;
 mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
+mod extensions;
 mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
@@ -108,6 +108,7 @@ pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
+const OTEL_SERVICE_NAME: &str = "codex-app-server";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LogFormat {
@@ -396,12 +397,14 @@ pub enum PluginStartupTasks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
+    pub remote_control_enabled: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
     fn default() -> Self {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
+            remote_control_enabled: false,
         }
     }
 }
@@ -511,6 +514,20 @@ pub async fn run_main_with_transport_options(
         }
     };
 
+    let otel = codex_core::otel_init::build_provider(
+        &config,
+        env!("CARGO_PKG_VERSION"),
+        Some(OTEL_SERVICE_NAME),
+        default_analytics_enabled,
+    )
+    .map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("error loading otel config: {e}"),
+        )
+    })?;
+    codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
+    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let state_db_result = rollout_state_db::try_init(&config).await;
     let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
     let state_db = state_db_result.ok();
@@ -589,19 +606,6 @@ pub async fn run_main_with_transport_options(
     }
 
     let feedback = CodexFeedback::new();
-
-    let otel = codex_core::otel_init::build_provider(
-        &config,
-        env!("CARGO_PKG_VERSION"),
-        Some("codex-app-server"),
-        default_analytics_enabled,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
 
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
@@ -691,15 +695,15 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
-    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
-    if remote_control_config_enabled && state_db.is_none() {
+    let remote_control_requested = runtime_options.remote_control_enabled;
+    let remote_control_enabled = remote_control_requested && state_db.is_some();
+    if remote_control_requested && state_db.is_none() {
         error!("remote control disabled because sqlite state db is unavailable");
     }
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_config_enabled && state_db.is_none() {
+            if remote_control_requested && state_db.is_none() {
                 "no transport configured; remote control disabled because sqlite state db is unavailable"
             } else {
                 "no transport configured; use --listen or enable remote control"
@@ -803,7 +807,6 @@ pub async fn run_main_with_transport_options(
             auth_manager,
             installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
-            remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();

@@ -266,6 +266,76 @@ async fn returns_config_error_for_schema_error_in_user_config() {
     assert_eq!(config_error, &expected_config_error);
 }
 
+#[tokio::test]
+async fn top_level_allow_managed_hooks_only_in_user_config_does_not_enable_requirements_policy()
+-> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "allow_managed_hooks_only = true",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().allow_managed_hooks_only, None);
+    assert!(layers.requirements().allow_managed_hooks_only.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_allow_managed_hooks_only_in_user_config_does_not_enable_requirements_policy()
+-> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[hooks]
+allow_managed_hooks_only = true
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /tmp/user-hook.py"
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert!(
+        layers
+            .get_user_layer()
+            .and_then(|layer| layer.config.get("hooks"))
+            .is_some(),
+        "hooks should still deserialize from config.toml"
+    );
+    assert_eq!(layers.requirements_toml().allow_managed_hooks_only, None);
+    assert!(layers.requirements().allow_managed_hooks_only.is_none());
+
+    Ok(())
+}
+
 #[test]
 fn schema_error_points_to_feature_value() {
     let tmp = tempdir().expect("tempdir");
@@ -810,6 +880,7 @@ allowed_approval_policies = ["on-request"]
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -867,6 +938,7 @@ allowed_approval_policies = ["on-request"]
             allowed_sandbox_modes: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             hooks: None,
             mcp_servers: None,
@@ -1075,6 +1147,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_sandbox_modes: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -1190,6 +1263,7 @@ async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![codex_config::HookHandlerConfig::Command {
                         command: format!("python3 {}/pre.py", managed_dir.display()),
+                        command_windows: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),

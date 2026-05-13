@@ -4,6 +4,7 @@ mod managed_install;
 mod settings;
 mod update_loop;
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use anyhow::anyhow;
 pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server_transport::app_server_control_socket_path;
-use codex_core::config::find_codex_home;
+use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
 #[cfg(unix)]
 use managed_install::managed_codex_version;
@@ -88,6 +89,13 @@ pub struct BootstrapOutput {
     pub app_server_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum RemoteControlStartOutput {
+    Bootstrap(BootstrapOutput),
+    Start(LifecycleOutput),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteControlMode {
     Enabled,
@@ -123,9 +131,35 @@ pub struct RemoteControlOutput {
 }
 
 #[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RestartIfRunningOutcome {
-    Completed,
     Busy,
+    NotRunning,
+    NotReady,
+    AlreadyCurrent,
+    Restarted,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestartMode {
+    IfVersionChanged,
+    Always,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdaterRefreshMode {
+    None,
+    ReexecIfManagedBinaryChanged,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestartDecision {
+    NotReady,
+    AlreadyCurrent,
+    Restart,
 }
 
 pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
@@ -136,6 +170,13 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.bootstrap(options).await
+}
+
+pub async fn ensure_remote_control_started() -> Result<RemoteControlStartOutput> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?
+        .ensure_remote_control_started()
+        .await
 }
 
 pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControlOutput> {
@@ -262,33 +303,49 @@ impl Daemon {
     }
 
     #[cfg(unix)]
-    pub(crate) async fn try_restart_if_running(&self) -> Result<RestartIfRunningOutcome> {
+    pub(crate) async fn try_restart_if_running(
+        &self,
+        mode: RestartMode,
+        updater_refresh_mode: UpdaterRefreshMode,
+        managed_codex_bin: &Path,
+    ) -> Result<RestartIfRunningOutcome> {
         let operation_lock = self.open_operation_lock_file().await?;
         if !try_lock_file(&operation_lock)? {
             return Ok(RestartIfRunningOutcome::Busy);
         }
         let settings = self.load_settings().await?;
-        if let Some(backend) = self.running_backend_instance(&settings).await? {
-            let Ok(info) = client::probe(&self.socket_path).await else {
-                return Ok(RestartIfRunningOutcome::Completed);
+        let outcome = if let Some(backend) = self.running_backend_instance(&settings).await? {
+            let info = client::probe(&self.socket_path).await.ok();
+            let managed_version = if info.is_some() {
+                Some(managed_codex_version(managed_codex_bin).await?)
+            } else {
+                None
             };
-            let managed_version = managed_codex_version(&self.managed_codex_bin).await?;
-            if info.app_server_version == managed_version {
-                return Ok(RestartIfRunningOutcome::Completed);
+            match restart_decision(mode, info.as_ref(), managed_version.as_deref()) {
+                RestartDecision::NotReady => return Ok(RestartIfRunningOutcome::NotReady),
+                RestartDecision::AlreadyCurrent => RestartIfRunningOutcome::AlreadyCurrent,
+                RestartDecision::Restart => {
+                    backend.stop().await?;
+                    let _ = self
+                        .start_managed_backend_with_bin(&settings, managed_codex_bin)
+                        .await?;
+                    self.wait_until_ready().await?;
+                    RestartIfRunningOutcome::Restarted
+                }
             }
-            backend.stop().await?;
-            let _ = self.start_managed_backend(&settings).await?;
-            self.wait_until_ready().await?;
-            return Ok(RestartIfRunningOutcome::Completed);
-        }
-
-        if client::probe(&self.socket_path).await.is_ok() {
+        } else if client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
                 "app server is running but is not managed by codex app-server daemon"
             ));
+        } else {
+            RestartIfRunningOutcome::NotRunning
+        };
+
+        if should_reexec_updater(updater_refresh_mode, outcome) {
+            crate::update_loop::reexec_managed_updater(managed_codex_bin)?;
         }
 
-        Ok(RestartIfRunningOutcome::Completed)
+        Ok(outcome)
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
@@ -354,8 +411,34 @@ impl Daemon {
         self.bootstrap_locked(options).await
     }
 
+    async fn ensure_remote_control_started(&self) -> Result<RemoteControlStartOutput> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let settings = self.load_settings().await?;
+        if self.is_bootstrapped(&settings).await? {
+            let _ = self
+                .set_remote_control_locked(RemoteControlMode::Enabled)
+                .await?;
+            let output = self.start().await?;
+            return Ok(RemoteControlStartOutput::Start(output));
+        }
+
+        let output = self
+            .bootstrap_locked(BootstrapOptions {
+                remote_control_enabled: true,
+            })
+            .await?;
+        Ok(RemoteControlStartOutput::Bootstrap(output))
+    }
+
     async fn set_remote_control(&self, mode: RemoteControlMode) -> Result<RemoteControlOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
+        self.set_remote_control_locked(mode).await
+    }
+
+    async fn set_remote_control_locked(
+        &self,
+        mode: RemoteControlMode,
+    ) -> Result<RemoteControlOutput> {
         let previous_settings = self.load_settings().await?;
         let mut settings = previous_settings.clone();
         let remote_control_enabled = mode.is_enabled();
@@ -460,8 +543,23 @@ impl Daemon {
     }
 
     async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
-        let backend = backend::pid_backend(self.backend_paths(settings));
+        self.start_managed_backend_with_bin(settings, &self.managed_codex_bin)
+            .await
+    }
+
+    async fn start_managed_backend_with_bin(
+        &self,
+        settings: &DaemonSettings,
+        managed_codex_bin: &Path,
+    ) -> Result<Option<u32>> {
+        let backend =
+            backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
         backend.start().await
+    }
+
+    async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
+        let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
+        updater.is_starting_or_running().await
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
@@ -476,8 +574,16 @@ impl Daemon {
     }
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
+        self.backend_paths_with_bin(settings, &self.managed_codex_bin)
+    }
+
+    fn backend_paths_with_bin(
+        &self,
+        settings: &DaemonSettings,
+        managed_codex_bin: &Path,
+    ) -> BackendPaths {
         BackendPaths {
-            codex_bin: self.managed_codex_bin.clone(),
+            codex_bin: managed_codex_bin.to_path_buf(),
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
@@ -576,6 +682,32 @@ fn already_remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus
 }
 
 #[cfg(unix)]
+fn restart_decision(
+    mode: RestartMode,
+    info: Option<&client::ProbeInfo>,
+    managed_version: Option<&str>,
+) -> RestartDecision {
+    match (mode, info, managed_version) {
+        (RestartMode::IfVersionChanged, None, _) => RestartDecision::NotReady,
+        (RestartMode::IfVersionChanged, Some(info), Some(managed_version))
+            if info.app_server_version == managed_version =>
+        {
+            RestartDecision::AlreadyCurrent
+        }
+        _ => RestartDecision::Restart,
+    }
+}
+
+#[cfg(unix)]
+fn should_reexec_updater(
+    updater_refresh_mode: UpdaterRefreshMode,
+    outcome: RestartIfRunningOutcome,
+) -> bool {
+    updater_refresh_mode == UpdaterRefreshMode::ReexecIfManagedBinaryChanged
+        && outcome == RestartIfRunningOutcome::Restarted
+}
+
+#[cfg(unix)]
 fn try_lock_file(file: &tokio::fs::File) -> Result<bool> {
     use std::os::fd::AsRawFd;
 
@@ -600,9 +732,20 @@ fn try_lock_file(_file: &tokio::fs::File) -> Result<bool> {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::BackendKind;
+    use super::BootstrapOutput;
     use super::BootstrapStatus;
+    use super::LifecycleOutput;
     use super::LifecycleStatus;
+    use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
+    use super::RestartDecision;
+    use super::RestartIfRunningOutcome;
+    use super::RestartMode;
+    use super::UpdaterRefreshMode;
+    use super::restart_decision;
+    use super::should_reexec_updater;
+    use crate::client::ProbeInfo;
 
     #[test]
     fn lifecycle_status_uses_camel_case_json() {
@@ -625,6 +768,107 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),
             "\"alreadyEnabled\""
+        );
+    }
+
+    #[test]
+    fn updater_reexec_waits_for_validated_restart() {
+        assert_eq!(
+            [
+                RestartIfRunningOutcome::Busy,
+                RestartIfRunningOutcome::NotReady,
+                RestartIfRunningOutcome::AlreadyCurrent,
+                RestartIfRunningOutcome::NotRunning,
+                RestartIfRunningOutcome::Restarted,
+            ]
+            .map(|outcome| {
+                should_reexec_updater(UpdaterRefreshMode::ReexecIfManagedBinaryChanged, outcome)
+            }),
+            [false, false, false, false, true]
+        );
+    }
+
+    #[test]
+    fn unchanged_updater_never_reexecs() {
+        assert_eq!(
+            [
+                RestartIfRunningOutcome::Busy,
+                RestartIfRunningOutcome::NotReady,
+                RestartIfRunningOutcome::AlreadyCurrent,
+                RestartIfRunningOutcome::NotRunning,
+                RestartIfRunningOutcome::Restarted,
+            ]
+            .map(|outcome| should_reexec_updater(UpdaterRefreshMode::None, outcome)),
+            [false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn restart_decision_preserves_forced_refreshes() {
+        let current_info = ProbeInfo {
+            app_server_version: "0.1.0".to_string(),
+        };
+
+        assert_eq!(
+            [
+                restart_decision(
+                    RestartMode::IfVersionChanged,
+                    Some(&current_info),
+                    Some("0.1.0"),
+                ),
+                restart_decision(
+                    RestartMode::IfVersionChanged,
+                    /*info*/ None,
+                    /*managed_version*/ None,
+                ),
+                restart_decision(RestartMode::Always, Some(&current_info), Some("0.1.0")),
+                restart_decision(
+                    RestartMode::Always,
+                    /*info*/ None,
+                    /*managed_version*/ None,
+                ),
+            ],
+            [
+                RestartDecision::AlreadyCurrent,
+                RestartDecision::NotReady,
+                RestartDecision::Restart,
+                RestartDecision::Restart,
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_control_start_output_serializes_inner_output_without_tag() {
+        let lifecycle_output = LifecycleOutput {
+            status: LifecycleStatus::AlreadyRunning,
+            backend: Some(BackendKind::Pid),
+            pid: None,
+            socket_path: "codex.sock".into(),
+            cli_version: Some("1.2.3".to_string()),
+            app_server_version: Some("1.2.4".to_string()),
+        };
+        let output = RemoteControlStartOutput::Start(lifecycle_output.clone());
+
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize"),
+            serde_json::to_value(lifecycle_output).expect("serialize")
+        );
+
+        let bootstrap_output = BootstrapOutput {
+            status: BootstrapStatus::Bootstrapped,
+            backend: BackendKind::Pid,
+            auto_update_enabled: true,
+            remote_control_enabled: true,
+            managed_codex_path: "codex".into(),
+            socket_path: "codex.sock".into(),
+            cli_version: "1.2.3".to_string(),
+            app_server_version: "1.2.4".to_string(),
+        };
+        let output = RemoteControlStartOutput::Bootstrap(bootstrap_output.clone());
+
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize"),
+            serde_json::to_value(bootstrap_output).expect("serialize")
         );
     }
 }

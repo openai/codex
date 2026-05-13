@@ -7,6 +7,7 @@ use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
+use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1137,6 +1138,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         auth_manager,
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
@@ -2494,38 +2496,6 @@ async fn token_count_includes_rate_limits_snapshot() {
         })
         .await
         .unwrap();
-
-    let first_token_event =
-        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let rate_limit_only = match first_token_event {
-        EventMsg::TokenCount(ev) => ev,
-        _ => unreachable!(),
-    };
-
-    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
-    pretty_assertions::assert_eq!(
-        rate_limit_json,
-        json!({
-            "info": null,
-            "rate_limits": {
-                "limit_id": "codex",
-                "limit_name": null,
-                "primary": {
-                    "used_percent": 12.5,
-                    "window_minutes": 10,
-                    "resets_at": 1704069000
-                },
-                "secondary": {
-                    "used_percent": 40.0,
-                    "window_minutes": 60,
-                    "resets_at": 1704074400
-                },
-                "credits": null,
-                "plan_type": null,
-                "rate_limit_reached_type": null
-            }
-        })
-    );
 
     let token_event = wait_for_event(
         &codex,

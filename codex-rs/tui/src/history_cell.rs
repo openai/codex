@@ -22,6 +22,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::markdown::append_markdown_agent_with_cwd;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -578,7 +579,8 @@ impl HistoryCell for AgentMessageCell {
 /// After a stream finalizes, the `ConsolidateAgentMessage` handler in `App`
 /// replaces the contiguous run of `AgentMessageCell`s with a single
 /// `AgentMarkdownCell`. On terminal resize, `display_lines(width)` re-renders
-/// from source via `append_markdown`.
+/// from source via `append_markdown_agent`, producing correctly-sized tables
+/// with box-drawing borders.
 ///
 /// The cell snapshots `cwd` at construction so local file-link display remains aligned with the
 /// session that produced the message. Reusing the current process cwd during reflow would make old
@@ -614,7 +616,7 @@ impl HistoryCell for AgentMarkdownCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
-        crate::markdown::append_markdown(
+        crate::markdown::append_markdown_agent_with_cwd(
             &self.markdown_source,
             Some(wrap_width),
             Some(self.cwd.as_path()),
@@ -625,6 +627,84 @@ impl HistoryCell for AgentMarkdownCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         raw_lines_from_source(&self.markdown_source)
+    }
+}
+
+/// Transient active-cell representation of the mutable tail of an agent stream.
+///
+/// During streaming, lines that have not yet been committed to scrollback because they belong to
+/// an in-progress table are displayed via this cell in the `active_cell` slot. It is replaced on
+/// every delta and cleared when the stream finalizes.
+#[derive(Debug)]
+pub(crate) struct StreamingAgentTailCell {
+    lines: Vec<Line<'static>>,
+    is_first_line: bool,
+}
+
+impl StreamingAgentTailCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+        Self {
+            lines,
+            is_first_line,
+        }
+    }
+}
+
+impl HistoryCell for StreamingAgentTailCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        // Tail lines are already rendered at the controller's current stream width.
+        // Re-wrapping them here can split table borders and produce malformed in-flight rows.
+        prefix_lines(
+            self.lines.clone(),
+            if self.is_first_line {
+                "• ".dim()
+            } else {
+                "  ".into()
+            },
+            "  ".into(),
+        )
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.display_lines(u16::MAX))
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        !self.is_first_line
+    }
+}
+
+/// Transient active-cell representation of the mutable tail of a proposed-plan stream.
+///
+/// The controller prepares the full styled plan lines because plan tails need the same header,
+/// padding, and background treatment as committed `ProposedPlanStreamCell`s while remaining
+/// preview-only during streaming.
+#[derive(Debug)]
+pub(crate) struct StreamingPlanTailCell {
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
+}
+
+impl StreamingPlanTailCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_stream_continuation: bool) -> Self {
+        Self {
+            lines,
+            is_stream_continuation,
+        }
+    }
+}
+
+impl HistoryCell for StreamingPlanTailCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.lines.clone())
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        self.is_stream_continuation
     }
 }
 
@@ -3015,7 +3095,7 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(
+        append_markdown_agent_with_cwd(
             &self.plan_markdown,
             Some(wrap_width),
             Some(self.cwd.as_path()),
@@ -3697,6 +3777,57 @@ mod tests {
             ]
         );
         assert_unstyled_lines(&plan_lines);
+    }
+
+    #[test]
+    fn proposed_plan_cell_renders_markdown_table() {
+        let plan = new_proposed_plan(
+            "## Plan\n\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n".to_string(),
+            &test_cwd(),
+        );
+
+        let rendered = render_lines(&plan.display_lines(/*width*/ 80));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains('│') || line.contains('┌')),
+            "expected boxed table in proposed plan output: {rendered:?}"
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.trim() == "| Step | Owner |"),
+            "did not expect raw table header in rich proposed plan output: {rendered:?}"
+        );
+
+        let raw = render_lines(&plan.raw_lines());
+        assert!(
+            raw.iter().any(|line| line == "| Step | Owner |"),
+            "expected raw mode to preserve table markdown source: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn proposed_plan_cell_unwraps_markdown_fenced_table() {
+        let plan = new_proposed_plan(
+            "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"
+                .to_string(),
+            &test_cwd(),
+        );
+
+        let rendered = render_lines(&plan.display_lines(/*width*/ 80));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains('│') || line.contains('┌')),
+            "expected boxed table for markdown-fenced proposed plan output: {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.trim() == "```markdown"),
+            "did not expect markdown fence to render as code block: {rendered:?}"
+        );
     }
 
     #[test]

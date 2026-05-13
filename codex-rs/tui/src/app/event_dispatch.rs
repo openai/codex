@@ -57,11 +57,8 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_url.clone() {
-                        Some(websocket_url) => crate::AppServerTarget::Remote {
-                            websocket_url,
-                            auth_token: self.remote_app_server_auth_token.clone(),
-                        },
+                    &match self.remote_app_server_endpoint.clone() {
+                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
                         None => crate::AppServerTarget::Embedded,
                     },
                     self.state_db.clone(),
@@ -204,42 +201,34 @@ impl App {
                     self.insert_history_cell_lines_with_initial_replay_buffer(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 } else {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 }
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
-            AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
-                let end = self.transcript_cells.len();
-                let start =
-                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-                if start < end {
-                    let consolidated: Arc<dyn HistoryCell> =
-                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
-                    self.transcript_cells
-                        .splice(start..end, std::iter::once(consolidated.clone()));
-
-                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.consolidate_cells(start..end, consolidated.clone());
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    self.maybe_finish_stream_reflow(tui)?;
-                } else {
-                    self.maybe_finish_stream_reflow(tui)?;
-                }
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                scrollback_reflow,
+                deferred_history_cell,
+            } => {
+                self.handle_consolidate_agent_message(
+                    tui,
+                    source,
+                    cwd,
+                    scrollback_reflow,
+                    deferred_history_cell,
+                )?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
@@ -272,7 +261,8 @@ impl App {
                     self.insert_history_cell_lines(
                         tui,
                         consolidated.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
 
                     self.maybe_finish_stream_reflow(tui)?;
@@ -328,6 +318,14 @@ impl App {
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
+            }
+            AppEvent::SyncThreadGitBranch { thread_id, branch } => {
+                if let Err(err) = app_server
+                    .thread_metadata_update_branch(thread_id, branch)
+                    .await
+                {
+                    tracing::warn!("failed to sync thread git branch from directive: {err}");
+                }
             }
             AppEvent::LookupMessageHistoryEntry {
                 thread_id,
@@ -390,6 +388,30 @@ impl App {
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
+            }
+            AppEvent::PetSelected { pet_id } => {
+                self.handle_pet_selected(tui, pet_id);
+            }
+            AppEvent::PetDisabled => {
+                self.handle_pet_disabled(tui).await;
+            }
+            AppEvent::PetPreviewRequested { pet_id } => {
+                self.chat_widget.start_pet_picker_preview(pet_id);
+            }
+            AppEvent::PetPreviewLoaded { request_id, result } => {
+                self.handle_pet_preview_loaded(tui, request_id, result);
+            }
+            AppEvent::PetSelectionLoaded {
+                request_id,
+                pet_id,
+                result,
+            } => {
+                return self
+                    .handle_pet_selection_loaded(tui, request_id, pet_id, result)
+                    .await;
+            }
+            AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+                self.handle_configured_pet_loaded(tui, pet_id, result);
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
@@ -671,6 +693,9 @@ impl App {
             }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
+            }
+            AppEvent::OpenThreadGoalEditor { thread_id } => {
+                self.open_thread_goal_editor(app_server, thread_id).await;
             }
             AppEvent::SetThreadGoalObjective {
                 thread_id,
@@ -1712,6 +1737,9 @@ impl App {
             }
             AppEvent::TrustHook { key, current_hash } => {
                 self.trust_hook(app_server, key, current_hash);
+            }
+            AppEvent::TrustHooks { updates } => {
+                self.trust_hooks(app_server, updates);
             }
             AppEvent::HookEnabledSet {
                 key,
