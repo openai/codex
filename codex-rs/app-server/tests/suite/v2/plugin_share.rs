@@ -324,7 +324,7 @@ async fn plugin_share_save_rejects_listed_discoverability() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_share_save_rejects_when_plugin_sharing_disabled() -> Result<()> {
+async fn plugin_share_save_rejects_when_plugin_sharing_not_allowed() -> Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = TempDir::new()?;
     let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
@@ -338,7 +338,9 @@ chatgpt_base_url = "{}/backend-api"
 [features]
 plugins = true
 remote_plugin = true
-plugin_sharing = false
+
+[plugins]
+allow_sharing = false
 "#,
             server.uri()
         ),

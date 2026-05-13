@@ -344,6 +344,47 @@ consolidation_model = "gpt-5.2"
 }
 
 #[test]
+fn plugins_top_level_config_preserves_plugin_entries() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+            [plugins]
+            allow_sharing = false
+
+            [plugins."linear@openai-curated"]
+            enabled = true
+        "#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert!(!cfg.plugins.allow_sharing);
+    assert_eq!(
+        cfg.plugins
+            .entries
+            .get("linear@openai-curated")
+            .map(|plugin| plugin.enabled),
+        Some(true)
+    );
+}
+
+#[test]
+fn plugins_top_level_config_serializes_sharing_disable() -> anyhow::Result<()> {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+            [plugins]
+            allow_sharing = false
+        "#,
+    )?;
+
+    let serialized = toml::to_string(&cfg)?;
+
+    assert!(
+        serialized.contains("allow_sharing = false"),
+        "serialized config missing sharing disable:\n{serialized}"
+    );
+    Ok(())
+}
+
+#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
@@ -3207,29 +3248,32 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
     ]);
     let source = RequirementSource::CloudRequirements;
     let requirements = Sourced::new(
-        BTreeMap::from([(
-            "sample@test".to_string(),
-            codex_config::PluginRequirementsToml {
-                mcp_servers: Some(BTreeMap::from([
-                    (
-                        MATCHED_SERVER.to_string(),
-                        McpServerRequirement {
-                            identity: McpServerIdentity::Command {
-                                command: GOOD_CMD.to_string(),
+        codex_config::PluginsRequirementsToml {
+            allow_sharing: None,
+            entries: BTreeMap::from([(
+                "sample@test".to_string(),
+                codex_config::PluginRequirementToml {
+                    mcp_servers: Some(BTreeMap::from([
+                        (
+                            MATCHED_SERVER.to_string(),
+                            McpServerRequirement {
+                                identity: McpServerIdentity::Command {
+                                    command: GOOD_CMD.to_string(),
+                                },
                             },
-                        },
-                    ),
-                    (
-                        MISMATCHED_SERVER.to_string(),
-                        McpServerRequirement {
-                            identity: McpServerIdentity::Command {
-                                command: GOOD_CMD.to_string(),
+                        ),
+                        (
+                            MISMATCHED_SERVER.to_string(),
+                            McpServerRequirement {
+                                identity: McpServerIdentity::Command {
+                                    command: GOOD_CMD.to_string(),
+                                },
                             },
-                        },
-                    ),
-                ])),
-            },
-        )]),
+                        ),
+                    ])),
+                },
+            )]),
+        },
         source.clone(),
     );
 
@@ -3257,19 +3301,22 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
     let mut servers = HashMap::from([("server-a".to_string(), stdio_mcp("cmd-a"))]);
     let source = RequirementSource::CloudRequirements;
     let requirements = Sourced::new(
-        BTreeMap::from([(
-            "other@test".to_string(),
-            codex_config::PluginRequirementsToml {
-                mcp_servers: Some(BTreeMap::from([(
-                    "server-a".to_string(),
-                    McpServerRequirement {
-                        identity: McpServerIdentity::Command {
-                            command: "cmd-a".to_string(),
+        codex_config::PluginsRequirementsToml {
+            allow_sharing: None,
+            entries: BTreeMap::from([(
+                "other@test".to_string(),
+                codex_config::PluginRequirementToml {
+                    mcp_servers: Some(BTreeMap::from([(
+                        "server-a".to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: "cmd-a".to_string(),
+                            },
                         },
-                    },
-                )])),
-            },
-        )]),
+                    )])),
+                },
+            )]),
+        },
         source.clone(),
     );
 
@@ -3291,6 +3338,28 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
             )
         )])
     );
+}
+
+#[tokio::test]
+async fn plugins_allow_sharing_respects_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = codex_config::ConfigRequirementsToml {
+        plugins: Some(codex_config::PluginsRequirementsToml {
+            allow_sharing: Some(false),
+            entries: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.plugins_allow_sharing());
+    Ok(())
 }
 
 #[tokio::test]
@@ -3633,19 +3702,22 @@ enabled = true
     )?;
 
     let requirements = codex_config::ConfigRequirementsToml {
-        plugins: Some(BTreeMap::from([(
-            "sample@test".to_string(),
-            codex_config::PluginRequirementsToml {
-                mcp_servers: Some(BTreeMap::from([(
-                    "sample".to_string(),
-                    McpServerRequirement {
-                        identity: McpServerIdentity::Url {
-                            url: "https://sample.example/mcp".to_string(),
+        plugins: Some(codex_config::PluginsRequirementsToml {
+            allow_sharing: None,
+            entries: BTreeMap::from([(
+                "sample@test".to_string(),
+                codex_config::PluginRequirementToml {
+                    mcp_servers: Some(BTreeMap::from([(
+                        "sample".to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Url {
+                                url: "https://sample.example/mcp".to_string(),
+                            },
                         },
-                    },
-                )])),
-            },
-        )])),
+                    )])),
+                },
+            )]),
+        }),
         ..Default::default()
     };
     let config = ConfigBuilder::default()

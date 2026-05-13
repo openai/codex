@@ -91,7 +91,7 @@ pub struct ConfigRequirements {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
-    pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    pub plugins: Option<Sourced<PluginsRequirementsToml>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
@@ -157,13 +157,42 @@ pub struct McpServerRequirement {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginRequirementsToml {
+pub struct PluginsRequirementsToml {
+    pub allow_sharing: Option<bool>,
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, PluginRequirementToml>,
+}
+
+impl PluginsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allow_sharing.is_none() && self.entries.values().all(PluginRequirementToml::is_empty)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginRequirementToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
 }
 
-impl PluginRequirementsToml {
+impl PluginRequirementToml {
     pub fn is_empty(&self) -> bool {
         self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
+    }
+}
+
+pub(crate) fn merge_plugin_requirements_descending(
+    base: &mut PluginsRequirementsToml,
+    incoming: PluginsRequirementsToml,
+) {
+    base.allow_sharing =
+        if base.allow_sharing == Some(false) || incoming.allow_sharing == Some(false) {
+            Some(false)
+        } else {
+            base.allow_sharing.or(incoming.allow_sharing)
+        };
+
+    if base.entries.is_empty() {
+        base.entries = incoming.entries;
     }
 }
 
@@ -695,7 +724,7 @@ pub struct ConfigRequirementsToml {
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
-    pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
+    pub plugins: Option<PluginsRequirementsToml>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -743,7 +772,7 @@ pub struct ConfigRequirementsWithSources {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
-    pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    pub plugins: Option<Sourced<PluginsRequirementsToml>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -810,7 +839,6 @@ impl ConfigRequirementsWithSources {
                 feature_requirements,
                 hooks,
                 mcp_servers,
-                plugins,
                 rules,
                 enforce_residency,
                 network,
@@ -818,6 +846,14 @@ impl ConfigRequirementsWithSources {
                 guardian_policy_config,
             }
         );
+
+        if let Some(incoming_plugins) = other.plugins.take() {
+            if let Some(existing_plugins) = self.plugins.as_mut() {
+                merge_plugin_requirements_descending(&mut existing_plugins.value, incoming_plugins);
+            } else {
+                self.plugins = Some(Sourced::new(incoming_plugins, source.clone()));
+            }
+        }
 
         if let Some(incoming_apps) = other.apps.take() {
             if let Some(existing_apps) = self.apps.as_mut() {
@@ -949,7 +985,7 @@ impl ConfigRequirementsToml {
             && self
                 .plugins
                 .as_ref()
-                .is_none_or(|plugins| plugins.values().all(PluginRequirementsToml::is_empty))
+                .is_none_or(PluginsRequirementsToml::is_empty)
             && self
                 .apps
                 .as_ref()
@@ -1752,6 +1788,68 @@ allowed_approvals_reviewers = ["user"]
                 },
             )]),
         }
+    }
+
+    fn plugin_requirements(allow_sharing: Option<bool>) -> PluginsRequirementsToml {
+        PluginsRequirementsToml {
+            allow_sharing,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    fn plugin_mcp_requirements(plugin_name: &str) -> PluginsRequirementsToml {
+        PluginsRequirementsToml {
+            allow_sharing: None,
+            entries: BTreeMap::from([(
+                plugin_name.to_string(),
+                PluginRequirementToml { mcp_servers: None },
+            )]),
+        }
+    }
+
+    #[test]
+    fn merge_plugin_requirements_descending_prefers_false_from_lower_precedence() {
+        let mut merged = plugin_requirements(/*allow_sharing*/ Some(true));
+        let lower = plugin_requirements(/*allow_sharing*/ Some(false));
+
+        merge_plugin_requirements_descending(&mut merged, lower);
+
+        assert_eq!(merged, plugin_requirements(/*allow_sharing*/ Some(false)));
+    }
+
+    #[test]
+    fn merge_plugin_requirements_descending_preserves_higher_plugin_entries() {
+        let mut merged = plugin_mcp_requirements("higher@test");
+        let lower = plugin_mcp_requirements("lower@test");
+
+        merge_plugin_requirements_descending(&mut merged, lower);
+
+        assert_eq!(merged, plugin_mcp_requirements("higher@test"));
+    }
+
+    #[test]
+    fn merge_unset_fields_plugins_empty_higher_source_does_not_block_lower_sharing_disable() {
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            ConfigRequirementsToml {
+                plugins: Some(plugin_requirements(/*allow_sharing*/ None)),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+            ConfigRequirementsToml {
+                plugins: Some(plugin_requirements(/*allow_sharing*/ Some(false))),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            target.plugins.map(|plugins| plugins.value),
+            Some(plugin_requirements(/*allow_sharing*/ Some(false))),
+        );
     }
 
     #[test]
@@ -2930,6 +3028,9 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn deserialize_plugin_mcp_server_requirements() -> Result<()> {
         let toml_str = r#"
+            [plugins]
+            allow_sharing = false
+
             [plugins."sample@test".mcp_servers.sample.identity]
             command = "sample-mcp"
 
@@ -2942,34 +3043,37 @@ command = "python3 /enterprise/hooks/pre.py"
         assert_eq!(
             requirements.plugins,
             Some(Sourced::new(
-                BTreeMap::from([
-                    (
-                        "remote@test".to_string(),
-                        PluginRequirementsToml {
-                            mcp_servers: Some(BTreeMap::from([(
-                                "remote".to_string(),
-                                McpServerRequirement {
-                                    identity: McpServerIdentity::Url {
-                                        url: "https://example.com/mcp".to_string(),
+                PluginsRequirementsToml {
+                    allow_sharing: Some(false),
+                    entries: BTreeMap::from([
+                        (
+                            "remote@test".to_string(),
+                            PluginRequirementToml {
+                                mcp_servers: Some(BTreeMap::from([(
+                                    "remote".to_string(),
+                                    McpServerRequirement {
+                                        identity: McpServerIdentity::Url {
+                                            url: "https://example.com/mcp".to_string(),
+                                        },
                                     },
-                                },
-                            )])),
-                        },
-                    ),
-                    (
-                        "sample@test".to_string(),
-                        PluginRequirementsToml {
-                            mcp_servers: Some(BTreeMap::from([(
-                                "sample".to_string(),
-                                McpServerRequirement {
-                                    identity: McpServerIdentity::Command {
-                                        command: "sample-mcp".to_string(),
+                                )])),
+                            },
+                        ),
+                        (
+                            "sample@test".to_string(),
+                            PluginRequirementToml {
+                                mcp_servers: Some(BTreeMap::from([(
+                                    "sample".to_string(),
+                                    McpServerRequirement {
+                                        identity: McpServerIdentity::Command {
+                                            command: "sample-mcp".to_string(),
+                                        },
                                     },
-                                },
-                            )])),
-                        },
-                    ),
-                ]),
+                                )])),
+                            },
+                        ),
+                    ]),
+                },
                 RequirementSource::Unknown,
             ))
         );

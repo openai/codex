@@ -1458,19 +1458,22 @@ command = "sample-mcp"
         assert_eq!(
             result,
             Some(ConfigRequirementsToml {
-                plugins: Some(BTreeMap::from([(
-                    "sample@test".to_string(),
-                    codex_config::PluginRequirementsToml {
-                        mcp_servers: Some(BTreeMap::from([(
-                            "sample".to_string(),
-                            codex_config::McpServerRequirement {
-                                identity: codex_config::McpServerIdentity::Command {
-                                    command: "sample-mcp".to_string(),
+                plugins: Some(codex_config::PluginsRequirementsToml {
+                    allow_sharing: None,
+                    entries: BTreeMap::from([(
+                        "sample@test".to_string(),
+                        codex_config::PluginRequirementToml {
+                            mcp_servers: Some(BTreeMap::from([(
+                                "sample".to_string(),
+                                codex_config::McpServerRequirement {
+                                    identity: codex_config::McpServerIdentity::Command {
+                                        command: "sample-mcp".to_string(),
+                                    },
                                 },
-                            },
-                        )])),
-                    },
-                )])),
+                            )])),
+                        },
+                    )]),
+                }),
                 ..Default::default()
             })
         );

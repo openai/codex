@@ -791,6 +791,29 @@ pub use crate::skills_config::SkillConfig;
 pub use crate::skills_config::SkillsConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct PluginsConfig {
+    /// Whether remote plugin sharing flows are allowed.
+    #[serde(
+        default = "default_enabled",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
+    pub allow_sharing: bool,
+
+    /// User-level plugin config entries keyed by plugin name.
+    #[serde(default, flatten)]
+    pub entries: HashMap<String, PluginConfig>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            allow_sharing: true,
+            entries: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]

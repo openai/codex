@@ -18,7 +18,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
-use codex_config::PluginRequirementsToml;
+use codex_config::PluginsRequirementsToml;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -45,6 +45,7 @@ use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::PluginsConfig;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -1093,6 +1094,27 @@ impl Config {
         )
     }
 
+    pub fn plugins_allow_sharing(&self) -> bool {
+        let config_allows_sharing = self
+            .config_layer_stack
+            .effective_config()
+            .get("plugins")
+            .cloned()
+            .and_then(|value| {
+                let plugins: Result<PluginsConfig, _> = value.try_into();
+                plugins.ok()
+            })
+            .is_none_or(|plugins| plugins.allow_sharing);
+        let requirements_allow_sharing = self
+            .config_layer_stack
+            .requirements()
+            .plugins
+            .as_ref()
+            .and_then(|plugins| plugins.value.allow_sharing)
+            .unwrap_or(true);
+        config_allows_sharing && requirements_allow_sharing
+    }
+
     pub async fn to_mcp_config(
         &self,
         plugins_manager: &codex_core_plugins::PluginsManager,
@@ -1399,7 +1421,7 @@ fn filter_mcp_servers_by_requirements(
 fn filter_plugin_mcp_servers_by_requirements(
     plugin_config_name: &str,
     mcp_servers: &mut HashMap<String, McpServerConfig>,
-    plugin_requirements: Option<&Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    plugin_requirements: Option<&Sourced<PluginsRequirementsToml>>,
 ) {
     let Some(requirements) = plugin_requirements else {
         return;
@@ -1407,6 +1429,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     let source = requirements.source.clone();
     let plugin_mcp_requirements = requirements
         .value
+        .entries
         .get(plugin_config_name)
         .and_then(|plugin| plugin.mcp_servers.as_ref());
 

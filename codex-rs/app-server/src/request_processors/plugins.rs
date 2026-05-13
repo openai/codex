@@ -536,7 +536,7 @@ impl PluginRequestProcessor {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
         }
         if marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe)
-            && config.features.enabled(Feature::PluginSharing)
+            && config.plugins_allow_sharing()
         {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
@@ -849,7 +849,7 @@ impl PluginRequestProcessor {
         params: PluginShareSaveParams,
     ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
-        if !config.features.enabled(Feature::PluginSharing) {
+        if !config.plugins_allow_sharing() {
             return Err(invalid_request("plugin sharing is disabled"));
         }
         let PluginShareSaveParams {

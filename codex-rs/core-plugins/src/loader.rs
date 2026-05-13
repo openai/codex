@@ -13,6 +13,7 @@ use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
+use codex_config::types::PluginsConfig;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
@@ -394,8 +395,9 @@ fn configured_plugins_from_user_config_value(
     let Some(plugins_value) = user_config.get("plugins") else {
         return HashMap::new();
     };
-    match plugins_value.clone().try_into() {
-        Ok(plugins) => plugins,
+    let plugins: Result<PluginsConfig, _> = plugins_value.clone().try_into();
+    match plugins {
+        Ok(plugins) => plugins.entries,
         Err(err) => {
             warn!("invalid plugins config: {err}");
             HashMap::new()

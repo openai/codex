@@ -19,7 +19,7 @@ use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OtelConfigToml;
-use crate::types::PluginConfig;
+use crate::types::PluginsConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
@@ -382,9 +382,10 @@ pub struct ConfigToml {
     /// Lifecycle hooks configured inline in TOML plus user-level overrides.
     pub hooks: Option<HooksToml>,
 
-    /// User-level plugin config entries keyed by plugin name.
+    /// Plugin system config and user-level plugin entries.
     #[serde(default)]
-    pub plugins: HashMap<String, PluginConfig>,
+    #[schemars(schema_with = "crate::schema::plugins_schema")]
+    pub plugins: PluginsConfig,
 
     /// User-level marketplace entries keyed by marketplace name.
     #[serde(default)]

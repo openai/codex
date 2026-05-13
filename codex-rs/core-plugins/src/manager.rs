@@ -53,6 +53,7 @@ use codex_config::apply_user_plugin_config_edits;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
+use codex_config::types::PluginsConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
 use codex_hooks::plugin_hook_declarations;
@@ -2018,8 +2019,9 @@ fn configured_plugins_from_user_config_value(
     let Some(plugins_value) = user_config.get("plugins") else {
         return HashMap::new();
     };
-    match plugins_value.clone().try_into() {
-        Ok(plugins) => plugins,
+    let plugins: Result<PluginsConfig, _> = plugins_value.clone().try_into();
+    match plugins {
+        Ok(plugins) => plugins.entries,
         Err(err) => {
             warn!("invalid plugins config: {err}");
             HashMap::new()

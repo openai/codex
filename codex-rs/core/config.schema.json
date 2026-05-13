@@ -496,9 +496,6 @@
             "plugin_hooks": {
               "type": "boolean"
             },
-            "plugin_sharing": {
-              "type": "boolean"
-            },
             "plugins": {
               "type": "boolean"
             },
@@ -4176,9 +4173,6 @@
         "plugin_hooks": {
           "type": "boolean"
         },
-        "plugin_sharing": {
-          "type": "boolean"
-        },
         "plugins": {
           "type": "boolean"
         },
@@ -4551,7 +4545,14 @@
         "$ref": "#/definitions/PluginConfig"
       },
       "default": {},
-      "description": "User-level plugin config entries keyed by plugin name.",
+      "description": "Plugin system config and user-level plugin entries.",
+      "properties": {
+        "allow_sharing": {
+          "default": true,
+          "description": "Whether remote plugin sharing flows are allowed.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "profile": {

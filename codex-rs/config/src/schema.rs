@@ -1,4 +1,5 @@
 use crate::config_toml::ConfigToml;
+use crate::types::PluginConfig;
 use crate::types::RawMcpServerConfig;
 use codex_features::FEATURES;
 use codex_features::legacy_feature_keys;
@@ -78,6 +79,29 @@ pub fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
         additional_properties: Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>())),
         ..Default::default()
     };
+    object.object = Some(Box::new(validation));
+
+    Schema::Object(object)
+}
+
+/// Schema for the `[plugins]` map: known top-level plugin settings plus plugin entries.
+pub fn plugins_schema(schema_gen: &mut SchemaGenerator) -> Schema {
+    let mut object = SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        ..Default::default()
+    };
+
+    let mut validation = ObjectValidation::default();
+    let mut allow_sharing_schema = schema_gen.subschema_for::<bool>();
+    if let Schema::Object(schema_object) = &mut allow_sharing_schema {
+        let metadata = schema_object.metadata();
+        metadata.description = Some("Whether remote plugin sharing flows are allowed.".to_string());
+        metadata.default = Some(Value::Bool(true));
+    }
+    validation
+        .properties
+        .insert("allow_sharing".to_string(), allow_sharing_schema);
+    validation.additional_properties = Some(Box::new(schema_gen.subschema_for::<PluginConfig>()));
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)
