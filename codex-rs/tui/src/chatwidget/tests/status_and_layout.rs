@@ -1,5 +1,6 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
+use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
