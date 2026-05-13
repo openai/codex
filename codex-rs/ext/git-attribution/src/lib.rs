@@ -1,26 +1,19 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_extension_api::CodexExtension;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
-use codex_extension_api::ThreadStartContributor;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
 
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
-/// Prompt-only extension that contributes the configured git-attribution instruction.
+/// Contributes the configured git-attribution instruction.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GitAttributionExtension;
-
-impl GitAttributionExtension {
-    /// Creates an extension instance.
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 impl ContextContributor for GitAttributionExtension {
     fn contribute(
@@ -47,30 +40,20 @@ struct GitAttributionConfig {
     prompt: Option<String>,
 }
 
-impl ThreadStartContributor<Config> for GitAttributionExtension {
-    fn contribute(
-        &self,
-        config: &Config,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) {
-        thread_store.insert(GitAttributionConfig {
-            enabled: config.features.enabled(Feature::CodexGitCommit),
-            prompt: config.commit_attribution.clone(),
+impl ThreadLifecycleContributor<Config> for GitAttributionExtension {
+    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+        input.thread_store.insert(GitAttributionConfig {
+            enabled: input.config.features.enabled(Feature::CodexGitCommit),
+            prompt: input.config.commit_attribution.clone(),
         });
     }
 }
 
-impl CodexExtension<Config> for GitAttributionExtension {
-    fn install(self: Arc<Self>, registry: &mut ExtensionRegistryBuilder<Config>) {
-        registry.thread_start_contributor(self.clone());
-        registry.prompt_contributor(self);
-    }
-}
-
-/// Creates a shared git-attribution extension instance.
-pub fn extension() -> Arc<GitAttributionExtension> {
-    Arc::new(GitAttributionExtension::new())
+/// Installs the git-attribution contributors into the extension registry.
+pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
+    let extension = Arc::new(GitAttributionExtension);
+    registry.thread_lifecycle_contributor(extension.clone());
+    registry.prompt_contributor(extension);
 }
 
 fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {

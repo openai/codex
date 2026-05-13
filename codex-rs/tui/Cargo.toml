@@ -86,10 +86,11 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 rmcp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
@@ -151,6 +152,7 @@ arboard = { workspace = true }
 [dev-dependencies]
 codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
+core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
@@ -161,3 +163,4 @@ rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
+wiremock = { workspace = true }

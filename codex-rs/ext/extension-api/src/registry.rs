@@ -1,26 +1,33 @@
 use std::sync::Arc;
 
-use crate::ApprovalInterceptorContributor;
-use crate::CodexExtension;
+use crate::ApprovalReviewContributor;
+use crate::ApprovalReviewFuture;
 use crate::ContextContributor;
-use crate::ThreadStartContributor;
+use crate::ExtensionData;
+use crate::ThreadLifecycleContributor;
+use crate::TokenUsageContributor;
 use crate::ToolContributor;
 use crate::TurnItemContributor;
+use crate::TurnLifecycleContributor;
 
-/// Mutable registry used while extensions install their typed contributions.
+/// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C> {
-    thread_start_contributors: Vec<Arc<dyn ThreadStartContributor<C>>>,
+    thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
+    token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    approval_interceptor_contributors: Vec<Arc<dyn ApprovalInterceptorContributor>>,
+    approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
 impl<C> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
-            thread_start_contributors: Vec::new(),
-            approval_interceptor_contributors: Vec::new(),
+            thread_lifecycle_contributors: Vec::new(),
+            turn_lifecycle_contributors: Vec::new(),
+            token_usage_contributors: Vec::new(),
+            approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             tool_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
@@ -34,35 +41,27 @@ impl<C> ExtensionRegistryBuilder<C> {
         Self::default()
     }
 
-    /// Installs one extension and returns the builder.
-    #[must_use]
-    pub fn with_extension<E>(mut self, extension: Arc<E>) -> Self
-    where
-        E: CodexExtension<C> + 'static,
-    {
-        self.install_extension(extension);
-        self
+    /// Registers one approval-review contributor.
+    pub fn approval_review_contributor(&mut self, contributor: Arc<dyn ApprovalReviewContributor>) {
+        self.approval_review_contributors.push(contributor);
     }
 
-    /// Installs one extension into the registry under construction.
-    pub fn install_extension<E>(&mut self, extension: Arc<E>)
-    where
-        E: CodexExtension<C> + 'static,
-    {
-        extension.install(self);
-    }
-
-    /// Registers one approval interceptor contributor.
-    pub fn approval_interceptor_contributor(
+    /// Registers one thread-lifecycle contributor.
+    pub fn thread_lifecycle_contributor(
         &mut self,
-        contributor: Arc<dyn ApprovalInterceptorContributor>,
+        contributor: Arc<dyn ThreadLifecycleContributor<C>>,
     ) {
-        self.approval_interceptor_contributors.push(contributor);
+        self.thread_lifecycle_contributors.push(contributor);
     }
 
-    /// Registers one thread-start contributor.
-    pub fn thread_start_contributor(&mut self, contributor: Arc<dyn ThreadStartContributor<C>>) {
-        self.thread_start_contributors.push(contributor);
+    /// Registers one turn-lifecycle contributor.
+    pub fn turn_lifecycle_contributor(&mut self, contributor: Arc<dyn TurnLifecycleContributor>) {
+        self.turn_lifecycle_contributors.push(contributor);
+    }
+
+    /// Registers one token-usage contributor.
+    pub fn token_usage_contributor(&mut self, contributor: Arc<dyn TokenUsageContributor>) {
+        self.token_usage_contributors.push(contributor);
     }
 
     /// Registers one prompt contributor.
@@ -83,8 +82,10 @@ impl<C> ExtensionRegistryBuilder<C> {
     /// Finishes construction and returns the immutable registry.
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
-            thread_start_contributors: self.thread_start_contributors,
-            approval_interceptor_contributors: self.approval_interceptor_contributors,
+            thread_lifecycle_contributors: self.thread_lifecycle_contributors,
+            turn_lifecycle_contributors: self.turn_lifecycle_contributors,
+            token_usage_contributors: self.token_usage_contributors,
+            approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             tool_contributors: self.tool_contributors,
             turn_item_contributors: self.turn_item_contributors,
@@ -94,22 +95,42 @@ impl<C> ExtensionRegistryBuilder<C> {
 
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C> {
-    thread_start_contributors: Vec<Arc<dyn ThreadStartContributor<C>>>,
+    thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
+    token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    approval_interceptor_contributors: Vec<Arc<dyn ApprovalInterceptorContributor>>,
+    approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
 impl<C> ExtensionRegistry<C> {
-    /// Returns the registered thread-start contributors.
-    pub fn thread_start_contributors(&self) -> &[Arc<dyn ThreadStartContributor<C>>] {
-        &self.thread_start_contributors
+    /// Returns the registered thread-lifecycle contributors.
+    pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
+        &self.thread_lifecycle_contributors
     }
 
-    /// Returns the registered approval interceptor contributors.
-    pub fn approval_interceptor_contributors(&self) -> &[Arc<dyn ApprovalInterceptorContributor>] {
-        &self.approval_interceptor_contributors
+    /// Returns the registered turn-lifecycle contributors.
+    pub fn turn_lifecycle_contributors(&self) -> &[Arc<dyn TurnLifecycleContributor>] {
+        &self.turn_lifecycle_contributors
+    }
+
+    /// Returns the registered token-usage contributors.
+    pub fn token_usage_contributors(&self) -> &[Arc<dyn TokenUsageContributor>] {
+        &self.token_usage_contributors
+    }
+
+    /// Claims the first rendered approval-review prompt accepted by an
+    /// installed contributor.
+    pub fn approval_review<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> Option<ApprovalReviewFuture<'a>> {
+        self.approval_review_contributors
+            .iter()
+            .find_map(|contributor| contributor.contribute(session_store, thread_store, prompt))
     }
 
     /// Returns the registered prompt contributors.
@@ -128,7 +149,7 @@ impl<C> ExtensionRegistry<C> {
     }
 }
 
-/// Creates an empty shared registry for hosts that do not install extensions.
+/// Creates an empty shared registry for hosts that do not register contributions.
 pub fn empty_extension_registry<C>() -> Arc<ExtensionRegistry<C>> {
     Arc::new(ExtensionRegistryBuilder::new().build())
 }

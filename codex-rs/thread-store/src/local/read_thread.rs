@@ -273,18 +273,24 @@ async fn stored_thread_from_sqlite_metadata(
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()
-            .flatten(),
+            .flatten()
+            .filter(|title| !title.trim().is_empty()),
     };
     let session_meta = read_session_meta_line(metadata.rollout_path.as_path())
         .await
         .ok()
         .map(|meta_line| meta_line.meta);
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let preview = metadata
+        .preview
+        .clone()
+        .or_else(|| metadata.first_user_message.clone())
+        .unwrap_or_default();
     StoredThread {
         thread_id: metadata.id,
         rollout_path: Some(metadata.rollout_path),
         forked_from_id,
-        preview: metadata.first_user_message.clone().unwrap_or_default(),
+        preview,
         name,
         model_provider: if metadata.model_provider.is_empty() {
             store.config.default_model_provider_id.clone()
@@ -1009,8 +1015,9 @@ mod tests {
         builder.cwd = external.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.title = "SQLite title".to_string();
-        metadata.first_user_message = Some("SQLite preview".to_string());
+        metadata.preview = Some("optimize the benchmark".to_string());
+        metadata.first_user_message = Some("next normal prompt".to_string());
+        metadata.title = "next normal prompt".to_string();
         metadata.model = Some("sqlite-model".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -1028,9 +1035,12 @@ mod tests {
 
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.rollout_path, Some(rollout_path));
-        assert_eq!(thread.preview, "SQLite preview");
-        assert_eq!(thread.first_user_message.as_deref(), Some("SQLite preview"));
-        assert_eq!(thread.name.as_deref(), Some("SQLite title"));
+        assert_eq!(thread.preview, "optimize the benchmark");
+        assert_eq!(
+            thread.first_user_message.as_deref(),
+            Some("next normal prompt")
+        );
+        assert_eq!(thread.name, None);
         assert_eq!(thread.model_provider, "sqlite-provider");
         assert_eq!(thread.model.as_deref(), Some("sqlite-model"));
         assert_eq!(thread.cwd, external.path().join("workspace"));

@@ -58,6 +58,8 @@ const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-start-ms";
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
@@ -145,6 +147,13 @@ async fn responses_websocket_streams_request() {
         body["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
+    let stream_request_start_ms = body["client_metadata"]
+        [X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY]
+        .as_str()
+        .expect("missing websocket stream request start timestamp")
+        .parse::<i64>()
+        .expect("websocket stream request start timestamp should be an integer");
+    assert!(stream_request_start_ms > 0);
 
     server.shutdown().await;
 }

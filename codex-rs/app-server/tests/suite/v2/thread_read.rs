@@ -1304,7 +1304,7 @@ async fn seed_pathless_store_thread(
         .update_thread_metadata(UpdateThreadMetadataParams {
             thread_id,
             patch: ThreadMetadataPatch {
-                name: Some("named pathless thread".to_string()),
+                name: Some(Some("named pathless thread".to_string())),
                 ..Default::default()
             },
             include_archived: true,

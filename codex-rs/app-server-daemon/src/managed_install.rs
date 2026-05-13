@@ -8,6 +8,12 @@ use anyhow::Result;
 #[cfg(unix)]
 use anyhow::anyhow;
 #[cfg(unix)]
+use sha2::Digest;
+#[cfg(unix)]
+use sha2::Sha256;
+#[cfg(unix)]
+use tokio::fs;
+#[cfg(unix)]
 use tokio::process::Command;
 
 pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
@@ -16,6 +22,16 @@ pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
         .join("standalone")
         .join("current")
         .join(managed_codex_file_name())
+}
+
+#[cfg(unix)]
+pub(crate) async fn resolved_managed_codex_bin(codex_bin: &Path) -> Result<PathBuf> {
+    fs::canonicalize(codex_bin).await.with_context(|| {
+        format!(
+            "failed to resolve managed Codex binary {}",
+            codex_bin.display()
+        )
+    })
 }
 
 #[cfg(unix)]
@@ -45,6 +61,27 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
         )
     })?;
     parse_codex_version(&stdout)
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecutableIdentity {
+    digest: [u8; 32],
+}
+
+#[cfg(unix)]
+pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableIdentity> {
+    let bytes = fs::read(executable)
+        .await
+        .with_context(|| format!("failed to read executable {}", executable.display()))?;
+    Ok(executable_identity_from_bytes(&bytes))
+}
+
+#[cfg(unix)]
+pub(crate) fn executable_identity_from_bytes(bytes: &[u8]) -> ExecutableIdentity {
+    ExecutableIdentity {
+        digest: Sha256::digest(bytes).into(),
+    }
 }
 
 fn managed_codex_file_name() -> &'static str {

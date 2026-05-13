@@ -62,6 +62,12 @@
     },
     "ConfigRequirements": {
       "properties": {
+        "allowManagedHooksOnly": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
@@ -120,6 +126,12 @@
             },
             "command": {
               "type": "string"
+            },
+            "commandWindows": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "statusMessage": {
               "type": [

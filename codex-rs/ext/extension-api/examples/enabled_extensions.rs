@@ -1,29 +1,23 @@
 #[path = "enabled_extensions/shared_state_extension.rs"]
 mod shared_state_extension;
 
-use std::sync::Arc;
-
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
-use shared_state_extension::SharedStateExtension;
 use shared_state_extension::recorded_style_contributions;
 use shared_state_extension::recorded_usage_contributions;
 
 fn main() {
-    // 1. Build the extension value owned by the host.
-    let extension = Arc::new(SharedStateExtension);
+    // 1. Install the contributors for the thread-start input type this host exposes.
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    shared_state_extension::install(&mut builder);
+    let registry = builder.build();
 
-    // 2. Install it into the registry for the thread-start input type this host exposes.
-    let registry = ExtensionRegistryBuilder::<()>::new()
-        .with_extension(extension)
-        .build();
-
-    // 3. The host decides which stores are shared.
+    // 2. The host decides which stores are shared.
     let session_store = ExtensionData::new();
     let first_thread_store = ExtensionData::new();
     let second_thread_store = ExtensionData::new();
 
-    // 4. Reusing the same session store shares session state across threads.
+    // 3. Reusing the same session store shares session state across threads.
     let first_thread_fragments = contribute_prompt(&registry, &session_store, &first_thread_store);
     contribute_prompt(&registry, &session_store, &first_thread_store);
     contribute_prompt(&registry, &session_store, &second_thread_store);

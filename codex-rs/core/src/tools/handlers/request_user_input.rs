@@ -8,8 +8,8 @@ use crate::tools::handlers::request_user_input_spec::create_request_user_input_t
 use crate::tools::handlers::request_user_input_spec::normalize_request_user_input_args;
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -19,7 +19,7 @@ pub struct RequestUserInputHandler {
     pub available_modes: Vec<ModeKind>,
 }
 
-impl ToolHandler for RequestUserInputHandler {
+impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -30,10 +30,6 @@ impl ToolHandler for RequestUserInputHandler {
         Some(create_request_user_input_tool(
             request_user_input_tool_description(&self.available_modes),
         ))
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -86,6 +82,8 @@ impl ToolHandler for RequestUserInputHandler {
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
+
+impl ToolHandler for RequestUserInputHandler {}
 
 #[cfg(test)]
 #[path = "request_user_input_tests.rs"]

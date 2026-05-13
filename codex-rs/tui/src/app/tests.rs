@@ -13,6 +13,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
@@ -73,6 +74,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
@@ -84,6 +86,7 @@ use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -301,6 +304,18 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     assert!(app.transcript_cells.is_empty());
 }
 
+#[test]
+fn bypass_hook_trust_startup_warning_snapshot() {
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(
+            "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
+                .to_string(),
+        )
+        .display_lines(/*width*/ 80),
+    );
+
+    assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
+}
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -3224,8 +3239,7 @@ fn agent_picker_item_name_snapshot() {
 
 #[tokio::test]
 async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
-    let mut app = make_test_app().await;
-    app.config.developer_instructions = Some("Existing developer policy.".to_string());
+    let app = make_test_app().await;
     let original_approval_policy = app.config.permissions.approval_policy.value();
     let original_sandbox_policy = app.config.legacy_sandbox_policy();
 
@@ -3241,7 +3255,6 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
         .developer_instructions
         .as_deref()
         .expect("side developer instructions");
-    assert!(developer_instructions.contains("Existing developer policy."));
     assert!(
         developer_instructions.contains("You are in a side conversation, not the main thread.")
     );
@@ -3267,6 +3280,49 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     assert!(developer_instructions.contains("Do not modify files"));
     assert!(developer_instructions.contains("Do not request escalated permissions"));
     assert!(app.transcript_cells.is_empty());
+}
+
+#[tokio::test]
+async fn side_fork_config_inherits_parent_thread_runtime_settings() {
+    let mut app = make_test_app().await;
+    app.config.model = Some("persisted-default-model".to_string());
+    app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+
+    let parent_service_tier = ServiceTier::Fast.request_value();
+    let parent_permission_profile = PermissionProfile::workspace_write();
+    app.chat_widget.set_model("parent-thread-model");
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    app.chat_widget
+        .set_service_tier(Some(parent_service_tier.to_string()));
+    app.chat_widget
+        .set_approval_policy(AskForApproval::OnRequest);
+    app.chat_widget
+        .set_permission_profile(parent_permission_profile.clone())
+        .expect("test permission profile should be accepted");
+    app.chat_widget
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+
+    let fork_config = app.side_fork_config();
+
+    assert_eq!(
+        (
+            fork_config.model.as_deref(),
+            fork_config.model_reasoning_effort,
+            fork_config.service_tier.as_deref(),
+            fork_config.permissions.approval_policy.value(),
+            fork_config.permissions.permission_profile(),
+            fork_config.approvals_reviewer,
+        ),
+        (
+            Some("parent-thread-model"),
+            Some(ReasoningEffortConfig::High),
+            Some(parent_service_tier),
+            AskForApproval::OnRequest.to_core(),
+            parent_permission_profile,
+            ApprovalsReviewer::AutoReview,
+        )
+    );
 }
 
 #[tokio::test]
@@ -3948,8 +4004,7 @@ async fn make_test_app() -> App {
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        remote_app_server_url: None,
-        remote_app_server_auth_token: None,
+        remote_app_server_endpoint: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
@@ -4011,8 +4066,7 @@ async fn make_test_app_with_channels() -> (
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            remote_app_server_url: None,
-            remote_app_server_auth_token: None,
+            remote_app_server_endpoint: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -4115,6 +4169,32 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
     assert_eq!(rendered.lines.len(), 39);
     assert_eq!(rendered_line_text(&rendered.lines[0]), "cell 0");
     assert_eq!(rendered_line_text(&rendered.lines[38]), "cell 19");
+}
+
+#[tokio::test]
+async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda".to_string(),
+        Path::new("/tmp"),
+    ))];
+
+    let without_pet = app.render_transcript_lines_for_reflow(/*width*/ 40);
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let width = app.chat_widget.history_wrap_width(/*width*/ 40);
+    assert!(width < 40);
+    let with_pet = app.render_transcript_lines_for_reflow(width);
+
+    assert!(
+        with_pet.lines.len() > without_pet.lines.len(),
+        "expected pet-enabled transcript reflow to wrap earlier"
+    );
 }
 
 #[tokio::test]

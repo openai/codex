@@ -1,45 +1,20 @@
 # codex-tools
 
-`codex-tools` is intended to become the home for tool-related code that is
-shared across multiple crates and does not need to stay coupled to
-`codex-core`.
+`codex-tools` is the shared support crate for building, adapting, planning, and
+executing model-visible tool sets outside `codex-core`.
 
-Today this crate is intentionally small. It currently owns the shared tool
-schema and Responses API tool primitives that no longer need to live in
-`core/src/tools/spec.rs` or `core/src/client_common.rs`:
+Today this crate owns the host-facing tool models and helpers that no longer
+need to live in `core/src/tools/spec.rs` or `core/src/client_common.rs`:
 
-- `JsonSchema`
-- `AdditionalProperties`
-- `ToolDefinition`
-- `ToolSpec`
-- `ConfiguredToolSpec`
-- `ResponsesApiTool`
-- `FreeformTool`
-- `FreeformToolFormat`
-- `LoadableToolSpec`
-- `ResponsesApiWebSearchFilters`
-- `ResponsesApiWebSearchUserLocation`
-- `ResponsesApiNamespace`
-- `ResponsesApiNamespaceTool`
-- code-mode `ToolSpec` adapters and `exec` / `wait` spec builders
-- MCP resource and `test_sync_tool` spec builders
-- local host tool spec builders for shell/exec/request-permissions/view-image
-- collaboration and agent-job `ToolSpec` builders for spawn/send/wait/close,
-  `request_user_input`, and CSV fanout/reporting
-- discoverable-tool models, client filtering, and `ToolSpec` builders for
-  `tool_search` and `request_plugin_install`
-- `parse_tool_input_schema()`
-- `parse_dynamic_tool()`
-- `parse_mcp_tool()`
-- `create_tools_json_for_responses_api()`
-- `mcp_call_tool_result_output_schema()`
-- `tool_definition_to_responses_api_tool()`
-- `dynamic_tool_to_loadable_tool_spec()`
-- `dynamic_tool_to_responses_api_tool()`
-- `mcp_tool_to_responses_api_tool()`
-- `mcp_tool_to_deferred_responses_api_tool()`
-- `augment_tool_spec_for_code_mode()`
-- `tool_spec_to_code_mode_tool_definition()`
+- aggregate host models such as `ToolSpec`, `ConfiguredToolSpec`,
+  `LoadableToolSpec`, `ResponsesApiNamespace`, and
+  `ResponsesApiNamespaceTool`
+- host config and discovery models used while assembling tool sets, including
+  `ToolsConfig`, discoverable-tool models, and request-plugin-install helpers
+- host adapters such as schema sanitization, MCP/dynamic conversion, code-mode
+  augmentation, and image-detail normalization
+- shared executable-tool contracts such as `ToolExecutor`, `ToolCall`, and
+  `ToolOutput`
 
 That extraction is the first step in a longer migration. The goal is not to
 move all of `core/src/tools` into this crate in one shot. Instead, the plan is
@@ -49,13 +24,14 @@ boundaries are ready.
 
 ## Vision
 
-Over time, this crate should hold tool-facing primitives that are shared by
+Over time, this crate should hold host-side tool machinery that is shared by
 multiple consumers, for example:
 
-- schema and spec data models
-- tool input/output parsing helpers
-- tool metadata and compatibility shims that do not depend on `codex-core`
-- other narrowly scoped utility code that multiple crates need
+- host-visible aggregate tool models
+- tool-set planning and discovery helpers
+- MCP and dynamic-tool adaptation into Responses API shapes
+- code-mode compatibility shims that do not depend on `codex-core`
+- other narrowly scoped host utilities that multiple crates need
 
 The corresponding non-goals are just as important:
 
@@ -69,15 +45,13 @@ The corresponding non-goals are just as important:
 
 The expected migration shape is:
 
-1. Move low-coupling tool primitives here.
-2. Switch non-core consumers to depend on `codex-tools` directly.
+1. Keep extension-owned executable-tool authoring in `codex-extension-api`.
+2. Move host-side planning/adaptation helpers here when they no longer need to
+   stay coupled to `codex-core`.
 3. Leave compatibility-sensitive adapters in `codex-core` while downstream
    call sites are updated.
-4. Only extract higher-level tool infrastructure after the crate boundaries are
+4. Only extract higher-level host infrastructure after the crate boundaries are
    clear and independently testable.
-
-That means it is normal for `codex-core` to temporarily re-export types or
-helpers from `codex-tools` during the transition.
 
 ## Crate conventions
 

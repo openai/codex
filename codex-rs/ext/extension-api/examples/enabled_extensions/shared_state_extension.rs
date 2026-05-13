@@ -2,21 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use codex_extension_api::CodexExtension;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 
-/// Small tutorial extension that installs two prompt contributors.
-#[derive(Debug, Default)]
-pub struct SharedStateExtension;
-
-impl CodexExtension<()> for SharedStateExtension {
-    fn install(self: Arc<Self>, registry: &mut ExtensionRegistryBuilder<()>) {
-        registry.prompt_contributor(Arc::new(StyleContributor));
-        registry.prompt_contributor(Arc::new(UsageContributor));
-    }
+/// Installs the tutorial contributors used by the example host.
+pub fn install(registry: &mut ExtensionRegistryBuilder<()>) {
+    registry.prompt_contributor(Arc::new(StyleContributor));
+    registry.prompt_contributor(Arc::new(UsageContributor));
 }
 
 #[derive(Debug)]

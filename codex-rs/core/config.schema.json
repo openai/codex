@@ -379,9 +379,6 @@
             "browser_use_external": {
               "type": "boolean"
             },
-            "builtin_mcp": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -481,16 +478,25 @@
             "memory_tool": {
               "type": "boolean"
             },
+            "mentions_v2": {
+              "type": "boolean"
+            },
             "multi_agent": {
               "type": "boolean"
             },
             "multi_agent_v2": {
               "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
+            "network_proxy": {
+              "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+            },
             "personality": {
               "type": "boolean"
             },
             "plugin_hooks": {
+              "type": "boolean"
+            },
+            "plugin_sharing": {
               "type": "boolean"
             },
             "plugins": {
@@ -617,6 +623,9 @@
           "type": "boolean"
         },
         "include_apps_instructions": {
+          "type": "boolean"
+        },
+        "include_collaboration_mode_instructions": {
           "type": "boolean"
         },
         "include_environment_context": {
@@ -802,6 +811,16 @@
         }
       ]
     },
+    "FeatureToml_for_NetworkProxyConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -954,6 +973,10 @@
               "type": "boolean"
             },
             "command": {
+              "type": "string"
+            },
+            "commandWindows": {
+              "default": null,
               "type": "string"
             },
             "statusMessage": {
@@ -1491,6 +1514,75 @@
       "enum": [
         "limited",
         "full"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "type": "boolean"
+        },
+        "domains": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkProxyDomainPermissionToml"
+          },
+          "type": "object"
+        },
+        "enable_socks5": {
+          "type": "boolean"
+        },
+        "enable_socks5_udp": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/NetworkProxyModeToml"
+        },
+        "proxy_url": {
+          "type": "string"
+        },
+        "socks_url": {
+          "type": "string"
+        },
+        "unix_sockets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkProxyUnixSocketPermissionToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkProxyDomainPermissionToml": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyModeToml": {
+      "enum": [
+        "limited",
+        "full"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyUnixSocketPermissionToml": {
+      "enum": [
+        "allow",
+        "none"
       ],
       "type": "string"
     },
@@ -2606,6 +2698,20 @@
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
         },
+        "pet": {
+          "default": null,
+          "description": "Pet id to preselect in the terminal pet picker.\n\nCustom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.",
+          "type": "string"
+        },
+        "pet_anchor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiPetAnchor"
+            }
+          ],
+          "default": "composer",
+          "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
+        },
         "raw_output_mode": {
           "default": false,
           "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
@@ -3350,6 +3456,24 @@
       },
       "type": "object"
     },
+    "TuiPetAnchor": {
+      "oneOf": [
+        {
+          "description": "Anchor the pet to the bottom of the current TUI composer viewport.",
+          "enum": [
+            "composer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anchor the pet to the physical bottom of the terminal screen.",
+          "enum": [
+            "screen-bottom"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,
       "description": "Vim normal-mode keybindings for modal editing inside text areas.\n\nActions that use uppercase letters (like `A` for append-line-end) should be specified as `shift-a` in config; the runtime matcher handles cross-terminal shift-reporting differences automatically.",
@@ -3935,9 +4059,6 @@
         "browser_use_external": {
           "type": "boolean"
         },
-        "builtin_mcp": {
-          "type": "boolean"
-        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -4037,16 +4158,25 @@
         "memory_tool": {
           "type": "boolean"
         },
+        "mentions_v2": {
+          "type": "boolean"
+        },
         "multi_agent": {
           "type": "boolean"
         },
         "multi_agent_v2": {
           "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
+        "network_proxy": {
+          "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+        },
         "personality": {
           "type": "boolean"
         },
         "plugin_hooks": {
+          "type": "boolean"
+        },
+        "plugin_sharing": {
           "type": "boolean"
         },
         "plugins": {
@@ -4235,6 +4365,10 @@
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
+      "type": "boolean"
+    },
+    "include_collaboration_mode_instructions": {
+      "description": "Whether to inject the `<collaboration_mode>` developer block.",
       "type": "boolean"
     },
     "include_environment_context": {

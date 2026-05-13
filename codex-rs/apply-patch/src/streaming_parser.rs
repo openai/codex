@@ -16,6 +16,8 @@ use crate::parser::UpdateFileChunk;
 use Hunk::*;
 use ParseError::*;
 
+const ENVIRONMENT_ID_MARKER: &str = "*** Environment ID: ";
+
 #[derive(Debug, Default, Clone)]
 pub struct StreamingPatchParser {
     line_buffer: String,
@@ -29,7 +31,7 @@ struct StreamingParserState {
     hunks: Vec<Hunk>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 enum StreamingParserMode {
     #[default]
     NotStarted,
@@ -43,6 +45,13 @@ enum StreamingParserMode {
 }
 
 impl StreamingPatchParser {
+    // The live streaming parser only needs to keep the patch preview flowing.
+    // Environment selection and validation happen on the final tool invocation,
+    // so here we just tolerate and skip the optional preamble line.
+    fn is_environment_id_preamble_line(&self, line: &str) -> bool {
+        line.starts_with(ENVIRONMENT_ID_MARKER)
+    }
+
     fn ensure_update_hunk_is_not_empty(&self, line: &str) -> Result<(), ParseError> {
         if let Some(UpdateFile { path, chunks, .. }) = self.state.hunks.last() {
             if chunks.is_empty()
@@ -150,7 +159,7 @@ impl StreamingPatchParser {
 
     fn process_line(&mut self, line: &str) -> Result<(), ParseError> {
         let trimmed = line.trim();
-        match self.state.mode.clone() {
+        match self.state.mode {
             StreamingParserMode::NotStarted => {
                 if trimmed == BEGIN_PATCH_MARKER {
                     self.state.mode = StreamingParserMode::StartedPatch;
@@ -161,6 +170,9 @@ impl StreamingPatchParser {
                 ))
             }
             StreamingParserMode::StartedPatch => {
+                if self.is_environment_id_preamble_line(line) {
+                    return Ok(());
+                }
                 if self.handle_hunk_headers_and_end_patch(trimmed)? {
                     return Ok(());
                 }
@@ -428,6 +440,32 @@ mod tests {
                     path: PathBuf::from("src/two.txt"),
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn test_streaming_patch_parser_environment_id_mode() {
+        let patch = "\
+*** Begin Patch
+*** Environment ID: remote
+*** Add File: src/hello.txt
++hello
+*** End Patch
+";
+
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta(patch),
+            Ok(vec![AddFile {
+                path: PathBuf::from("src/hello.txt"),
+                contents: "hello\n".to_string(),
+            }])
+        );
+
+        let mut parser = StreamingPatchParser::default();
+        assert_eq!(
+            parser.push_delta("*** Begin Patch\n*** Environment ID:   \n"),
+            Ok(vec![])
         );
     }
 

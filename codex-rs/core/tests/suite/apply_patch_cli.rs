@@ -140,6 +140,28 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
 }
 
 #[cfg(unix)]
+fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> PermissionProfile {
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: unreadable_path,
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
+#[cfg(unix)]
 fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, link)
 }
@@ -716,6 +738,59 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     assert!(
         !harness.abs_path_exists(&escape_path).await?,
         "path traversal should be rejected; tool output: {out}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Shell ; "shell")]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc ; "shell_heredoc")]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
+async fn intercepted_apply_patch_verification_uses_local_sandbox(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(Ok(()), "symlink setup needs local filesystem link creation");
+
+    let harness = apply_patch_harness().await?;
+    let denied_target = harness.path("denied-target.txt");
+    std::fs::write(&denied_target, "outside content\n")?;
+
+    let link_rel = "soft-link.txt";
+    create_file_symlink(&denied_target, &harness.path(link_rel))?;
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {link_rel}
+@@
+-outside content
++pwned
+*** End Patch"#
+    );
+    let call_id = "apply-sandboxed-read";
+    mount_apply_patch(&harness, call_id, &patch, "fail", model_output).await;
+
+    harness
+        .submit_with_permission_profile(
+            "attempt to read denied target via intercepted apply_patch",
+            workspace_write_with_unreadable_path(AbsolutePathBuf::try_from(denied_target.clone())?),
+        )
+        .await?;
+
+    let out = harness.apply_patch_output(call_id, model_output).await;
+    assert!(
+        out.contains("apply_patch verification failed"),
+        "expected sandboxed verification failure: {out}"
+    );
+    assert!(
+        out.contains("Failed to read"),
+        "expected read failure: {out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&denied_target)?,
+        "outside content\n",
+        "verification failure should leave the denied target unchanged"
     );
     Ok(())
 }

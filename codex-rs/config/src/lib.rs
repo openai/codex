@@ -33,6 +33,8 @@ pub use cloud_requirements::CloudRequirementsLoader;
 pub use codex_app_server_protocol::ConfigLayerSource;
 pub use codex_utils_absolute_path::AbsolutePathBuf;
 pub use config_requirements::AppRequirementToml;
+pub use config_requirements::AppToolRequirementToml;
+pub use config_requirements::AppToolsRequirementsToml;
 pub use config_requirements::AppsRequirementsToml;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;

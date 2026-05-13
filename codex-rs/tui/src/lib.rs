@@ -25,6 +25,7 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -42,6 +43,7 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -110,6 +112,7 @@ mod clipboard_paste;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
+mod pets;
 pub use custom_terminal::Terminal;
 mod auto_review_denials;
 mod cwd_prompt;
@@ -124,6 +127,7 @@ mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
+mod git_action_directives;
 mod goal_display;
 mod history_cell;
 mod hooks_rpc;
@@ -269,6 +273,10 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[cfg(unix)]
+const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
@@ -299,10 +307,7 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
-    Remote {
-        websocket_url: String,
-        auth_token: Option<String>,
-    },
+    Remote { endpoint: RemoteAppServerEndpoint },
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -344,12 +349,24 @@ fn websocket_url_supports_auth_token(parsed: &Url) -> bool {
     }
 }
 
-pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
+pub fn resolve_remote_addr(addr: &str) -> color_eyre::Result<RemoteAppServerEndpoint> {
+    if let Some(socket_path) = addr.strip_prefix("unix://") {
+        let socket_path = if socket_path.is_empty() {
+            let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+            codex_app_server_client::app_server_control_socket_path(&codex_home)
+                .map_err(color_eyre::Report::new)?
+        } else {
+            AbsolutePathBuf::relative_to_current_dir(socket_path)
+                .map_err(color_eyre::Report::new)?
+        };
+        return Ok(RemoteAppServerEndpoint::UnixSocket { socket_path });
+    }
+
     let parsed = match Url::parse(addr) {
         Ok(parsed) => parsed,
         Err(_) => {
             color_eyre::eyre::bail!(
-                "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+                "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
             );
         }
     };
@@ -360,32 +377,31 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
         && parsed.query().is_none()
         && parsed.fragment().is_none()
     {
-        return Ok(parsed.to_string());
+        return Ok(RemoteAppServerEndpoint::WebSocket {
+            websocket_url: parsed.to_string(),
+            auth_token: None,
+        });
     }
 
     color_eyre::eyre::bail!(
-        "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+        "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
     );
 }
 
-fn validate_remote_auth_token_transport(websocket_url: &str) -> color_eyre::Result<()> {
-    let parsed = Url::parse(websocket_url).map_err(color_eyre::Report::new)?;
-    if websocket_url_supports_auth_token(&parsed) {
-        return Ok(());
+pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bool {
+    match endpoint {
+        RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
+            Url::parse(websocket_url).is_ok_and(|parsed| websocket_url_supports_auth_token(&parsed))
+        }
+        RemoteAppServerEndpoint::UnixSocket { .. } => false,
     }
-
-    color_eyre::eyre::bail!(
-        "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
-    )
 }
 
 async fn connect_remote_app_server(
-    websocket_url: String,
-    auth_token: Option<String>,
+    endpoint: RemoteAppServerEndpoint,
 ) -> color_eyre::Result<AppServerClient> {
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        websocket_url,
-        auth_token,
+        endpoint,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
@@ -395,6 +411,40 @@ async fn connect_remote_app_server(
     .await
     .wrap_err("failed to connect to remote app server")?;
     Ok(AppServerClient::Remote(app_server))
+}
+
+#[cfg(unix)]
+async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
+    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
+    if !socket_path.as_path().try_exists().unwrap_or(false) {
+        return None;
+    }
+
+    match tokio::time::timeout(
+        AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
+        tokio::net::UnixStream::connect(socket_path.as_path()),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => Some(socket_path),
+        Ok(Err(err)) => {
+            tracing::debug!(%err, socket_path = %socket_path.display(), "skipping default app-server daemon socket");
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                socket_path = %socket_path.display(),
+                timeout_ms = AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT.as_millis(),
+                "timed out probing default app-server daemon socket"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn maybe_probe_default_daemon_socket(_codex_home: &Path) -> Option<AbsolutePathBuf> {
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -424,10 +474,7 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::Remote {
-            websocket_url,
-            auth_token,
-        } => connect_remote_app_server(websocket_url.clone(), auth_token.clone()).await,
+        AppServerTarget::Remote { endpoint } => connect_remote_app_server(endpoint.clone()).await,
     }
 }
 
@@ -711,24 +758,8 @@ pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
-    remote: Option<String>,
-    remote_auth_token: Option<String>,
+    explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    let remote_url = remote;
-    if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
-        validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
-    }
-    let app_server_target = remote_url
-        .clone()
-        .map(|websocket_url| AppServerTarget::Remote {
-            websocket_url,
-            auth_token: remote_auth_token.clone(),
-        })
-        .unwrap_or(AppServerTarget::Embedded);
-    let remote_cwd_override = cli
-        .cwd
-        .clone()
-        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
@@ -772,6 +803,22 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
+
+    let remote_endpoint = match explicit_remote_endpoint {
+        Some(endpoint) => Some(endpoint),
+        None => maybe_probe_default_daemon_socket(&codex_home)
+            .await
+            .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path }),
+    };
+    let app_server_target = remote_endpoint
+        .clone()
+        .map_or(AppServerTarget::Embedded, |endpoint| {
+            AppServerTarget::Remote { endpoint }
+        });
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
 
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         arg0_paths.codex_self_exe.clone(),
@@ -881,6 +928,7 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -892,6 +940,36 @@ pub async fn run_main(
     )
     .await;
 
+    let otel_originator = originator().value;
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::legacy_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
+        }
+    };
+    crate::legacy_core::otel_init::record_process_start(otel.as_ref(), otel_originator.as_str());
+    crate::legacy_core::otel_init::install_sqlite_telemetry(
+        otel.as_ref(),
+        otel_originator.as_str(),
+    );
     let state_db = match &app_server_target {
         AppServerTarget::Embedded => state_db::init(&config).await,
         AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
@@ -1034,31 +1112,6 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::legacy_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_analytics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            None
-        }
-    };
-
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
@@ -1090,8 +1143,7 @@ pub async fn run_main(
         feedback,
         log_db,
         state_db,
-        remote_url,
-        remote_auth_token,
+        remote_endpoint,
         environment_manager,
     )
     .await
@@ -1112,8 +1164,7 @@ async fn run_ratatui_app(
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
-    remote_url: Option<String>,
-    remote_auth_token: Option<String>,
+    remote_endpoint: Option<RemoteAppServerEndpoint>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppExitInfo> {
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
@@ -1161,30 +1212,29 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let mut app_server = Some(
-        match start_app_server(
-            &app_server_target,
-            arg0_paths.clone(),
-            initial_config.clone(),
-            cli_kv_overrides.clone(),
-            loader_overrides.clone(),
-            cloud_requirements.clone(),
-            feedback.clone(),
-            log_db.clone(),
-            state_db.clone(),
-            environment_manager.clone(),
-        )
-        .await
-        {
-            Ok(app_server) => AppServerSession::new(app_server)
-                .with_remote_cwd_override(remote_cwd_override.clone()),
-            Err(err) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err);
-            }
-        },
-    );
+    let app_server_session = match start_app_server(
+        &app_server_target,
+        arg0_paths.clone(),
+        initial_config.clone(),
+        cli_kv_overrides.clone(),
+        loader_overrides.clone(),
+        cloud_requirements.clone(),
+        feedback.clone(),
+        log_db.clone(),
+        state_db.clone(),
+        environment_manager.clone(),
+    )
+    .await
+    {
+        Ok(app_server) => AppServerSession::new(app_server),
+        Err(err) => {
+            terminal_restore_guard.restore_silently();
+            session_log::log_session_end();
+            return Err(err);
+        }
+    }
+    .with_remote_cwd_override(remote_cwd_override.clone());
+    let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
@@ -1545,8 +1595,7 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
-        remote_url,
-        remote_auth_token,
+        remote_endpoint,
         state_db,
         environment_manager,
         startup_hooks_browser,
@@ -1780,81 +1829,103 @@ mod tests {
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_websocket_url() {
+    fn resolve_remote_addr_accepts_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
-            "ws://127.0.0.1:4500/"
+            resolve_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "ws://127.0.0.1:4500/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_secure_websocket_url() {
+    fn resolve_remote_addr_accepts_secure_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
-            "wss://example.com/"
+            resolve_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "wss://example.com/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_rejects_websocket_url_without_explicit_port() {
+    fn resolve_remote_addr_accepts_default_socket() -> color_eyre::Result<()> {
+        let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+        assert_eq!(
+            resolve_remote_addr("unix://")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: codex_app_server_client::app_server_control_socket_path(&codex_home)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_relative_socket_path() -> color_eyre::Result<()> {
+        assert_eq!(
+            resolve_remote_addr("unix://codex.sock")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_absolute_socket_path() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let socket_path = temp_dir.path().join("codex.sock");
+        assert_eq!(
+            resolve_remote_addr(&format!("unix://{}", socket_path.display()))?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::from_absolute_path(&socket_path)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_rejects_invalid_remote_addresses() {
         for addr in [
             "ws://127.0.0.1",
             "wss://example.com",
-            "ws://user:pass@127.0.0.1",
+            "127.0.0.1:4500",
+            "https://127.0.0.1:4500",
         ] {
-            let err = normalize_remote_addr(addr)
-                .expect_err("websocket URLs without an explicit port should be rejected");
-            assert!(
-                err.to_string()
-                    .contains("expected `ws://host:port` or `wss://host:port`")
-            );
+            let err = resolve_remote_addr(addr).expect_err("invalid remote addresses should fail");
+            assert!(err.to_string().contains(
+                "expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
+            ));
         }
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_invalid_input() {
-        let err = normalize_remote_addr("https://127.0.0.1:4500")
-            .expect_err("https URLs should be rejected");
+    #[tokio::test]
+    async fn default_daemon_auto_connect_skips_missing_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
         assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+            maybe_probe_default_daemon_socket(codex_home.path())
+                .await
+                .is_none()
         );
+        Ok(())
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_host_port_shortcut() {
-        let err =
-            normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
-        assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let socket_path =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
+        let _listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
+
+        assert_eq!(
+            maybe_probe_default_daemon_socket(codex_home.path()).await,
+            Some(socket_path)
         );
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_loopback_ws() {
-        validate_remote_auth_token_transport("ws://127.0.0.1:4500/")
-            .expect("loopback ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://localhost:4500/")
-            .expect("localhost ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://[::1]:4500/")
-            .expect("ipv6 loopback ws should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_secure_wss() {
-        validate_remote_auth_token_transport("wss://example.com:443/")
-            .expect("wss should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_rejects_non_loopback_ws() {
-        let err = validate_remote_auth_token_transport("ws://example.com:4500/")
-            .expect_err("non-loopback ws should be rejected for auth tokens");
-        assert!(
-            err.to_string()
-                .contains("remote auth tokens require `wss://` or loopback `ws://` URLs")
-        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -2101,8 +2172,9 @@ mod tests {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Remote {
-            websocket_url: "ws://127.0.0.1:1234/".to_string(),
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
         };
         let environment_manager = EnvironmentManager::default_for_tests();
 
