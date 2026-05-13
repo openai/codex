@@ -1271,7 +1271,6 @@ description: Visible only for ChatGPT
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"

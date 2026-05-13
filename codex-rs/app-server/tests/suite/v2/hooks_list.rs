@@ -97,7 +97,6 @@ fn write_plugin_hook_config(codex_home: &std::path::Path, hooks_json: &str) -> R
         codex_home.join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 hooks = true
 
 [plugins."demo@test"]
