@@ -232,7 +232,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
 }
 
 #[tokio::test]
-async fn startup_rejection_emits_begin_then_declined_end() {
+async fn startup_failure_emits_begin_then_failed_end() {
     let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
@@ -295,7 +295,7 @@ async fn startup_rejection_emits_begin_then_declined_end() {
     assert_eq!(end_event.call_id, "call-unified-empty");
     assert_eq!(
         end_event.status,
-        codex_protocol::protocol::ExecCommandStatus::Declined
+        codex_protocol::protocol::ExecCommandStatus::Failed
     );
 }
 
