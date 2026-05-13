@@ -2536,7 +2536,6 @@ dependencies = [
  "ctor 0.6.3",
  "dirs",
  "dunce",
- "env-flags",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
@@ -3791,6 +3790,7 @@ dependencies = [
  "codex-utils-string",
  "codex-windows-sandbox",
  "color-eyre",
+ "core_test_support",
  "cpal",
  "crossterm",
  "derive_more 2.1.1",
@@ -3841,6 +3841,7 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.52.0",
  "winsplit",
+ "wiremock",
 ]
 
 [[package]]
@@ -5388,12 +5389,6 @@ dependencies = [
  "quote",
  "syn 2.0.114",
 ]
-
-[[package]]
-name = "env-flags"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbfd0e7fc632dec5e6c9396a27bc9f9975b4e039720e1fd3e34021d3ce28c415"
 
 [[package]]
 name = "env_filter"

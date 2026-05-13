@@ -7250,8 +7250,7 @@ model_verbosity = "high"
 /// 2. as part of a profile, where the `--profile` is specified via a CLI
 ///    (or in the config file itself)
 /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
-/// 4. the default value for a required field defined in code, e.g.,
-///    `crate::flags::OPENAI_DEFAULT_MODEL`
+/// 4. the default value for a required field defined in code.
 ///
 /// Note that profiles are the recommended way to specify a group of
 /// configuration options together.
