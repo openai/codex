@@ -106,6 +106,54 @@ index 9648e4a..88efd41 100644
          }) + select({
              ":should_add_rdynamic": ["-rdynamic"],
              "//conditions:default": [],
+@@ -495,6 +524,8 @@ def _mksnapshot(ctx):
+         arguments = [
+             "--embedded_variant=Default",
++            "--target_arch",
++            ctx.attr.target_arch,
+             "--target_os",
+             ctx.attr.target_os,
+             "--startup_src",
+@@ -519,6 +550,7 @@ _v8_mksnapshot = rule(
+             executable = True,
+             cfg = "exec",
+         ),
++        "target_arch": attr.string(mandatory = True),
+         "target_os": attr.string(mandatory = True),
+         "prefix": attr.string(mandatory = True),
+         "suffix": attr.string(mandatory = True),
+@@ -532,6 +564,15 @@ def v8_mksnapshot(name, args, suffix = ""):
+         tool = ":noicu/mksnapshot" + suffix,
+         suffix = suffix,
++        target_arch = select({
++            "@v8//bazel/config:v8_target_arm": "arm",
++            "@v8//bazel/config:v8_target_arm64": "arm64",
++            "@v8//bazel/config:v8_target_ia32": "ia32",
++            "@v8//bazel/config:v8_target_ppc64le": "ppc64le",
++            "@v8//bazel/config:v8_target_riscv64": "riscv64",
++            "@v8//bazel/config:v8_target_s390x": "s390x",
++            "@v8//bazel/config:v8_target_x64": "x64",
++        }),
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",
+             "@v8//bazel/config:is_windows": "win",
+             "//conditions:default": "",
+@@ -544,6 +585,15 @@ def v8_mksnapshot(name, args, suffix = ""):
+         tool = ":icu/mksnapshot" + suffix,
+         suffix = suffix,
++        target_arch = select({
++            "@v8//bazel/config:v8_target_arm": "arm",
++            "@v8//bazel/config:v8_target_arm64": "arm64",
++            "@v8//bazel/config:v8_target_ia32": "ia32",
++            "@v8//bazel/config:v8_target_ppc64le": "ppc64le",
++            "@v8//bazel/config:v8_target_riscv64": "riscv64",
++            "@v8//bazel/config:v8_target_s390x": "s390x",
++            "@v8//bazel/config:v8_target_x64": "x64",
++        }),
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",
+             "@v8//bazel/config:is_windows": "win",
+             "//conditions:default": "",
 diff --git a/orig/v8-14.6.202.11/BUILD.bazel b/mod/v8-14.6.202.11/BUILD.bazel
 index 421ebcd..52283ea 100644
 --- a/orig/v8-14.6.202.11/BUILD.bazel
