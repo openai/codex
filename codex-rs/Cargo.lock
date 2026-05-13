@@ -2918,7 +2918,6 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-features",
- "codex-protocol",
  "pretty_assertions",
 ]
 

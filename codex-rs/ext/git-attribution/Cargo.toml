@@ -16,7 +16,6 @@ workspace = true
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
-codex-protocol = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
