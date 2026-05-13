@@ -5,7 +5,7 @@ use super::HumanOutputOptions;
 use super::redact_detail;
 
 const LIST_LIMIT: usize = 7;
-const PATH_LIMIT: usize = 68;
+const PATH_LIMIT: usize = 48;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum HumanDetail {
@@ -159,7 +159,7 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
     out.push(HumanDetail::Row {
         label: "managed by".to_string(),
         value: format!(
-            "npm:{} · bun:{} · package root {}",
+            "npm: {} · bun: {} · package root {}",
             yes_no(managed_by_npm),
             yes_no(managed_by_bun),
             if is_falsy(package_root) {

@@ -83,6 +83,7 @@ pub(super) fn render_human_report(report: &DoctorReport, options: HumanOutputOpt
         for note in &notes {
             write_note_row(&mut out, note, options);
         }
+        let _ = writeln!(out, "{}", dim(&separator(options), options));
         out.push('\n');
     }
 
@@ -130,9 +131,9 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
     let status = display_status(check);
     let _ = writeln!(
         out,
-        "  {} {} {}",
-        status_marker(status, options),
-        bold(&format!("{:<NAME_WIDTH$}", check.category), options),
+        "  {}{} {}",
+        status_marker_slot(status, options),
+        format_args!("{:<NAME_WIDTH$}", check.category),
         style_description(&description, status, options)
     );
 
@@ -146,10 +147,10 @@ fn write_check_row(out: &mut String, check: &DoctorCheck, options: HumanOutputOp
 fn write_note_row(out: &mut String, note: &DoctorNote, options: HumanOutputOptions) {
     let _ = writeln!(
         out,
-        "  {} {} {}",
-        status_marker(note.status, options),
-        bold(&format!("{:<NAME_WIDTH$}", note.name), options),
-        style_description(&note.summary, note.status, options)
+        "   {}{} {}",
+        status_marker_slot(note.status, options),
+        format_args!("{:<NAME_WIDTH$}", note.name),
+        style_note_summary(note, options)
     );
 }
 
@@ -258,6 +259,11 @@ fn status_marker(status: DisplayStatus, options: HumanOutputOptions) -> String {
     }
 }
 
+fn status_marker_slot(status: DisplayStatus, options: HumanOutputOptions) -> String {
+    let marker = status_marker(status, options);
+    format!("{marker} ")
+}
+
 fn style_description(
     description: &str,
     status: DisplayStatus,
@@ -269,6 +275,36 @@ fn style_description(
         DisplayStatus::Update => amber(&highlighted, options),
         DisplayStatus::Note | DisplayStatus::Warning | DisplayStatus::Fail => highlighted,
     }
+}
+
+fn style_note_summary(note: &DoctorNote, options: HumanOutputOptions) -> String {
+    if note.status == DisplayStatus::Update {
+        return style_update_note_summary(&note.summary, options);
+    }
+    style_description(&note.summary, note.status, options)
+}
+
+fn style_update_note_summary(summary: &str, options: HumanOutputOptions) -> String {
+    if !options.color_enabled {
+        return summary.to_string();
+    }
+
+    let Some((version, rest)) = summary.split_once(" available") else {
+        return amber(summary, options);
+    };
+    let Some((action, parenthetical)) = rest.split_once(" (") else {
+        return format!(
+            "{}{}",
+            amber(&format!("{version} available"), options),
+            amber(rest, options)
+        );
+    };
+    format!(
+        "{}{} {}",
+        amber(&format!("{version} available"), options),
+        amber(action, options),
+        dim(&format!("({parenthetical}"), options)
+    )
 }
 
 fn summary_line(report: &DoctorReport, options: HumanOutputOptions) -> String {
@@ -691,6 +727,17 @@ fn highlight_flags(text: &str, options: HumanOutputOptions) -> String {
 
 pub(super) fn redact_detail(detail: &str) -> String {
     let lower = detail.to_ascii_lowercase();
+    let label = lower.split(':').next().unwrap_or_default();
+    if label.contains("env var") {
+        return redact_urls(detail);
+    }
+    if detail
+        .split_once(": ")
+        .is_some_and(|(_, value)| is_safe_presence_value(value))
+    {
+        return redact_urls(detail);
+    }
+
     let secret_keys = [
         "openai_api_key",
         "codex_api_key",
@@ -706,6 +753,13 @@ pub(super) fn redact_detail(detail: &str) -> String {
     } else {
         redact_urls(detail)
     }
+}
+
+fn is_safe_presence_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "false" | "yes" | "no" | "present" | "absent" | "missing" | "not set"
+    )
 }
 
 fn redact_urls(detail: &str) -> String {
@@ -823,16 +877,67 @@ fn detail_value(text: &str, options: HumanOutputOptions) -> String {
     if !options.color_enabled {
         return text.to_string();
     }
-    if text.contains("<redacted>") {
-        return color256(&text.italic().to_string(), /*code*/ 244, options);
+    style_detail_text(text, options)
+}
+
+fn style_detail_text(text: &str, options: HumanOutputOptions) -> String {
+    let mut out = String::new();
+    let mut parts = text.split('`');
+    if let Some(first) = parts.next() {
+        out.push_str(&style_detail_plain_text(first, options));
     }
-    if detail::is_falsy(text) || text.contains("(missing)") {
-        return color256(text, /*code*/ 240, options);
+    let mut in_code = true;
+    for part in parts {
+        if in_code {
+            out.push_str(&cyan(part, options));
+        } else {
+            out.push_str(&style_detail_plain_text(part, options));
+        }
+        in_code = !in_code;
     }
-    if looks_copyable(text) {
-        return cyan(text, options);
+    out
+}
+
+fn style_detail_plain_text(text: &str, options: HumanOutputOptions) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|token| style_detail_token(token, options))
+        .collect()
+}
+
+fn style_detail_token(token: &str, options: HumanOutputOptions) -> String {
+    let trimmed = token.trim_end();
+    let suffix = &token[trimmed.len()..];
+    let bare = trimmed.trim_end_matches([',', '.', ':', ';', ')']);
+    let punctuation = &trimmed[bare.len()..];
+    let styled = style_detail_bare_token(bare, options);
+    format!("{styled}{punctuation}{suffix}")
+}
+
+fn style_detail_bare_token(bare: &str, options: HumanOutputOptions) -> String {
+    if bare.is_empty() {
+        return String::new();
     }
-    dim_units(&highlight_actions(text, options), options)
+    if bare == "<redacted>" {
+        return color256(&bare.italic().to_string(), /*code*/ 244, options);
+    }
+    if bare.contains("(missing)") || detail::is_falsy(bare) {
+        return color256(bare, /*code*/ 240, options);
+    }
+    if let Some((label, value)) = bare.split_once(':')
+        && detail::is_falsy(value)
+    {
+        return format!("{label}:{}", color256(value, /*code*/ 240, options));
+    }
+    if bare == "ok" {
+        return green(bare, options);
+    }
+    if bare.starts_with("--") || looks_copyable(bare) {
+        return cyan(bare, options);
+    }
+    if matches!(bare, "B" | "KB" | "MB" | "GB" | "TB" | "files" | "file") {
+        return dim(bare, options);
+    }
+    bare.to_string()
 }
 
 fn green(text: &str, options: HumanOutputOptions) -> String {
@@ -873,22 +978,6 @@ fn looks_copyable(text: &str) -> bool {
         || text.starts_with("../")
 }
 
-fn dim_units(text: &str, options: HumanOutputOptions) -> String {
-    text.split_inclusive(char::is_whitespace)
-        .map(|token| {
-            let trimmed = token.trim_end();
-            let suffix = &token[trimmed.len()..];
-            let unit = trimmed.trim_end_matches([',', ')']);
-            let punctuation = &trimmed[unit.len()..];
-            if matches!(unit, "B" | "KB" | "MB" | "GB" | "TB" | "files" | "file") {
-                format!("{}{}{}", dim(unit, options), punctuation, suffix)
-            } else {
-                token.to_string()
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -919,6 +1008,15 @@ mod tests {
             show_all: true,
             ascii: false,
             color_enabled: false,
+        }
+    }
+
+    fn detailed_color_unicode_options() -> HumanOutputOptions {
+        HumanOutputOptions {
+            show_details: true,
+            show_all: false,
+            ascii: false,
+            color_enabled: true,
         }
     }
 
@@ -1012,14 +1110,14 @@ Codex Doctor v0.0.0
 Environment
   ✓ runtime      running local build on darwin-arm64
   ✓ install      consistent
-      managed by               npm:no · bun:no · package root —
+      managed by               npm: no · bun: no · package root —
   ✓ search       search is OK (bundled)
   ⚠ terminal     narrow terminal
   ✓ state        state paths inspectable
 
 Configuration
   ✗ auth         token expired — Run `codex login`.
-      OPENAI_API_KEY           <redacted>
+      OPENAI_API_KEY           present
 
 Updates
   ✓ updates      update configuration is locally consistent
@@ -1140,7 +1238,7 @@ Run codex doctor without --summary for detailed diagnostics.
                 color_enabled: false,
             },
         );
-        assert!(rendered.contains("      OPENAI_API_KEY           <redacted>"));
+        assert!(rendered.contains("      OPENAI_API_KEY           present"));
     }
 
     #[test]
@@ -1209,7 +1307,7 @@ Run codex doctor without --summary for detailed diagnostics.
 
         let rendered = render_human_report(&report, summary_no_color_unicode_options());
 
-        assert!(rendered.contains("Notes\n  ↑ updates"));
+        assert!(rendered.contains("Notes\n   ↑ updates"));
         assert!(rendered.contains("0.130.0 available (current 0.0.0, dismissed 0.128.0)"));
         assert!(rendered.contains("⚠ rollouts"));
         assert!(rendered.contains("⚠ sandbox"));
@@ -1251,6 +1349,31 @@ Run codex doctor without --summary for detailed diagnostics.
     }
 
     #[test]
+    fn detail_value_colors_inline_statuses_and_low_signal_values() {
+        let rendered = detail_value(
+            "npm: no · commit unknown · integrity ok · ~/code/codex/target/debug/codex · <redacted>",
+            detailed_color_unicode_options(),
+        );
+
+        assert!(rendered.contains("npm: \u{1b}[38;5;240mno"));
+        assert!(rendered.contains("\u{1b}[38;5;240munknown"));
+        assert!(rendered.contains("\u{1b}[38;5;10mok"));
+        assert!(rendered.contains("\u{1b}[38;5;117m~/code/codex/target/debug/codex"));
+        assert!(rendered.contains("\u{1b}[38;5;244m"));
+    }
+
+    #[test]
+    fn update_note_emphasizes_available_version_and_dims_context() {
+        let rendered = style_update_note_summary(
+            "0.130.0 available (current 0.0.0, dismissed 0.128.0)",
+            detailed_color_unicode_options(),
+        );
+
+        assert!(rendered.contains("\u{1b}[38;5;220m0.130.0 available"));
+        assert!(rendered.contains("\u{1b}[2m(current 0.0.0, dismissed 0.128.0)"));
+    }
+
+    #[test]
     fn redact_detail_sanitizes_urls() {
         let redacted = redact_detail(
             "reachability failed: https://user:pass@example.com/mcp?x=abc#frag (connect failed)",
@@ -1269,6 +1392,26 @@ Run codex doctor without --summary for detailed diagnostics.
         assert_eq!(
             redacted,
             "reachability failed: https://example.com/mcp/<redacted>"
+        );
+    }
+
+    #[test]
+    fn redact_detail_preserves_env_var_names() {
+        assert_eq!(
+            redact_detail("auth env vars present: OPENAI_API_KEY, CODEX_API_KEY"),
+            "auth env vars present: OPENAI_API_KEY, CODEX_API_KEY"
+        );
+    }
+
+    #[test]
+    fn redact_detail_preserves_secret_presence_booleans() {
+        assert_eq!(
+            redact_detail("stored ChatGPT tokens: true"),
+            "stored ChatGPT tokens: true"
+        );
+        assert_eq!(
+            redact_detail("stored ChatGPT tokens: false"),
+            "stored ChatGPT tokens: false"
         );
     }
 
