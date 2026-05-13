@@ -441,6 +441,13 @@
               ],
               "title": "WorkspaceWriteSandboxPolicyType",
               "type": "string"
+            },
+            "writableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
             }
           },
           "required": [

@@ -1482,6 +1482,7 @@ stream_max_retries = 0
         agent_nickname: None,
         agent_role: None,
         model_provider: Some("mock_provider".to_string()),
+        workspace_roots: vec![repo_path.clone().try_into()?],
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,

@@ -535,7 +535,9 @@ pub enum SandboxPolicy {
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        #[serde(rename = "writableRoots")]
+        #[ts(rename = "writableRoots")]
+        legacy_writable_roots: Vec<AbsolutePathBuf>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -564,7 +566,8 @@ enum SandboxPolicyDeserialize {
     #[serde(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<AbsolutePathBuf>,
+        #[serde(rename = "writableRoots")]
+        legacy_writable_roots: Vec<AbsolutePathBuf>,
         #[serde(default)]
         read_only_access: Option<LegacyReadOnlyAccess>,
         #[serde(default)]
@@ -605,7 +608,7 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
                 Ok(SandboxPolicy::ExternalSandbox { network_access })
             }
             SandboxPolicyDeserialize::WorkspaceWrite {
-                writable_roots,
+                legacy_writable_roots,
                 read_only_access,
                 network_access,
                 exclude_tmpdir_env_var,
@@ -617,7 +620,7 @@ impl<'de> Deserialize<'de> for SandboxPolicy {
                     ));
                 }
                 Ok(SandboxPolicy::WorkspaceWrite {
-                    writable_roots,
+                    legacy_writable_roots,
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
@@ -647,12 +650,11 @@ impl SandboxPolicy {
                 }
             }
             SandboxPolicy::WorkspaceWrite {
-                writable_roots,
+                legacy_writable_roots: _,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: writable_roots.clone(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
@@ -679,16 +681,29 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 }
             }
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
-                writable_roots,
+                legacy_writable_roots: Vec::new(),
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
+        }
+    }
+}
+
+impl SandboxPolicy {
+    pub fn legacy_writable_roots(&self) -> &[AbsolutePathBuf] {
+        match self {
+            SandboxPolicy::WorkspaceWrite {
+                legacy_writable_roots,
+                ..
+            } => legacy_writable_roots,
+            SandboxPolicy::DangerFullAccess
+            | SandboxPolicy::ReadOnly { .. }
+            | SandboxPolicy::ExternalSandbox { .. } => &[],
         }
     }
 }

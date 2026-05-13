@@ -341,14 +341,19 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
         "unexpected warning suffix: {}",
         warning.message
     );
-    let trimmed_count = warning.message
-        [WARNING_PREFIX.len()..warning.message.len() - WARNING_SUFFIX.len()]
-        .parse::<usize>()
-        .expect("warning should include a numeric trimmed skills count");
-    assert!(
-        trimmed_count > 0,
-        "warning should report at least one trimmed skill"
-    );
+    let trimmed = warning
+        .message
+        .strip_prefix(warning_prefix)
+        .and_then(|message| message.strip_suffix(warning_suffix))
+        .expect("warning message should match expected wrapper");
+    let trimmed_count = trimmed
+        .strip_suffix(" additional skills")
+        .or_else(|| trimmed.strip_suffix(" additional skill"))
+        .expect("warning message should include trimmed skill count");
+    let trimmed_count: usize = trimmed_count
+        .parse()
+        .expect("trimmed skill count should be numeric");
+    assert!(trimmed_count > 0, "expected at least one trimmed skill");
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1903,16 +1908,16 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
-            workspace_roots: Some(vec![first_cwd.try_into()?]),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                legacy_writable_roots: vec![first_cwd.try_into()?],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
-                legacy_writable_roots: Vec::new(),
             }),
             permissions: None,
+            workspace_roots: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1949,6 +1954,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             permissions: None,
+            workspace_roots: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),

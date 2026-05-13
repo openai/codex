@@ -62,6 +62,7 @@ mod thread_processor_behavior_tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
+    use codex_protocol::models::ActivePermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -620,6 +621,93 @@ mod thread_processor_behavior_tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn permission_profile_candidate_ids_include_preferred_and_user_profiles() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        std::fs::write(
+            temp_dir.path().join("config.toml"),
+            r#"
+default_permissions = "dev"
+
+[permissions.dev.filesystem]
+":minimal" = "read"
+
+[permissions.other.filesystem]
+":minimal" = "read"
+"#,
+        )?;
+
+        let config_manager =
+            ConfigManager::without_managed_config_for_tests(temp_dir.path().to_path_buf());
+        let cwd = temp_dir.path().to_path_buf().abs();
+
+        assert_eq!(
+            permission_profile_candidate_ids(&config_manager, &cwd, Some("other".to_string()))
+                .await
+                .map_err(|err| anyhow::anyhow!(err.message))?,
+            vec![
+                "other".to_string(),
+                ":read-only".to_string(),
+                ":workspace".to_string(),
+                ":danger-no-sandbox".to_string(),
+                "dev".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_legacy_sandbox_policy_selection_maps_workspace_write_to_builtin_profile()
+    -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let cwd = temp_dir.path().join("workspace");
+        let extra_root = temp_dir.path().join("extra");
+        std::fs::create_dir_all(&cwd)?;
+        std::fs::create_dir_all(&extra_root)?;
+
+        let config_manager =
+            ConfigManager::without_managed_config_for_tests(temp_dir.path().to_path_buf());
+        let sandbox_policy = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            legacy_writable_roots: vec![extra_root.clone().try_into()?],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let selection = resolve_legacy_sandbox_policy_selection(
+            &config_manager,
+            &Arg0DispatchPaths::default(),
+            &sandbox_policy,
+            Some(cwd.clone()),
+            None,
+            Some(&ActivePermissionProfile::new(":workspace")),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!(err.message))?;
+
+        assert_eq!(
+            thread_response_sandbox_policy(
+                &selection.permission_profile,
+                &cwd,
+                &selection
+                    .workspace_roots
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(AbsolutePathBuf::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+                config_manager.codex_home(),
+            ),
+            sandbox_policy
+        );
+        assert_eq!(
+            selection.active_permission_profile,
+            Some(ActivePermissionProfile::new(":workspace"))
+        );
+        assert_eq!(selection.workspace_roots, Some(vec![cwd, extra_root]));
+        Ok(())
+    }
+
     #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {
         let cwd = test_path_buf("/tmp").abs();
@@ -635,6 +723,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: None,
             sandbox: None,
             permissions: None,
+            workspace_roots: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,

@@ -448,12 +448,12 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 let was_initialized = session.initialized();
                                 processor
                                     .process_client_request(
-                                    IN_PROCESS_CONNECTION_ID,
-                                    *request,
-                                    Arc::clone(&session),
-                                    &outbound_initialized,
-                                )
-                                .await;
+                                        IN_PROCESS_CONNECTION_ID,
+                                        request,
+                                        Arc::clone(&session),
+                                        &outbound_initialized,
+                                    )
+                                    .await;
                                 let opted_out_notification_methods_snapshot =
                                     session.opted_out_notification_methods();
                                 let experimental_api_enabled =
@@ -724,6 +724,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
@@ -735,6 +736,7 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::future::Future;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -809,11 +811,9 @@ mod tests {
             .spawn(move || -> Result<()> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
-                    .build()
-                    .expect("current-thread runtime should build");
-                runtime.block_on(Box::pin(future));
-            })
-            .expect("stack-sized test thread should spawn");
+                    .build()?;
+                runtime.block_on(Box::pin(future))
+            })?;
 
         match handle.join() {
             Ok(result) => result,

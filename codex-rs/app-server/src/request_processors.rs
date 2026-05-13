@@ -472,7 +472,6 @@ pub(crate) use thread_processor::ThreadRequestProcessor;
 pub(crate) use turn_processor::TurnRequestProcessor;
 pub(crate) use windows_sandbox_processor::WindowsSandboxRequestProcessor;
 
-use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
@@ -504,6 +503,8 @@ pub(crate) use self::thread_summary::read_summary_from_rollout;
 #[cfg(test)]
 pub(crate) use self::thread_summary::summary_to_thread;
 
+use crate::error_code::internal_error;
+
 pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
@@ -512,4 +513,178 @@ pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<T
         }
     }
     builder.finish()
+}
+
+const BUILT_IN_READ_ONLY_PROFILE_ID: &str = ":read-only";
+const BUILT_IN_WORKSPACE_PROFILE_ID: &str = ":workspace";
+const BUILT_IN_DANGER_NO_SANDBOX_PROFILE_ID: &str = ":danger-no-sandbox";
+
+pub(super) fn permission_profile_id_for_sandbox_mode(sandbox: SandboxMode) -> &'static str {
+    match sandbox {
+        SandboxMode::ReadOnly => BUILT_IN_READ_ONLY_PROFILE_ID,
+        SandboxMode::WorkspaceWrite => BUILT_IN_WORKSPACE_PROFILE_ID,
+        SandboxMode::DangerFullAccess => BUILT_IN_DANGER_NO_SANDBOX_PROFILE_ID,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LegacySandboxProfileSelection {
+    pub workspace_roots: Option<Vec<PathBuf>>,
+    pub permission_profile: codex_protocol::models::PermissionProfile,
+    pub active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
+}
+
+pub(super) async fn resolve_legacy_sandbox_policy_selection(
+    config_manager: &ConfigManager,
+    arg0_paths: &Arg0DispatchPaths,
+    sandbox_policy: &codex_app_server_protocol::SandboxPolicy,
+    requested_cwd: Option<PathBuf>,
+    fallback_cwd: Option<PathBuf>,
+    preferred_active_permission_profile: Option<&codex_protocol::models::ActivePermissionProfile>,
+) -> Result<LegacySandboxProfileSelection, JSONRPCErrorError> {
+    let base_config = config_manager
+        .load_for_cwd(
+            /*request_overrides*/ None,
+            ConfigOverrides {
+                cwd: requested_cwd.clone(),
+                codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+                main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+                ..Default::default()
+            },
+            fallback_cwd,
+        )
+        .await
+        .map_err(|err| config_load_error(&err))?;
+    let effective_cwd = base_config.cwd.clone();
+    let workspace_roots = match sandbox_policy {
+        codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+            let mut workspace_roots = vec![effective_cwd.to_path_buf()];
+            for root in sandbox_policy.legacy_writable_roots() {
+                let root = root.to_path_buf();
+                if !workspace_roots.iter().any(|existing| existing == &root) {
+                    workspace_roots.push(root);
+                }
+            }
+            Some(workspace_roots)
+        }
+        codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+        | codex_app_server_protocol::SandboxPolicy::ExternalSandbox { .. }
+        | codex_app_server_protocol::SandboxPolicy::ReadOnly { .. } => None,
+    };
+    let preferred_profile_id =
+        preferred_active_permission_profile.map(|profile| profile.id.clone());
+    let candidate_ids =
+        permission_profile_candidate_ids(config_manager, &effective_cwd, preferred_profile_id)
+            .await?;
+
+    for permission_profile_id in candidate_ids {
+        let config = config_manager
+            .load_for_cwd(
+                /*request_overrides*/ None,
+                ConfigOverrides {
+                    cwd: requested_cwd.clone(),
+                    default_permissions: Some(permission_profile_id.clone()),
+                    workspace_roots: workspace_roots.clone(),
+                    codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+                    main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+                    ..Default::default()
+                },
+                Some(effective_cwd.to_path_buf()),
+            )
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        let permission_profile = config.permissions.permission_profile();
+        let candidate_legacy_sandbox_policy = thread_response_sandbox_policy(
+            &permission_profile,
+            effective_cwd.as_path(),
+            &config.workspace_roots,
+            config_manager.codex_home(),
+        );
+        if candidate_legacy_sandbox_policy
+            == normalize_legacy_sandbox_policy_for_compare(
+                sandbox_policy,
+                effective_cwd.as_path(),
+                config_manager.codex_home(),
+            )
+        {
+            return Ok(LegacySandboxProfileSelection {
+                workspace_roots,
+                permission_profile,
+                active_permission_profile: config.permissions.active_permission_profile(),
+            });
+        }
+    }
+
+    Err(invalid_request(format!(
+        "legacy sandboxPolicy {sandbox_policy:?} does not map to any named permission profile"
+    )))
+}
+
+async fn permission_profile_candidate_ids(
+    config_manager: &ConfigManager,
+    cwd: &AbsolutePathBuf,
+    preferred_profile_id: Option<String>,
+) -> Result<Vec<String>, JSONRPCErrorError> {
+    let layers = config_manager
+        .load_config_layers_for_cwd(cwd.clone())
+        .await
+        .map_err(|err| config_load_error(&err))?;
+    let effective_config: codex_config::config_toml::ConfigToml = layers
+        .effective_config()
+        .try_into()
+        .map_err(|err| internal_error(format!("failed to decode effective config: {err}")))?;
+
+    let mut candidate_ids = preferred_profile_id.into_iter().collect::<Vec<_>>();
+    for profile_id in [
+        BUILT_IN_READ_ONLY_PROFILE_ID,
+        BUILT_IN_WORKSPACE_PROFILE_ID,
+        BUILT_IN_DANGER_NO_SANDBOX_PROFILE_ID,
+    ] {
+        if !candidate_ids.iter().any(|existing| existing == profile_id) {
+            candidate_ids.push(profile_id.to_string());
+        }
+    }
+
+    let mut user_profile_ids = effective_config
+        .permissions
+        .into_iter()
+        .flat_map(|permissions| permissions.entries.into_keys())
+        .collect::<Vec<_>>();
+    user_profile_ids.sort();
+    for profile_id in user_profile_ids {
+        if !candidate_ids.iter().any(|existing| existing == &profile_id) {
+            candidate_ids.push(profile_id);
+        }
+    }
+
+    Ok(candidate_ids)
+}
+
+fn normalize_legacy_sandbox_policy_for_compare(
+    sandbox_policy: &codex_app_server_protocol::SandboxPolicy,
+    cwd: &Path,
+    codex_home: &Path,
+) -> codex_app_server_protocol::SandboxPolicy {
+    match sandbox_policy {
+        codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            legacy_writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } => {
+            let memories_root = codex_home.join("memories");
+            let mut legacy_writable_roots = legacy_writable_roots.clone();
+            legacy_writable_roots
+                .retain(|root| root.as_path() != cwd && root.as_path() != memories_root);
+            codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                legacy_writable_roots,
+                network_access: *network_access,
+                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                exclude_slash_tmp: *exclude_slash_tmp,
+            }
+        }
+        codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+        | codex_app_server_protocol::SandboxPolicy::ExternalSandbox { .. }
+        | codex_app_server_protocol::SandboxPolicy::ReadOnly { .. } => sandbox_policy.clone(),
+    }
 }

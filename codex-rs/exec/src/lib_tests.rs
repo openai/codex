@@ -421,11 +421,15 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
 
     let params = thread_start_params_from_config(&config);
 
+    assert_eq!(config.permissions.active_permission_profile(), None);
     assert_eq!(
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::User)
     );
-    assert_eq!(params.sandbox, None);
+    assert_eq!(
+        params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+    );
     assert_eq!(
         params.permissions,
         permissions_selection_from_config(&config)
@@ -565,7 +569,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
         approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            legacy_writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

@@ -374,19 +374,25 @@ impl TurnRequestProcessor {
                 "`permissions` cannot be combined with `sandboxPolicy`",
             ));
         }
+        if params.sandbox_policy.is_some() && params.workspace_roots.is_some() {
+            return Err(invalid_request(
+                "`workspaceRoots` cannot be combined with `sandboxPolicy`; use `permissions` instead",
+            ));
+        }
 
         let cwd = params.cwd;
-        let workspace_roots = params.workspace_roots;
+        let mut workspace_roots = params.workspace_roots;
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
             .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile) =
+        let requested_sandbox_policy = params.sandbox_policy;
+        let (permission_profile, active_permission_profile, sandbox_policy) =
             if let Some(permissions) = params.permissions {
                 let snapshot = thread.config_snapshot().await;
                 let mut overrides = ConfigOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: workspace_roots.clone(),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
@@ -394,6 +400,7 @@ impl TurnRequestProcessor {
                 apply_permission_profile_selection_to_config_overrides(
                     &mut overrides,
                     Some(permissions),
+                    workspace_roots.clone(),
                 );
                 let config = self
                     .config_manager
@@ -417,9 +424,27 @@ impl TurnRequestProcessor {
                 (
                     Some(config.permissions.permission_profile()),
                     config.permissions.active_permission_profile(),
+                    None,
+                )
+            } else if let Some(sandbox_policy) = requested_sandbox_policy.as_ref() {
+                let snapshot = thread.config_snapshot().await;
+                let selection = resolve_legacy_sandbox_policy_selection(
+                    &self.config_manager,
+                    &self.arg0_paths,
+                    sandbox_policy,
+                    cwd.clone(),
+                    Some(snapshot.cwd.to_path_buf()),
+                    snapshot.active_permission_profile.as_ref(),
+                )
+                .await?;
+                workspace_roots = selection.workspace_roots.clone();
+                (
+                    Some(selection.permission_profile),
+                    selection.active_permission_profile,
+                    None,
                 )
             } else {
-                (None, None)
+                (None, None, None)
             };
         let model = params.model;
         let effort = params.effort.map(Some);
