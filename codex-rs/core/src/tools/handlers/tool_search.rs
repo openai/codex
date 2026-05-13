@@ -198,16 +198,21 @@ fn default_limit_for_bucket(bucket: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::ToolCallSource;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::McpHandler;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_mcp::ToolInfo;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::models::SearchToolCallParams;
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
@@ -311,6 +316,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn omitted_limit_uses_default_tool_search_result_limit() {
+        let tool_count = TOOL_SEARCH_DEFAULT_LIMIT + 5;
+        let dynamic_tools = numbered_dynamic_tools(tool_count);
+        let handler = handler_from_dynamic_tools(&dynamic_tools);
+
+        let output = tool_search_output(&handler, /*limit*/ None).await;
+
+        assert_eq!(output.tools.len(), TOOL_SEARCH_DEFAULT_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn explicit_limit_controls_tool_search_result_count() {
+        let explicit_limit = 3;
+        let tool_count = TOOL_SEARCH_DEFAULT_LIMIT + explicit_limit;
+        let dynamic_tools = numbered_dynamic_tools(tool_count);
+        let handler = handler_from_dynamic_tools(&dynamic_tools);
+
+        let output = tool_search_output(&handler, Some(explicit_limit)).await;
+
+        assert_eq!(output.tools.len(), explicit_limit);
+    }
+
     #[test]
     fn computer_use_tool_search_uses_larger_limit() {
         let tools = numbered_tools(
@@ -318,16 +346,7 @@ mod tests {
             "computer use",
             /*count*/ 100,
         );
-        let handler = ToolSearchHandler::new(
-            tools
-                .iter()
-                .map(|tool| {
-                    McpHandler::new(tool.clone())
-                        .search_info()
-                        .expect("MCP handler should return search info")
-                })
-                .collect(),
-        );
+        let handler = handler_from_mcp_tools(&tools);
 
         let results = handler.search_result_entries(
             "computer use",
@@ -363,16 +382,7 @@ mod tests {
             "calendar",
             /*count*/ 100,
         ));
-        let handler = ToolSearchHandler::new(
-            tools
-                .iter()
-                .map(|tool| {
-                    McpHandler::new(tool.clone())
-                        .search_info()
-                        .expect("MCP handler should return search info")
-                })
-                .collect(),
-        );
+        let handler = handler_from_mcp_tools(&tools);
 
         let results = handler.search_result_entries(
             "calendar",
@@ -406,16 +416,7 @@ mod tests {
             "computer use",
             /*count*/ 100,
         ));
-        let handler = ToolSearchHandler::new(
-            tools
-                .iter()
-                .map(|tool| {
-                    McpHandler::new(tool.clone())
-                        .search_info()
-                        .expect("MCP handler should return search info")
-                })
-                .collect(),
-        );
+        let handler = handler_from_mcp_tools(&tools);
 
         let results = handler.search_result_entries(
             "computer use",
@@ -428,6 +429,47 @@ mod tests {
                 <= COMPUTER_USE_TOOL_SEARCH_LIMIT
         );
         assert!(count_results_for_server(&results, "other-server") <= TOOL_SEARCH_DEFAULT_LIMIT);
+    }
+
+    async fn tool_search_output(
+        handler: &ToolSearchHandler,
+        limit: Option<usize>,
+    ) -> ToolSearchOutput {
+        let (session, turn) = make_session_and_context().await;
+        handler
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-tool-search".to_string(),
+                tool_name: ToolName::plain(TOOL_SEARCH_TOOL_NAME),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::ToolSearch {
+                    arguments: SearchToolCallParams {
+                        query: "calendar".to_string(),
+                        limit,
+                    },
+                },
+            })
+            .await
+            .expect("tool_search should succeed")
+    }
+
+    fn numbered_dynamic_tools(count: usize) -> Vec<DynamicToolSpec> {
+        (0..count)
+            .map(|index| DynamicToolSpec {
+                namespace: None,
+                name: format!("calendar_tool_{index:03}"),
+                description: "Calendar search helper.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            })
+            .collect()
     }
 
     fn numbered_tools(server_name: &str, description_prefix: &str, count: usize) -> Vec<ToolInfo> {
@@ -466,6 +508,33 @@ mod tests {
             connector_name: None,
             plugin_display_names: Vec::new(),
         }
+    }
+
+    fn handler_from_dynamic_tools(dynamic_tools: &[DynamicToolSpec]) -> ToolSearchHandler {
+        ToolSearchHandler::new(
+            dynamic_tools
+                .iter()
+                .map(|tool| {
+                    DynamicToolHandler::new(tool)
+                        .expect("dynamic tool should convert")
+                        .search_info()
+                        .expect("dynamic handler should return search info")
+                })
+                .collect(),
+        )
+    }
+
+    fn handler_from_mcp_tools(mcp_tools: &[ToolInfo]) -> ToolSearchHandler {
+        ToolSearchHandler::new(
+            mcp_tools
+                .iter()
+                .map(|tool| {
+                    McpHandler::new(tool.clone())
+                        .search_info()
+                        .expect("MCP handler should return search info")
+                })
+                .collect(),
+        )
     }
 
     fn count_results_for_server(results: &[&ToolSearchEntry], server_name: &str) -> usize {

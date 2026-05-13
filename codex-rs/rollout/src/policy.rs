@@ -1,6 +1,9 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::truncate_middle_chars;
+
+const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPersistenceMode {
@@ -19,6 +22,43 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode)
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
             true
         }
+    }
+}
+
+/// Return the canonical rollout items that should be persisted for a live append.
+pub fn persisted_rollout_items(
+    items: &[RolloutItem],
+    mode: EventPersistenceMode,
+) -> Vec<RolloutItem> {
+    let mut persisted = Vec::new();
+    for item in items {
+        if is_persisted_rollout_item(item, mode) {
+            persisted.push(sanitize_rollout_item_for_persistence(item.clone(), mode));
+        }
+    }
+    persisted
+}
+
+fn sanitize_rollout_item_for_persistence(
+    item: RolloutItem,
+    mode: EventPersistenceMode,
+) -> RolloutItem {
+    if mode != EventPersistenceMode::Extended {
+        return item;
+    }
+
+    match item {
+        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
+            event.aggregated_output = truncate_middle_chars(
+                &event.aggregated_output,
+                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
+            );
+            event.stdout.clear();
+            event.stderr.clear();
+            event.formatted_output.clear();
+            RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
+        }
+        _ => item,
     }
 }
 

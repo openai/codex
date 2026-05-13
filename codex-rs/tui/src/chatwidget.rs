@@ -32,8 +32,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
-use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -113,7 +111,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::TextElement as AppServerTextElement;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
@@ -158,8 +155,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::local_image_label_text;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -324,6 +319,14 @@ use crate::tui::FrameRequester;
 mod connectors;
 use self::connectors::ConnectorsCacheState;
 use self::connectors::ConnectorsState;
+mod exec_state;
+use self::exec_state::RunningCommand;
+use self::exec_state::UnifiedExecProcessSummary;
+use self::exec_state::UnifiedExecWaitState;
+use self::exec_state::UnifiedExecWaitStreak;
+use self::exec_state::command_execution_command_and_parsed;
+use self::exec_state::is_standard_tool_call;
+use self::exec_state::is_unified_exec_source;
 mod goal_status;
 use self::goal_status::GoalStatusState;
 #[cfg(test)]
@@ -349,10 +352,21 @@ use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod plugins;
+use self::plugins::PluginInstallAuthFlowState;
+use self::plugins::PluginListFetchState;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod protocol;
+mod rate_limits;
+use self::rate_limits::NUDGE_MODEL_SLUG;
+use self::rate_limits::RATE_LIMIT_SWITCH_PROMPT_THRESHOLD;
+use self::rate_limits::RateLimitErrorKind;
+use self::rate_limits::RateLimitSwitchPromptState;
+use self::rate_limits::RateLimitWarningState;
+use self::rate_limits::app_server_rate_limit_error_kind;
+pub(crate) use self::rate_limits::get_limits_duration;
+use self::rate_limits::is_app_server_cyber_policy_error;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 mod reasoning_shortcuts;
@@ -371,8 +385,27 @@ use self::transcript::TranscriptState;
 mod turn_lifecycle;
 use self::turn_lifecycle::TurnLifecycleState;
 mod user_messages;
+use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
+use self::user_messages::QueueDrain;
+use self::user_messages::QueuedUserMessage;
+use self::user_messages::ShellEscapePolicy;
+use self::user_messages::ThreadComposerState;
+pub(crate) use self::user_messages::ThreadInputState;
+pub(crate) use self::user_messages::UserMessage;
 use self::user_messages::UserMessageDisplay;
+#[cfg(test)]
+use self::user_messages::UserMessageHistoryOverride;
+use self::user_messages::UserMessageHistoryRecord;
+use self::user_messages::app_server_text_elements;
+pub(crate) use self::user_messages::create_initial_user_message;
+use self::user_messages::merge_user_messages;
+use self::user_messages::merge_user_messages_with_history_record;
+#[cfg(test)]
+use self::user_messages::remap_placeholders_for_message;
+use self::user_messages::user_message_display_for_history;
+use self::user_messages::user_message_for_restore;
+use self::user_messages::user_message_preview_text;
 mod warnings;
 use self::warnings::WarningDisplayState;
 pub(crate) use crate::branch_summary::StatusLineGitSummary;
@@ -401,175 +434,7 @@ const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it l
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
-// Track information about an in-flight exec command.
-struct RunningCommand {
-    command: Vec<String>,
-    parsed_cmd: Vec<ParsedCommand>,
-    source: ExecCommandSource,
-}
-
-struct UnifiedExecProcessSummary {
-    key: String,
-    call_id: String,
-    command_display: String,
-    recent_chunks: Vec<String>,
-}
-
-struct UnifiedExecWaitState {
-    command_display: String,
-}
-
-impl UnifiedExecWaitState {
-    fn new(command_display: String) -> Self {
-        Self { command_display }
-    }
-
-    fn is_duplicate(&self, command_display: &str) -> bool {
-        self.command_display == command_display
-    }
-}
-
-#[derive(Clone, Debug)]
-struct UnifiedExecWaitStreak {
-    process_id: String,
-    command_display: Option<String>,
-}
-
-impl UnifiedExecWaitStreak {
-    fn new(process_id: String, command_display: Option<String>) -> Self {
-        Self {
-            process_id,
-            command_display: command_display.filter(|display| !display.is_empty()),
-        }
-    }
-
-    fn update_command_display(&mut self, command_display: Option<String>) {
-        if self.command_display.is_some() {
-            return;
-        }
-        self.command_display = command_display.filter(|display| !display.is_empty());
-    }
-}
-
-fn is_unified_exec_source(source: ExecCommandSource) -> bool {
-    matches!(
-        source,
-        ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
-    )
-}
-
-fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
-    !parsed_cmd.is_empty()
-        && parsed_cmd
-            .iter()
-            .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
-}
-
-fn command_execution_command_and_parsed(
-    command: &str,
-    command_actions: &[codex_app_server_protocol::CommandAction],
-) -> (Vec<String>, Vec<ParsedCommand>) {
-    (
-        split_command_string(command),
-        command_actions
-            .iter()
-            .cloned()
-            .map(codex_app_server_protocol::CommandAction::into_core)
-            .collect(),
-    )
-}
-
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
-const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 const MAX_AGENT_COPY_HISTORY: usize = 32;
-
-#[derive(Default)]
-struct RateLimitWarningState {
-    secondary_index: usize,
-    primary_index: usize,
-}
-
-impl RateLimitWarningState {
-    fn take_warnings(
-        &mut self,
-        secondary_used_percent: Option<f64>,
-        secondary_window_minutes: Option<i64>,
-        primary_used_percent: Option<f64>,
-        primary_window_minutes: Option<i64>,
-    ) -> Vec<String> {
-        let reached_secondary_cap =
-            matches!(secondary_used_percent, Some(percent) if percent == 100.0);
-        let reached_primary_cap = matches!(primary_used_percent, Some(percent) if percent == 100.0);
-        if reached_secondary_cap || reached_primary_cap {
-            return Vec::new();
-        }
-
-        let mut warnings = Vec::new();
-
-        if let Some(secondary_used_percent) = secondary_used_percent {
-            let mut highest_secondary: Option<f64> = None;
-            while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-                && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
-            {
-                highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
-                self.secondary_index += 1;
-            }
-            if let Some(threshold) = highest_secondary {
-                let limit_label = secondary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                let remaining_percent = 100.0 - threshold;
-                warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
-                ));
-            }
-        }
-
-        if let Some(primary_used_percent) = primary_used_percent {
-            let mut highest_primary: Option<f64> = None;
-            while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-                && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
-            {
-                highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
-                self.primary_index += 1;
-            }
-            if let Some(threshold) = highest_primary {
-                let limit_label = primary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                let remaining_percent = 100.0 - threshold;
-                warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
-                ));
-            }
-        }
-
-        warnings
-    }
-}
-
-pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
-    const MINUTES_PER_HOUR: i64 = 60;
-    const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
-    const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
-    const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
-    const ROUNDING_BIAS_MINUTES: i64 = 3;
-
-    let windows_minutes = windows_minutes.max(0);
-
-    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
-        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
-        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
-        format!("{hours}h")
-    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "weekly".to_string()
-    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "monthly".to_string()
-    } else {
-        "annual".to_string()
-    }
-}
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
@@ -598,48 +463,6 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid terminal-title item IDs.
     pub(crate) terminal_title_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
-}
-
-#[derive(Default)]
-enum RateLimitSwitchPromptState {
-    #[default]
-    Idle,
-    Pending,
-    Shown,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PluginListFetchState {
-    cache_cwd: Option<PathBuf>,
-    in_flight_cwd: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-struct PluginInstallAuthFlowState {
-    plugin_display_name: String,
-    next_app_index: usize,
-}
-
-#[derive(Debug)]
-enum RateLimitErrorKind {
-    ServerOverloaded,
-    UsageLimit,
-    Generic,
-}
-
-fn app_server_rate_limit_error_kind(info: &AppServerCodexErrorInfo) -> Option<RateLimitErrorKind> {
-    match info {
-        AppServerCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
-        AppServerCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
-        AppServerCodexErrorInfo::ResponseTooManyFailedAttempts {
-            http_status_code: Some(429),
-        } => Some(RateLimitErrorKind::Generic),
-        _ => None,
-    }
-}
-
-fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -> bool {
-    matches!(info, AppServerCodexErrorInfo::CyberPolicy)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -890,476 +713,11 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct UserMessage {
-    text: String,
-    local_images: Vec<LocalImageAttachment>,
-    /// Remote image attachments represented as URLs (for example data URLs)
-    /// provided by app-server clients.
-    ///
-    /// Unlike `local_images`, these are not created by TUI image attach/paste
-    /// flows. The TUI can restore and remove them while editing/backtracking.
-    remote_image_urls: Vec<String>,
-    text_elements: Vec<TextElement>,
-    mention_bindings: Vec<MentionBinding>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum UserMessageHistoryRecord {
-    UserMessageText,
-    Override(UserMessageHistoryOverride),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct UserMessageHistoryOverride {
-    text: String,
-    text_elements: Vec<TextElement>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellEscapePolicy {
-    Allow,
-    Disallow,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct QueuedUserMessage {
-    user_message: UserMessage,
-    action: QueuedInputAction,
-}
-
-impl QueuedUserMessage {
-    fn new(user_message: UserMessage, action: QueuedInputAction) -> Self {
-        Self {
-            user_message,
-            action,
-        }
-    }
-
-    fn into_user_message(self) -> UserMessage {
-        self.user_message
-    }
-}
-
-impl From<UserMessage> for QueuedUserMessage {
-    fn from(user_message: UserMessage) -> Self {
-        Self::new(user_message, QueuedInputAction::Plain)
-    }
-}
-
-impl Deref for QueuedUserMessage {
-    type Target = UserMessage;
-
-    fn deref(&self) -> &Self::Target {
-        &self.user_message
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueueDrain {
-    Continue,
-    Stop,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-struct ThreadComposerState {
-    text: String,
-    local_images: Vec<LocalImageAttachment>,
-    remote_image_urls: Vec<String>,
-    text_elements: Vec<TextElement>,
-    mention_bindings: Vec<MentionBinding>,
-    pending_pastes: Vec<(String, String)>,
-}
-
-impl ThreadComposerState {
-    fn has_content(&self) -> bool {
-        !self.text.is_empty()
-            || !self.local_images.is_empty()
-            || !self.remote_image_urls.is_empty()
-            || !self.text_elements.is_empty()
-            || !self.mention_bindings.is_empty()
-            || !self.pending_pastes.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ThreadInputState {
-    composer: Option<ThreadComposerState>,
-    pending_steers: VecDeque<UserMessage>,
-    pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
-    pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
-    rejected_steers_queue: VecDeque<UserMessage>,
-    rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
-    queued_user_messages: VecDeque<QueuedUserMessage>,
-    queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
-    user_turn_pending_start: bool,
-    current_collaboration_mode: CollaborationMode,
-    active_collaboration_mask: Option<CollaborationModeMask>,
-    task_running: bool,
-    agent_turn_running: bool,
-}
-
-impl From<String> for UserMessage {
-    fn from(text: String) -> Self {
-        Self {
-            text,
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            // Plain text conversion has no UI element ranges.
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        }
-    }
-}
-
-impl From<&str> for UserMessage {
-    fn from(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            // Plain text conversion has no UI element ranges.
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PendingSteer {
-    user_message: UserMessage,
-    history_record: UserMessageHistoryRecord,
-    compare_key: PendingSteerCompareKey,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum InterruptedTurnNoticeMode {
     #[default]
     Default,
     Suppress,
-}
-
-pub(crate) fn create_initial_user_message(
-    text: Option<String>,
-    local_image_paths: Vec<PathBuf>,
-    text_elements: Vec<TextElement>,
-) -> Option<UserMessage> {
-    let text = text.unwrap_or_default();
-    if text.is_empty() && local_image_paths.is_empty() {
-        None
-    } else {
-        let local_images = local_image_paths
-            .into_iter()
-            .enumerate()
-            .map(|(idx, path)| LocalImageAttachment {
-                placeholder: local_image_label_text(idx + 1),
-                path,
-            })
-            .collect();
-        Some(UserMessage {
-            text,
-            local_images,
-            remote_image_urls: Vec::new(),
-            text_elements,
-            mention_bindings: Vec::new(),
-        })
-    }
-}
-
-fn append_text_with_rebased_elements(
-    target_text: &mut String,
-    target_text_elements: &mut Vec<TextElement>,
-    text: &str,
-    text_elements: impl IntoIterator<Item = TextElement>,
-) {
-    let offset = target_text.len();
-    target_text.push_str(text);
-    target_text_elements.extend(text_elements.into_iter().map(|mut element| {
-        element.byte_range.start += offset;
-        element.byte_range.end += offset;
-        element
-    }));
-}
-
-fn app_server_text_elements(elements: &[TextElement]) -> Vec<AppServerTextElement> {
-    elements.iter().cloned().map(Into::into).collect()
-}
-
-fn build_placeholder_mapping(
-    local_images: Vec<LocalImageAttachment>,
-    next_label: &mut usize,
-) -> (HashMap<String, String>, Vec<LocalImageAttachment>) {
-    let mut mapping: HashMap<String, String> = HashMap::new();
-    let mut remapped_images = Vec::new();
-    for attachment in local_images {
-        let new_placeholder = local_image_label_text(*next_label);
-        *next_label += 1;
-        mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
-        remapped_images.push(LocalImageAttachment {
-            placeholder: new_placeholder,
-            path: attachment.path,
-        });
-    }
-    (mapping, remapped_images)
-}
-
-fn remap_placeholders_in_text(
-    text: String,
-    text_elements: Vec<TextElement>,
-    mapping: &HashMap<String, String>,
-) -> (String, Vec<TextElement>) {
-    if mapping.is_empty() {
-        return (text, text_elements);
-    }
-
-    let mut elements = text_elements;
-    elements.sort_by_key(|elem| elem.byte_range.start);
-
-    let mut cursor = 0usize;
-    let mut rebuilt = String::new();
-    let mut rebuilt_elements = Vec::new();
-    for mut elem in elements {
-        let start = elem.byte_range.start.min(text.len());
-        let end = elem.byte_range.end.min(text.len());
-        if let Some(segment) = text.get(cursor..start) {
-            rebuilt.push_str(segment);
-        }
-
-        let original = text.get(start..end).unwrap_or("");
-        let placeholder = elem.placeholder(&text);
-        let replacement = placeholder
-            .and_then(|ph| mapping.get(ph))
-            .map(String::as_str)
-            .unwrap_or(original);
-
-        let elem_start = rebuilt.len();
-        rebuilt.push_str(replacement);
-        let elem_end = rebuilt.len();
-
-        if let Some(remapped) = placeholder.and_then(|ph| mapping.get(ph)) {
-            elem.set_placeholder(Some(remapped.clone()));
-        }
-        elem.byte_range = (elem_start..elem_end).into();
-        rebuilt_elements.push(elem);
-        cursor = end;
-    }
-    if let Some(segment) = text.get(cursor..) {
-        rebuilt.push_str(segment);
-    }
-
-    (rebuilt, rebuilt_elements)
-}
-
-// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
-// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
-// the combined local_image_paths order matches the labels, even if placeholders were moved
-// in the text (e.g., [Image #2] appearing before [Image #1]). Apply the same remapping to
-// history overrides so restored drafts and rendered transcript entries agree.
-fn remap_placeholders_for_message_and_history_record(
-    message: UserMessage,
-    history_record: UserMessageHistoryRecord,
-    next_label: &mut usize,
-) -> (UserMessage, UserMessageHistoryRecord) {
-    let UserMessage {
-        text,
-        text_elements,
-        local_images,
-        remote_image_urls,
-        mention_bindings,
-    } = message;
-    let (mapping, remapped_images) = build_placeholder_mapping(local_images, next_label);
-    let (text, text_elements) = remap_placeholders_in_text(text, text_elements, &mapping);
-    let history_record = match history_record {
-        UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-            let (text, text_elements) =
-                remap_placeholders_in_text(history.text, history.text_elements, &mapping);
-            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
-                text,
-                text_elements,
-            })
-        }
-        record => record,
-    };
-
-    (
-        UserMessage {
-            text,
-            local_images: remapped_images,
-            remote_image_urls,
-            text_elements,
-            mention_bindings,
-        },
-        history_record,
-    )
-}
-
-#[cfg(test)]
-fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
-    remap_placeholders_for_message_and_history_record(
-        message,
-        UserMessageHistoryRecord::UserMessageText,
-        next_label,
-    )
-    .0
-}
-
-fn remap_user_messages_with_history_records(
-    messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
-) -> Vec<(UserMessage, UserMessageHistoryRecord)> {
-    let total_remote_images = messages
-        .iter()
-        .map(|(message, _)| message.remote_image_urls.len())
-        .sum::<usize>();
-    let mut next_image_label = total_remote_images + 1;
-    messages
-        .into_iter()
-        .map(|(message, history_record)| {
-            remap_placeholders_for_message_and_history_record(
-                message,
-                history_record,
-                &mut next_image_label,
-            )
-        })
-        .collect()
-}
-
-fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
-    let messages = remap_user_messages_with_history_records(
-        messages
-            .into_iter()
-            .map(|message| (message, UserMessageHistoryRecord::UserMessageText))
-            .collect(),
-    );
-    merge_remapped_user_messages(messages.into_iter().map(|(message, _)| message))
-}
-
-fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>) -> UserMessage {
-    let mut combined = UserMessage {
-        text: String::new(),
-        text_elements: Vec::new(),
-        local_images: Vec::new(),
-        remote_image_urls: Vec::new(),
-        mention_bindings: Vec::new(),
-    };
-
-    for (idx, message) in messages.into_iter().enumerate() {
-        if idx > 0 {
-            combined.text.push('\n');
-        }
-        let UserMessage {
-            text,
-            text_elements,
-            local_images,
-            remote_image_urls,
-            mention_bindings,
-        } = message;
-        append_text_with_rebased_elements(
-            &mut combined.text,
-            &mut combined.text_elements,
-            &text,
-            text_elements,
-        );
-        combined.local_images.extend(local_images);
-        combined.remote_image_urls.extend(remote_image_urls);
-        combined.mention_bindings.extend(mention_bindings);
-    }
-
-    combined
-}
-
-fn user_message_for_restore(
-    message: UserMessage,
-    history_record: &UserMessageHistoryRecord,
-) -> UserMessage {
-    match history_record {
-        UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => UserMessage {
-            text: history.text.clone(),
-            text_elements: history.text_elements.clone(),
-            ..message
-        },
-        UserMessageHistoryRecord::Override(_) | UserMessageHistoryRecord::UserMessageText => {
-            message
-        }
-    }
-}
-
-fn user_message_preview_text(
-    message: &UserMessage,
-    history_record: Option<&UserMessageHistoryRecord>,
-) -> String {
-    match history_record {
-        Some(UserMessageHistoryRecord::Override(history)) if !history.text.is_empty() => {
-            history.text.clone()
-        }
-        Some(UserMessageHistoryRecord::Override(_))
-        | Some(UserMessageHistoryRecord::UserMessageText)
-        | None => message.text.clone(),
-    }
-}
-
-fn user_message_display_for_history(
-    message: UserMessage,
-    history_record: &UserMessageHistoryRecord,
-) -> UserMessageDisplay {
-    let message = user_message_for_restore(message, history_record);
-    ChatWidget::user_message_display_from_parts(
-        message.text,
-        message.text_elements,
-        message
-            .local_images
-            .into_iter()
-            .map(|image| image.path)
-            .collect(),
-        message.remote_image_urls,
-    )
-}
-
-fn merge_user_messages_with_history_record(
-    messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
-) -> (UserMessage, UserMessageHistoryRecord) {
-    let messages = remap_user_messages_with_history_records(messages);
-    let history_record = if messages
-        .iter()
-        .all(|(_, record)| *record == UserMessageHistoryRecord::UserMessageText)
-    {
-        UserMessageHistoryRecord::UserMessageText
-    } else {
-        let mut history_text = String::new();
-        let mut history_text_elements = Vec::new();
-        let mut history_segment_count = 0usize;
-        let mut append_history_segment = |text: &str, text_elements: Vec<TextElement>| {
-            if history_segment_count > 0 {
-                history_text.push('\n');
-            }
-            append_text_with_rebased_elements(
-                &mut history_text,
-                &mut history_text_elements,
-                text,
-                text_elements,
-            );
-            history_segment_count += 1;
-        };
-        for (message, record) in &messages {
-            match record {
-                UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-                    append_history_segment(&history.text, history.text_elements.clone());
-                }
-                UserMessageHistoryRecord::Override(_) if message.text.is_empty() => {}
-                UserMessageHistoryRecord::Override(_)
-                | UserMessageHistoryRecord::UserMessageText => {
-                    append_history_segment(&message.text, message.text_elements.clone());
-                }
-            }
-        }
-        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
-            text: history_text,
-            text_elements: history_text_elements,
-        })
-    };
-    (
-        merge_remapped_user_messages(messages.into_iter().map(|(message, _)| message)),
-        history_record,
-    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
