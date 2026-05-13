@@ -241,7 +241,7 @@ pub async fn run_doctor(
     if command.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&redacted_report(&report))?
+            serde_json::to_string_pretty(&redacted_json_report(&report))?
         );
     } else {
         print!(
@@ -445,17 +445,103 @@ fn config_overrides_from_interactive(
     }
 }
 
-fn redacted_report(report: &DoctorReport) -> DoctorReport {
-    let mut redacted = report.clone();
-    for check in &mut redacted.checks {
-        check.details = check
-            .details
-            .iter()
-            .map(|detail| redact_detail(detail))
-            .collect();
-        check.remediation = check.remediation.as_deref().map(redact_detail);
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonDoctorReport {
+    schema_version: u32,
+    generated_at: String,
+    overall_status: CheckStatus,
+    codex_version: String,
+    checks: BTreeMap<String, JsonDoctorCheck>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonDoctorCheck {
+    id: String,
+    category: String,
+    status: CheckStatus,
+    summary: String,
+    details: BTreeMap<String, JsonDetailValue>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
+    remediation: Option<String>,
+    duration_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum JsonDetailValue {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl JsonDetailValue {
+    fn push(&mut self, value: String) {
+        match self {
+            JsonDetailValue::One(previous) => {
+                *self = JsonDetailValue::Many(vec![std::mem::take(previous), value]);
+            }
+            JsonDetailValue::Many(values) => values.push(value),
+        }
     }
-    redacted
+}
+
+fn redacted_json_report(report: &DoctorReport) -> JsonDoctorReport {
+    let checks = report
+        .checks
+        .iter()
+        .map(|check| {
+            let json_check = redacted_json_check(check);
+            (check.id.clone(), json_check)
+        })
+        .collect();
+    JsonDoctorReport {
+        schema_version: report.schema_version,
+        generated_at: report.generated_at.clone(),
+        overall_status: report.overall_status,
+        codex_version: report.codex_version.clone(),
+        checks,
+    }
+}
+
+fn redacted_json_check(check: &DoctorCheck) -> JsonDoctorCheck {
+    let (details, notes) = structured_json_details(&check.details);
+    JsonDoctorCheck {
+        id: check.id.clone(),
+        category: check.category.clone(),
+        status: check.status,
+        summary: check.summary.clone(),
+        details,
+        notes,
+        remediation: check.remediation.as_deref().map(redact_detail),
+        duration_ms: check.duration_ms,
+    }
+}
+
+fn structured_json_details(details: &[String]) -> (BTreeMap<String, JsonDetailValue>, Vec<String>) {
+    let mut structured: BTreeMap<String, JsonDetailValue> = BTreeMap::new();
+    let mut notes = Vec::new();
+    for detail in details {
+        let redacted = redact_detail(detail);
+        let Some((key, value)) = redacted.split_once(": ") else {
+            notes.push(redacted);
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            notes.push(redacted);
+            continue;
+        }
+        let value = value.to_string();
+        match structured.get_mut(key) {
+            Some(existing) => existing.push(value),
+            None => {
+                structured.insert(key.to_string(), JsonDetailValue::One(value));
+            }
+        }
+    }
+    (structured, notes)
 }
 
 fn run_sync_check(
@@ -2606,7 +2692,7 @@ mod tests {
     }
 
     #[test]
-    fn redacted_report_sanitizes_json_details() {
+    fn redacted_json_report_structures_and_sanitizes_details() {
         let report = DoctorReport {
             schema_version: 1,
             generated_at: "0s since unix epoch".to_string(),
@@ -2623,17 +2709,35 @@ mod tests {
                     "optional reachability failed: remote: https://user:pass@example.com/mcp?x=abc (connect failed)",
                 )
                 .detail("OPENAI_API_KEY: sk-live-secret")
+                .detail("duplicate: one")
+                .detail("duplicate: two")
+                .detail("freeform note")
                 .remediation("Open https://user:pass@example.com/help?x=abc."),
             ],
         };
 
-        let redacted = serde_json::to_string(&redacted_report(&report)).expect("serialize report");
+        let redacted_report = redacted_json_report(&report);
+        let redacted = serde_json::to_string(&redacted_report).expect("serialize report");
+        let json = serde_json::to_value(redacted_report).expect("report should serialize");
 
         assert!(!redacted.contains("user:pass"));
         assert!(!redacted.contains("x=abc"));
         assert!(!redacted.contains("sk-live-secret"));
         assert!(redacted.contains("https://example.com/mcp"));
-        assert!(redacted.contains("OPENAI_API_KEY: <redacted>"));
+        assert_eq!(json["checks"].is_object(), true);
+        assert_eq!(json["checks"]["mcp.config"]["id"], "mcp.config");
+        assert_eq!(
+            json["checks"]["mcp.config"]["details"]["OPENAI_API_KEY"],
+            "<redacted>"
+        );
+        assert_eq!(
+            json["checks"]["mcp.config"]["details"]["duplicate"],
+            serde_json::json!(["one", "two"])
+        );
+        assert_eq!(
+            json["checks"]["mcp.config"]["notes"],
+            serde_json::json!(["freeform note"])
+        );
     }
 
     #[tokio::test]
