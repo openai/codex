@@ -17,6 +17,25 @@ struct ThreadListFilters {
     use_state_db_only: bool,
 }
 
+                workspace_roots = Some(if meta_line.meta.workspace_roots.is_empty() {
+                    cwd.iter().cloned().collect()
+                } else {
+                    meta_line.meta.workspace_roots
+                });
+                let context_cwd = cwd
+                    .as_ref()
+                    .map(AbsolutePathBuf::as_path)
+                    .unwrap_or(context.cwd.as_path());
+                permission_profile = Some(context.permission_profile.unwrap_or_else(|| {
+                    PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                        &context.sandbox_policy,
+                        context_cwd,
+                    )
+                }));
+                if context.active_permission_profile.is_some() {
+                    active_permission_profile = context.active_permission_profile;
+                }
+
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
@@ -1162,6 +1181,10 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd.as_path(),
         );
+        let permission_profile = thread_response_permission_profile(
+            &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
+        );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -1175,7 +1198,8 @@ impl ThreadRequestProcessor {
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            permission_profile,
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -1215,7 +1239,8 @@ impl ThreadRequestProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
+        workspace_roots: Option<Vec<PathBuf>>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -2379,6 +2404,8 @@ impl ThreadRequestProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
+        let permissions_were_explicit = permissions.is_some();
+        let sandbox_was_explicit = sandbox.is_some();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2392,6 +2419,14 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        if !permissions_were_explicit
+            && !sandbox_was_explicit
+            && let Some(persisted_permission_state) = persisted_permission_state.as_ref()
+        {
+            typesafe_overrides.permission_profile =
+                Some(persisted_permission_state.permission_profile.clone());
+        }
+                        .map(AbsolutePathBuf::to_path_buf)
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -2412,6 +2447,17 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if !permissions_were_explicit
+            && !sandbox_was_explicit
+            && let Some(persisted_permission_state) = persisted_permission_state
+        {
+            config
+                .permissions
+                .set_active_permission_profile_for_current_profile(
+                    persisted_permission_state.active_permission_profile,
+                    Some(&persisted_permission_state.permission_profile),
+                );
+        }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
@@ -2507,6 +2553,10 @@ impl ThreadRequestProcessor {
                     &config_snapshot.permission_profile,
                     config_snapshot.cwd.as_path(),
                 );
+                let permission_profile = thread_response_permission_profile(
+                    &config_snapshot.permission_profile,
+                    &config_snapshot.workspace_roots,
+                );
                 let active_permission_profile = thread_response_active_permission_profile(
                     config_snapshot.active_permission_profile,
                 );
@@ -2525,7 +2575,8 @@ impl ThreadRequestProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
+                    permission_profile,
+                    workspace_roots: config_snapshot.workspace_roots,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -3045,6 +3096,8 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
+        let permissions_were_explicit = permissions.is_some();
+        let sandbox_was_explicit = sandbox.is_some();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -3058,6 +3111,11 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        if !permissions_were_explicit && !sandbox_was_explicit {
+            typesafe_overrides.permission_profile =
+                Some(persisted_permission_state.permission_profile.clone());
+        }
+                    .map(AbsolutePathBuf::to_path_buf)
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
@@ -3065,6 +3123,14 @@ impl ThreadRequestProcessor {
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        if !permissions_were_explicit && !sandbox_was_explicit {
+            config
+                .permissions
+                .set_active_permission_profile_for_current_profile(
+                    persisted_permission_state.active_permission_profile,
+                    Some(&persisted_permission_state.permission_profile),
+                );
+        }
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -3170,6 +3236,10 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd.as_path(),
         );
+        let permission_profile = thread_response_permission_profile(
+            &config_snapshot.permission_profile,
+            &config_snapshot.workspace_roots,
+        );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -3183,7 +3253,8 @@ impl ThreadRequestProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
+            permission_profile,
+            workspace_roots: config_snapshot.workspace_roots,
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };

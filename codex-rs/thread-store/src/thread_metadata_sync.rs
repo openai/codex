@@ -532,6 +532,7 @@ mod tests {
             history: Some(history),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
+                workspace_roots: Vec::new(),
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,

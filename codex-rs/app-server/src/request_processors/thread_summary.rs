@@ -177,35 +177,48 @@ pub(super) fn thread_response_active_permission_profile(
 
 pub(super) fn apply_permission_profile_selection_to_config_overrides(
     overrides: &mut ConfigOverrides,
-    permissions: Option<PermissionProfileSelectionParams>,
+    permissions: Option<String>,
+    workspace_roots: Option<Vec<PathBuf>>,
 ) {
-    let Some(PermissionProfileSelectionParams::Profile { id, modifications }) = permissions else {
-        return;
-    };
-    overrides.default_permissions = Some(id);
-    overrides
-        .additional_writable_roots
-        .extend(modifications.unwrap_or_default().into_iter().map(
-            |modification| match modification {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path } => {
-                    path.to_path_buf()
-                }
-            },
-        ));
+    if let Some(permissions) = permissions {
+        overrides.default_permissions = Some(permissions);
+    }
+    if let Some(workspace_roots) = workspace_roots {
+        overrides.workspace_roots = Some(workspace_roots);
+    }
 }
 
 pub(super) fn thread_response_sandbox_policy(
     permission_profile: &codex_protocol::models::PermissionProfile,
     cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
+    codex_home: &Path,
 ) -> codex_app_server_protocol::SandboxPolicy {
+    let permission_profile = permission_profile
+        .clone()
+        .materialize_project_roots_with_workspace_roots(workspace_roots);
     let file_system_policy = permission_profile.file_system_sandbox_policy();
     let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-        permission_profile,
+        &permission_profile,
         &file_system_policy,
         permission_profile.network_sandbox_policy(),
         cwd,
     );
-    sandbox_policy.into()
+    let mut sandbox: codex_app_server_protocol::SandboxPolicy = sandbox_policy.into();
+    if let codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        legacy_writable_roots,
+        ..
+    } = &mut sandbox
+    {
+        let memories_root = codex_home.join("memories");
+        legacy_writable_roots.extend(
+            workspace_roots
+                .iter()
+                .filter(|root| root.as_path() != cwd && root.as_path() != memories_root)
+                .cloned(),
+        );
+    }
+    sandbox
 }
 
 #[cfg(test)]

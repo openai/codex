@@ -3442,9 +3442,9 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(start.permission_profile, None);
     assert_eq!(resume.permission_profile, None);
     assert_eq!(fork.permission_profile, None);
-    assert_eq!(start.active_permission_profile, None);
-    assert_eq!(resume.active_permission_profile, None);
-    assert_eq!(fork.active_permission_profile, None);
+    assert_eq!(start.workspace_roots, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(resume.workspace_roots, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(fork.workspace_roots, Vec::<AbsolutePathBuf>::new());
 }
 
 #[test]
@@ -3469,6 +3469,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         responsesapi_client_metadata: None,
         environments: None,
         cwd: None,
+        workspace_roots: None,
         approval_policy: None,
         approvals_reviewer: None,
         sandbox_policy: None,

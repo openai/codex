@@ -16,6 +16,7 @@ async fn spawn_command_under_sandbox(
     command_cwd: AbsolutePathBuf,
     sandbox_policy: &SandboxPolicy,
     sandbox_cwd: &AbsolutePathBuf,
+    additional_workspace_roots: &[AbsolutePathBuf],
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
@@ -28,6 +29,8 @@ async fn spawn_command_under_sandbox(
     use std::process::Stdio;
 
     let codex_linux_sandbox_exe = None;
+    let mut workspace_roots = vec![sandbox_cwd.clone()];
+    workspace_roots.extend_from_slice(additional_workspace_roots);
     let exec_request = build_exec_request(
         ExecParams {
             command,
@@ -44,6 +47,7 @@ async fn spawn_command_under_sandbox(
         },
         &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy),
         sandbox_cwd,
+        &workspace_roots,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
     )
@@ -85,6 +89,7 @@ async fn spawn_command_under_sandbox(
     command_cwd: AbsolutePathBuf,
     sandbox_policy: &SandboxPolicy,
     sandbox_cwd: &AbsolutePathBuf,
+    additional_workspace_roots: &[AbsolutePathBuf],
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
@@ -93,7 +98,10 @@ async fn spawn_command_under_sandbox(
 
     let codex_linux_sandbox_exe = core_test_support::find_codex_linux_sandbox_exe()
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
-    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(sandbox_policy);
+    let mut workspace_roots = vec![sandbox_cwd.clone()];
+    workspace_roots.extend_from_slice(additional_workspace_roots);
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(sandbox_policy)
+        .materialize_project_roots_with_workspace_roots(&workspace_roots);
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
         command,
@@ -145,6 +153,7 @@ async fn can_apply_linux_sandbox_policy(
         command_cwd.clone(),
         policy,
         sandbox_cwd,
+        &[],
         StdioPolicy::RedirectForShellTool,
         env,
     )
@@ -181,7 +190,6 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     let writable_roots: Vec<AbsolutePathBuf> = vec!["/dev/shm".try_into().unwrap()];
 
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots,
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -212,6 +220,7 @@ if __name__ == '__main__':
         command_cwd,
         &policy,
         &sandbox_cwd,
+        &writable_roots,
         StdioPolicy::Inherit,
         sandbox_env,
     )
@@ -255,6 +264,7 @@ async fn python_getpwuid_works_under_sandbox() {
         command_cwd,
         &policy,
         &sandbox_cwd,
+        &[],
         StdioPolicy::RedirectForShellTool,
         sandbox_env,
     )
@@ -295,7 +305,6 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     // writable only because it is under the sandbox policy cwd, not because it
     // is under a writable root.
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -311,6 +320,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         command_root.clone(),
         &policy,
         &canonical_sandbox_root,
+        &[],
         StdioPolicy::Inherit,
         sandbox_env.clone(),
     )
@@ -342,6 +352,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         command_root,
         &policy,
         &canonical_sandbox_root,
+        &[],
         StdioPolicy::Inherit,
         sandbox_env,
     )
@@ -376,7 +387,6 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
     let dot_codex = repo_root.join(".codex");
     let config_toml = dot_codex.join("config.toml");
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -392,6 +402,7 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
         repo_root.clone(),
         &policy,
         &repo_root,
+        &[],
         StdioPolicy::RedirectForShellTool,
         sandbox_env,
     )
@@ -546,6 +557,7 @@ where
             command_cwd,
             policy,
             &sandbox_cwd,
+            &[],
             stdio_policy,
             HashMap::from([("IN_SANDBOX".into(), "1".into())]),
         )

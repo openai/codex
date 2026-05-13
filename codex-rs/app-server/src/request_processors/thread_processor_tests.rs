@@ -651,6 +651,7 @@ mod thread_processor_behavior_tests {
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
             cwd,
+            workspace_roots: vec![test_path_buf("/tmp").abs()],
             ephemeral: false,
             reasoning_effort: None,
             personality: None,

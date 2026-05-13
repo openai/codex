@@ -525,6 +525,9 @@ mod tests {
                 history: None,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    workspace_roots: vec![
+                        home.path().to_path_buf().try_into().expect("absolute path"),
+                    ],
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -580,6 +583,9 @@ mod tests {
                 history: None,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
+                    workspace_roots: vec![
+                        home.path().to_path_buf().try_into().expect("absolute path"),
+                    ],
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -794,6 +800,7 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: ThreadPersistenceMetadata {
+                    workspace_roots: Vec::new(),
                     cwd: None,
                     model_provider: "test-provider".to_string(),
                     memory_mode: ThreadMemoryMode::Enabled,
@@ -1023,8 +1030,10 @@ mod tests {
     }
 
     fn thread_metadata() -> ThreadPersistenceMetadata {
+        let cwd = std::env::current_dir().expect("cwd");
         ThreadPersistenceMetadata {
-            cwd: Some(std::env::current_dir().expect("cwd")),
+            workspace_roots: vec![cwd.clone().try_into().expect("absolute path")],
+            cwd: Some(cwd),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
         }

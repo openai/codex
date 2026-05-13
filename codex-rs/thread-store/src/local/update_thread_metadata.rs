@@ -1508,8 +1508,10 @@ mod tests {
     }
 
     fn test_thread_metadata() -> ThreadPersistenceMetadata {
+        let cwd = std::env::current_dir().expect("cwd");
         ThreadPersistenceMetadata {
-            cwd: Some(std::env::current_dir().expect("cwd")),
+            workspace_roots: vec![cwd.clone().try_into().expect("absolute path")],
+            cwd: Some(cwd),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
         }

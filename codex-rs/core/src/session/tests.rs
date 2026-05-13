@@ -2063,8 +2063,10 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     };
     let expected_sandbox_policy = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.permissions.permission_profile = codex_config::Constrained::allow_any(
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
+        config.permissions.replace_permission_profile_constraint(
+            codex_config::Constrained::allow_any(PermissionProfile::from_legacy_sandbox_policy(
+                &sandbox_policy,
+            )),
         );
         config
             .set_legacy_sandbox_policy(sandbox_policy)
@@ -2218,11 +2220,13 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         trace_id: turn_context.trace_id.clone(),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
+        workspace_roots: turn_context.workspace_roots.clone(),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
+        active_permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -2819,10 +2823,12 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -2923,10 +2929,12 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3189,6 +3197,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             dynamic_tools: Vec::new(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
+                workspace_roots: config.workspace_roots.clone(),
                 model_provider: config.model_provider_id.clone(),
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
@@ -3396,10 +3405,12 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3442,7 +3453,6 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
 
     session_configuration.cwd = original_cwd.abs();
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -3486,6 +3496,8 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
     let mut session_configuration = make_session_configuration_for_tests().await;
     let cwd = tempfile::tempdir().expect("create temp dir");
     session_configuration.cwd = cwd.path().abs();
+    session_configuration.workspace_roots = vec![session_configuration.cwd.clone()];
+    session_configuration.workspace_roots_explicit = false;
 
     let workspace_policy = SandboxPolicy::new_workspace_write_policy();
     let deny_entry = FileSystemSandboxEntry {
@@ -3524,7 +3536,8 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         })
         .expect("permission profile update should succeed");
 
-    let mut expected_file_system_policy = requested_file_system_policy;
+    let mut expected_file_system_policy = requested_file_system_policy
+        .materialize_project_roots_with_workspace_roots(&updated.workspace_roots);
     expected_file_system_policy.glob_scan_max_depth = Some(2);
     expected_file_system_policy.entries.push(deny_entry);
     assert_eq!(
@@ -3538,6 +3551,8 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
     let mut session_configuration = make_session_configuration_for_tests().await;
     let cwd = tempfile::tempdir().expect("create cwd");
     session_configuration.cwd = cwd.path().abs();
+    session_configuration.workspace_roots = vec![session_configuration.cwd.clone()];
+    session_configuration.workspace_roots_explicit = false;
     let external_write_dir = tempfile::tempdir().expect("create external write root");
     let external_write_path = AbsolutePathBuf::from_absolute_path(
         codex_utils_absolute_path::canonicalize_preserving_symlinks(external_write_dir.path())
@@ -3547,7 +3562,7 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: external_write_path.clone(),
+                path: external_write_path,
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -3571,7 +3586,6 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
     assert_eq!(
         updated.sandbox_policy(),
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3673,7 +3687,6 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let original_cwd = project_root.join("subdir");
     session_configuration.cwd = original_cwd.abs();
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -3929,10 +3942,12 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -4038,10 +4053,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4085,7 +4102,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.permission_profile,
+            config.permissions.permission_profile_constraint(),
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -4270,10 +4287,12 @@ async fn make_session_with_config_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4373,10 +4392,12 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -5026,6 +5047,7 @@ fn op_kind_distinguishes_turn_ops() {
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             cwd: None,
+            workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
@@ -5430,6 +5452,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             dynamic_tools: Vec::new(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
+                workspace_roots: config.workspace_roots.clone(),
                 model_provider: config.model_provider_id.clone(),
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
@@ -5890,10 +5913,12 @@ where
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
+        workspace_roots_explicit: config.workspace_roots_explicit,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -5937,7 +5962,7 @@ where
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.permission_profile,
+            config.permissions.permission_profile_constraint(),
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(

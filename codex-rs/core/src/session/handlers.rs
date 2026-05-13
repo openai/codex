@@ -143,6 +143,7 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd: Some(cwd),
+                    workspace_roots: None,
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
@@ -163,6 +164,7 @@ pub(super) async fn user_input_or_turn_inner(
         }
         Op::UserInputWithTurnContext {
             cwd,
+            workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -195,6 +197,7 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd,
+                    workspace_roots,
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,

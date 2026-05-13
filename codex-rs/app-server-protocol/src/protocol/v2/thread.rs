@@ -1,8 +1,6 @@
 use super::ActivePermissionProfile;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
-use super::PermissionProfile;
-use super::PermissionProfileSelectionParams;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
@@ -117,11 +115,14 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     /// Named profile selection for this thread. Cannot be combined with
-    /// `sandbox`. Use bounded `modifications` for supported turn/thread
-    /// adjustments instead of replacing the full permissions profile.
+    /// `sandbox`.
     #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
+    /// Override the runtime workspace roots for this thread.
+    #[experimental("thread/start.workspaceRoots")]
+    #[ts(optional = nullable)]
+    pub workspace_roots: Option<Vec<PathBuf>>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -206,16 +207,15 @@ pub struct ThreadStartResponse {
     /// should prefer `permissionProfile` when they need exact runtime
     /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Full active permissions for this thread. `activePermissionProfile`
-    /// carries display/provenance metadata for this runtime profile.
+    /// Named or implicit built-in profile that produced the active runtime
+    /// permissions, when known.
     #[experimental("thread/start.permissionProfile")]
     #[serde(default)]
-    pub permission_profile: Option<PermissionProfile>,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
-    #[experimental("thread/start.activePermissionProfile")]
+    pub permission_profile: Option<ActivePermissionProfile>,
+    /// Runtime workspace roots currently associated with the thread.
+    #[experimental("thread/start.workspaceRoots")]
     #[serde(default)]
-    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -274,11 +274,14 @@ pub struct ThreadResumeParams {
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     /// Named profile selection for the resumed thread. Cannot be combined
-    /// with `sandbox`. Use bounded `modifications` for supported thread
-    /// adjustments instead of replacing the full permissions profile.
+    /// with `sandbox`.
     #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
+    /// Override the runtime workspace roots for the resumed thread.
+    #[experimental("thread/resume.workspaceRoots")]
+    #[ts(optional = nullable)]
+    pub workspace_roots: Option<Vec<PathBuf>>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -321,16 +324,15 @@ pub struct ThreadResumeResponse {
     /// should prefer `permissionProfile` when they need exact runtime
     /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Full active permissions for this thread. `activePermissionProfile`
-    /// carries display/provenance metadata for this runtime profile.
+    /// Named or implicit built-in profile that produced the active runtime
+    /// permissions, when known.
     #[experimental("thread/resume.permissionProfile")]
     #[serde(default)]
-    pub permission_profile: Option<PermissionProfile>,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
-    #[experimental("thread/resume.activePermissionProfile")]
+    pub permission_profile: Option<ActivePermissionProfile>,
+    /// Runtime workspace roots currently associated with the thread.
+    #[experimental("thread/resume.workspaceRoots")]
     #[serde(default)]
-    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -380,11 +382,14 @@ pub struct ThreadForkParams {
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     /// Named profile selection for the forked thread. Cannot be combined with
-    /// `sandbox`. Use bounded `modifications` for supported thread
-    /// adjustments instead of replacing the full permissions profile.
+    /// `sandbox`.
     #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
+    /// Override the runtime workspace roots for the forked thread.
+    #[experimental("thread/fork.workspaceRoots")]
+    #[ts(optional = nullable)]
+    pub workspace_roots: Option<Vec<PathBuf>>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -430,16 +435,15 @@ pub struct ThreadForkResponse {
     /// should prefer `permissionProfile` when they need exact runtime
     /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Full active permissions for this thread. `activePermissionProfile`
-    /// carries display/provenance metadata for this runtime profile.
+    /// Named or implicit built-in profile that produced the active runtime
+    /// permissions, when known.
     #[experimental("thread/fork.permissionProfile")]
     #[serde(default)]
-    pub permission_profile: Option<PermissionProfile>,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
-    #[experimental("thread/fork.activePermissionProfile")]
+    pub permission_profile: Option<ActivePermissionProfile>,
+    /// Runtime workspace roots currently associated with the thread.
+    #[experimental("thread/fork.workspaceRoots")]
     #[serde(default)]
-    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 

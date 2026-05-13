@@ -164,7 +164,10 @@ impl CommandExecRequestProcessor {
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(
-                    self.config.permissions.permission_profile.get(),
+                    self.config
+                        .permissions
+                        .permission_profile_constraint()
+                        .get(),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
@@ -243,7 +246,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile_constraint()
                 .can_set(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
@@ -264,7 +267,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile_constraint()
                 .can_set(&permission_profile)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             permission_profile
@@ -287,6 +290,7 @@ impl CommandExecRequestProcessor {
             exec_params,
             &effective_permission_profile,
             &sandbox_cwd,
+            std::slice::from_ref(&sandbox_cwd),
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
         )

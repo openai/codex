@@ -223,6 +223,7 @@ macro_rules! client_request_definitions {
 
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
@@ -2299,7 +2300,7 @@ mod tests {
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 permission_profile: None,
-                active_permission_profile: None,
+                workspace_roots: Vec::new(),
                 reasoning_effort: None,
             },
         };
@@ -2345,7 +2346,7 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "permissionProfile": null,
-                    "activePermissionProfile": null,
+                    "workspaceRoots": [],
                     "reasoningEffort": null
                 }
             }),

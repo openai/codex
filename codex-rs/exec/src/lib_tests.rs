@@ -513,7 +513,7 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
 }
 
 #[tokio::test]
-async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+async fn session_configured_from_thread_response_uses_active_permission_profile_from_response() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
@@ -523,12 +523,15 @@ async fn session_configured_from_thread_response_uses_permission_profile_from_re
         .await
         .expect("build config");
     let mut response = sample_thread_start_response();
-    response.permission_profile = Some(PermissionProfile::Disabled.into());
+    response.permission_profile = Some(ActivePermissionProfile::new(":danger-no-sandbox").into());
 
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
-    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+    assert_eq!(
+        event.active_permission_profile,
+        Some(ActivePermissionProfile::new(":danger-no-sandbox"))
+    );
 }
 
 fn sample_thread_start_response() -> ThreadStartResponse {
@@ -568,7 +571,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             exclude_slash_tmp: false,
         },
         permission_profile: None,
-        active_permission_profile: None,
+        workspace_roots: vec![test_path_buf("/tmp").abs()],
         reasoning_effort: None,
     }
 }

@@ -1574,7 +1574,7 @@ pub(crate) fn new_session_info(
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
         AskForApproval::from(config.permissions.approval_policy.value()),
-        &config.permissions.permission_profile(),
+        config.permissions.permission_profile_ref(),
     )
 }
 
@@ -3959,6 +3959,7 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,

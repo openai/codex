@@ -632,77 +632,80 @@ fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Resul
     )
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[test]
 #[serial(app_server_tracing)]
-async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let mut harness = TracingHarness::new().await?;
-    let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
-    let thread_id = thread_start_response.thread.id.clone();
+fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+    run_current_thread_test_with_stack("turn_start_jsonrpc_span_parents_core_turn_spans", async {
+        let mut harness = TracingHarness::new().await?;
+        let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
+        let thread_id = thread_start_response.thread.id.clone();
 
-    harness.reset_tracing();
+        harness.reset_tracing();
 
-    let RemoteTrace {
-        trace_id: remote_trace_id,
-        parent_span_id: remote_parent_span_id,
-        context: remote_trace,
-    } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
-    let turn_start_response: TurnStartResponse = harness
-        .request(
-            ClientRequest::TurnStart {
-                request_id: RequestId::Integer(3),
-                params: TurnStartParams {
-                    environments: None,
-                    thread_id,
-                    input: vec![UserInput::Text {
-                        text: "hello".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    responsesapi_client_metadata: None,
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    permissions: None,
-                    approvals_reviewer: None,
-                    model: None,
-                    service_tier: None,
-                    effort: None,
-                    summary: None,
-                    personality: None,
-                    output_schema: None,
-                    collaboration_mode: None,
+        let RemoteTrace {
+            trace_id: remote_trace_id,
+            parent_span_id: remote_parent_span_id,
+            context: remote_trace,
+        } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
+        let turn_start_response: TurnStartResponse = harness
+            .request(
+                ClientRequest::TurnStart {
+                    request_id: RequestId::Integer(3),
+                    params: TurnStartParams {
+                        environments: None,
+                        thread_id,
+                        input: vec![UserInput::Text {
+                            text: "hello".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        responsesapi_client_metadata: None,
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        permissions: None,
+                        workspace_roots: None,
+                        approvals_reviewer: None,
+                        model: None,
+                        service_tier: None,
+                        effort: None,
+                        summary: None,
+                        personality: None,
+                        output_schema: None,
+                        collaboration_mode: None,
+                    },
                 },
-            },
-            Some(remote_trace),
-        )
-        .await;
-    let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans.iter().any(|span| {
-            span.span_kind == SpanKind::Server
-                && span_attr(span, "rpc.method") == Some("turn/start")
-                && span.span_context.trace_id() == remote_trace_id
-        }) && spans.iter().any(|span| {
-            span_attr(span, "codex.op") == Some("user_input")
-                && span.span_context.trace_id() == remote_trace_id
+                Some(remote_trace),
+            )
+            .await;
+        let spans = wait_for_exported_spans(harness.tracing, |spans| {
+            spans.iter().any(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("turn/start")
+                    && span.span_context.trace_id() == remote_trace_id
+            }) && spans.iter().any(|span| {
+                span_attr(span, "codex.op") == Some("user_input")
+                    && span.span_context.trace_id() == remote_trace_id
+            })
         })
+        .await;
+
+        let server_request_span =
+            find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
+        let core_turn_span =
+            find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
+                span_attr(span, "codex.op") == Some("user_input")
+            });
+
+        assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+        assert!(server_request_span.parent_span_is_remote);
+        assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
+        assert_eq!(
+            span_attr(server_request_span, "turn.id"),
+            Some(turn_start_response.turn.id.as_str())
+        );
+        assert_span_descends_from(&spans, core_turn_span, server_request_span);
+        harness.shutdown().await;
+
+        Ok(())
     })
-    .await;
-
-    let server_request_span =
-        find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let core_turn_span =
-        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-            span_attr(span, "codex.op") == Some("user_input")
-        });
-
-    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
-    assert!(server_request_span.parent_span_is_remote);
-    assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_eq!(
-        span_attr(server_request_span, "turn.id"),
-        Some(turn_start_response.turn.id.as_str())
-    );
-    assert_span_descends_from(&spans, core_turn_span, server_request_span);
-    harness.shutdown().await;
-
-    Ok(())
 }

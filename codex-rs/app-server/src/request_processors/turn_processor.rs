@@ -357,6 +357,7 @@ impl TurnRequestProcessor {
         let turn_has_input = !mapped_items.is_empty();
 
         let has_any_overrides = params.cwd.is_some()
+            || params.workspace_roots.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -375,6 +376,7 @@ impl TurnRequestProcessor {
         }
 
         let cwd = params.cwd;
+        let workspace_roots = params.workspace_roots;
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
@@ -432,6 +434,7 @@ impl TurnRequestProcessor {
             thread
                 .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -457,6 +460,7 @@ impl TurnRequestProcessor {
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
                 cwd,
+                workspace_roots,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
