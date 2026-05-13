@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+const PROTECTED_WRITE_SUBDIRS: &[&str] = &[".git", ".codex", ".agents"];
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct AllowDenyPaths {
     pub allow: HashSet<PathBuf>,
@@ -44,19 +46,11 @@ pub fn compute_allow_paths(
              policy_cwd: &Path,
              add_allow: &mut dyn FnMut(PathBuf),
              add_deny: &mut dyn FnMut(PathBuf)| {
-                let candidate = if root.is_absolute() {
-                    root
-                } else {
-                    policy_cwd.join(root)
-                };
-                let canonical = canonicalize(&candidate).unwrap_or(candidate);
+                let canonical = canonical_writable_root(root, policy_cwd);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
-                    let protected_entry = canonical.join(protected_subdir);
-                    if protected_entry.exists() {
-                        add_deny(protected_entry);
-                    }
+                for protected_entry in protected_child_deny_paths_for_canonical_root(&canonical) {
+                    add_deny(protected_entry);
                 }
             };
 
@@ -66,17 +60,6 @@ pub fn compute_allow_paths(
             &mut add_allow_path,
             &mut add_deny_path,
         );
-
-        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-            for root in writable_roots {
-                add_writable_root(
-                    root.clone().into(),
-                    policy_cwd,
-                    &mut add_allow_path,
-                    &mut add_deny_path,
-                );
-            }
-        }
     }
     if include_tmp_env_vars {
         for key in ["TEMP", "TMP"] {
@@ -92,24 +75,53 @@ pub fn compute_allow_paths(
     AllowDenyPaths { allow, deny }
 }
 
+pub(crate) fn protected_child_deny_paths_for_roots<I, P>(
+    roots: I,
+    policy_cwd: &Path,
+) -> HashSet<PathBuf>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    roots
+        .into_iter()
+        .flat_map(|root| {
+            let canonical = canonical_writable_root(root.as_ref().to_path_buf(), policy_cwd);
+            protected_child_deny_paths_for_canonical_root(&canonical)
+        })
+        .collect()
+}
+
+fn canonical_writable_root(root: PathBuf, policy_cwd: &Path) -> PathBuf {
+    let candidate = if root.is_absolute() {
+        root
+    } else {
+        policy_cwd.join(root)
+    };
+    canonicalize(&candidate).unwrap_or(candidate)
+}
+
+fn protected_child_deny_paths_for_canonical_root(canonical: &Path) -> Vec<PathBuf> {
+    PROTECTED_WRITE_SUBDIRS
+        .iter()
+        .map(|protected_subdir| canonical.join(protected_subdir))
+        .filter(|protected_entry| protected_entry.exists())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
-    fn includes_additional_writable_roots() {
+    fn includes_command_cwd_as_writable_root() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
-        let extra_root = tmp.path().join("extra");
         let _ = fs::create_dir_all(&command_cwd);
-        let _ = fs::create_dir_all(&extra_root);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -121,11 +133,6 @@ mod tests {
             paths
                 .allow
                 .contains(&dunce::canonicalize(&command_cwd).unwrap())
-        );
-        assert!(
-            paths
-                .allow
-                .contains(&dunce::canonicalize(&extra_root).unwrap())
         );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
@@ -139,7 +146,6 @@ mod tests {
         let _ = fs::create_dir_all(&temp_dir);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
@@ -170,7 +176,6 @@ mod tests {
         let _ = fs::create_dir_all(&git_dir);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
@@ -197,7 +202,6 @@ mod tests {
         let _ = fs::write(&git_file, "gitdir: .git/worktrees/example");
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
@@ -225,7 +229,6 @@ mod tests {
         let _ = fs::create_dir_all(&agents_dir);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
@@ -253,7 +256,6 @@ mod tests {
         let _ = fs::create_dir_all(&command_cwd);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,

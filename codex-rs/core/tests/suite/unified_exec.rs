@@ -906,9 +906,11 @@ allow_local_binding = true
                 .enable(Feature::UnifiedExec)
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
-            config.permissions.permission_profile = Constrained::allow_any(
-                PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy_for_config),
-            );
+            config
+                .permissions
+                .replace_permission_profile_constraint(Constrained::allow_any(
+                    PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy_for_config),
+                ));
         });
     let test = builder.build_remote_aware(server).await?;
     assert!(
@@ -2752,10 +2754,13 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
                 },
                 access: FileSystemAccessMode::None,
             });
-        config.permissions.permission_profile =
-            Constrained::allow_any(PermissionProfile::from_runtime_permissions(
-                &file_system_sandbox_policy,
-                NetworkSandboxPolicy::Restricted,
+        config
+            .permissions
+            .replace_permission_profile_constraint(Constrained::allow_any(
+                PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ),
             ));
     });
     let TestCodex {
