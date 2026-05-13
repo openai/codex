@@ -225,13 +225,12 @@ impl HookCell {
         };
         let presentation = hook_presentation(&run);
         let HookPresentation::Render { entries } = presentation else {
-            if run.status == HookRunStatus::Completed {
-                if !self.runs[index]
+            if run.status == HookRunStatus::Completed
+                && !self.runs[index]
                     .state
                     .complete_quiet_success(Instant::now())
-                {
-                    self.runs.remove(index);
-                }
+            {
+                self.runs.remove(index);
             }
             return true;
         };
@@ -689,7 +688,8 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 /// Returns true when a hook marked as hidden has no user-relevant consequence to render.
 pub(crate) fn hook_run_should_skip_render(run: &HookRunSummary) -> bool {
-    matches!(hook_presentation(run), HookPresentation::Skip)
+    run.visibility_hint == HookVisibilityHint::Hidden
+        && matches!(hook_presentation(run), HookPresentation::Skip)
 }
 
 /// Chooses the transcript presentation for a hook run:
@@ -876,7 +876,7 @@ mod tests {
         let mut run = hook_run_summary("hook-1");
         run.status = HookRunStatus::Completed;
 
-        assert!(hook_run_should_skip_render(&run));
+        assert!(!hook_run_should_skip_render(&run));
         assert_eq!(hook_presentation(&run), HookPresentation::Skip);
     }
 
