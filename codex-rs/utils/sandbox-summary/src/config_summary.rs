@@ -1,7 +1,8 @@
 use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
-use crate::sandbox_summary::summarize_sandbox_policy;
+use crate::sandbox_summary::summarize_permission_profile_with_hidden_writable_roots;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
 pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'static str, String)> {
@@ -13,14 +14,7 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
             "approval",
             config.permissions.approval_policy.value().to_string(),
         ),
-        (
-            "sandbox",
-            summarize_sandbox_policy(
-                &config
-                    .permissions
-                    .legacy_sandbox_policy(config.cwd.as_path()),
-            ),
-        ),
+        ("sandbox", summarize_config_permission_profile(config)),
     ];
     if config.model_provider.wire_api == WireApi::Responses {
         let reasoning_effort = config
@@ -40,4 +34,18 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
     }
 
     entries
+}
+
+pub fn summarize_config_permission_profile(config: &Config) -> String {
+    let hidden_writable_roots = hidden_writable_roots(config);
+    summarize_permission_profile_with_hidden_writable_roots(
+        config.permissions.permission_profile_ref(),
+        &config.cwd,
+        &config.workspace_roots,
+        &hidden_writable_roots,
+    )
+}
+
+fn hidden_writable_roots(config: &Config) -> [AbsolutePathBuf; 1] {
+    [config.codex_home.join("memories")]
 }
