@@ -44,6 +44,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +54,28 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn run_current_thread_test_with_stack<F>(name: &str, future: F) -> Result<()>
+where
+    F: Future<Output = Result<()>> + Send + 'static,
+{
+    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+
+    let handle = std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(move || -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(Box::pin(future))
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!("{name} thread panicked")),
+    }
+}
 
 #[tokio::test]
 async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result<()> {
@@ -197,96 +220,102 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     Ok(())
 }
 
-#[tokio::test]
-async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let store_id = Uuid::new_v4().to_string();
-    create_config_toml_with_in_memory_thread_store(codex_home.path(), &store_id)?;
-    let store = InMemoryThreadStore::for_id(store_id.clone());
-    let _in_memory_store = InMemoryThreadStoreId { store_id };
-    let thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000126")?;
-    let parent_thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000127")?;
-    store
-        .create_thread(CreateThreadParams {
-            thread_id,
-            forked_from_id: Some(parent_thread_id),
-            source: SessionSource::Cli,
-            thread_source: None,
-            base_instructions: BaseInstructions::default(),
-            dynamic_tools: Vec::new(),
-            metadata: ThreadPersistenceMetadata {
-                cwd: None,
-                model_provider: "test-provider".to_string(),
-                memory_mode: ThreadMemoryMode::Disabled,
-            },
-            event_persistence_mode: ThreadEventPersistenceMode::default(),
-        })
-        .await?;
-    store
-        .update_thread_metadata(UpdateThreadMetadataParams {
-            thread_id,
-            patch: ThreadMetadataPatch {
-                name: Some(Some("named pathless thread".to_string())),
-                ..Default::default()
-            },
-            include_archived: true,
-        })
-        .await?;
+#[test]
+fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
+    run_current_thread_test_with_stack(
+        "thread_unarchive_preserves_pathless_store_metadata",
+        async {
+            let codex_home = TempDir::new()?;
+            let store_id = Uuid::new_v4().to_string();
+            create_config_toml_with_in_memory_thread_store(codex_home.path(), &store_id)?;
+            let store = InMemoryThreadStore::for_id(store_id.clone());
+            let _in_memory_store = InMemoryThreadStoreId { store_id };
+            let thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000126")?;
+            let parent_thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000127")?;
+            store
+                .create_thread(CreateThreadParams {
+                    thread_id,
+                    forked_from_id: Some(parent_thread_id),
+                    source: SessionSource::Cli,
+                    thread_source: None,
+                    base_instructions: BaseInstructions::default(),
+                    dynamic_tools: Vec::new(),
+                    metadata: ThreadPersistenceMetadata {
+                        cwd: None,
+                        workspace_roots: Vec::new(),
+                        model_provider: "test-provider".to_string(),
+                        memory_mode: ThreadMemoryMode::Disabled,
+                    },
+                    event_persistence_mode: ThreadEventPersistenceMode::default(),
+                })
+                .await?;
+            store
+                .update_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id,
+                    patch: ThreadMetadataPatch {
+                        name: Some(Some("named pathless thread".to_string())),
+                        ..Default::default()
+                    },
+                    include_archived: true,
+                })
+                .await?;
 
-    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .loader_overrides(loader_overrides.clone())
-        .build()
-        .await?;
-    let client = in_process::start(InProcessStartArgs {
-        arg0_paths: Arg0DispatchPaths::default(),
-        config: Arc::new(config),
-        cli_overrides: Vec::new(),
-        loader_overrides,
-        cloud_requirements: CloudRequirementsLoader::default(),
-        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
-        log_db: None,
-        state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        config_warnings: Vec::new(),
-        session_source: SessionSource::Cli,
-        enable_codex_api_key_env: false,
-        initialize: InitializeParams {
-            client_info: ClientInfo {
-                name: "codex-app-server-tests".to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            capabilities: Some(InitializeCapabilities {
-                experimental_api: true,
-                ..Default::default()
-            }),
+            let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+            let config = ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .fallback_cwd(Some(codex_home.path().to_path_buf()))
+                .loader_overrides(loader_overrides.clone())
+                .build()
+                .await?;
+            let client = in_process::start(InProcessStartArgs {
+                arg0_paths: Arg0DispatchPaths::default(),
+                config: Arc::new(config),
+                cli_overrides: Vec::new(),
+                loader_overrides,
+                cloud_requirements: CloudRequirementsLoader::default(),
+                thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+                feedback: CodexFeedback::new(),
+                log_db: None,
+                state_db: None,
+                environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+                config_warnings: Vec::new(),
+                session_source: SessionSource::Cli,
+                enable_codex_api_key_env: false,
+                initialize: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-app-server-tests".to_string(),
+                        title: None,
+                        version: "0.1.0".to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: true,
+                        ..Default::default()
+                    }),
+                },
+                channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            })
+            .await?;
+
+            let result = client
+                .request(ClientRequest::ThreadUnarchive {
+                    request_id: RequestId::Integer(1),
+                    params: ThreadUnarchiveParams {
+                        thread_id: thread_id.to_string(),
+                    },
+                })
+                .await?
+                .expect("thread/unarchive should succeed");
+            let ThreadUnarchiveResponse { thread } = serde_json::from_value(result)?;
+
+            assert_eq!(thread.id, thread_id.to_string());
+            assert_eq!(thread.path, None);
+            assert_eq!(thread.forked_from_id, Some(parent_thread_id.to_string()));
+            assert_eq!(thread.name, Some("named pathless thread".to_string()));
+
+            client.shutdown().await?;
+            Ok(())
         },
-        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
-    .await?;
-
-    let result = client
-        .request(ClientRequest::ThreadUnarchive {
-            request_id: RequestId::Integer(1),
-            params: ThreadUnarchiveParams {
-                thread_id: thread_id.to_string(),
-            },
-        })
-        .await?
-        .expect("thread/unarchive should succeed");
-    let ThreadUnarchiveResponse { thread } = serde_json::from_value(result)?;
-
-    assert_eq!(thread.id, thread_id.to_string());
-    assert_eq!(thread.path, None);
-    assert_eq!(thread.forked_from_id, Some(parent_thread_id.to_string()));
-    assert_eq!(thread.name, Some("named pathless thread".to_string()));
-
-    client.shutdown().await?;
-    Ok(())
+    )
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
