@@ -12,6 +12,8 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -24,7 +26,6 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -83,36 +84,12 @@ impl ToolHandler for ExecCommandHandler {
         ))
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        true
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            tracing::error!(
-                "This should never happen, invocation payload is wrong: {:?}",
-                invocation.payload
-            );
-            return true;
-        };
-
-        let Ok(params) = parse_arguments::<ExecCommandArgs>(arguments) else {
-            return true;
-        };
-        let command = match get_command(
-            &params,
-            invocation.session.user_shell(),
-            &invocation.turn.tools_config.unified_exec_shell_mode,
-            invocation.turn.tools_config.allow_login_shell,
-        ) {
-            Ok(command) => command,
-            Err(_) => return true,
-        };
-        !is_known_safe_command(&command)
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -126,6 +103,27 @@ impl ToolHandler for ExecCommandHandler {
                 tool_name: HookToolName::bash(),
                 tool_input: serde_json::json!({ "command": args.cmd }),
             })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported exec_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "exec_command",
+                "cmd",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
     }
 
     fn post_tool_use_payload(
@@ -301,6 +299,7 @@ impl ToolHandler for ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens: Some(max_output_tokens),
                     cwd,
+                    sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
                     network: context.turn.network.clone(),
                     tty,

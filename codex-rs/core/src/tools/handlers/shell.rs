@@ -19,6 +19,8 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::rewrite_function_arguments;
+use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -91,6 +93,32 @@ fn shell_function_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<Pr
         tool_name: HookToolName::bash(),
         tool_input: serde_json::json!({ "command": command }),
     })
+}
+
+fn rewrite_shell_function_updated_hook_input(
+    mut invocation: ToolInvocation,
+    updated_input: JsonValue,
+    tool_name: &str,
+) -> Result<ToolInvocation, FunctionCallError> {
+    let ToolPayload::Function { arguments } = invocation.payload else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "hook input rewrite received unsupported {tool_name} payload"
+        )));
+    };
+    let command = shlex::split(updated_hook_command(&updated_input)?).ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "hook returned shell input with an invalid command string".to_string(),
+        )
+    })?;
+    invocation.payload = ToolPayload::Function {
+        arguments: rewrite_function_arguments(&arguments, tool_name, |arguments| {
+            arguments.insert(
+                "command".to_string(),
+                JsonValue::Array(command.into_iter().map(JsonValue::String).collect()),
+            );
+        })?,
+    };
+    Ok(invocation)
 }
 
 fn shell_function_post_tool_use_payload(

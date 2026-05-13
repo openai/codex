@@ -281,6 +281,7 @@ fn parse_completed(
     dispatcher::ParsedHandler {
         completed,
         data: PermissionRequestHandlerData { decision },
+        completion_order: 0,
     }
 }
 
