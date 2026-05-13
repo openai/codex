@@ -131,8 +131,8 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// [experimental] Ensure the app-server daemon is running with remote control enabled.
-    RemoteControl,
+    /// [experimental] Manage the app-server daemon with remote control enabled.
+    RemoteControl(RemoteControlCommand),
 
     /// Launch the Codex desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -561,6 +561,21 @@ struct AppServerBootstrapCommand {
     /// Launch the managed app-server with remote_control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+}
+
+#[derive(Debug, Args)]
+struct RemoteControlCommand {
+    #[command(subcommand)]
+    subcommand: Option<RemoteControlSubcommand>,
+}
+
+#[derive(Debug, Clone, Copy, clap::Subcommand)]
+enum RemoteControlSubcommand {
+    /// Start the app-server daemon with remote control enabled.
+    Start,
+
+    /// Stop the app-server daemon.
+    Stop,
 }
 
 #[derive(Debug, Args)]
@@ -1024,14 +1039,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Subcommand::RemoteControl) => {
+        Some(Subcommand::RemoteControl(remote_control_cli)) => {
+            let subcommand_name = remote_control_subcommand_name(&remote_control_cli);
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
-                "remote-control",
+                subcommand_name,
             )?;
-            let output = codex_app_server_daemon::ensure_remote_control_started().await?;
-            println!("{}", serde_json::to_string(&output)?);
+            match remote_control_cli
+                .subcommand
+                .unwrap_or(RemoteControlSubcommand::Start)
+            {
+                RemoteControlSubcommand::Start => {
+                    let output = codex_app_server_daemon::ensure_remote_control_started().await?;
+                    println!("{}", serde_json::to_string(&output)?);
+                }
+                RemoteControlSubcommand::Stop => {
+                    print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                }
+            }
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -1713,7 +1739,9 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
         }
-        Some(Subcommand::RemoteControl) => Some("remote-control"),
+        Some(Subcommand::RemoteControl(remote_control)) => {
+            Some(remote_control_subcommand_name(remote_control))
+        }
         Some(Subcommand::Mcp(_)) => Some("mcp"),
         Some(Subcommand::Plugin(_)) => Some("plugin"),
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1764,6 +1792,14 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = app_server_subcommand_name(subcommand);
     reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+}
+
+fn remote_control_subcommand_name(command: &RemoteControlCommand) -> &'static str {
+    match command.subcommand {
+        None => "remote-control",
+        Some(RemoteControlSubcommand::Start) => "remote-control start",
+        Some(RemoteControlSubcommand::Stop) => "remote-control stop",
+    }
 }
 
 fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'static str {
@@ -2659,7 +2695,12 @@ mod tests {
     fn reject_remote_flag_for_remote_control() {
         let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://", "remote-control"])
             .expect("parse");
-        assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::RemoteControl(RemoteControlCommand {
+                subcommand: None
+            }))
+        );
 
         let err = reject_remote_mode_for_subcommand(
             cli.remote.remote.as_deref(),
