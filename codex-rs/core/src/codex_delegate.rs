@@ -701,14 +701,6 @@ async fn handle_mcp_elicitation(
             return;
         }
     };
-    let request_id = match &id {
-        codex_protocol::mcp::RequestId::String(value) => {
-            rmcp::model::NumberOrString::String(Arc::from(value.as_str()))
-        }
-        codex_protocol::mcp::RequestId::Integer(value) => {
-            rmcp::model::NumberOrString::Number(*value)
-        }
-    };
     let response = if parent_session
         .services
         .mcp_connection_manager
@@ -723,6 +715,9 @@ async fn handle_mcp_elicitation(
             meta: None,
         })
     } else {
+        // Child MCP request IDs are child-local, so route through a unique parent-side ID.
+        let parent_request_id =
+            rmcp::model::RequestId::String(uuid::Uuid::new_v4().to_string().into());
         tokio::select! {
             biased;
             _ = cancel_token.cancelled() => {
@@ -732,13 +727,17 @@ async fn handle_mcp_elicitation(
                     meta: None,
                 };
                 let _ = parent_session
-                    .resolve_elicitation(server_name.clone(), request_id.clone(), response.clone())
+                    .resolve_elicitation(
+                        server_name.clone(),
+                        parent_request_id.clone(),
+                        response.clone(),
+                    )
                     .await;
                 Some(response)
             }
             response = parent_session.request_mcp_server_elicitation(
                 parent_ctx,
-                request_id.clone(),
+                parent_request_id,
                 McpServerElicitationRequestParams {
                     thread_id: parent_session.conversation_id.to_string(),
                     turn_id: Some(parent_ctx.sub_id.clone()),
