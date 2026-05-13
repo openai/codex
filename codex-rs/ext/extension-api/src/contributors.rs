@@ -9,6 +9,7 @@ use crate::ExtensionData;
 mod prompt;
 mod thread_lifecycle;
 mod tools;
+mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
@@ -18,6 +19,9 @@ pub use thread_lifecycle::ThreadStopInput;
 pub use tools::ExtensionToolExecutor;
 pub use tools::ExtensionToolFuture;
 pub use tools::ExtensionToolOutput;
+pub use turn_lifecycle::TurnAbortInput;
+pub use turn_lifecycle::TurnStartInput;
+pub use turn_lifecycle::TurnStopInput;
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
 pub trait ContextContributor: Send + Sync {
@@ -43,6 +47,23 @@ pub trait ThreadLifecycleContributor<C>: Send + Sync {
 
     /// Called before the host drops the thread runtime and thread-scoped store.
     fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
+}
+
+/// Contributor for host-owned turn lifecycle gates.
+///
+/// Implementations should use these callbacks to seed, observe, or clear
+/// extension-private turn state. The host exposes stable identifiers and
+/// extension stores instead of core runtime objects.
+pub trait TurnLifecycleContributor: Send + Sync {
+    /// Called after turn-scoped extension stores are created, before the task
+    /// for the turn starts running.
+    fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
+
+    /// Called before the host drops the completed turn runtime and turn store.
+    fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
+
+    /// Called after the host aborts a running turn.
+    fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
 }
 
 /// Extension contribution that exposes native tools owned by a feature.

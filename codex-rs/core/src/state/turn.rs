@@ -1,5 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
+use codex_extension_api::ExtensionData;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -75,6 +76,7 @@ pub(crate) struct RunningTask {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
+    pub(crate) turn_extension_data: Arc<ExtensionData>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
@@ -82,6 +84,7 @@ pub(crate) struct RunningTask {
 pub(crate) struct RemovedTask {
     pub(crate) records_turn_token_usage_on_span: bool,
     pub(crate) active_turn_is_empty: bool,
+    pub(crate) turn_extension_data: Arc<ExtensionData>,
 }
 
 impl ActiveTurn {
@@ -97,6 +100,7 @@ impl ActiveTurn {
         Some(RemovedTask {
             records_turn_token_usage_on_span,
             active_turn_is_empty: self.tasks.is_empty(),
+            turn_extension_data: task.turn_extension_data,
         })
     }
 
@@ -120,6 +124,7 @@ pub(crate) struct TurnState {
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+    pub(crate) extension_data: Arc<ExtensionData>,
 }
 
 pub(crate) struct PendingRequestPermissions {

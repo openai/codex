@@ -7,10 +7,12 @@ use crate::ExtensionData;
 use crate::ThreadLifecycleContributor;
 use crate::ToolContributor;
 use crate::TurnItemContributor;
+use crate::TurnLifecycleContributor;
 
 /// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -21,6 +23,7 @@ impl<C> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             thread_lifecycle_contributors: Vec::new(),
+            turn_lifecycle_contributors: Vec::new(),
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             tool_contributors: Vec::new(),
@@ -48,6 +51,11 @@ impl<C> ExtensionRegistryBuilder<C> {
         self.thread_lifecycle_contributors.push(contributor);
     }
 
+    /// Registers one turn-lifecycle contributor.
+    pub fn turn_lifecycle_contributor(&mut self, contributor: Arc<dyn TurnLifecycleContributor>) {
+        self.turn_lifecycle_contributors.push(contributor);
+    }
+
     /// Registers one prompt contributor.
     pub fn prompt_contributor(&mut self, contributor: Arc<dyn ContextContributor>) {
         self.context_contributors.push(contributor);
@@ -67,6 +75,7 @@ impl<C> ExtensionRegistryBuilder<C> {
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
+            turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             tool_contributors: self.tool_contributors,
@@ -78,6 +87,7 @@ impl<C> ExtensionRegistryBuilder<C> {
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -88,6 +98,11 @@ impl<C> ExtensionRegistry<C> {
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
+    }
+
+    /// Returns the registered turn-lifecycle contributors.
+    pub fn turn_lifecycle_contributors(&self) -> &[Arc<dyn TurnLifecycleContributor>] {
+        &self.turn_lifecycle_contributors
     }
 
     /// Claims the first rendered approval-review prompt accepted by an
