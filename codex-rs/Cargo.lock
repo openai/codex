@@ -2257,6 +2257,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "crossterm",
  "http 1.4.0",
  "libc",
  "owo-colors",

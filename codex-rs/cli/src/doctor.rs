@@ -11,6 +11,7 @@
 //! issue or while diagnosing a broken local installation.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
@@ -91,6 +92,38 @@ const PROXY_ENV_VARS: &[&str] = &[
     "all_proxy",
     "no_proxy",
 ];
+const COLOR_ENV_VARS: &[&str] = &[
+    "COLORTERM",
+    "NO_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "FORCE_COLOR",
+    "COLORFGBG",
+];
+const TERMINAL_DIMENSION_ENV_VARS: &[&str] = &["COLUMNS", "LINES"];
+const TERMINFO_ENV_VARS: &[&str] = &["TERMINFO", "TERMINFO_DIRS"];
+const LOCALE_ENV_VARS: &[&str] = &["LC_ALL", "LC_CTYPE", "LANG"];
+const REMOTE_TERMINAL_ENV_VARS: &[&str] = &[
+    "SSH_TTY",
+    "SSH_CONNECTION",
+    "SSH_CLIENT",
+    "MOSH_IP",
+    "WSL_DISTRO_NAME",
+    "WSL_INTEROP",
+    "VSCODE_INJECTION",
+    "VSCODE_IPC_HOOK_CLI",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "WT_SESSION",
+];
+const TMUX_OPTION_NAMES: &[&str] = &[
+    "extended-keys",
+    "xterm-keys",
+    "allow-passthrough",
+    "set-clipboard",
+    "focus-events",
+];
+const NARROW_TERMINAL_COLUMNS: u16 = 80;
 
 /// Options for building a local Codex diagnostic report.
 ///
@@ -273,7 +306,11 @@ async fn build_report(
                         sandbox_check(config, arg0_paths)
                     })
                 },
-                async { run_sync_check("terminal", progress.clone(), terminal_check) },
+                async {
+                    run_sync_check("terminal", progress.clone(), || {
+                        terminal_check(command.no_color)
+                    })
+                },
                 run_async_check("state", progress.clone(), state_check(config)),
                 async {
                     run_sync_check("app-server", progress.clone(), || {
@@ -316,7 +353,11 @@ async fn build_report(
                     })
                 },
                 async { run_sync_check("network", progress.clone(), network_check) },
-                async { run_sync_check("terminal", progress.clone(), terminal_check) },
+                async {
+                    run_sync_check("terminal", progress.clone(), || {
+                        terminal_check(command.no_color)
+                    })
+                },
                 async { run_sync_check("state", progress.clone(), fallback_state_check) },
                 run_async_check(
                     "provider reachability",
@@ -1286,33 +1327,117 @@ fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) -> DoctorCheck
     DoctorCheck::new("sandbox.helpers", "sandbox", status, summary).details(details)
 }
 
-fn terminal_check() -> DoctorCheck {
-    let info = terminal_info();
-    let name = info.name;
-    let mut details = vec![format!("terminal: {}", terminal_name(&info))];
-    if let Some(term_program) = info.term_program {
-        details.push(format!("TERM_PROGRAM: {term_program}"));
-    }
-    if let Some(version) = info.version {
-        details.push(format!("terminal version: {version}"));
-    }
-    if let Some(term) = info.term {
-        details.push(format!("TERM: {term}"));
-    }
-    if let Some(multiplexer) = info.multiplexer {
-        details.push(format!("multiplexer: {}", multiplexer_name(&multiplexer)));
+#[derive(Clone, Debug)]
+struct TerminalCheckInputs {
+    info: TerminalInfo,
+    env: BTreeMap<String, String>,
+    present_env: BTreeSet<String>,
+    no_color_flag: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+    stderr_is_terminal: bool,
+    stream_supports_color: bool,
+    terminal_size: Result<(u16, u16), String>,
+    tmux_details: Vec<String>,
+}
+
+impl TerminalCheckInputs {
+    fn detect(no_color_flag: bool) -> Self {
+        let names = terminal_env_names();
+        let (env, present_env) = collect_env_snapshot(&names);
+        let terminal_size = crossterm::terminal::size().map_err(|err| err.to_string());
+        let info = terminal_info();
+        let tmux_details = if matches!(info.multiplexer, Some(Multiplexer::Tmux { .. })) {
+            tmux_diagnostic_details()
+        } else {
+            Vec::new()
+        };
+        Self {
+            info,
+            env,
+            present_env,
+            no_color_flag,
+            stdin_is_terminal: std::io::stdin().is_terminal(),
+            stdout_is_terminal: std::io::stdout().is_terminal(),
+            stderr_is_terminal: std::io::stderr().is_terminal(),
+            stream_supports_color: supports_color::on(Stream::Stdout).is_some(),
+            terminal_size,
+            tmux_details,
+        }
     }
 
-    let status = if matches!(name, TerminalName::Dumb) {
-        CheckStatus::Warning
-    } else {
+    fn env_value(&self, name: &str) -> Option<&str> {
+        self.env.get(name).map(String::as_str)
+    }
+
+    fn env_present(&self, name: &str) -> bool {
+        self.present_env.contains(name)
+    }
+}
+
+fn terminal_check(no_color_flag: bool) -> DoctorCheck {
+    terminal_check_from_inputs(TerminalCheckInputs::detect(no_color_flag))
+}
+
+fn terminal_check_from_inputs(inputs: TerminalCheckInputs) -> DoctorCheck {
+    let info = &inputs.info;
+    let name = info.name;
+    let mut details = vec![format!("terminal: {}", terminal_name(info))];
+    if let Some(term_program) = info.term_program.as_deref() {
+        details.push(format!("TERM_PROGRAM: {term_program}"));
+    }
+    if let Some(version) = info.version.as_deref() {
+        details.push(format!("terminal version: {version}"));
+    }
+    if let Some(term) = info.term.as_deref() {
+        details.push(format!("TERM: {term}"));
+    }
+    if let Some(multiplexer) = info.multiplexer.as_ref() {
+        details.push(format!("multiplexer: {}", multiplexer_name(multiplexer)));
+    }
+    details.push(format!("stdin is terminal: {}", inputs.stdin_is_terminal));
+    details.push(format!("stdout is terminal: {}", inputs.stdout_is_terminal));
+    details.push(format!("stderr is terminal: {}", inputs.stderr_is_terminal));
+    match &inputs.terminal_size {
+        Ok((columns, rows)) => details.push(format!("terminal size: {columns}x{rows}")),
+        Err(err) => details.push(format!("terminal size: unavailable ({err})")),
+    }
+    push_terminal_env_values(&mut details, &inputs, TERMINAL_DIMENSION_ENV_VARS);
+    details.push(format!("color output: {}", color_output_summary(&inputs)));
+    push_terminal_env_values(&mut details, &inputs, COLOR_ENV_VARS);
+    let terminfo_warning = push_terminfo_details(&mut details, &inputs);
+    let locale = effective_locale(&inputs);
+    if let Some(locale) = locale.as_ref() {
+        details.push(format!("effective locale: {locale}"));
+    }
+    push_presence_env_values(&mut details, &inputs, REMOTE_TERMINAL_ENV_VARS);
+    details.extend(inputs.tmux_details.iter().cloned());
+
+    let narrow_terminal = is_narrow_terminal(&inputs);
+    let locale_warning = locale.as_deref().is_some_and(is_non_utf8_locale);
+    let mut warnings = Vec::new();
+    if matches!(name, TerminalName::Dumb) {
+        warnings.push("terminal reports TERM=dumb");
+    }
+    if locale_warning {
+        warnings.push("terminal locale is not UTF-8");
+    }
+    if terminfo_warning {
+        warnings.push("terminfo path is not readable");
+    }
+    if narrow_terminal {
+        warnings.push("narrow terminal may wrap output");
+    }
+
+    let status = if warnings.is_empty() {
         CheckStatus::Ok
-    };
-    let summary = if status == CheckStatus::Warning {
-        "terminal reports TERM=dumb"
     } else {
-        "terminal metadata was detected"
+        CheckStatus::Warning
     };
+    let summary = warnings
+        .first()
+        .copied()
+        .unwrap_or("terminal metadata was detected");
     DoctorCheck::new("terminal.env", "terminal", status, summary).details(details)
 }
 
@@ -1341,8 +1466,197 @@ fn multiplexer_name(multiplexer: &Multiplexer) -> String {
             Some(version) => format!("tmux {version}"),
             None => "tmux".to_string(),
         },
-        Multiplexer::Zellij {} => "zellij".to_string(),
+        Multiplexer::Zellij { version } => match version {
+            Some(version) => format!("zellij {version}"),
+            None => "zellij".to_string(),
+        },
     }
+}
+
+fn terminal_env_names() -> BTreeSet<&'static str> {
+    let mut names = BTreeSet::from(["TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"]);
+    names.extend(COLOR_ENV_VARS.iter().copied());
+    names.extend(TERMINAL_DIMENSION_ENV_VARS.iter().copied());
+    names.extend(TERMINFO_ENV_VARS.iter().copied());
+    names.extend(LOCALE_ENV_VARS.iter().copied());
+    names.extend(REMOTE_TERMINAL_ENV_VARS.iter().copied());
+    names
+}
+
+fn collect_env_snapshot(
+    names: &BTreeSet<&'static str>,
+) -> (BTreeMap<String, String>, BTreeSet<String>) {
+    let mut values = BTreeMap::new();
+    let mut present = BTreeSet::new();
+    for name in names {
+        if let Some(raw) = env::var_os(name) {
+            present.insert((*name).to_string());
+            let value = raw.to_string_lossy().trim().to_string();
+            if !value.is_empty() {
+                values.insert((*name).to_string(), value);
+            }
+        }
+    }
+    (values, present)
+}
+
+fn push_terminal_env_values(
+    details: &mut Vec<String>,
+    inputs: &TerminalCheckInputs,
+    names: &[&str],
+) {
+    for name in names {
+        if let Some(value) = inputs.env_value(name) {
+            details.push(format!("{name}: {value}"));
+        } else if inputs.env_present(name) {
+            details.push(format!("{name}: present"));
+        }
+    }
+}
+
+fn push_presence_env_values(
+    details: &mut Vec<String>,
+    inputs: &TerminalCheckInputs,
+    names: &[&str],
+) {
+    for name in names {
+        if inputs.env_present(name) {
+            details.push(format!("{name}: present"));
+        }
+    }
+}
+
+fn color_output_summary(inputs: &TerminalCheckInputs) -> String {
+    if should_enable_color(
+        inputs.no_color_flag,
+        inputs.env_present("NO_COLOR"),
+        inputs.env_value("TERM"),
+        inputs.stdout_is_terminal,
+        inputs.stream_supports_color,
+    ) {
+        return "enabled".to_string();
+    }
+
+    let reason = if inputs.no_color_flag {
+        "--no-color"
+    } else if inputs.env_present("NO_COLOR") {
+        "NO_COLOR"
+    } else if inputs.env_value("TERM") == Some("dumb") {
+        "TERM=dumb"
+    } else if !inputs.stdout_is_terminal {
+        "stdout is not a terminal"
+    } else if !inputs.stream_supports_color {
+        "terminal color support not detected"
+    } else {
+        "disabled"
+    };
+    format!("disabled ({reason})")
+}
+
+fn push_terminfo_details(details: &mut Vec<String>, inputs: &TerminalCheckInputs) -> bool {
+    let mut has_warning = false;
+    if let Some(raw) = inputs.env_value("TERMINFO") {
+        let path = PathBuf::from(raw);
+        let (status, warning) = terminal_path_readiness(&path);
+        details.push(format!("TERMINFO: {} ({status})", path.display()));
+        has_warning |= warning;
+    }
+    if let Some(raw) = inputs.env_value("TERMINFO_DIRS") {
+        for path in env::split_paths(raw).filter(|path| !path.as_os_str().is_empty()) {
+            let (status, warning) = terminal_path_readiness(&path);
+            details.push(format!(
+                "TERMINFO_DIRS entry: {} ({status})",
+                path.display()
+            ));
+            has_warning |= warning;
+        }
+    } else if inputs.env_present("TERMINFO_DIRS") {
+        details.push("TERMINFO_DIRS: present".to_string());
+    }
+    has_warning
+}
+
+fn terminal_path_readiness(path: &Path) -> (String, bool) {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(path) {
+            Ok(_) => ("dir".to_string(), false),
+            Err(err) => (format!("dir unreadable: {err}"), true),
+        },
+        Ok(metadata) if metadata.is_file() => match read_probe_file(path) {
+            Ok(_) => ("file".to_string(), false),
+            Err(err) => (format!("file unreadable: {err}"), true),
+        },
+        Ok(_) => ("not a file or directory".to_string(), true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ("missing".to_string(), true),
+        Err(err) => (err.to_string(), true),
+    }
+}
+
+fn effective_locale(inputs: &TerminalCheckInputs) -> Option<String> {
+    LOCALE_ENV_VARS
+        .iter()
+        .find_map(|name| inputs.env_value(name).map(ToString::to_string))
+}
+
+fn is_non_utf8_locale(locale: &str) -> bool {
+    let locale = locale.to_ascii_lowercase();
+    !(locale.contains("utf-8") || locale.contains("utf8"))
+}
+
+fn is_narrow_terminal(inputs: &TerminalCheckInputs) -> bool {
+    let actual_width_is_narrow = matches!(
+        &inputs.terminal_size,
+        Ok((columns, _)) if *columns > 0 && *columns < NARROW_TERMINAL_COLUMNS
+    );
+    let declared_width_is_narrow = inputs
+        .env_value("COLUMNS")
+        .and_then(|columns| columns.parse::<u16>().ok())
+        .is_some_and(|columns| columns > 0 && columns < NARROW_TERMINAL_COLUMNS);
+    actual_width_is_narrow || declared_width_is_narrow
+}
+
+fn tmux_diagnostic_details() -> Vec<String> {
+    let mut details = Vec::new();
+    push_tmux_display_detail(&mut details, "tmux client termtype", "#{client_termtype}");
+    push_tmux_display_detail(&mut details, "tmux client termname", "#{client_termname}");
+    for option in TMUX_OPTION_NAMES {
+        let value = tmux_option_value(option).unwrap_or_else(|| "unavailable".to_string());
+        details.push(format!("tmux {option}: {value}"));
+    }
+    details
+}
+
+fn push_tmux_display_detail(details: &mut Vec<String>, label: &str, format: &str) {
+    if let Some(value) = tmux_display_message(format) {
+        details.push(format!("{label}: {value}"));
+    }
+}
+
+fn tmux_option_value(option: &str) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["show-options", "-gqv", option])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    non_empty_trimmed(String::from_utf8(output.stdout).ok()?)
+}
+
+fn tmux_display_message(format: &str) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["display-message", "-p", format])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    non_empty_trimmed(String::from_utf8(output.stdout).ok()?)
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() { None } else { Some(value) }
 }
 
 async fn state_check(config: &Config) -> DoctorCheck {
@@ -2757,5 +3071,156 @@ mod tests {
             /*stdout_is_tty*/ false,
             /*stream_supports_color*/ true,
         ));
+    }
+
+    fn terminal_inputs() -> TerminalCheckInputs {
+        TerminalCheckInputs {
+            info: TerminalInfo {
+                name: TerminalName::Unknown,
+                term_program: None,
+                version: None,
+                term: Some("xterm-256color".to_string()),
+                multiplexer: None,
+            },
+            env: BTreeMap::from([("TERM".to_string(), "xterm-256color".to_string())]),
+            present_env: BTreeSet::from(["TERM".to_string()]),
+            no_color_flag: false,
+            stdin_is_terminal: true,
+            stdout_is_terminal: true,
+            stderr_is_terminal: true,
+            stream_supports_color: true,
+            terminal_size: Ok((120, 40)),
+            tmux_details: Vec::new(),
+        }
+    }
+
+    fn set_terminal_env(inputs: &mut TerminalCheckInputs, name: &str, value: &str) {
+        inputs.present_env.insert(name.to_string());
+        if value.is_empty() {
+            inputs.env.remove(name);
+        } else {
+            inputs.env.insert(name.to_string(), value.to_string());
+        }
+    }
+
+    #[test]
+    fn terminal_check_warns_for_dumb_terminal() {
+        let mut inputs = terminal_inputs();
+        inputs.info.name = TerminalName::Dumb;
+        inputs.info.term = Some("dumb".to_string());
+        set_terminal_env(&mut inputs, "TERM", "dumb");
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "terminal reports TERM=dumb");
+    }
+
+    #[test]
+    fn terminal_check_warns_for_narrow_terminal() {
+        let mut inputs = terminal_inputs();
+        inputs.terminal_size = Ok((79, 24));
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "narrow terminal may wrap output");
+    }
+
+    #[test]
+    fn terminal_check_warns_for_declared_narrow_terminal() {
+        let mut inputs = terminal_inputs();
+        set_terminal_env(&mut inputs, "COLUMNS", "60");
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "narrow terminal may wrap output");
+        assert!(check.details.contains(&"COLUMNS: 60".to_string()));
+    }
+
+    #[test]
+    fn terminal_check_warns_for_non_utf8_locale() {
+        let mut inputs = terminal_inputs();
+        set_terminal_env(&mut inputs, "LANG", "C");
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "terminal locale is not UTF-8");
+        assert!(check.details.contains(&"effective locale: C".to_string()));
+    }
+
+    #[test]
+    fn terminal_check_warns_for_unreadable_terminfo_path() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        let missing = tempdir.path().join("missing-terminfo");
+        let mut inputs = terminal_inputs();
+        set_terminal_env(&mut inputs, "TERMINFO", &missing.to_string_lossy());
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "terminfo path is not readable");
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("TERMINFO: ") && detail.ends_with(" (missing)"))
+        );
+    }
+
+    #[test]
+    fn terminal_check_reports_remote_indicators_as_present_only() {
+        let mut inputs = terminal_inputs();
+        set_terminal_env(&mut inputs, "SSH_CONNECTION", "10.0.0.1 1 10.0.0.2 22");
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert!(
+            check
+                .details
+                .contains(&"SSH_CONNECTION: present".to_string())
+        );
+        assert!(
+            !check
+                .details
+                .iter()
+                .any(|detail| detail.contains("10.0.0.1"))
+        );
+    }
+
+    #[test]
+    fn terminal_check_keeps_tmux_probe_failures_non_fatal() {
+        let mut inputs = terminal_inputs();
+        inputs.info.multiplexer = Some(Multiplexer::Tmux { version: None });
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "terminal metadata was detected");
+    }
+
+    #[test]
+    fn color_output_summary_reports_disabled_reasons() {
+        let mut inputs = terminal_inputs();
+        inputs.no_color_flag = true;
+        assert_eq!(color_output_summary(&inputs), "disabled (--no-color)");
+
+        inputs = terminal_inputs();
+        set_terminal_env(&mut inputs, "NO_COLOR", "");
+        assert_eq!(color_output_summary(&inputs), "disabled (NO_COLOR)");
+
+        inputs = terminal_inputs();
+        inputs.info.term = Some("dumb".to_string());
+        set_terminal_env(&mut inputs, "TERM", "dumb");
+        assert_eq!(color_output_summary(&inputs), "disabled (TERM=dumb)");
+
+        inputs = terminal_inputs();
+        inputs.stdout_is_terminal = false;
+        assert_eq!(
+            color_output_summary(&inputs),
+            "disabled (stdout is not a terminal)"
+        );
     }
 }

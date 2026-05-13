@@ -5,6 +5,7 @@ use std::collections::HashMap;
 struct FakeEnvironment {
     vars: HashMap<String, String>,
     tmux_client_info: TmuxClientInfo,
+    zellij_version: Option<String>,
 }
 
 impl FakeEnvironment {
@@ -12,6 +13,7 @@ impl FakeEnvironment {
         Self {
             vars: HashMap::new(),
             tmux_client_info: TmuxClientInfo::default(),
+            zellij_version: None,
         }
     }
 
@@ -27,6 +29,11 @@ impl FakeEnvironment {
         };
         self
     }
+
+    fn with_zellij_version(mut self, version: &str) -> Self {
+        self.zellij_version = Some(version.to_string());
+        self
+    }
 }
 
 impl Environment for FakeEnvironment {
@@ -36,6 +43,12 @@ impl Environment for FakeEnvironment {
 
     fn tmux_client_info(&self) -> TmuxClientInfo {
         self.tmux_client_info.clone()
+    }
+
+    fn zellij_version(&self) -> Option<String> {
+        self.zellij_version
+            .clone()
+            .or_else(|| self.var_non_empty("ZELLIJ_VERSION"))
     }
 }
 
@@ -129,7 +142,7 @@ fn terminal_info_reports_is_zellij() {
         /*term_program*/ None,
         /*version*/ None,
         /*term*/ None,
-        Some(Multiplexer::Zellij {}),
+        Some(Multiplexer::Zellij { version: None }),
     );
     assert!(zellij.is_zellij());
 
@@ -312,10 +325,60 @@ fn detects_zellij_multiplexer() {
             term_program: None,
             version: None,
             term: None,
-            multiplexer: Some(Multiplexer::Zellij {}),
+            multiplexer: Some(Multiplexer::Zellij { version: None }),
         },
         "zellij_multiplexer"
     );
+}
+
+#[test]
+fn detects_zellij_multiplexer_version() {
+    let env = FakeEnvironment::new().with_var("ZELLIJ_VERSION", "0.43.1");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::Unknown,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            Some(Multiplexer::Zellij {
+                version: Some("0.43.1".to_string()),
+            }),
+        ),
+        "zellij_multiplexer_version"
+    );
+}
+
+#[test]
+fn detects_zellij_multiplexer_command_version() {
+    let env = FakeEnvironment::new()
+        .with_var("ZELLIJ", "1")
+        .with_zellij_version("0.44.1");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::Unknown,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            Some(Multiplexer::Zellij {
+                version: Some("0.44.1".to_string()),
+            }),
+        ),
+        "zellij_multiplexer_command_version"
+    );
+}
+
+#[test]
+fn parses_zellij_version_output() {
+    assert_eq!(
+        parse_zellij_version("zellij 0.44.1"),
+        Some("0.44.1".to_string())
+    );
+    assert_eq!(parse_zellij_version("0.44.1"), Some("0.44.1".to_string()));
+    assert_eq!(parse_zellij_version(""), None);
 }
 
 #[test]
