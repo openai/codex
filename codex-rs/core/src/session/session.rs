@@ -813,13 +813,13 @@ impl Session {
             let agent_control = agent_control.with_session_id(session_id);
             let session_extension_data = codex_extension_api::ExtensionData::new();
             let thread_extension_data = codex_extension_api::ExtensionData::new();
-            for contributor in extensions.thread_start_contributors() {
-                contributor.contribute(
+            for contributor in extensions.thread_lifecycle_contributors() {
+                contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     thread_id,
-                    config.as_ref(),
-                    &session_extension_data,
-                    &thread_extension_data,
-                );
+                    config: config.as_ref(),
+                    session_store: &session_extension_data,
+                    thread_store: &thread_extension_data,
+                });
             }
 
             let services = SessionServices {

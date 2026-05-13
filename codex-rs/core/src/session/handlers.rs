@@ -643,6 +643,24 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
+    let contributors = sess
+        .services
+        .extensions
+        .thread_lifecycle_contributors()
+        .to_vec();
+    for contributor in contributors {
+        if let Err(err) = contributor
+            .on_thread_stop(codex_extension_api::ThreadStopInput {
+                thread_id: sess.conversation_id,
+                session_store: &sess.services.session_extension_data,
+                thread_store: &sess.services.thread_extension_data,
+            })
+            .await
+        {
+            warn!("thread lifecycle contributor failed during thread stop: {err}");
+        }
+    }
+
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
     if let Some(live_thread) = sess.live_thread()

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
-use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadStartContributor;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_protocol::ThreadId;
 
 /// Guardian extension dependencies supplied by the host at construction time.
@@ -47,19 +47,13 @@ impl GuardianThreadContext {
     }
 }
 
-impl<S> ThreadStartContributor<Config> for GuardianExtension<S>
+impl<S> ThreadLifecycleContributor<Config> for GuardianExtension<S>
 where
     S: Send + Sync,
 {
-    fn contribute(
-        &self,
-        thread_id: ThreadId,
-        _input: &Config,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) {
-        thread_store.insert(GuardianThreadContext {
-            forked_from_thread_id: thread_id,
+    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+        input.thread_store.insert(GuardianThreadContext {
+            forked_from_thread_id: input.thread_id,
         });
     }
 }
@@ -69,5 +63,5 @@ pub fn install<S>(registry: &mut ExtensionRegistryBuilder<Config>, agent_spawner
 where
     S: Send + Sync + 'static,
 {
-    registry.thread_start_contributor(Arc::new(GuardianExtension::new(agent_spawner)));
+    registry.thread_lifecycle_contributor(Arc::new(GuardianExtension::new(agent_spawner)));
 }

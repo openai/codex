@@ -1,32 +1,25 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 
 use crate::ExtensionData;
 
 mod prompt;
+mod thread_lifecycle;
 mod tools;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use thread_lifecycle::ThreadLifecycleContributor;
+pub use thread_lifecycle::ThreadLifecycleFuture;
+pub use thread_lifecycle::ThreadResumeInput;
+pub use thread_lifecycle::ThreadStartInput;
+pub use thread_lifecycle::ThreadStopInput;
 pub use tools::ExtensionToolExecutor;
 pub use tools::ExtensionToolFuture;
 pub use tools::ExtensionToolOutput;
-
-/// Contributor that receives the live thread id and host-owned thread-start
-/// input before later contributors read from extension stores.
-pub trait ThreadStartContributor<C>: Send + Sync {
-    fn contribute(
-        &self,
-        thread_id: ThreadId,
-        input: &C,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    );
-}
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
 pub trait ContextContributor: Send + Sync {

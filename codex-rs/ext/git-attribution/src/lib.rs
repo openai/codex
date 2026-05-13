@@ -5,9 +5,9 @@ use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
-use codex_extension_api::ThreadStartContributor;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
-use codex_protocol::ThreadId;
 
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
@@ -40,17 +40,11 @@ struct GitAttributionConfig {
     prompt: Option<String>,
 }
 
-impl ThreadStartContributor<Config> for GitAttributionExtension {
-    fn contribute(
-        &self,
-        _thread_id: ThreadId,
-        config: &Config,
-        _session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) {
-        thread_store.insert(GitAttributionConfig {
-            enabled: config.features.enabled(Feature::CodexGitCommit),
-            prompt: config.commit_attribution.clone(),
+impl ThreadLifecycleContributor<Config> for GitAttributionExtension {
+    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+        input.thread_store.insert(GitAttributionConfig {
+            enabled: input.config.features.enabled(Feature::CodexGitCommit),
+            prompt: input.config.commit_attribution.clone(),
         });
     }
 }
@@ -58,7 +52,7 @@ impl ThreadStartContributor<Config> for GitAttributionExtension {
 /// Installs the git-attribution contributors into the extension registry.
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
     let extension = Arc::new(GitAttributionExtension);
-    registry.thread_start_contributor(extension.clone());
+    registry.thread_lifecycle_contributor(extension.clone());
     registry.prompt_contributor(extension);
 }
 
