@@ -251,3 +251,82 @@ async fn turn_start_emits_turn_context_updated_when_overrides_change_defaults() 
 
     Ok(())
 }
+
+#[tokio::test]
+async fn thread_turn_context_update_after_turn_start_preserves_newer_update() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("gpt-5.2".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            ..Default::default()
+        })
+        .await?;
+    let update_request_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id.clone(),
+            model: Some("gpt-5.4".to_string()),
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        })
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let update_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_request_id)),
+    )
+    .await??;
+    let update_response = to_response::<ThreadTurnContextUpdateResponse>(update_response)?;
+    assert_eq!(update_response.turn_context.model, "gpt-5.4");
+    assert_eq!(
+        update_response.turn_context.effort,
+        Some(ReasoningEffort::High)
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    mcp.clear_message_buffer();
+    let read_current_request_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let read_current_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_current_request_id)),
+    )
+    .await??;
+    let read_current_response =
+        to_response::<ThreadTurnContextUpdateResponse>(read_current_response)?;
+    assert_eq!(
+        read_current_response.turn_context,
+        update_response.turn_context
+    );
+
+    Ok(())
+}
