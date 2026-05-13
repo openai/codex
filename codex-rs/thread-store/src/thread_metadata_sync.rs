@@ -533,6 +533,7 @@ mod tests {
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
+                workspace_roots: Vec::new(),
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },

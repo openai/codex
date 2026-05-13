@@ -71,6 +71,7 @@ pub struct TurnContext {
     /// instead of `std::env::current_dir()`.
     #[deprecated(note = "use the selected turn environment cwd instead")]
     pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
@@ -105,7 +106,10 @@ impl TurnContext {
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.file_system_sandbox_policy()
+        self.permission_profile
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
+            .file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
@@ -257,6 +261,7 @@ impl TurnContext {
             environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
@@ -321,6 +326,7 @@ impl TurnContext {
             permissions,
             #[allow(deprecated)]
             cwd: Some(self.cwd.clone()),
+            workspace_roots: self.workspace_roots.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -358,11 +364,13 @@ impl TurnContext {
             trace_id: self.trace_id.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
+            workspace_roots: self.workspace_roots.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
+            active_permission_profile: self.config.permissions.active_permission_profile(),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
@@ -420,14 +428,19 @@ impl Session {
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
+        per_turn_config.workspace_roots = session_configuration.workspace_roots.clone();
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.service_tier = session_configuration.service_tier.clone();
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
-        per_turn_config.permissions.permission_profile =
-            session_configuration.permission_profile.clone();
+        per_turn_config
+            .permissions
+            .replace_permission_profile_constraint_with_active_profile(
+                session_configuration.permission_profile.clone(),
+                session_configuration.active_permission_profile(),
+            );
         let permission_profile = session_configuration.permission_profile();
         let resolved_web_search_mode =
             resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &permission_profile);
@@ -454,8 +467,6 @@ impl Session {
             Self::build_per_turn_config(session_configuration, session_configuration.cwd.clone());
         config.model = Some(session_configuration.collaboration_mode.model().to_string());
         config.permissions.approval_policy = session_configuration.approval_policy.clone();
-        config.permissions.active_permission_profile =
-            session_configuration.active_permission_profile.clone();
         config
     }
 
@@ -576,6 +587,7 @@ impl Session {
             environments,
             #[allow(deprecated)]
             cwd,
+            workspace_roots: session_configuration.workspace_roots.clone(),
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),

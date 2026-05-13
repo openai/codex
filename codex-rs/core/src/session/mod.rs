@@ -615,10 +615,12 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            permission_profile: config.permissions.permission_profile.clone(),
+            permission_profile: config.permissions.permission_profile_constraint().clone(),
             active_permission_profile: config.permissions.active_permission_profile(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            workspace_roots: config.workspace_roots.clone(),
+            workspace_roots_explicit: config.workspace_roots_explicit,
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
@@ -2625,9 +2627,13 @@ impl Session {
             developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
+            let permission_profile = turn_context
+                .permission_profile
+                .clone()
+                .materialize_project_roots_with_workspace_roots(&turn_context.workspace_roots);
             developer_sections.push(
                 PermissionsInstructions::from_permission_profile(
-                    &turn_context.permission_profile,
+                    &permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
