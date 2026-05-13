@@ -621,7 +621,7 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global_shared_read("config"),
+        serialization: global_shared_read("plugin-list"),
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
@@ -1685,7 +1685,9 @@ mod tests {
         };
         assert_eq!(
             plugin_list.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "plugin-list"
+            ))
         );
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
