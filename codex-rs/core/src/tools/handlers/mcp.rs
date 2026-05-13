@@ -14,7 +14,11 @@ use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolTelemetryTags;
 use codex_mcp::ToolInfo;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use codex_tools::mcp_tool_to_responses_api_tool;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -33,6 +37,26 @@ impl ToolHandler for McpHandler {
 
     fn tool_name(&self) -> ToolName {
         self.tool_info.canonical_tool_name()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        let tool_name = self.tool_name();
+        let namespace_name = tool_name.namespace.as_ref()?;
+        let tool = mcp_tool_to_responses_api_tool(&tool_name, &self.tool_info.tool).ok()?;
+        let description = self
+            .tool_info
+            .namespace_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_string)
+            .unwrap_or_default();
+
+        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace_name.clone(),
+            description,
+            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+        }))
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

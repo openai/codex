@@ -1056,6 +1056,7 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: Default::default(),
+            strict_config: false,
             cloud_requirements: cloud_requirements_loader_for_storage(
                 codex_home_path.clone(),
                 /*enable_codex_api_key_env*/ false,

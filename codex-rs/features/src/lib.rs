@@ -231,7 +231,8 @@ pub enum Feature {
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable workspace-specific owner nudge copy and prompts in the TUI.
+    /// Removed compatibility flag retained as a no-op now that workspace owner
+    /// usage nudges are always enabled.
     WorkspaceOwnerUsageNudge,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
@@ -1153,7 +1154,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

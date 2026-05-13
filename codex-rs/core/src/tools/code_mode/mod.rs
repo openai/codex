@@ -29,12 +29,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::tools::router::ToolRouterParams;
-use crate::tools::router::extension_tool_bundles;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
-use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
@@ -258,36 +255,6 @@ fn truncate_code_mode_result(
     }
 
     truncate_function_output_items_with_policy(&items, policy)
-}
-
-pub(super) async fn build_enabled_tools(
-    exec: &ExecContext,
-) -> Vec<codex_code_mode::ToolDefinition> {
-    let router = build_nested_router(exec).await;
-    let specs = router.specs();
-    collect_code_mode_tool_definitions(&specs)
-}
-
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "nested tool router construction reads through the session-owned manager guard"
-)]
-async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
-    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
-    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
-
-    ToolRouter::from_config(
-        &nested_tools_config,
-        ToolRouterParams {
-            deferred_mcp_tools: None,
-            mcp_tools: Some(listed_mcp_tools),
-            unavailable_called_tools: Vec::new(),
-            discoverable_tools: None,
-            extension_tool_bundles: extension_tool_bundles(exec.session.as_ref()),
-            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
-        },
-    )
 }
 
 async fn call_nested_tool(

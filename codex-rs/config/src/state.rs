@@ -14,6 +14,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+/// User-facing config loading behavior that is not part of the config document.
+#[derive(Debug, Default, Clone)]
+pub struct ConfigLoadOptions {
+    pub loader_overrides: LoaderOverrides,
+    pub strict_config: bool,
+}
+
+impl From<LoaderOverrides> for ConfigLoadOptions {
+    fn from(loader_overrides: LoaderOverrides) -> Self {
+        Self {
+            loader_overrides,
+            strict_config: false,
+        }
+    }
+}
+
 /// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {

@@ -232,7 +232,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
+async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
@@ -273,10 +273,6 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
         },
     );
 
-    assert_eq!(
-        namespace_function_names(&router.specs(), "codex_app"),
-        vec![hidden_tool.to_string(), visible_tool.to_string()]
-    );
     assert_eq!(
         namespace_function_names(&router.model_visible_specs(), "codex_app"),
         vec![visible_tool.to_string()]
@@ -334,13 +330,6 @@ async fn extension_tool_bundles_are_model_visible_and_dispatchable() -> anyhow::
         },
     );
 
-    assert!(
-        router
-            .specs()
-            .iter()
-            .any(|spec| spec.name() == "extension_echo"),
-        "expected extension-provided tool spec to be registered"
-    );
     assert!(
         router
             .model_visible_specs()

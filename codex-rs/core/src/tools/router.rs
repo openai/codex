@@ -37,7 +37,6 @@ pub struct ToolCall {
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    specs: Vec<ToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
 }
 
@@ -90,13 +89,8 @@ impl ToolRouter {
 
         Self {
             registry,
-            specs,
             model_visible_specs,
         }
-    }
-
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.specs.clone()
     }
 
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
