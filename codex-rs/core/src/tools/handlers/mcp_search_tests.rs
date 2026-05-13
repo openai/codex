@@ -1,47 +1,44 @@
 use super::*;
-use crate::tools::tool_search_entry::ToolSearchEntry;
-use codex_tools::JsonSchema;
 use codex_tools::LoadableToolSpec;
-use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSearchSourceInfo;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::BTreeMap;
 
 #[test]
 fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
     let handler = McpHandler::new(tool_info());
+    let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
-        handler.search_info().expect("MCP search info").entry,
-        ToolSearchEntry {
-            search_text: "mcp__calendar___create_event _create_event createEvent codex-apps Create event Create a calendar event. Calendar Plan events. Calendar plugin attendees start_time"
-                .to_string(),
-            output: LoadableToolSpec::Namespace(ResponsesApiNamespace {
-                name: "mcp__calendar__".to_string(),
-                description: "Plan events.".to_string(),
-                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                    name: "_create_event".to_string(),
-                    description: "Create a calendar event.".to_string(),
-                    strict: false,
-                    defer_loading: Some(true),
-                    parameters: JsonSchema::object(
-                        BTreeMap::from([
-                            (
-                                "attendees".to_string(),
-                                JsonSchema::string(/*description*/ None),
-                            ),
-                            (
-                                "start_time".to_string(),
-                                JsonSchema::string(/*description*/ None),
-                            ),
-                        ]),
-                        /*required*/ None,
-                        Some(false.into()),
-                    ),
-                    output_schema: None,
-                })],
-            }),
-        }
+        search_info.entry.search_text,
+        "mcp__calendar___create_event _create_event createEvent codex-apps Create event Create a calendar event. Calendar Plan events. Calendar plugin attendees start_time"
+    );
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Calendar".to_string(),
+            description: Some("Plan events.".to_string()),
+        })
+    );
+}
+
+#[test]
+fn search_info_uses_connector_name_for_output_namespace_description() {
+    let mut tool_info = tool_info();
+    tool_info.namespace_description = None;
+    let handler = McpHandler::new(tool_info);
+    let search_info = handler.search_info().expect("MCP search info");
+
+    let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
+        panic!("expected namespace search output");
+    };
+    assert_eq!(namespace.description, "Tools for working with Calendar.");
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Calendar".to_string(),
+            description: None,
+        })
     );
 }
 

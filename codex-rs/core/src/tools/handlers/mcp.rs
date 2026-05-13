@@ -53,6 +53,14 @@ impl ToolHandler for McpHandler {
             .map(str::trim)
             .filter(|description| !description.is_empty())
             .map(str::to_string)
+            .or_else(|| {
+                self.tool_info
+                    .connector_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|connector_name| !connector_name.is_empty())
+                    .map(|connector_name| format!("Tools for working with {connector_name}."))
+            })
             .unwrap_or_default();
 
         Some(ToolSpec::Namespace(ResponsesApiNamespace {
