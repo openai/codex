@@ -2712,6 +2712,18 @@ impl Config {
                 "features.multi_agent_v2.min_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
+        if multi_agent_v2.default_wait_timeout_ms < multi_agent_v2.min_wait_timeout_ms {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.default_wait_timeout_ms must be at least features.multi_agent_v2.min_wait_timeout_ms",
+            ));
+        }
+        if multi_agent_v2.default_wait_timeout_ms > multi_agent_v2.max_wait_timeout_ms {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
+            ));
+        }
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
         let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
             if agent_max_threads_from_config.is_some() {
