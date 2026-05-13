@@ -250,6 +250,10 @@ async fn terminal_title_setup_popup_mixed_snapshot() {
 #[tokio::test]
 async fn missing_project_root_uses_different_status_and_title_preview_sources() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_project_root_name_cache = Some(CachedProjectRootName {
+        cwd: chat.config.cwd.to_path_buf(),
+        root_name: None,
+    });
 
     let status_preview = status_preview_line(&mut chat, &[StatusLineItem::ProjectRoot]);
     let title_preview = title_preview_line(&mut chat, &[TerminalTitleItem::Project]);
