@@ -2051,6 +2051,7 @@ impl Session {
             turn_context,
             call_id,
             args,
+            #[allow(deprecated)]
             turn_context.cwd.clone(),
             cancellation_token,
         )
@@ -2630,6 +2631,7 @@ impl Session {
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
+                    #[allow(deprecated)]
                     &turn_context.cwd,
                     turn_context
                         .features
@@ -2763,6 +2765,7 @@ impl Session {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
+                    #[allow(deprecated)]
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
                 .render(),

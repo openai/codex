@@ -17,6 +17,7 @@ codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-memories-read = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 schemars = { workspace = true }
@@ -26,7 +27,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
-codex-tools = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros"] }

@@ -47,6 +47,7 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
             }
         };
 
+        #[allow(deprecated)]
         let mut args: RequestPermissionsArgs =
             parse_arguments_with_base_path(&arguments, &turn.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())

@@ -6,6 +6,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
 use codex_extension_api::ExtensionToolExecutor;
@@ -63,10 +64,7 @@ impl ToolRouter {
         let (specs, registry) = builder.build();
         let model_visible_specs = specs
             .into_iter()
-            .filter(|spec| {
-                !config.code_mode_only_enabled
-                    || !codex_code_mode::is_code_mode_nested_tool(spec.name())
-            })
+            .filter(|spec| !is_hidden_by_code_mode_only(config, &registry, spec))
             .collect();
 
         Self {
@@ -171,6 +169,21 @@ impl ToolRouter {
 
         self.registry.dispatch_any(invocation).await
     }
+}
+
+fn is_hidden_by_code_mode_only(
+    config: &ToolsConfig,
+    registry: &ToolRegistry,
+    spec: &ToolSpec,
+) -> bool {
+    if !config.code_mode_only_enabled || !codex_code_mode::is_code_mode_nested_tool(spec.name()) {
+        return false;
+    }
+
+    let exposure = registry
+        .tool_exposure(&ToolName::plain(spec.name()))
+        .unwrap_or(ToolExposure::Direct);
+    exposure != ToolExposure::DirectModelOnly
 }
 
 pub(crate) fn extension_tool_executors(session: &Session) -> Vec<Arc<dyn ExtensionToolExecutor>> {

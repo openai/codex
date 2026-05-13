@@ -184,6 +184,12 @@ fn tool_search_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn plugin_hooks_are_stable_and_enabled_by_default() {
+    assert_eq!(Feature::PluginHooks.stage(), Stage::Stable);
+    assert_eq!(Feature::PluginHooks.default_enabled(), true);
+}
+
+#[test]
 fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
     assert_eq!(Feature::InAppBrowser.default_enabled(), true);
@@ -287,8 +293,8 @@ fn auth_elicitation_is_under_development() {
 }
 
 #[test]
-fn remote_control_is_removed_and_disabled_by_default() {
-    assert_eq!(Feature::RemoteControl.stage(), Stage::Removed);
+fn remote_control_is_under_development() {
+    assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
 }
 
@@ -476,11 +482,14 @@ fn multi_agent_v2_feature_config_deserializes_table() {
 enabled = true
 max_concurrent_threads_per_session = 4
 min_wait_timeout_ms = 2500
+max_wait_timeout_ms = 120000
+default_wait_timeout_ms = 30000
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
+non_code_mode_only = true
 "#,
     )
     .expect("features table should deserialize");
@@ -495,11 +504,14 @@ hide_spawn_agent_metadata = true
             enabled: Some(true),
             max_concurrent_threads_per_session: Some(4),
             min_wait_timeout_ms: Some(2500),
+            max_wait_timeout_ms: Some(120000),
+            default_wait_timeout_ms: Some(30000),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            non_code_mode_only: Some(true),
         }))
     );
 }
@@ -530,11 +542,14 @@ usage_hint_enabled = false
             enabled: None,
             max_concurrent_threads_per_session: None,
             min_wait_timeout_ms: None,
+            max_wait_timeout_ms: None,
+            default_wait_timeout_ms: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: None,
+            non_code_mode_only: None,
         }))
     );
 }

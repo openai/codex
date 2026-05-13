@@ -24,6 +24,7 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::extension_tools::ExtensionToolHandler;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -43,18 +44,23 @@ use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::override_tool_exposure;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
 use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolEnvironmentMode;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
+use tracing::warn;
 
 pub fn build_tool_registry_builder(
     config: &ToolsConfig,
@@ -69,7 +75,6 @@ pub fn build_tool_registry_builder(
     for handler in build_code_mode_handlers(
         config,
         &handlers,
-        params.extension_tool_executors,
         config.search_tool && deferred_tools_available,
     ) {
         builder.register_tool(handler);
@@ -79,9 +84,9 @@ pub fn build_tool_registry_builder(
     let mut deferred_search_infos = Vec::new();
     for handler in &handlers {
         match handler.exposure() {
-            ToolExposure::Direct => {
+            ToolExposure::Direct | ToolExposure::DirectModelOnly => {
                 if let Some(spec) = handler.spec() {
-                    non_deferred_specs.push(spec);
+                    non_deferred_specs.push((spec, handler.exposure()));
                 }
             }
             ToolExposure::Deferred => {
@@ -97,21 +102,27 @@ pub fn build_tool_registry_builder(
         web_search_config: config.web_search_config.as_ref(),
         web_search_tool_type: config.web_search_tool_type,
     }) {
-        non_deferred_specs.push(web_search_tool);
+        non_deferred_specs.push((web_search_tool, ToolExposure::Direct));
     }
     if config.image_gen_tool {
-        non_deferred_specs.push(create_image_generation_tool("png"));
+        non_deferred_specs.push((create_image_generation_tool("png"), ToolExposure::Direct));
     }
+
+    let non_deferred_specs = non_deferred_specs
+        .into_iter()
+        .map(|(spec, exposure)| {
+            if config.code_mode_enabled && exposure != ToolExposure::DirectModelOnly {
+                codex_tools::augment_tool_spec_for_code_mode(spec)
+            } else {
+                spec
+            }
+        })
+        .collect();
 
     for spec in merge_into_namespaces(non_deferred_specs) {
         if !config.namespace_tools && matches!(spec, ToolSpec::Namespace(_)) {
             continue;
         }
-        let spec = if config.code_mode_enabled {
-            codex_tools::augment_tool_spec_for_code_mode(spec)
-        } else {
-            spec
-        };
         builder.push_spec(spec);
     }
 
@@ -123,32 +134,28 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ToolSearchHandler::new(deferred_search_infos)));
     }
 
-    for executor in params.extension_tool_executors.iter().cloned() {
-        builder.register_extension_tool_executor(executor);
-    }
-
     builder
 }
 
 fn build_code_mode_handlers(
     config: &ToolsConfig,
     handlers: &[Arc<dyn RegisteredTool>],
-    extension_tool_executors: &[Arc<dyn ExtensionToolExecutor>],
     deferred_tools_available: bool,
 ) -> Vec<Arc<dyn RegisteredTool>> {
     if !config.code_mode_enabled {
         return vec![];
     }
 
-    let mut code_mode_nested_tool_specs = handlers
+    let code_mode_nested_tool_specs = handlers
         .iter()
-        .filter_map(|handler| handler.spec())
+        .filter_map(|handler| {
+            if handler.exposure() == ToolExposure::DirectModelOnly {
+                return None;
+            }
+
+            handler.spec()
+        })
         .collect::<Vec<_>>();
-    code_mode_nested_tool_specs.extend(
-        extension_tool_executors
-            .iter()
-            .filter_map(|executor| executor.spec()),
-    );
     let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
     let mut enabled_tools =
         collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
@@ -344,23 +351,32 @@ fn collect_handler_tools(
 
     if config.collab_tools {
         if config.multi_agent_v2 {
+            let exposure = if config.multi_agent_v2_non_code_mode_only {
+                ToolExposure::DirectModelOnly
+            } else {
+                ToolExposure::Direct
+            };
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            handlers.push(Arc::new(SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            handlers.push(Arc::new(SendMessageHandlerV2));
-            handlers.push(Arc::new(FollowupTaskHandlerV2));
-            handlers.push(Arc::new(WaitAgentHandlerV2::new(
-                params.wait_agent_timeouts,
-            )));
-            handlers.push(Arc::new(CloseAgentHandlerV2));
-            handlers.push(Arc::new(ListAgentsHandlerV2));
+            handlers.push(multi_agent_v2_handler(
+                SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                    available_models: config.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
+                }),
+                exposure,
+            ));
+            handlers.push(multi_agent_v2_handler(SendMessageHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(FollowupTaskHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(
+                WaitAgentHandlerV2::new(params.wait_agent_timeouts),
+                exposure,
+            ));
+            handlers.push(multi_agent_v2_handler(CloseAgentHandlerV2, exposure));
+            handlers.push(multi_agent_v2_handler(ListAgentsHandlerV2, exposure));
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
@@ -413,7 +429,52 @@ fn collect_handler_tools(
         handlers.push(handler);
     }
 
+    append_extension_tool_handlers(config, params.extension_tool_executors, &mut handlers);
+
     handlers
+}
+
+fn append_extension_tool_handlers(
+    config: &ToolsConfig,
+    executors: &[Arc<dyn ExtensionToolExecutor>],
+    handlers: &mut Vec<Arc<dyn RegisteredTool>>,
+) {
+    if executors.is_empty() {
+        return;
+    }
+
+    let mut reserved_tool_names = handlers
+        .iter()
+        .map(|handler| handler.tool_name())
+        .collect::<HashSet<_>>();
+    if config.code_mode_enabled {
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
+    }
+    if config.search_tool
+        && config.namespace_tools
+        && handlers
+            .iter()
+            .any(|handler| handler.exposure() == ToolExposure::Deferred)
+    {
+        reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
+    }
+
+    for executor in executors.iter().cloned() {
+        let tool_name = executor.tool_name();
+        if !reserved_tool_names.insert(tool_name.clone()) {
+            warn!("Skipping extension tool `{tool_name}`: handler already registered");
+            continue;
+        }
+        handlers.push(Arc::new(ExtensionToolHandler::new(executor)));
+    }
+}
+
+fn multi_agent_v2_handler(
+    handler: impl RegisteredTool + 'static,
+    exposure: ToolExposure,
+) -> Arc<dyn RegisteredTool> {
+    override_tool_exposure(Arc::new(handler), exposure)
 }
 
 fn compare_code_mode_tools(

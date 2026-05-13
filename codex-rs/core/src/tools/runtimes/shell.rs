@@ -21,6 +21,7 @@ use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -47,6 +48,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub shell_type: Option<ShellType>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
@@ -236,6 +238,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.cwd,
             &req.explicit_env_overrides,
             &env,
+        );
+        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            req.shell_type.as_ref(),
+            attempt.sandbox,
+            attempt.windows_sandbox_level,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)

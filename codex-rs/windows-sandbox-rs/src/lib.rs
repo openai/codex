@@ -110,6 +110,12 @@ pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
+pub use cap::workspace_write_cap_sid_for_root;
+#[cfg(target_os = "windows")]
+pub use cap::workspace_write_root_contains_path;
+#[cfg(target_os = "windows")]
+pub use cap::workspace_write_root_overlaps_path;
+#[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
@@ -222,7 +228,7 @@ pub use setup_error::setup_error_path;
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
-pub use spawn_prep::LocalSid;
+pub use token::LocalSid;
 #[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
@@ -273,34 +279,25 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::acl::add_allow_ace;
-    use super::acl::add_deny_write_ace;
-    use super::acl::allow_null_device;
     use super::acl::revoke_ace;
-    use super::allow::AllowDenyPaths;
-    use super::allow::compute_allow_paths;
-    use super::cap::load_or_create_cap_sids;
-    use super::cap::workspace_cap_sid_for_cwd;
-    use super::deny_read_acl::apply_deny_read_acls;
-    use super::deny_read_state::sync_persistent_deny_read_acls;
     use super::logging::log_failure;
     use super::logging::log_success;
-    use super::path_normalization::canonicalize_path;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
+    use super::spawn_prep::LegacyAclSids;
+    use super::spawn_prep::allow_null_device_for_workspace_write;
+    use super::spawn_prep::apply_legacy_session_acl_rules;
+    use super::spawn_prep::legacy_session_capability_roots;
+    use super::spawn_prep::prepare_legacy_session_security;
     use super::spawn_prep::prepare_legacy_spawn_context;
-    use super::token::convert_string_sid_to_sid;
-    use super::token::create_workspace_write_token_with_caps_from;
-    use super::workspace_acl::is_command_cwd_root;
-    use anyhow::Context;
+    use super::spawn_prep::root_capability_sids;
+    use super::token::LocalSid;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
-    use std::ffi::c_void;
     use std::io;
     use std::path::Path;
-    use std::path::PathBuf;
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
@@ -418,130 +415,36 @@ mod windows_impl {
         if !additional_deny_read_paths.is_empty() {
             anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
         }
-        let caps = load_or_create_cap_sids(codex_home)?;
-        let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
-            match &policy {
-                SandboxPolicy::ReadOnly { .. } => {
-                    #[allow(clippy::expect_used)]
-                    let psid =
-                        convert_string_sid_to_sid(&caps.readonly).expect("valid readonly SID");
-                    let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
-                    (h, psid, None)
-                }
-                SandboxPolicy::WorkspaceWrite { .. } => {
-                    #[allow(clippy::expect_used)]
-                    let psid_generic =
-                        convert_string_sid_to_sid(&caps.workspace).expect("valid workspace SID");
-                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                    #[allow(clippy::expect_used)]
-                    let psid_workspace =
-                        convert_string_sid_to_sid(&ws_sid).expect("valid workspace SID");
-                    let base = super::token::get_current_token_for_restriction()?;
-                    let h_res = create_workspace_write_token_with_caps_from(
-                        base,
-                        &[psid_generic, psid_workspace],
-                    );
-                    windows_sys::Win32::Foundation::CloseHandle(base);
-                    let h = h_res?;
-                    (h, psid_generic, Some(psid_workspace))
-                }
-                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                    unreachable!("DangerFullAccess handled above")
-                }
-            }
-        };
-
-        unsafe {
-            if is_workspace_write
-                && let Ok(base) = super::token::get_current_token_for_restriction()
-            {
-                if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
-                    let mut tmp = bytes;
-                    let psid2 = tmp.as_mut_ptr() as *mut c_void;
-                    allow_null_device(psid2);
-                }
-                windows_sys::Win32::Foundation::CloseHandle(base);
-            }
-        }
-
+        let capability_roots = legacy_session_capability_roots(
+            &policy,
+            sandbox_policy_cwd,
+            &current_dir,
+            &env_map,
+            codex_home,
+        );
+        let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
+        allow_null_device_for_workspace_write(is_workspace_write);
         let persist_aces = is_workspace_write;
-        let AllowDenyPaths { allow, mut deny } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        for path in additional_deny_write_paths {
-            // Explicit deny-write carveouts must already exist when the process
-            // starts, otherwise it could create a missing path under a writable
-            // parent before the deny-write ACE exists.
-            if !path.exists() {
-                std::fs::create_dir_all(&path)
-                    .with_context(|| format!("create deny-write path {}", path.display()))?;
-            }
-            deny.insert(path.clone());
-        }
-        let canonical_cwd = canonicalize_path(&current_dir);
-        let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
-        unsafe {
-            for p in &allow {
-                let psid = if is_workspace_write && is_command_cwd_root(p, &canonical_cwd) {
-                    psid_workspace.unwrap_or(psid_generic)
-                } else {
-                    psid_generic
-                };
-                if let Ok(added) = add_allow_ace(p, psid)
-                    && added
-                {
-                    if persist_aces {
-                        if p.is_dir() {
-                            // best-effort seeding omitted intentionally
-                        }
-                    } else {
-                        guards.push((p.clone(), psid));
-                    }
-                }
-            }
-            for p in &deny {
-                if let Ok(added) = add_deny_write_ace(p, psid_generic)
-                    && added
-                    && !persist_aces
-                {
-                    guards.push((p.clone(), psid_generic));
-                }
-            }
-            // Read denies are layered after allow/deny-write setup so they can
-            // override broad read grants for the sandbox principal without
-            // changing the existing write policy computation.
-            let applied_deny_read_paths = match if persist_aces {
-                sync_persistent_deny_read_acls(
-                    codex_home,
-                    &caps.workspace,
-                    &additional_deny_read_paths,
-                    psid_generic,
-                )
-            } else {
-                apply_deny_read_acls(&additional_deny_read_paths, psid_generic)
-            } {
-                Ok(paths) => paths,
-                Err(err) => {
-                    if !persist_aces {
-                        cleanup_acl_guards(&mut guards);
-                    }
-                    return Err(err);
-                }
-            };
-            if !persist_aces {
-                for path in applied_deny_read_paths {
-                    guards.push((path, psid_generic));
-                }
-            }
-            allow_null_device(psid_generic);
-            if let Some(psid) = psid_workspace {
-                allow_null_device(psid);
-            }
-        }
+        let guards = apply_legacy_session_acl_rules(
+            &policy,
+            sandbox_policy_cwd,
+            codex_home,
+            &current_dir,
+            &env_map,
+            &additional_deny_read_paths,
+            &additional_deny_write_paths,
+            LegacyAclSids {
+                readonly_sid: security.readonly_sid.as_ref(),
+                readonly_sid_str: security.readonly_sid_str.as_deref(),
+                write_root_sids: &security.write_root_sids,
+            },
+            persist_aces,
+        )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
         let spawn_res = unsafe {
             create_process_as_user(
-                h_token,
+                security.h_token,
                 &command,
                 cwd,
                 &env_map,
@@ -553,7 +456,6 @@ mod windows_impl {
         let created = match spawn_res {
             Ok(v) => v,
             Err(err) => {
-                cleanup_acl_guards(&mut guards);
                 unsafe {
                     CloseHandle(in_r);
                     CloseHandle(in_w);
@@ -561,7 +463,14 @@ mod windows_impl {
                     CloseHandle(out_w);
                     CloseHandle(err_r);
                     CloseHandle(err_w);
-                    CloseHandle(h_token);
+                    if !persist_aces {
+                        for (p, sid_str) in &guards {
+                            if let Ok(sid) = LocalSid::from_string(sid_str) {
+                                revoke_ace(p, sid.as_ptr());
+                            }
+                        }
+                    }
+                    CloseHandle(security.h_token);
                 }
                 return Err(err);
             }
@@ -643,7 +552,7 @@ mod windows_impl {
             if pi.hProcess != 0 {
                 CloseHandle(pi.hProcess);
             }
-            CloseHandle(h_token);
+            CloseHandle(security.h_token);
         }
         let _ = t_out.join();
         let _ = t_err.join();
@@ -662,7 +571,13 @@ mod windows_impl {
         }
 
         if !persist_aces {
-            cleanup_acl_guards(&mut guards);
+            unsafe {
+                for (p, sid_str) in guards {
+                    if let Ok(sid) = LocalSid::from_string(&sid_str) {
+                        revoke_ace(&p, sid.as_ptr());
+                    }
+                }
+            }
         }
         Ok(CaptureResult {
             exit_code,
@@ -670,14 +585,6 @@ mod windows_impl {
             stderr,
             timed_out,
         })
-    }
-
-    fn cleanup_acl_guards(guards: &mut Vec<(PathBuf, *mut c_void)>) {
-        unsafe {
-            for (p, sid) in guards.drain(..) {
-                revoke_ace(&p, sid);
-            }
-        }
     }
 
     pub fn run_windows_sandbox_legacy_preflight(
@@ -693,33 +600,30 @@ mod windows_impl {
         }
 
         ensure_codex_home_exists(codex_home)?;
-        let caps = load_or_create_cap_sids(codex_home)?;
-        #[allow(clippy::expect_used)]
-        let psid_generic =
-            unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
-        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-        #[allow(clippy::expect_used)]
-        let psid_workspace =
-            unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
         let current_dir = cwd.to_path_buf();
-        let AllowDenyPaths { allow, deny } =
-            compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
-        let canonical_cwd = canonicalize_path(&current_dir);
-        unsafe {
-            for p in &allow {
-                let psid = if is_command_cwd_root(p, &canonical_cwd) {
-                    psid_workspace
-                } else {
-                    psid_generic
-                };
-                let _ = add_allow_ace(p, psid);
-            }
-            for p in &deny {
-                let _ = add_deny_write_ace(p, psid_generic);
-            }
-            allow_null_device(psid_generic);
-            allow_null_device(psid_workspace);
-        }
+        let capability_roots = legacy_session_capability_roots(
+            sandbox_policy,
+            sandbox_policy_cwd,
+            &current_dir,
+            env_map,
+            codex_home,
+        );
+        let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
+        let _guards = apply_legacy_session_acl_rules(
+            sandbox_policy,
+            sandbox_policy_cwd,
+            codex_home,
+            &current_dir,
+            env_map,
+            &[],
+            &[],
+            LegacyAclSids {
+                readonly_sid: None,
+                readonly_sid_str: None,
+                write_root_sids: &write_root_sids,
+            },
+            /*persist_aces*/ true,
+        )?;
 
         Ok(())
     }

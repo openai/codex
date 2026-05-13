@@ -756,9 +756,6 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
             }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
-            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
@@ -1253,7 +1250,7 @@ impl App {
                 }
             }
             AppEvent::RefreshPluginMentions => {
-                self.refresh_plugin_mentions();
+                self.refresh_plugin_mentions(app_server);
             }
             AppEvent::PluginMentionsLoaded { mut plugins } => {
                 if !self.config.features.enabled(Feature::Plugins) {

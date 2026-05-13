@@ -732,6 +732,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         permission_profile: Some(turn_context.permission_profile()),
         sandbox_policy: turn_context.sandbox_policy(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
     })?;

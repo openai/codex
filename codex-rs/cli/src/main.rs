@@ -46,6 +46,7 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
+mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
@@ -53,6 +54,7 @@ mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use doctor::DoctorCommand;
 
 use codex_core::build_models_manager;
 use codex_core::config::ConfigBuilder;
@@ -141,6 +143,9 @@ enum Subcommand {
 
     /// Update Codex to the latest version.
     Update,
+
+    /// Diagnose local Codex installation, config, auth, and runtime health.
+    Doctor(DoctorCommand),
 
     /// Run commands within a Codex-provided sandbox.
     Sandbox(SandboxArgs),
@@ -449,10 +454,6 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
-    /// Enable remote control for this app-server process.
-    #[arg(long = "remote-control", hide = true)]
-    remote_control: bool,
-
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -531,10 +532,10 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Enable remote control for future starts and a currently running managed daemon.
+    /// Enable remote_control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
-    /// Disable remote control for future starts and a currently running managed daemon.
+    /// Disable remote_control for future starts and a currently running managed daemon.
     DisableRemoteControl,
 
     /// Stop the local app server daemon.
@@ -557,7 +558,7 @@ struct AppServerProxyCommand {
 
 #[derive(Debug, Args)]
 struct AppServerBootstrapCommand {
-    /// Launch the managed app-server with remote control enabled.
+    /// Launch the managed app-server with remote_control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
 }
@@ -929,7 +930,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 subcommand,
                 strict_config: app_server_strict_config,
                 listen,
-                remote_control,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -944,10 +944,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
-                    let runtime_options = codex_app_server::AppServerRuntimeOptions {
-                        remote_control_enabled: remote_control,
-                        ..Default::default()
-                    };
                     codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
@@ -957,7 +953,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
-                        runtime_options,
+                        codex_app_server::AppServerRuntimeOptions::default(),
                     )
                     .await?;
                 }
@@ -1171,6 +1167,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "update",
             )?;
             run_update_command()?;
+        }
+        Some(Subcommand::Doctor(doctor_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "doctor",
+            )?;
+            doctor::run_doctor(
+                doctor_cli,
+                root_config_overrides.clone(),
+                &interactive,
+                &arg0_paths,
+            )
+            .await?;
         }
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1697,7 +1707,8 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::Resume(_))
-        | Some(Subcommand::Fork(_)) => None,
+        | Some(Subcommand::Fork(_))
+        | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
@@ -2560,7 +2571,6 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
-        assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio

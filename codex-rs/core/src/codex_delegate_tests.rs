@@ -207,6 +207,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         scope: PermissionGrantScope::Turn,
         strict_auto_review: false,
     };
+    #[allow(deprecated)]
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
     let cancel_token = CancellationToken::new();
     let request_call_id = call_id.clone();

@@ -18,12 +18,10 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
-use crate::tools::handlers::extension_tools::ExtensionToolHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
-use codex_extension_api::ExtensionToolExecutor;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ToolName;
@@ -263,6 +261,79 @@ where
     }
 }
 
+pub(crate) fn override_tool_exposure(
+    handler: Arc<dyn RegisteredTool>,
+    exposure: ToolExposure,
+) -> Arc<dyn RegisteredTool> {
+    if handler.exposure() == exposure {
+        return handler;
+    }
+
+    Arc::new(ExposureOverride { handler, exposure })
+}
+
+struct ExposureOverride {
+    handler: Arc<dyn RegisteredTool>,
+    exposure: ToolExposure,
+}
+
+impl RegisteredTool for ExposureOverride {
+    fn tool_name(&self) -> ToolName {
+        self.handler.tool_name()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        self.handler.spec()
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        self.handler.pre_tool_use_payload(invocation)
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        invocation: ToolInvocation,
+        updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        self.handler
+            .with_updated_hook_input(invocation, updated_input)
+    }
+
+    fn telemetry_tags<'a>(
+        &'a self,
+        invocation: &'a ToolInvocation,
+    ) -> BoxFuture<'a, ToolTelemetryTags> {
+        self.handler.telemetry_tags(invocation)
+    }
+
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
+
+    fn handle_any<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>> {
+        self.handler.handle_any(invocation)
+    }
+}
+
 pub struct ToolRegistry {
     handlers: HashMap<ToolName, Arc<dyn RegisteredTool>>,
 }
@@ -288,6 +359,10 @@ impl ToolRegistry {
 
     fn handler(&self, name: &ToolName) -> Option<Arc<dyn RegisteredTool>> {
         self.handlers.get(name).map(Arc::clone)
+    }
+
+    pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
+        self.handlers.get(name).map(|handler| handler.exposure())
     }
 
     #[cfg(test)]
@@ -332,6 +407,7 @@ impl ToolRegistry {
                 "sandbox_policy",
                 permission_profile_policy_tag(
                     &invocation.turn.permission_profile,
+                    #[allow(deprecated)]
                     invocation.turn.cwd.as_path(),
                 ),
             ),
@@ -584,24 +660,13 @@ impl ToolRegistryBuilder {
         }
 
         if include_spec
-            && handler.exposure() == ToolExposure::Direct
+            && handler.exposure().is_direct()
             && let Some(spec) = handler.spec()
         {
             self.push_spec(spec);
         }
 
         self.handlers.insert(name, handler);
-    }
-
-    pub fn register_extension_tool_executor(&mut self, executor: Arc<dyn ExtensionToolExecutor>) {
-        let tool_name = executor.tool_name();
-        if self.handlers.contains_key(&tool_name) {
-            warn!("Skipping extension tool `{tool_name}`: handler already registered");
-            return;
-        }
-
-        let handler: Arc<dyn RegisteredTool> = Arc::new(ExtensionToolHandler::new(executor));
-        self.register_tool_internal(handler, /*include_spec*/ true);
     }
 
     pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {

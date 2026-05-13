@@ -138,13 +138,15 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         )
         .await;
         let process_id = manager.allocate_process_id().await;
-        let command = get_command(
+        let resolved_command = get_command(
             &args,
             session.user_shell(),
             &turn.tools_config.unified_exec_shell_mode,
             turn.tools_config.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
+        let command = resolved_command.command;
+        let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
         let ExecCommandArgs {
@@ -249,6 +251,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             .exec_command(
                 ExecCommandRequest {
                     command,
+                    shell_type,
                     hook_command: hook_command.clone(),
                     process_id,
                     yield_time_ms,

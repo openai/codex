@@ -2216,6 +2216,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -3769,6 +3770,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 #[tokio::test]
 async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
+    #[allow(deprecated)]
     let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
@@ -3788,8 +3790,12 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let next_turn = session.new_default_turn().await;
 
     assert_eq!(session_cwd, updated_cwd);
-    assert_eq!(config.cwd, turn_context.cwd);
-    assert_eq!(next_turn.cwd, updated_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    #[allow(deprecated)]
+    let next_turn_cwd = next_turn.cwd.clone();
+    assert_eq!(config.cwd, turn_cwd);
+    assert_eq!(next_turn_cwd, updated_cwd);
     assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
@@ -3873,7 +3879,9 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
         .await
         .expect("absolute cwd with explicit environments should succeed");
 
-    assert_eq!(turn_context.cwd, absolute_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
     assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
@@ -4674,7 +4682,9 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         panic!("expected request_permissions event");
     };
     assert_eq!(request.call_id, call_id);
-    assert_eq!(request.cwd, Some(turn_context.cwd.clone()));
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(request.cwd, Some(turn_cwd));
 
     session
         .notify_request_permissions_response(&request.call_id, expected_response.clone())
@@ -5103,7 +5113,9 @@ async fn turn_environments_set_primary_environment() {
         &turn_environments.turn_environments[0].environment
     ));
     assert!(!turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 }
 
@@ -5134,7 +5146,9 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
         &turn_environment.environment,
         &turn_environments.turn_environments[0].environment
     ));
-    assert_eq!(turn_context.cwd, session_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
 }
 
@@ -5152,7 +5166,9 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd, session_cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
     assert_eq!(turn_context.environments.turn_environments.len(), 0);
 }
@@ -5161,6 +5177,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let first_environment = turn_context.environments.turn_environments[0].clone();
+    #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
     turn_context
         .environments
@@ -5214,7 +5231,9 @@ async fn empty_turn_environments_clear_primary_environment() {
 
     assert!(turn_context.environments.primary().is_none());
     assert!(turn_context.environments.turn_environments.is_empty());
-    assert_eq!(turn_context.cwd, session.get_config().await.cwd);
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
+    assert_eq!(turn_cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
 }
 
@@ -6474,10 +6493,10 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     (session, turn_context)
 }
 
-struct GitAttributionTestContributor;
-struct GitAttributionTestState;
+struct PromptExtensionTestContributor;
+struct PromptExtensionTestState;
 
-impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
     fn contribute<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
@@ -6487,11 +6506,11 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     > {
         Box::pin(async move {
             thread_store
-                .get::<GitAttributionTestState>()
+                .get::<PromptExtensionTestState>()
                 .is_some()
                 .then(|| {
                     codex_extension_api::PromptFragment::developer_policy(
-                        "git attribution extension enabled",
+                        "prompt extension enabled",
                     )
                 })
                 .into_iter()
@@ -6500,21 +6519,21 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     }
 }
 
-fn git_attribution_test_registry()
+fn prompt_extension_test_registry()
 -> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    builder.prompt_contributor(Arc::new(PromptExtensionTestContributor));
     Arc::new(builder.build())
 }
 
 #[tokio::test]
-async fn build_initial_context_includes_git_attribution_from_extensions() {
+async fn build_initial_context_includes_prompt_fragments_from_extensions() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
     session
         .services
         .thread_extension_data
-        .insert(GitAttributionTestState);
+        .insert(PromptExtensionTestState);
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6523,15 +6542,15 @@ async fn build_initial_context_includes_git_attribution_from_extensions() {
         developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "expected git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "expected prompt extension developer text, got {developer_messages:?}"
     );
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+async fn build_initial_context_omits_prompt_fragments_without_extension_state() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6540,8 +6559,8 @@ async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() 
         !developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "did not expect git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "did not expect prompt extension developer text, got {developer_messages:?}"
     );
 }
 
@@ -7033,13 +7052,16 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 }
 
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
+    #[allow(deprecated)]
     let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &turn_context.sandbox_policy(),
         &turn_context.cwd,
     );
+    #[allow(deprecated)]
+    let cwd_display = turn_context.cwd.as_path().display().to_string();
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
-            pattern: format!("{}/**/*.env", turn_context.cwd.as_path().display()),
+            pattern: format!("{cwd_display}/**/*.env"),
         },
         access: FileSystemAccessMode::None,
     });
@@ -9381,6 +9403,8 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let call_id = "test-call".to_string();
 
     let handler = ShellCommandHandler::from(ShellCommandBackendConfig::Classic);
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -9393,7 +9417,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": command_script,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": timeout_ms,
                     "sandbox_permissions": sandbox_permissions,
                     "justification": Some("test"),
@@ -9433,6 +9457,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
             file_system_sandbox_policy: &file_system_sandbox_policy,
+            #[allow(deprecated)]
             sandbox_cwd: turn_context.cwd.as_path(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
