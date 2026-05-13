@@ -2344,6 +2344,94 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     assert!(!description.contains("### `view_image`"));
 }
 
+#[test]
+fn files_namespace_is_gated_by_experimental_supported_tool() {
+    let available_models = Vec::new();
+
+    let default_model_info = model_info();
+    let default_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &default_model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (default_tools, default_registry) = build_specs(
+        &default_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert!(!default_tools.iter().any(|tool| tool.name() == "files"));
+    assert!(!default_registry.has_handler(&ToolName::namespaced("files", "materialize")));
+
+    let mut supported_model_info = model_info();
+    supported_model_info.experimental_supported_tools = vec!["code_mode_files".to_string()];
+    let supported_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &supported_model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, registry) = build_specs(
+        &supported_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_eq!(
+        namespace_function_names(&tools, "files"),
+        vec!["copy", "export_for_tool", "materialize"]
+    );
+    assert!(registry.has_handler(&ToolName::namespaced("files", "materialize")));
+    assert!(registry.has_handler(&ToolName::namespaced("files", "copy")));
+    assert!(registry.has_handler(&ToolName::namespaced("files", "export_for_tool")));
+}
+
+#[test]
+fn code_mode_exec_description_includes_gated_files_tools() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools = vec!["code_mode_files".to_string()];
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeOnly);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(description.contains("### `files_copy`"));
+    assert!(description.contains("### `files_export_for_tool`"));
+    assert!(description.contains("### `files_materialize`"));
+    assert!(description.contains("data URI"));
+}
+
 fn model_info() -> ModelInfo {
     serde_json::from_value(json!({
         "slug": "gpt-5-codex",

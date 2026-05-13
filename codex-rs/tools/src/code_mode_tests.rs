@@ -1,9 +1,12 @@
 use super::augment_tool_spec_for_code_mode;
+use super::collect_code_mode_tool_definitions;
 use super::tool_spec_to_code_mode_tool_definition;
 use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ToolName;
 use crate::ToolSpec;
@@ -133,5 +136,55 @@ fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
             ),
         }),
         None
+    );
+}
+
+#[test]
+fn namespace_tools_are_flattened_for_code_mode_runtime() {
+    let tools = collect_code_mode_tool_definitions([&ToolSpec::Namespace(ResponsesApiNamespace {
+        name: "files".to_string(),
+        description: "File tools".to_string(),
+        tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+            name: "export_for_tool".to_string(),
+            description: "Export a file ref".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
+                    "file_uri".to_string(),
+                    JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["file_uri".to_string()]),
+                Some(AdditionalProperties::Boolean(false)),
+            ),
+            output_schema: None,
+        })],
+    })]);
+
+    assert_eq!(
+        tools,
+        vec![codex_code_mode::ToolDefinition {
+            name: "files_export_for_tool".to_string(),
+            tool_name: ToolName::namespaced("files", "export_for_tool"),
+            description: r#"Export a file ref
+
+exec tool declaration:
+```ts
+declare const tools: { files_export_for_tool(args: { file_uri: string; }): Promise<unknown>; };
+```"#
+                .to_string(),
+            kind: codex_code_mode::CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "file_uri": {
+                        "type": "string"
+                    }
+                },
+                "required": ["file_uri"],
+                "additionalProperties": false
+            })),
+            output_schema: None,
+        }]
     );
 }
