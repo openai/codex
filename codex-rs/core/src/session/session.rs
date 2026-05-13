@@ -811,14 +811,16 @@ impl Session {
                 SessionId::from(thread_id)
             };
             let agent_control = agent_control.with_session_id(session_id);
-            let session_extension_data = codex_extension_api::ExtensionData::new();
-            let thread_extension_data = codex_extension_api::ExtensionData::new();
-            for contributor in extensions.thread_start_contributors() {
-                contributor.contribute(
-                    config.as_ref(),
-                    &session_extension_data,
-                    &thread_extension_data,
-                );
+            let session_extension_data =
+                codex_extension_api::ExtensionData::new(session_id.to_string());
+            let thread_extension_data =
+                codex_extension_api::ExtensionData::new(thread_id.to_string());
+            for contributor in extensions.thread_lifecycle_contributors() {
+                contributor.on_thread_start(codex_extension_api::ThreadStartInput {
+                    config: config.as_ref(),
+                    session_store: &session_extension_data,
+                    thread_store: &thread_extension_data,
+                });
             }
 
             let services = SessionServices {
@@ -961,6 +963,14 @@ impl Session {
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
+            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
+                ElicitationCapability {
+                    form: Some(FormElicitationCapability::default()),
+                    url: Some(UrlElicitationCapability::default()),
+                }
+            } else {
+                ElicitationCapability::default()
+            };
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
@@ -1003,6 +1013,7 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
+                client_elicitation_capability,
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),

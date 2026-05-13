@@ -277,6 +277,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,
+        mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
@@ -535,12 +536,18 @@ pub(crate) fn app_tool_policy(
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
     let apps_config = read_apps_config(config);
+    let managed_approval = managed_app_tool_approval(
+        config.config_layer_stack.requirements_toml().apps.as_ref(),
+        connector_id,
+        tool_name,
+    );
     app_tool_policy_from_apps_config(
         apps_config.as_ref(),
         connector_id,
         tool_name,
         tool_title,
         annotations,
+        managed_approval,
     )
 }
 
@@ -593,12 +600,27 @@ fn apply_requirements_apps_constraints(
     };
 
     for (app_id, requirement) in &requirements_apps_config.apps {
-        if requirement.enabled != Some(false) {
-            continue;
+        if requirement.enabled == Some(false) {
+            let app = apps_config.apps.entry(app_id.clone()).or_default();
+            app.enabled = false;
         }
-        let app = apps_config.apps.entry(app_id.clone()).or_default();
-        app.enabled = false;
     }
+}
+
+fn managed_app_tool_approval(
+    requirements_apps_config: Option<&AppsRequirementsToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+) -> Option<AppToolApproval> {
+    let connector_id = connector_id?;
+    requirements_apps_config?
+        .apps
+        .get(connector_id)?
+        .tools
+        .as_ref()?
+        .tools
+        .get(tool_name)?
+        .approval_mode
 }
 
 fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
@@ -620,9 +642,13 @@ fn app_tool_policy_from_apps_config(
     tool_name: &str,
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
+    managed_approval: Option<AppToolApproval>,
 ) -> AppToolPolicy {
     let Some(apps_config) = apps_config else {
-        return AppToolPolicy::default();
+        return AppToolPolicy {
+            approval: managed_approval.unwrap_or(AppToolApproval::Auto),
+            ..Default::default()
+        };
     };
 
     let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
@@ -633,8 +659,8 @@ fn app_tool_policy_from_apps_config(
             .get(tool_name)
             .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
     });
-    let approval = tool_config
-        .and_then(|tool| tool.approval_mode)
+    let approval = managed_approval
+        .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .unwrap_or(AppToolApproval::Auto);
 

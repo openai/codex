@@ -8,15 +8,11 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
-impl ToolHandler for TestHandler {
+impl ToolExecutor<ToolInvocation> for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
-    }
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
     }
 
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -27,6 +23,8 @@ impl ToolHandler for TestHandler {
     }
 }
 
+impl ToolHandler for TestHandler {}
+
 #[test]
 fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespace = "mcp__codex_apps__gmail";
@@ -35,10 +33,10 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
     let plain_handler = Arc::new(TestHandler {
         tool_name: plain_name.clone(),
-    }) as Arc<dyn AnyToolHandler>;
+    }) as Arc<dyn RegisteredTool>;
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
-    }) as Arc<dyn AnyToolHandler>;
+    }) as Arc<dyn RegisteredTool>;
     let registry = ToolRegistry::new(HashMap::from([
         (plain_name.clone(), Arc::clone(&plain_handler)),
         (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
@@ -67,16 +65,13 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[test]
-fn register_handler_adds_handler_and_augments_specs_for_code_mode() {
-    let mut builder = ToolRegistryBuilder::new(/*code_mode_enabled*/ true);
+fn register_handler_adds_handler_and_spec() {
+    let mut builder = ToolRegistryBuilder::new();
     builder.register_handler(Arc::new(GetGoalHandler));
 
     let (specs, registry) = builder.build();
 
     assert_eq!(specs.len(), 1);
-    assert_eq!(
-        specs[0].spec,
-        codex_tools::augment_tool_spec_for_code_mode(create_get_goal_tool())
-    );
+    assert_eq!(specs[0], create_get_goal_tool());
     assert!(registry.has_handler(&codex_tools::ToolName::plain(GET_GOAL_TOOL_NAME)));
 }

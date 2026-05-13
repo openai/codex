@@ -18,12 +18,12 @@ use codex_config::RequirementSource;
 use codex_config::SessionThreadConfig;
 use codex_config::StaticThreadConfigLoader;
 use codex_config::ThreadConfigSource;
+use codex_config::config_error_from_ignored_toml_fields;
 use codex_config::config_error_from_toml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
-use codex_config::version_for_toml;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -68,6 +68,45 @@ async fn make_config_for_test(
     .await
 }
 
+async fn write_linked_worktree_pointer(
+    repo_root: &Path,
+    worktree_root: &Path,
+) -> std::io::Result<()> {
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+    tokio::fs::create_dir_all(&worktree_git_dir).await?;
+    tokio::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .await
+}
+
+async fn write_project_hook_config(
+    dot_codex_folder: &Path,
+    foo: Option<&str>,
+    command: &str,
+) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(dot_codex_folder).await?;
+    let foo = foo
+        .map(|value| format!("foo = \"{value}\"\n\n"))
+        .unwrap_or_default();
+    tokio::fs::write(
+        dot_codex_folder.join(CONFIG_TOML_FILE),
+        format!(
+            r#"{foo}[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{command}"
+"#
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<()> {
     let codex_home = tempdir().expect("tempdir");
@@ -95,7 +134,8 @@ async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<(
 #[tokio::test]
 async fn returns_config_error_for_invalid_user_config_toml() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "model = \"gpt-4\"\ninvalid = [";
+    let contents = r#"model = "gpt-4"
+invalid = ["#;
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
@@ -123,7 +163,8 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
-        "model = \"from-user-config\"\ninvalid = [",
+        r#"model = "from-user-config"
+invalid = ["#,
     )
     .expect("write config");
 
@@ -181,7 +222,8 @@ async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io:
 async fn returns_config_error_for_invalid_managed_config_toml() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
-    let contents = "model = \"gpt-4\"\ninvalid = [";
+    let contents = r#"model = "gpt-4"
+invalid = ["#;
     std::fs::write(&managed_path, contents).expect("write managed config");
 
     let overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone());
@@ -228,10 +270,221 @@ async fn returns_config_error_for_schema_error_in_user_config() {
     assert_eq!(config_error, &expected_config_error);
 }
 
+#[tokio::test]
+async fn top_level_allow_managed_hooks_only_in_user_config_does_not_enable_requirements_policy()
+-> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "allow_managed_hooks_only = true",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().allow_managed_hooks_only, None);
+    assert!(layers.requirements().allow_managed_hooks_only.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_allow_managed_hooks_only_in_user_config_does_not_enable_requirements_policy()
+-> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[hooks]
+allow_managed_hooks_only = true
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /tmp/user-hook.py"
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert!(
+        layers
+            .get_user_layer()
+            .and_then(|layer| layer.config.get("hooks"))
+            .is_some(),
+        "hooks should still deserialize from config.toml"
+    );
+    assert_eq!(layers.requirements_toml().allow_managed_hooks_only, None);
+    assert!(layers.requirements().allow_managed_hooks_only.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"model = "gpt-5"
+unknown_key = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    let expected_config_error =
+        config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+            .expect("unknown field error");
+    assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "foo".to_string(),
+            TomlValue::String("bar".to_string()),
+        )])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_cli_override_key_with_relative_path_override() {
+    let tmp = tempdir().expect("tempdir");
+    let instructions_path = tmp.path().join("instructions.md");
+    std::fs::write(&instructions_path, "instructions").expect("write instructions");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![
+            (
+                "model_instructions_file".to_string(),
+                TomlValue::String("instructions.md".to_string()),
+            ),
+            ("foo".to_string(), TomlValue::String("bar".to_string())),
+        ])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_cli_override_key() {
+    let tmp = tempdir().expect("tempdir");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![("features.foo".to_string(), TomlValue::Boolean(true))])
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    assert_eq!(
+        err.to_string(),
+        "unknown configuration field `features.foo` in -c/--config override"
+    );
+}
+
+#[tokio::test]
+async fn strict_config_rejects_unknown_feature_user_config_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"[features]
+foo = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("expected error");
+
+    let config_error = config_error_from_io(&err);
+    assert_eq!(
+        config_error.message,
+        "unknown configuration field `features.foo`"
+    );
+    assert_eq!(config_error.range.start.line, 2);
+    assert_eq!(config_error.range.start.column, 1);
+}
+
+#[test]
+fn strict_config_points_to_unknown_nested_key() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"[mcp_servers.local]
+command = "echo"
+unknown_key = true"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    let error = config_error_from_ignored_toml_fields::<ConfigToml>(&config_path, contents)
+        .expect("unknown field error");
+
+    assert_eq!(
+        error.message,
+        "unknown configuration field `mcp_servers.local.unknown_key`"
+    );
+    assert_eq!(error.range.start.line, 3);
+    assert_eq!(error.range.start.column, 1);
+}
 #[test]
 fn schema_error_points_to_feature_value() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "[features]\ncollaboration_modes = \"true\"";
+    let contents = r#"[features]
+collaboration_modes = "true""#;
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
@@ -321,18 +574,13 @@ async fn returns_empty_when_all_layers_missing() {
     let user_layer = layers
         .get_user_layer()
         .expect("expected a user layer even when CODEX_HOME/config.toml does not exist");
-    assert_eq!(
-        &ConfigLayerEntry {
-            name: ConfigLayerSource::User {
-                file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
-            },
-            config: TomlValue::Table(toml::map::Map::new()),
-            raw_toml: None,
-            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
-            disabled_reason: None,
+    let expected_user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path()),
         },
-        user_layer,
+        TomlValue::Table(toml::map::Map::new()),
     );
+    assert_eq!(&expected_user_layer, user_layer);
     assert_eq!(
         user_layer.config,
         TomlValue::Table(toml::map::Map::new()),
@@ -613,7 +861,12 @@ async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()
     let tmp = tempdir()?;
     let managed_path = tmp.path().join("managed_config.toml");
 
-    tokio::fs::write(&managed_path, "approval_policy = \"on-request\"\n").await?;
+    tokio::fs::write(
+        &managed_path,
+        r#"approval_policy = "on-request"
+"#,
+    )
+    .await?;
 
     let mut loader_overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
     loader_overrides.macos_managed_config_requirements_base64 = Some(
@@ -777,6 +1030,7 @@ allowed_approval_policies = ["on-request"]
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -834,6 +1088,7 @@ allowed_approval_policies = ["on-request"]
             allowed_sandbox_modes: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             hooks: None,
             mcp_servers: None,
@@ -1042,6 +1297,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_sandbox_modes: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
+        allow_managed_hooks_only: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -1095,11 +1351,17 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let managed_config_path = tmp.path().join("managed_config.toml");
-    tokio::fs::write(&managed_config_path, "approval_policy = \"never\"\n").await?;
+    tokio::fs::write(
+        &managed_config_path,
+        r#"approval_policy = "never"
+"#,
+    )
+    .await?;
     let system_requirements_path = tmp.path().join("requirements.toml");
     tokio::fs::write(
         &system_requirements_path,
-        "allowed_sandbox_modes = [\"read-only\"]\n",
+        r#"allowed_sandbox_modes = ["read-only"]
+"#,
     )
     .await?;
 
@@ -1157,6 +1419,7 @@ async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![codex_config::HookHandlerConfig::Command {
                         command: format!("python3 {}/pre.py", managed_dir.display()),
+                        command_windows: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
@@ -1284,12 +1547,14 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        r#"foo = "root"
+"#,
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        r#"foo = "child"
+"#,
     )
     .await?;
 
@@ -1336,6 +1601,260 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         .expect("foo entry");
     assert_eq!(foo, "child");
     Ok(())
+}
+
+#[tokio::test]
+async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_hooks()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let repo_child = repo_root.join("child");
+    let worktree_root = tmp.path().join("worktree");
+    let worktree_child = worktree_root.join("child");
+
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(worktree_child.join(".codex")).await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        Some("repo-root"),
+        "echo repo root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &repo_child.join(".codex"),
+        Some("repo-child"),
+        "echo repo child hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &worktree_root.join(".codex"),
+        Some("worktree-root"),
+        "echo worktree root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &worktree_child.join(".codex"),
+        Some("worktree-child"),
+        "echo worktree child hook",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_child)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_child.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[1].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[0]
+            .config
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("worktree-child")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo repo child hook")
+    );
+    assert_eq!(
+        project_layers[1]
+            .config
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("worktree-root")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[1]),
+        Some("echo repo root hook")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_config_toml()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let worktree_root = tmp.path().join("worktree");
+
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        /*foo*/ None,
+        "echo repo root hook",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_root)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo repo root hook")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let project_root = repo_root.join("project");
+    let nested = project_root.join("child");
+
+    tokio::fs::create_dir_all(repo_root.join(".git")).await?;
+    tokio::fs::create_dir_all(&project_root).await?;
+    tokio::fs::write(project_root.join(".hg"), "hg").await?;
+    write_project_hook_config(
+        &repo_root.join(".codex"),
+        /*foo*/ None,
+        "echo repo root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &project_root.join(".codex"),
+        /*foo*/ None,
+        "echo project root hook",
+    )
+    .await?;
+    write_project_hook_config(
+        &nested.join(".codex"),
+        /*foo*/ None,
+        "echo nested hook",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        Some(vec![".hg".to_string()]),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(
+        project_layers[0].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(nested.join(".codex"))?)
+    );
+    assert_eq!(
+        project_layers[1].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            project_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_hook_command(project_layers[0]),
+        Some("echo nested hook")
+    );
+    assert_eq!(
+        project_hook_command(project_layers[1]),
+        Some("echo project root hook")
+    );
+
+    Ok(())
+}
+
+fn project_hook_command(layer: &ConfigLayerEntry) -> Option<&str> {
+    layer
+        .config
+        .get("hooks")?
+        .get("PreToolUse")?
+        .as_array()?
+        .first()?
+        .get("hooks")?
+        .as_array()?
+        .first()?
+        .get("command")?
+        .as_str()
 }
 
 #[tokio::test]
@@ -1489,18 +2008,13 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
-    assert_eq!(
-        vec![&ConfigLayerEntry {
-            name: ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
-            },
-            config: TomlValue::Table(toml::map::Map::new()),
-            raw_toml: None,
-            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
-            disabled_reason: None,
-        }],
-        project_layers
+    let expected_project_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
+        },
+        TomlValue::Table(toml::map::Map::new()),
     );
+    assert_eq!(vec![&expected_project_layer], project_layers);
 
     Ok(())
 }
@@ -1511,7 +2025,12 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let home_dir = tmp.path().join("home");
     let codex_home = home_dir.join(".codex");
     tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"foo = "user"
+"#,
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
@@ -1553,7 +2072,12 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
     tokio::fs::create_dir_all(&nested_dot_codex).await?;
     tokio::fs::create_dir_all(project_root.join(".git")).await?;
-    tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
+    tokio::fs::write(
+        nested_dot_codex.join(CONFIG_TOML_FILE),
+        r#"foo = "child"
+"#,
+    )
+    .await?;
 
     tokio::fs::create_dir_all(&project_dot_codex).await?;
     make_config_for_test(
@@ -1567,7 +2091,10 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
     let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
     tokio::fs::write(
         &user_config_path,
-        format!("foo = \"user\"\n{user_config_contents}"),
+        format!(
+            r#"foo = "user"
+{user_config_contents}"#
+        ),
     )
     .await?;
 
@@ -1592,19 +2119,18 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
 
-    let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
-    assert_eq!(
-        vec![&ConfigLayerEntry {
-            name: ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
-            },
-            config: child_config.clone(),
-            raw_toml: None,
-            version: version_for_toml(&child_config),
-            disabled_reason: None,
-        }],
-        project_layers
+    let child_config: TomlValue = toml::from_str(
+        r#"foo = "child"
+"#,
+    )
+    .expect("parse child config");
+    let expected_project_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
+        },
+        child_config,
     );
+    assert_eq!(vec![&expected_project_layer], project_layers);
     assert_eq!(
         layers.effective_config().get("foo"),
         Some(&TomlValue::String("child".to_string()))
@@ -1621,7 +2147,9 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\nprofile = \"ignored\"\n",
+        r#"foo = "child"
+profile = "ignored"
+"#,
     )
     .await?;
 
@@ -1640,7 +2168,10 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
     tokio::fs::write(
         &untrusted_config_path,
-        format!("foo = \"user\"\n{untrusted_config_contents}"),
+        format!(
+            r#"foo = "user"
+{untrusted_config_contents}"#
+        ),
     )
     .await?;
 
@@ -1686,7 +2217,8 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
     tokio::fs::write(
         codex_home_unknown.join(CONFIG_TOML_FILE),
-        "foo = \"user\"\n",
+        r#"foo = "user"
+"#,
     )
     .await?;
 
@@ -1856,7 +2388,8 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"project\"\n",
+        r#"foo = "project"
+"#,
     )
     .await?;
     std::os::unix::fs::symlink(&project_root, &alias_root)?;
@@ -2027,9 +2560,21 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             )
             .await?;
             let config_contents = tokio::fs::read_to_string(&config_path).await?;
-            tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
+            tokio::fs::write(
+                &config_path,
+                format!(
+                    r#"foo = "user"
+{config_contents}"#
+                ),
+            )
+            .await?;
         } else {
-            tokio::fs::write(&config_path, "foo = \"user\"\n").await?;
+            tokio::fs::write(
+                &config_path,
+                r#"foo = "user"
+"#,
+            )
+            .await?;
         }
 
         let layers = load_config_layers_state(
@@ -2186,12 +2731,14 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        r#"foo = "root"
+"#,
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        r#"foo = "child"
+"#,
     )
     .await?;
 

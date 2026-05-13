@@ -5,7 +5,6 @@ use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
 use codex_memories_read::usage::memories_usage_kinds_from_command;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use std::path::PathBuf;
 
 pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
@@ -41,14 +40,6 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
         invocation.tool_name.namespace.as_deref(),
         invocation.tool_name.name.as_str(),
     ) {
-        (None, "shell") => serde_json::from_str::<ShellToolCallParams>(arguments)
-            .ok()
-            .map(|params| {
-                (
-                    params.command,
-                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
-                )
-            }),
         (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
             .map(|params| {

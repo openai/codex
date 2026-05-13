@@ -8,6 +8,8 @@ use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
 use crate::cap::workspace_write_root_specificity;
+use crate::deny_read_acl::apply_deny_read_acls;
+use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
 use crate::env::inherit_path_env;
@@ -29,6 +31,7 @@ use crate::token::get_logon_sid_bytes;
 use crate::workspace_acl::is_command_cwd_root;
 use crate::workspace_acl::protect_workspace_agents_dir;
 use crate::workspace_acl::protect_workspace_codex_dir;
+use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -270,24 +273,31 @@ pub(crate) fn allow_null_device_for_workspace_write(is_workspace_write: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_legacy_session_acl_rules(
     policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    codex_home: &Path,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
+    additional_deny_read_paths: &[PathBuf],
     additional_deny_write_paths: &[PathBuf],
     acl_sids: LegacyAclSids<'_>,
     persist_aces: bool,
-) -> Vec<(PathBuf, String)> {
+) -> Result<Vec<(PathBuf, String)>> {
     let AllowDenyPaths { allow, mut deny } =
         compute_allow_paths(policy, sandbox_policy_cwd, current_dir, env_map);
-    for path in additional_deny_write_paths {
-        if path.exists() {
-            deny.insert(path.clone());
-        }
-    }
     let mut guards: Vec<(PathBuf, String)> = Vec::new();
     unsafe {
+        for path in additional_deny_write_paths {
+            // Explicit carveouts must exist before the command starts so the
+            // sandbox cannot create them under a writable parent first.
+            if !path.exists() {
+                std::fs::create_dir_all(path)
+                    .with_context(|| format!("create deny-write path {}", path.display()))?;
+            }
+            deny.insert(path.clone());
+        }
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             for p in &allow {
                 if matches!(add_allow_ace(p, readonly_sid.as_ptr()), Ok(true))
@@ -317,6 +327,50 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 }
             }
         }
+        if !additional_deny_read_paths.is_empty() {
+            if let Some(readonly_sid) = acl_sids.readonly_sid {
+                let Some(readonly_sid_str) = acl_sids.readonly_sid_str else {
+                    anyhow::bail!("readonly capability SID string missing");
+                };
+                let applied_deny_read_paths = if persist_aces {
+                    sync_persistent_deny_read_acls(
+                        codex_home,
+                        readonly_sid_str,
+                        additional_deny_read_paths,
+                        readonly_sid.as_ptr(),
+                    )?
+                } else {
+                    apply_deny_read_acls(additional_deny_read_paths, readonly_sid.as_ptr())?
+                };
+                if !persist_aces {
+                    guards.extend(
+                        applied_deny_read_paths
+                            .into_iter()
+                            .map(|path| (path, readonly_sid_str.to_string())),
+                    );
+                }
+            } else {
+                for root_sid in acl_sids.write_root_sids {
+                    let applied_deny_read_paths = if persist_aces {
+                        sync_persistent_deny_read_acls(
+                            codex_home,
+                            &root_sid.sid_str,
+                            additional_deny_read_paths,
+                            root_sid.sid.as_ptr(),
+                        )?
+                    } else {
+                        apply_deny_read_acls(additional_deny_read_paths, root_sid.sid.as_ptr())?
+                    };
+                    if !persist_aces {
+                        guards.extend(
+                            applied_deny_read_paths
+                                .into_iter()
+                                .map(|path| (path, root_sid.sid_str.clone())),
+                        );
+                    }
+                }
+            }
+        }
         for root_sid in acl_sids.write_root_sids {
             allow_null_device(root_sid.sid.as_ptr());
         }
@@ -335,9 +389,10 @@ pub(crate) fn apply_legacy_session_acl_rules(
             }
         }
     }
-    guards
+    Ok(guards)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_elevated_spawn_context(
     policy_json_or_preset: &str,
     sandbox_policy_cwd: &Path,
@@ -345,6 +400,11 @@ pub(crate) fn prepare_elevated_spawn_context(
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
     command: &[String],
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[PathBuf],
+    deny_write_paths_override: &[PathBuf],
 ) -> Result<ElevatedSpawnContext> {
     let common = prepare_spawn_context_common(
         policy_json_or_preset,
@@ -364,6 +424,12 @@ pub(crate) fn prepare_elevated_spawn_context(
     );
     let write_roots: Vec<PathBuf> = allow.into_iter().collect();
     let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
+    let computed_write_roots_override = if common.is_workspace_write {
+        Some(write_roots.as_slice())
+    } else {
+        None
+    };
+    let write_roots_for_setup = write_roots_override.or(computed_write_roots_override);
     let effective_write_roots = if common.is_workspace_write {
         effective_write_roots_for_setup(
             &common.policy,
@@ -371,15 +437,15 @@ pub(crate) fn prepare_elevated_spawn_context(
             &common.current_dir,
             env_map,
             codex_home,
-            Some(write_roots.as_slice()),
+            write_roots_for_setup,
         )
     } else {
         Vec::new()
     };
-    let write_roots_override = if common.is_workspace_write {
+    let setup_write_roots_override = if common.is_workspace_write {
         Some(effective_write_roots.as_slice())
     } else {
-        None
+        write_roots_override
     };
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
@@ -387,10 +453,15 @@ pub(crate) fn prepare_elevated_spawn_context(
         cwd,
         env_map,
         codex_home,
-        /*read_roots_override*/ None,
-        /*read_roots_include_platform_defaults*/ false,
-        write_roots_override,
-        &deny_write_paths,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        setup_write_roots_override,
+        deny_read_paths_override,
+        if deny_write_paths_override.is_empty() {
+            &deny_write_paths
+        } else {
+            deny_write_paths_override
+        },
         /*proxy_enforced*/ false,
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;

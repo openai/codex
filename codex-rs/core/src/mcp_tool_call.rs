@@ -576,6 +576,11 @@ async fn execute_mcp_tool_call(
     )
     .await
     .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
+    let mcp_call_trace = sess
+        .services
+        .rollout_thread_trace
+        .start_mcp_call_trace(call_id);
+    let request_meta = mcp_call_trace.add_request_meta(request_meta);
     let result = sess
         .call_tool(
             &invocation.server,

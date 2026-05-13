@@ -29,6 +29,8 @@ use crate::app_event_sender::AppEventSender;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::hooks_rpc::hook_needs_review;
 use crate::key_hint;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
@@ -50,6 +52,7 @@ pub(crate) struct HooksBrowserView {
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
+    keymap: ListKeymap,
 }
 
 impl HooksBrowserView {
@@ -68,10 +71,15 @@ impl HooksBrowserView {
                 errors,
             },
             app_event_tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         )
     }
 
-    pub(crate) fn from_entry(mut entry: HooksListEntry, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn from_entry(
+        mut entry: HooksListEntry,
+        app_event_tx: AppEventSender,
+        keymap: ListKeymap,
+    ) -> Self {
         entry.hooks.sort_by_key(|hook| hook.display_order);
         let mut view = Self {
             entry,
@@ -79,6 +87,7 @@ impl HooksBrowserView {
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
+            keymap,
         };
         if view.page_len() > 0 {
             view.state.selected_idx = Some(
@@ -163,6 +172,26 @@ impl HooksBrowserView {
         let len = self.page_len();
         self.state.move_down_wrap(len);
         self.state.ensure_visible(len, self.max_visible_rows());
+    }
+
+    fn page_up(&mut self) {
+        let len = self.page_len();
+        self.state.page_up_clamped(len, self.max_visible_rows());
+    }
+
+    fn page_down(&mut self) {
+        let len = self.page_len();
+        self.state.page_down_clamped(len, self.max_visible_rows());
+    }
+
+    fn jump_top(&mut self) {
+        let len = self.page_len();
+        self.state.jump_top(len, self.max_visible_rows());
+    }
+
+    fn jump_bottom(&mut self) {
+        let len = self.page_len();
+        self.state.jump_bottom(len, self.max_visible_rows());
     }
 
     fn page_len(&self) -> usize {
@@ -533,33 +562,18 @@ impl HooksBrowserView {
 impl BottomPaneView for HooksBrowserView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
+            _ if self.keymap.move_up.is_pressed(key_event) => self.move_up(),
+            _ if self.keymap.move_down.is_pressed(key_event) => self.move_down(),
+            _ if self.keymap.page_up.is_pressed(key_event) => self.page_up(),
+            _ if self.keymap.page_down.is_pressed(key_event) => self.page_down(),
+            _ if self.keymap.jump_top.is_pressed(key_event) => self.jump_top(),
+            _ if self.keymap.jump_bottom.is_pressed(key_event) => self.jump_bottom(),
+            _ if self.keymap.accept.is_pressed(key_event)
+                && self.page == HooksBrowserPage::Events =>
+            {
+                self.open_selected_event()
             }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self.move_down(),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.page == HooksBrowserPage::Events => self.open_selected_event(),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            _ if self.keymap.accept.is_pressed(key_event) => {
                 if let HooksBrowserPage::Handlers(event_name) = self.page {
                     self.toggle_selected_hook(event_name);
                 }
@@ -581,9 +595,7 @@ impl BottomPaneView for HooksBrowserView {
                 HooksBrowserPage::Events => self.trust_all_hooks(),
                 HooksBrowserPage::Handlers(event_name) => self.trust_selected_hook(event_name),
             },
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => match self.page {
+            _ if self.keymap.cancel.is_pressed(key_event) => match self.page {
                 HooksBrowserPage::Events => self.close(),
                 HooksBrowserPage::Handlers(_) => self.return_to_events(),
             },

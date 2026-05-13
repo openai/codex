@@ -27,6 +27,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
+        client_elicitation_capability: ElicitationCapability::default(),
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }

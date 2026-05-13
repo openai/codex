@@ -14,13 +14,13 @@ mod audit;
 #[cfg(target_os = "windows")]
 mod cap;
 #[cfg(target_os = "windows")]
+mod deny_read_acl;
+#[cfg(target_os = "windows")]
+mod deny_read_state;
+#[cfg(target_os = "windows")]
 mod desktop;
 #[cfg(target_os = "windows")]
 mod dpapi;
-#[cfg(target_os = "windows")]
-mod elevated;
-#[cfg(target_os = "windows")]
-mod elevated_impl;
 #[cfg(target_os = "windows")]
 mod env;
 #[cfg(target_os = "windows")]
@@ -36,21 +36,9 @@ mod path_normalization;
 #[cfg(target_os = "windows")]
 mod policy;
 #[cfg(target_os = "windows")]
-mod proc_thread_attr;
-#[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
-mod sandbox_utils;
-#[cfg(target_os = "windows")]
-mod setup;
-#[cfg(target_os = "windows")]
-mod setup_error;
-#[cfg(target_os = "windows")]
-mod spawn_prep;
-#[cfg(target_os = "windows")]
 mod token;
-#[cfg(target_os = "windows")]
-mod unified_exec;
 #[cfg(target_os = "windows")]
 mod wfp;
 #[cfg(target_os = "windows")]
@@ -60,16 +48,46 @@ mod winutil;
 #[cfg(target_os = "windows")]
 mod workspace_acl;
 
+mod deny_read_resolver;
+
 #[cfg(target_os = "windows")]
 mod conpty;
 
 #[cfg(target_os = "windows")]
+mod elevated;
+
+#[cfg(target_os = "windows")]
+mod elevated_impl;
+
+#[cfg(target_os = "windows")]
+mod proc_thread_attr;
+
+#[cfg(target_os = "windows")]
+mod sandbox_utils;
+
+#[cfg(target_os = "windows")]
+mod setup;
+
+#[cfg(target_os = "windows")]
+mod setup_error;
+
+#[cfg(target_os = "windows")]
+mod spawn_prep;
+
+#[cfg(target_os = "windows")]
+mod unified_exec;
+
+#[cfg(target_os = "windows")]
 pub(crate) use elevated::ipc_framed;
+
 #[cfg(target_os = "windows")]
 pub(crate) use elevated::runner_client;
+
 #[cfg(target_os = "windows")]
 pub(crate) use elevated::runner_pipe;
 
+#[cfg(target_os = "windows")]
+pub use acl::add_deny_read_ace;
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
 
@@ -101,6 +119,13 @@ pub use cap::workspace_write_root_overlaps_path;
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::apply_deny_read_acls;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::plan_deny_read_acl_paths;
+pub use deny_read_resolver::resolve_windows_deny_read_paths;
+#[cfg(target_os = "windows")]
+pub use deny_read_state::sync_persistent_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use desktop::LaunchDesktop;
 #[cfg(target_os = "windows")]
@@ -231,7 +256,7 @@ pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
-pub use windows_impl::run_windows_sandbox_capture_with_extra_deny_write_paths;
+pub use windows_impl::run_windows_sandbox_capture_with_filesystem_overrides;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
@@ -269,10 +294,10 @@ mod windows_impl {
     use super::spawn_prep::root_capability_sids;
     use super::token::LocalSid;
     use anyhow::Result;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
     use std::io;
     use std::path::Path;
-    use std::path::PathBuf;
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
@@ -332,7 +357,7 @@ mod windows_impl {
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
-        run_windows_sandbox_capture_with_extra_deny_write_paths(
+        run_windows_sandbox_capture_with_filesystem_overrides(
             policy_json_or_preset,
             sandbox_policy_cwd,
             codex_home,
@@ -341,12 +366,13 @@ mod windows_impl {
             env_map,
             timeout_ms,
             &[],
+            &[],
             use_private_desktop,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture_with_extra_deny_write_paths(
+    pub fn run_windows_sandbox_capture_with_filesystem_overrides(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
         codex_home: &Path,
@@ -354,9 +380,18 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        additional_deny_write_paths: &[PathBuf],
+        additional_deny_read_paths: &[AbsolutePathBuf],
+        additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
+        let additional_deny_read_paths = additional_deny_read_paths
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
+        let additional_deny_write_paths = additional_deny_write_paths
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
         let common = prepare_legacy_spawn_context(
             policy_json_or_preset,
             codex_home,
@@ -375,6 +410,11 @@ mod windows_impl {
                 "Restricted read-only access requires the elevated Windows sandbox backend"
             );
         }
+        // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
+        // backend cannot make capability-SID deny-read ACLs authoritative.
+        if !additional_deny_read_paths.is_empty() {
+            anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
+        }
         let capability_roots = legacy_session_capability_roots(
             &policy,
             sandbox_policy_cwd,
@@ -388,16 +428,18 @@ mod windows_impl {
         let guards = apply_legacy_session_acl_rules(
             &policy,
             sandbox_policy_cwd,
+            codex_home,
             &current_dir,
             &env_map,
-            additional_deny_write_paths,
+            &additional_deny_read_paths,
+            &additional_deny_write_paths,
             LegacyAclSids {
                 readonly_sid: security.readonly_sid.as_ref(),
                 readonly_sid_str: security.readonly_sid_str.as_deref(),
                 write_root_sids: &security.write_root_sids,
             },
             persist_aces,
-        );
+        )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
         let spawn_res = unsafe {
@@ -570,8 +612,10 @@ mod windows_impl {
         let _guards = apply_legacy_session_acl_rules(
             sandbox_policy,
             sandbox_policy_cwd,
+            codex_home,
             &current_dir,
             env_map,
+            &[],
             &[],
             LegacyAclSids {
                 readonly_sid: None,
@@ -579,7 +623,7 @@ mod windows_impl {
                 write_root_sids: &write_root_sids,
             },
             /*persist_aces*/ true,
-        );
+        )?;
 
         Ok(())
     }

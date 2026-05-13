@@ -8,7 +8,7 @@
 
 ## `run()` vs `stream()`
 
-- `TurnHandle.run()` / `AsyncTurnHandle.run()` is the easiest path. It consumes events until completion and returns the canonical generated app-server `Turn` model.
+- `TurnHandle.run()` / `AsyncTurnHandle.run()` is the easiest path. It consumes events until completion and returns the public app-server `Turn` model from `openai_codex.types`.
 - `TurnHandle.stream()` / `AsyncTurnHandle.stream()` yields raw notifications (`Notification`) so you can react event-by-event.
 
 Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout logic, or custom parsing.
@@ -68,7 +68,7 @@ cd sdk/python
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
-  /tmp/codex-python-release/openai-codex-app-server-sdk \
+  /tmp/codex-python-release/openai-codex \
   --codex-version <codex-release-tag-or-pep440-version>
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
@@ -99,5 +99,5 @@ Do not blindly retry all errors. For `InvalidParamsError` or `MethodNotFoundErro
 
 - Starting a new thread for every prompt when you wanted continuity.
 - Forgetting to `close()` (or not using context managers).
-- Assuming `run()` returns extra SDK-only fields instead of the generated `Turn` model.
+- Assuming `run()` returns extra SDK-only fields instead of the public `Turn` model.
 - Mixing SDK input classes with raw dicts incorrectly.

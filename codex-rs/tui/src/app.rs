@@ -80,6 +80,7 @@ use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AskForApproval;
@@ -155,6 +156,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -192,6 +194,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod pets;
 mod platform_actions;
 mod replay_filter;
 mod resize_reflow;
@@ -496,8 +499,7 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
-    remote_app_server_url: Option<String>,
-    remote_app_server_auth_token: Option<String>,
+    remote_app_server_endpoint: Option<RemoteAppServerEndpoint>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -635,8 +637,7 @@ impl App {
         is_first_run: bool,
         entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
-        remote_app_server_url: Option<String>,
-        remote_app_server_auth_token: Option<String>,
+        remote_app_server_endpoint: Option<RemoteAppServerEndpoint>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
         startup_hooks_browser: Option<HooksListEntry>,
@@ -917,8 +918,7 @@ See the Codex keymap documentation for supported actions and examples."
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
-            remote_app_server_url,
-            remote_app_server_auth_token,
+            remote_app_server_endpoint,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -1080,13 +1080,18 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
+        let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
+                clear_pet_result?;
                 clear_result?;
                 exit_reason
             }
             Err(err) => {
+                if let Err(clear_pet_err) = clear_pet_result {
+                    tracing::warn!(error = %clear_pet_err, "failed to clear ambient pet image");
+                }
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
                 }
@@ -1154,9 +1159,11 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    let mut rendered_area = Rect::default();
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
                             let area = frame.area();
+                            rendered_area = area;
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
                                 frame.set_cursor_style(self.chat_widget.cursor_style(area));
@@ -1166,12 +1173,37 @@ See the Codex keymap documentation for supported actions and examples."
                     } else {
                         tui.draw(desired_height, |frame| {
                             let area = frame.area();
+                            rendered_area = area;
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
                                 frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
+                    }
+                    if self.chat_widget.ambient_pet_image_enabled() {
+                        let terminal_size = tui.terminal.size()?;
+                        let ambient_pet_area = Rect::new(
+                            /*x*/ 0,
+                            /*y*/ 0,
+                            terminal_size.width,
+                            terminal_size.height,
+                        );
+                        if let Err(err) = tui.draw_ambient_pet_image(
+                            self.chat_widget
+                                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
+                        ) {
+                            self.handle_ambient_pet_image_render_error(tui, err)?;
+                        }
+                    }
+                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
+                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                            self.handle_pet_picker_preview_image_render_error(tui, err)?;
+                        }
+                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
+                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
+                    {
+                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
                     }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget

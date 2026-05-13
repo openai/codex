@@ -14,5 +14,5 @@ doctest = false
 workspace = true
 
 [dependencies]
-codex-tool-api = { workspace = true }
 codex-protocol = { workspace = true }
+codex-tools = { workspace = true }

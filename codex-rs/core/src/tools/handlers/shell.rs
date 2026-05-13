@@ -1,6 +1,5 @@
 use codex_features::Feature;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
@@ -9,8 +8,6 @@ use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -19,10 +16,7 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
@@ -31,36 +25,10 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 
-mod container_exec;
-mod local_shell;
 mod shell_command;
-mod shell_handler;
 
-pub use container_exec::ContainerExecHandler;
-pub use local_shell::LocalShellHandler;
 pub use shell_command::ShellCommandHandler;
 pub(crate) use shell_command::ShellCommandHandlerOptions;
-pub use shell_handler::ShellHandler;
-
-fn shell_function_payload_command(payload: &ToolPayload) -> Option<String> {
-    let ToolPayload::Function { arguments } = payload else {
-        return None;
-    };
-
-    parse_arguments::<ShellToolCallParams>(arguments)
-        .ok()
-        .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-}
-
-fn local_shell_payload_command(payload: &ToolPayload) -> Option<String> {
-    let ToolPayload::LocalShell { params } = payload else {
-        return None;
-    };
-
-    Some(codex_shell_command::parse_command::shlex_join(
-        &params.command,
-    ))
-}
 
 fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
     let ToolPayload::Function { arguments } = payload else {
@@ -84,27 +52,6 @@ struct RunExecLikeArgs {
     call_id: String,
     freeform: bool,
     shell_runtime_backend: ShellRuntimeBackend,
-}
-
-fn shell_function_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-    shell_function_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
-        tool_name: HookToolName::bash(),
-        tool_input: serde_json::json!({ "command": command }),
-    })
-}
-
-fn shell_function_post_tool_use_payload(
-    invocation: &ToolInvocation,
-    result: &FunctionToolOutput,
-) -> Option<PostToolUsePayload> {
-    let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
-    let command = shell_function_payload_command(&invocation.payload)?;
-    Some(PostToolUsePayload {
-        tool_name: HookToolName::bash(),
-        tool_use_id: invocation.call_id.clone(),
-        tool_input: serde_json::json!({ "command": command }),
-        tool_response,
-    })
 }
 
 async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -198,6 +145,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         &exec_params.command,
         &exec_params.cwd,
         fs.as_ref(),
+        turn_environment.clone(),
         session.clone(),
         turn.clone(),
         Some(&tracker),
@@ -260,15 +208,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         exec_approval_requirement,
     };
     let mut orchestrator = ToolOrchestrator::new();
-    let mut runtime = {
-        use ShellRuntimeBackend::*;
-        match shell_runtime_backend {
-            Generic => ShellRuntime::new(),
-            backend @ (ShellCommandClassic | ShellCommandZshFork) => {
-                ShellRuntime::for_shell_command(backend)
-            }
-        }
-    };
+    let mut runtime = ShellRuntime::for_shell_command(shell_runtime_backend);
     let tool_ctx = ToolCtx {
         session: session.clone(),
         turn: turn.clone(),

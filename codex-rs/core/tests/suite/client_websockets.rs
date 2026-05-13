@@ -132,11 +132,11 @@ async fn responses_websocket_streams_request() {
         Some(harness.thread_id.to_string())
     );
     assert_eq!(
-        handshake.header("session_id"),
+        handshake.header("session-id"),
         Some(harness.session_id.to_string())
     );
     assert_eq!(
-        handshake.header("thread_id"),
+        handshake.header("thread-id"),
         Some(harness.thread_id.to_string())
     );
     assert_eq!(

@@ -8,7 +8,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_loader_overrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -25,6 +25,7 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
+pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -52,7 +53,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
 use codex_state::log_db;
-use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -111,6 +111,7 @@ mod clipboard_paste;
 mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
+mod pets;
 pub use custom_terminal::Terminal;
 mod auto_review_denials;
 mod cwd_prompt;
@@ -125,6 +126,7 @@ mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
+mod git_action_directives;
 mod goal_display;
 mod history_cell;
 mod hooks_rpc;
@@ -270,12 +272,17 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[cfg(unix)]
+const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -287,6 +294,7 @@ async fn start_embedded_app_server(
         config,
         cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -300,10 +308,7 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
-    Remote {
-        websocket_url: String,
-        auth_token: Option<String>,
-    },
+    Remote { endpoint: RemoteAppServerEndpoint },
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -345,12 +350,24 @@ fn websocket_url_supports_auth_token(parsed: &Url) -> bool {
     }
 }
 
-pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
+pub fn resolve_remote_addr(addr: &str) -> color_eyre::Result<RemoteAppServerEndpoint> {
+    if let Some(socket_path) = addr.strip_prefix("unix://") {
+        let socket_path = if socket_path.is_empty() {
+            let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+            codex_app_server_client::app_server_control_socket_path(&codex_home)
+                .map_err(color_eyre::Report::new)?
+        } else {
+            AbsolutePathBuf::relative_to_current_dir(socket_path)
+                .map_err(color_eyre::Report::new)?
+        };
+        return Ok(RemoteAppServerEndpoint::UnixSocket { socket_path });
+    }
+
     let parsed = match Url::parse(addr) {
         Ok(parsed) => parsed,
         Err(_) => {
             color_eyre::eyre::bail!(
-                "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+                "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
             );
         }
     };
@@ -361,32 +378,31 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
         && parsed.query().is_none()
         && parsed.fragment().is_none()
     {
-        return Ok(parsed.to_string());
+        return Ok(RemoteAppServerEndpoint::WebSocket {
+            websocket_url: parsed.to_string(),
+            auth_token: None,
+        });
     }
 
     color_eyre::eyre::bail!(
-        "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+        "invalid remote address `{addr}`; expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
     );
 }
 
-fn validate_remote_auth_token_transport(websocket_url: &str) -> color_eyre::Result<()> {
-    let parsed = Url::parse(websocket_url).map_err(color_eyre::Report::new)?;
-    if websocket_url_supports_auth_token(&parsed) {
-        return Ok(());
+pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bool {
+    match endpoint {
+        RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
+            Url::parse(websocket_url).is_ok_and(|parsed| websocket_url_supports_auth_token(&parsed))
+        }
+        RemoteAppServerEndpoint::UnixSocket { .. } => false,
     }
-
-    color_eyre::eyre::bail!(
-        "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
-    )
 }
 
 async fn connect_remote_app_server(
-    websocket_url: String,
-    auth_token: Option<String>,
+    endpoint: RemoteAppServerEndpoint,
 ) -> color_eyre::Result<AppServerClient> {
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-        websocket_url,
-        auth_token,
+        endpoint,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
@@ -398,6 +414,40 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+#[cfg(unix)]
+async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
+    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
+    if !socket_path.as_path().try_exists().unwrap_or(false) {
+        return None;
+    }
+
+    match tokio::time::timeout(
+        AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
+        tokio::net::UnixStream::connect(socket_path.as_path()),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => Some(socket_path),
+        Ok(Err(err)) => {
+            tracing::debug!(%err, socket_path = %socket_path.display(), "skipping default app-server daemon socket");
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                socket_path = %socket_path.display(),
+                timeout_ms = AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT.as_millis(),
+                "timed out probing default app-server daemon socket"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn maybe_probe_default_daemon_socket(_codex_home: &Path) -> Option<AbsolutePathBuf> {
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_app_server(
     target: &AppServerTarget,
@@ -405,6 +455,7 @@ async fn start_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -417,6 +468,7 @@ async fn start_app_server(
             config,
             cli_kv_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             feedback,
             log_db,
@@ -425,10 +477,7 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::Remote {
-            websocket_url,
-            auth_token,
-        } => connect_remote_app_server(websocket_url.clone(), auth_token.clone()).await,
+        AppServerTarget::Remote { endpoint } => connect_remote_app_server(endpoint.clone()).await,
     }
 }
 
@@ -444,6 +493,7 @@ pub(crate) async fn start_app_server_for_picker(
         config.clone(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
@@ -474,6 +524,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -500,6 +551,7 @@ where
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -712,24 +764,9 @@ pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
-    remote: Option<String>,
-    remote_auth_token: Option<String>,
+    explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    let remote_url = remote;
-    if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
-        validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
-    }
-    let app_server_target = remote_url
-        .clone()
-        .map(|websocket_url| AppServerTarget::Remote {
-            websocket_url,
-            auth_token: remote_auth_token.clone(),
-        })
-        .unwrap_or(AppServerTarget::Embedded);
-    let remote_cwd_override = cli
-        .cwd
-        .clone()
-        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
+    let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
@@ -774,6 +811,22 @@ pub async fn run_main(
         }
     };
 
+    let remote_endpoint = match explicit_remote_endpoint {
+        Some(endpoint) => Some(endpoint),
+        None => maybe_probe_default_daemon_socket(&codex_home)
+            .await
+            .map(|socket_path| RemoteAppServerEndpoint::UnixSocket { socket_path }),
+    };
+    let app_server_target = remote_endpoint
+        .clone()
+        .map_or(AppServerTarget::Embedded, |endpoint| {
+            AppServerTarget::Remote { endpoint }
+        });
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
+
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
@@ -791,11 +844,14 @@ pub async fn run_main(
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_load_options(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
-        loader_overrides.clone(),
+        codex_config::ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
     )
     .await
     {
@@ -882,6 +938,7 @@ pub async fn run_main(
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -890,6 +947,8 @@ pub async fn run_main(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
+        loader_overrides.clone(),
+        strict_config,
     )
     .await;
 
@@ -945,6 +1004,8 @@ pub async fn run_main(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
                         cloud_requirements.clone(),
+                        loader_overrides.clone(),
+                        strict_config,
                     )
                     .await;
                 }
@@ -1087,6 +1148,7 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        strict_config,
         app_server_target,
         remote_cwd_override,
         config,
@@ -1096,8 +1158,7 @@ pub async fn run_main(
         feedback,
         log_db,
         state_db,
-        remote_url,
-        remote_auth_token,
+        remote_endpoint,
         environment_manager,
     )
     .await
@@ -1109,6 +1170,7 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
@@ -1118,8 +1180,7 @@ async fn run_ratatui_app(
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
-    remote_url: Option<String>,
-    remote_auth_token: Option<String>,
+    remote_endpoint: Option<RemoteAppServerEndpoint>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppExitInfo> {
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
@@ -1167,30 +1228,30 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let mut app_server = Some(
-        match start_app_server(
-            &app_server_target,
-            arg0_paths.clone(),
-            initial_config.clone(),
-            cli_kv_overrides.clone(),
-            loader_overrides.clone(),
-            cloud_requirements.clone(),
-            feedback.clone(),
-            log_db.clone(),
-            state_db.clone(),
-            environment_manager.clone(),
-        )
-        .await
-        {
-            Ok(app_server) => AppServerSession::new(app_server)
-                .with_remote_cwd_override(remote_cwd_override.clone()),
-            Err(err) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err);
-            }
-        },
-    );
+    let app_server_session = match start_app_server(
+        &app_server_target,
+        arg0_paths.clone(),
+        initial_config.clone(),
+        cli_kv_overrides.clone(),
+        loader_overrides.clone(),
+        strict_config,
+        cloud_requirements.clone(),
+        feedback.clone(),
+        log_db.clone(),
+        state_db.clone(),
+        environment_manager.clone(),
+    )
+    .await
+    {
+        Ok(app_server) => AppServerSession::new(app_server),
+        Err(err) => {
+            terminal_restore_guard.restore_silently();
+            session_log::log_session_end();
+            return Err(err);
+        }
+    }
+    .with_remote_cwd_override(remote_cwd_override.clone());
+    let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
@@ -1261,6 +1322,8 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
             )
             .await
         } else {
@@ -1463,6 +1526,8 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
                 fallback_cwd,
             )
             .await
@@ -1472,6 +1537,8 @@ async fn run_ratatui_app(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
                 cloud_requirements.clone(),
+                loader_overrides.clone(),
+                strict_config,
             )
             .await
         }
@@ -1513,6 +1580,7 @@ async fn run_ratatui_app(
             config.clone(),
             cli_kv_overrides.clone(),
             loader_overrides,
+            strict_config,
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
@@ -1551,8 +1619,7 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
-        remote_url,
-        remote_auth_token,
+        remote_endpoint,
         state_db,
         environment_manager,
         startup_hooks_browser,
@@ -1612,36 +1679,17 @@ impl Drop for TerminalRestoreGuard {
 
 /// Determine whether to use the terminal's alternate screen buffer.
 ///
-/// The alternate screen buffer provides a cleaner fullscreen experience without polluting
-/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
-/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
-/// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
-/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
-/// change this behavior.
-///
-/// This function implements a pragmatic workaround:
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
-///   - `always`: Use alternate screen everywhere (original behavior)
+///   - `always`: Use alternate screen
 ///   - `never`: Inline mode only, preserves scrollback
-///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
-///     only in Zellij, enabling it everywhere else
+///   - `auto` (default): Use alternate screen
 fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
     if no_alt_screen {
-        false
-    } else {
-        match tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                let terminal_info = terminal_info();
-                !matches!(
-                    terminal_info.multiplexer,
-                    Some(codex_terminal_detection::Multiplexer::Zellij {})
-                )
-            }
-        }
+        return false;
     }
+
+    tui_alternate_screen != AltScreenMode::Never
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1674,11 +1722,15 @@ async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
         cloud_requirements,
+        loader_overrides,
+        strict_config,
         /*fallback_cwd*/ None,
     )
     .await
@@ -1688,12 +1740,16 @@ async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()
@@ -1765,6 +1821,7 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -1772,6 +1829,26 @@ mod tests {
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
+    }
+
+    #[test]
+    fn alternate_screen_auto_uses_alt_screen() {
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Auto,
+        ));
+        assert!(determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Always,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            AltScreenMode::Never,
+        ));
+        assert!(!determine_alt_screen_mode(
+            /*no_alt_screen*/ true,
+            AltScreenMode::Auto,
+        ));
     }
 
     #[test]
@@ -1786,81 +1863,103 @@ mod tests {
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_websocket_url() {
+    fn resolve_remote_addr_accepts_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
-            "ws://127.0.0.1:4500/"
+            resolve_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "ws://127.0.0.1:4500/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_accepts_secure_websocket_url() {
+    fn resolve_remote_addr_accepts_secure_websocket_url() {
         assert_eq!(
-            normalize_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
-            "wss://example.com/"
+            resolve_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
+            RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "wss://example.com/".to_string(),
+                auth_token: None,
+            }
         );
     }
 
     #[test]
-    fn normalize_remote_addr_rejects_websocket_url_without_explicit_port() {
+    fn resolve_remote_addr_accepts_default_socket() -> color_eyre::Result<()> {
+        let codex_home = find_codex_home().wrap_err("failed to resolve CODEX_HOME")?;
+        assert_eq!(
+            resolve_remote_addr("unix://")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: codex_app_server_client::app_server_control_socket_path(&codex_home)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_relative_socket_path() -> color_eyre::Result<()> {
+        assert_eq!(
+            resolve_remote_addr("unix://codex.sock")?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_accepts_absolute_socket_path() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let socket_path = temp_dir.path().join("codex.sock");
+        assert_eq!(
+            resolve_remote_addr(&format!("unix://{}", socket_path.display()))?,
+            RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::from_absolute_path(&socket_path)?,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_remote_addr_rejects_invalid_remote_addresses() {
         for addr in [
             "ws://127.0.0.1",
             "wss://example.com",
-            "ws://user:pass@127.0.0.1",
+            "127.0.0.1:4500",
+            "https://127.0.0.1:4500",
         ] {
-            let err = normalize_remote_addr(addr)
-                .expect_err("websocket URLs without an explicit port should be rejected");
-            assert!(
-                err.to_string()
-                    .contains("expected `ws://host:port` or `wss://host:port`")
-            );
+            let err = resolve_remote_addr(addr).expect_err("invalid remote addresses should fail");
+            assert!(err.to_string().contains(
+                "expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
+            ));
         }
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_invalid_input() {
-        let err = normalize_remote_addr("https://127.0.0.1:4500")
-            .expect_err("https URLs should be rejected");
+    #[tokio::test]
+    async fn default_daemon_auto_connect_skips_missing_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
         assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+            maybe_probe_default_daemon_socket(codex_home.path())
+                .await
+                .is_none()
         );
+        Ok(())
     }
 
-    #[test]
-    fn normalize_remote_addr_rejects_host_port_shortcut() {
-        let err =
-            normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
-        assert!(
-            err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let socket_path =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
+        let _listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
+
+        assert_eq!(
+            maybe_probe_default_daemon_socket(codex_home.path()).await,
+            Some(socket_path)
         );
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_loopback_ws() {
-        validate_remote_auth_token_transport("ws://127.0.0.1:4500/")
-            .expect("loopback ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://localhost:4500/")
-            .expect("localhost ws should be allowed for auth tokens");
-        validate_remote_auth_token_transport("ws://[::1]:4500/")
-            .expect("ipv6 loopback ws should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_accepts_secure_wss() {
-        validate_remote_auth_token_transport("wss://example.com:443/")
-            .expect("wss should be allowed for auth tokens");
-    }
-
-    #[test]
-    fn remote_auth_token_transport_rejects_non_loopback_ws() {
-        let err = validate_remote_auth_token_transport("ws://example.com:4500/")
-            .expect_err("non-loopback ws should be rejected for auth tokens");
-        assert!(
-            err.to_string()
-                .contains("remote auth tokens require `wss://` or loopback `ws://` URLs")
-        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -2107,8 +2206,9 @@ mod tests {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Remote {
-            websocket_url: "ws://127.0.0.1:1234/".to_string(),
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
         };
         let environment_manager = EnvironmentManager::default_for_tests();
 
@@ -2287,6 +2387,7 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,

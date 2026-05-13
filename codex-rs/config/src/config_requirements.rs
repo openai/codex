@@ -18,6 +18,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::mcp_types::AppToolApproval;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
@@ -86,6 +87,7 @@ pub struct ConfigRequirements {
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -119,6 +121,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
             ),
+            allow_managed_hooks_only: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
@@ -598,8 +601,42 @@ impl FeatureRequirementsToml {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppToolRequirementToml {
+    pub approval_mode: Option<AppToolApproval>,
+}
+
+impl AppToolRequirementToml {
+    pub fn is_empty(&self) -> bool {
+        self.approval_mode.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppToolsRequirementsToml {
+    #[serde(default, flatten)]
+    pub tools: BTreeMap<String, AppToolRequirementToml>,
+}
+
+impl AppToolsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.tools.values().all(AppToolRequirementToml::is_empty)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppRequirementToml {
     pub enabled: Option<bool>,
+    pub tools: Option<AppToolsRequirementsToml>,
+}
+
+impl AppRequirementToml {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
+            && self
+                .tools
+                .as_ref()
+                .is_none_or(AppToolsRequirementsToml::is_empty)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -610,14 +647,14 @@ pub struct AppsRequirementsToml {
 
 impl AppsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.apps.values().all(|app| app.enabled.is_none())
+        self.apps.values().all(AppRequirementToml::is_empty)
     }
 }
 
-/// Merge `enabled` configs from a lower-precedence source into an existing higher-precedence set.
-/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers.
-/// Implemented with AppsRequirementsToml for now, could be abstracted if we have more enablement-style configs in the future.
-pub(crate) fn merge_enablement_settings_descending(
+/// Merge app requirements from a lower-precedence source into an existing higher-precedence set.
+/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers,
+/// while exact tool approval settings keep the higher-precedence value when present.
+pub(crate) fn merge_app_requirements_descending(
     base: &mut AppsRequirementsToml,
     incoming: AppsRequirementsToml,
 ) {
@@ -631,6 +668,17 @@ pub(crate) fn merge_enablement_settings_descending(
             } else {
                 higher_precedence.or(lower_precedence)
             };
+
+        let Some(incoming_tools) = incoming_requirement.tools else {
+            continue;
+        };
+        let base_tools = base_requirement.tools.get_or_insert_with(Default::default);
+        for (tool_name, incoming_tool) in incoming_tools.tools {
+            let base_tool = base_tools.tools.entry(tool_name).or_default();
+            if base_tool.approval_mode.is_none() {
+                base_tool.approval_mode = incoming_tool.approval_mode;
+            }
+        }
     }
 }
 
@@ -642,6 +690,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub allow_managed_hooks_only: Option<bool>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -690,6 +739,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -726,6 +776,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes: _,
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
+            allow_managed_hooks_only: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -755,6 +806,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                allow_managed_hooks_only,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -769,7 +821,7 @@ impl ConfigRequirementsWithSources {
 
         if let Some(incoming_apps) = other.apps.take() {
             if let Some(existing_apps) = self.apps.as_mut() {
-                merge_enablement_settings_descending(&mut existing_apps.value, incoming_apps);
+                merge_app_requirements_descending(&mut existing_apps.value, incoming_apps);
             } else {
                 self.apps = Some(Sourced::new(incoming_apps, source));
             }
@@ -782,6 +834,7 @@ impl ConfigRequirementsWithSources {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -799,6 +852,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -882,6 +936,7 @@ impl ConfigRequirementsToml {
             && self.allowed_sandbox_modes.is_none()
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.allow_managed_hooks_only.is_none()
             && self
                 .feature_requirements
                 .as_ref()
@@ -919,6 +974,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1154,6 +1210,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approvals_reviewer,
             permission_profile,
             web_search_mode,
+            allow_managed_hooks_only,
             feature_requirements,
             managed_hooks,
             mcp_servers,
@@ -1226,6 +1283,7 @@ mod tests {
             allowed_sandbox_modes,
             remote_sandbox_config: _,
             allowed_web_search_modes,
+            allow_managed_hooks_only,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1246,6 +1304,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_managed_hooks_only: allow_managed_hooks_only
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1260,6 +1320,32 @@ mod tests {
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
+    }
+
+    #[test]
+    fn deserialize_allow_managed_hooks_only() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = true
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(true));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn allow_managed_hooks_only_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_managed_hooks_only = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_managed_hooks_only, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1293,6 +1379,7 @@ mod tests {
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            allow_managed_hooks_only: Some(true),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1321,6 +1408,10 @@ mod tests {
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
+                    enforce_source.clone(),
+                )),
+                allow_managed_hooks_only: Some(Sourced::new(
+                    /*value*/ true,
                     enforce_source.clone(),
                 )),
                 feature_requirements: Some(Sourced::new(
@@ -1365,6 +1456,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1412,6 +1504,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1583,6 +1676,37 @@ allowed_approvals_reviewers = ["user"]
                     "connector_123123".to_string(),
                     AppRequirementToml {
                         enabled: Some(false),
+                        tools: None,
+                    },
+                )]),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_apps_tool_requirements() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123.tools."calendar/list_events"]
+            approval_mode = "approve"
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: None,
+                        tools: Some(AppToolsRequirementsToml {
+                            tools: BTreeMap::from([(
+                                "calendar/list_events".to_string(),
+                                AppToolRequirementToml {
+                                    approval_mode: Some(AppToolApproval::Approve),
+                                },
+                            )]),
+                        }),
                     },
                 )]),
             })
@@ -1597,19 +1721,45 @@ allowed_approvals_reviewers = ["user"]
                 .map(|(app_id, enabled)| {
                     (
                         (*app_id).to_string(),
-                        AppRequirementToml { enabled: *enabled },
+                        AppRequirementToml {
+                            enabled: *enabled,
+                            tools: None,
+                        },
                     )
                 })
                 .collect(),
         }
     }
 
+    fn app_tool_requirements(
+        app_id: &str,
+        tool_name: &str,
+        approval_mode: AppToolApproval,
+    ) -> AppsRequirementsToml {
+        AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                app_id.to_string(),
+                AppRequirementToml {
+                    enabled: None,
+                    tools: Some(AppToolsRequirementsToml {
+                        tools: BTreeMap::from([(
+                            tool_name.to_string(),
+                            AppToolRequirementToml {
+                                approval_mode: Some(approval_mode),
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        }
+    }
+
     #[test]
-    fn merge_enablement_settings_descending_unions_distinct_apps() {
+    fn merge_app_requirements_descending_unions_distinct_apps() {
         let mut merged = apps_requirements(&[("connector_high", Some(false))]);
         let lower = apps_requirements(&[("connector_low", Some(true))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1621,11 +1771,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
+    fn merge_app_requirements_descending_prefers_false_from_lower_precedence() {
         let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
         let lower = apps_requirements(&[("connector_123123", Some(false))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1634,11 +1784,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
+    fn merge_app_requirements_descending_keeps_higher_true_when_lower_is_unset() {
         let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
         let lower = apps_requirements(&[("connector_123123", None)]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1647,11 +1797,11 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
+    fn merge_app_requirements_descending_uses_lower_value_when_higher_missing() {
         let mut merged = apps_requirements(&[]);
         let lower = apps_requirements(&[("connector_123123", Some(true))]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
@@ -1660,15 +1810,61 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
+    fn merge_app_requirements_descending_preserves_higher_false_when_lower_missing_app() {
         let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
         let lower = apps_requirements(&[]);
 
-        merge_enablement_settings_descending(&mut merged, lower);
+        merge_app_requirements_descending(&mut merged, lower);
 
         assert_eq!(
             merged,
             apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_app_requirements_descending_preserves_higher_tool_approval_mode() {
+        let mut merged = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        );
+        let lower = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Prompt,
+        );
+
+        merge_app_requirements_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            app_tool_requirements(
+                "connector_123123",
+                "calendar/list_events",
+                AppToolApproval::Approve,
+            )
+        );
+    }
+
+    #[test]
+    fn merge_app_requirements_descending_uses_lower_tool_approval_when_higher_missing() {
+        let mut merged = apps_requirements(&[("connector_123123", None)]);
+        let lower = app_tool_requirements(
+            "connector_123123",
+            "calendar/list_events",
+            AppToolApproval::Approve,
+        );
+
+        merge_app_requirements_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            app_tool_requirements(
+                "connector_123123",
+                "calendar/list_events",
+                AppToolApproval::Approve,
+            )
         );
     }
 

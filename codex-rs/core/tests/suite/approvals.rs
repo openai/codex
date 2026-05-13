@@ -15,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -963,6 +964,46 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "known_safe_escalation_on_request_requires_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "echo known-safe-escalation",
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+                expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "known_safe_escalation_granular_sandbox_disabled_rejects",
+            approval_policy: Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "echo known-safe-escalation-granular-disabled",
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::CommandFailure {
+                output_contains: "you should not ask for escalated permissions",
             },
         },
         ScenarioSpec {

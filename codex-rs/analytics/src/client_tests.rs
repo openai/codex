@@ -6,7 +6,6 @@ use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
-use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AnalyticsFact;
 use crate::facts::InvocationType;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
@@ -53,10 +52,7 @@ fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest 
                 repo_hash: None,
                 accepted_added_lines: 1,
                 accepted_deleted_lines: 0,
-                line_fingerprints: vec![AcceptedLineFingerprint {
-                    path_hash: "path-hash".to_string(),
-                    line_hash: "line-hash".to_string(),
-                }],
+                line_fingerprints: Vec::new(),
             },
         },
     ))
