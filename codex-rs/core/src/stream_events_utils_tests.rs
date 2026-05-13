@@ -1,13 +1,16 @@
 use super::completed_item_defers_mailbox_delivery_to_next_turn;
+use super::finalize_non_tool_response_item;
 use super::handle_non_tool_response_item;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
 use crate::session::tests::make_session_and_context;
+use codex_extension_api::AssistantMessageAnnotationContributor;
+use codex_extension_api::AssistantMessageAnnotationFuture;
+use codex_extension_api::AssistantMessageAnnotationInput;
+use codex_extension_api::AssistantMessageAnnotations;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::TurnItemContributionFuture;
-use codex_extension_api::TurnItemContributor;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::memory_citation::MemoryCitation;
@@ -22,6 +25,8 @@ use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
     assistant_output_text_with_phase(text, /*phase*/ None)
@@ -123,15 +128,10 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
     );
 
-    let turn_item = handle_non_tool_response_item(
-        &session,
-        &turn_context,
-        &ExtensionData::new(),
-        &item,
-        /*plan_mode*/ false,
-    )
-    .await
-    .expect("assistant message should parse");
+    let turn_item =
+        handle_non_tool_response_item(&session, &turn_context, &item, /*plan_mode*/ false)
+            .await
+            .expect("assistant message should parse");
 
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
@@ -155,48 +155,66 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
     );
 }
 
-struct TestTurnItemContributor;
+struct TestAssistantMessageAnnotationContributor {
+    calls: Arc<AtomicUsize>,
+}
 
 #[derive(Debug)]
-struct TurnItemContributorRan;
+struct AssistantMessageAnnotationContributorRan;
 
-impl TurnItemContributor for TestTurnItemContributor {
+impl AssistantMessageAnnotationContributor for TestAssistantMessageAnnotationContributor {
     fn contribute<'a>(
         &'a self,
-        _thread_store: &'a ExtensionData,
-        turn_store: &'a ExtensionData,
-        item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a> {
+        input: AssistantMessageAnnotationInput<'a>,
+    ) -> AssistantMessageAnnotationFuture<'a> {
+        let calls = Arc::clone(&self.calls);
         Box::pin(async move {
-            turn_store.insert(TurnItemContributorRan);
-            if let TurnItem::AgentMessage(agent_message) = item {
-                agent_message.memory_citation = Some(MemoryCitation {
-                    entries: vec![MemoryCitationEntry {
-                        path: "from-contributor.md".to_string(),
-                        line_start: 3,
-                        line_end: 4,
-                        note: "set by contributor".to_string(),
-                    }],
-                    rollout_ids: vec!["from-contributor".to_string()],
-                });
-            }
-            Ok(())
+            calls.fetch_add(1, Ordering::Relaxed);
+            input
+                .turn_store
+                .insert(AssistantMessageAnnotationContributorRan);
+            assert_eq!(input.visible_text, "hello world");
+            assert_eq!(input.parsed_memory_citation, None);
+            Ok(AssistantMessageAnnotations {
+                memory_citation: Some(test_contributor_memory_citation()),
+            })
         })
     }
 }
 
 #[tokio::test]
-async fn handle_non_tool_response_item_runs_turn_item_contributors_before_hidden_markup_cleanup() {
+async fn finalize_non_tool_response_item_runs_annotation_contributors_only_for_final_items() {
     let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-    builder.turn_item_contributor(Arc::new(TestTurnItemContributor));
+    builder.assistant_message_annotation_contributor(Arc::new(
+        TestAssistantMessageAnnotationContributor {
+            calls: Arc::clone(&calls),
+        },
+    ));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new();
     let item = assistant_output_text(
         "hello<oai-mem-citation>ignored by memory parser</oai-mem-citation> world",
     );
 
-    let turn_item = handle_non_tool_response_item(
+    let provisional_turn_item =
+        handle_non_tool_response_item(&session, &turn_context, &item, /*plan_mode*/ false)
+            .await
+            .expect("assistant message should parse");
+
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert!(
+        turn_store
+            .get::<AssistantMessageAnnotationContributorRan>()
+            .is_none()
+    );
+    let TurnItem::AgentMessage(provisional_agent_message) = provisional_turn_item else {
+        panic!("expected agent message");
+    };
+    assert_eq!(provisional_agent_message.memory_citation, None);
+
+    let finalized_turn_item = finalize_non_tool_response_item(
         &session,
         &turn_context,
         &turn_store,
@@ -206,7 +224,17 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_before_hidden
     .await
     .expect("assistant message should parse");
 
-    assert!(turn_store.get::<TurnItemContributorRan>().is_some());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(
+        turn_store
+            .get::<AssistantMessageAnnotationContributorRan>()
+            .is_some()
+    );
+    assert_eq!(
+        finalized_turn_item.memory_citation,
+        Some(test_contributor_memory_citation())
+    );
+    let turn_item = finalized_turn_item.item;
     let TurnItem::AgentMessage(agent_message) = turn_item else {
         panic!("expected agent message");
     };
@@ -220,16 +248,20 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_before_hidden
     assert_eq!(text, "hello world");
     assert_eq!(
         agent_message.memory_citation,
-        Some(MemoryCitation {
-            entries: vec![MemoryCitationEntry {
-                path: "from-contributor.md".to_string(),
-                line_start: 3,
-                line_end: 4,
-                note: "set by contributor".to_string(),
-            }],
-            rollout_ids: vec!["from-contributor".to_string()],
-        })
+        Some(test_contributor_memory_citation())
     );
+}
+
+fn test_contributor_memory_citation() -> MemoryCitation {
+    MemoryCitation {
+        entries: vec![MemoryCitationEntry {
+            path: "from-contributor.md".to_string(),
+            line_start: 3,
+            line_end: 4,
+            note: "set by contributor".to_string(),
+        }],
+        rollout_ids: vec!["from-contributor".to_string()],
+    }
 }
 
 #[test]

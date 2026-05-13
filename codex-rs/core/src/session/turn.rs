@@ -44,12 +44,13 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
-use crate::stream_events_utils::record_completed_response_item;
+use crate::stream_events_utils::record_completed_response_item_with_final_memory_citation;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -1757,7 +1758,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) = handle_non_tool_response_item(
+        let mut final_memory_citation = None;
+        if let Some(finalized_turn_item) = finalize_non_tool_response_item(
             sess,
             turn_context,
             turn_store,
@@ -1766,17 +1768,24 @@ async fn handle_assistant_item_done_in_plan_mode(
         )
         .await
         {
+            final_memory_citation = finalized_turn_item.memory_citation;
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
-                turn_item,
+                finalized_turn_item.item,
                 previously_active_item,
                 state,
             )
             .await;
         }
 
-        record_completed_response_item(sess, turn_context, item).await;
+        record_completed_response_item_with_final_memory_citation(
+            sess,
+            turn_context,
+            item,
+            final_memory_citation.as_ref(),
+        )
+        .await;
         if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
             *last_agent_message = Some(agent_message);
         }
@@ -2014,7 +2023,6 @@ async fn try_run_sampling_request(
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    turn_store.as_ref(),
                     &item,
                     plan_mode,
                 )

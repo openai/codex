@@ -3,8 +3,11 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_extension_api::AssistantMessageAnnotationInput;
+use codex_extension_api::AssistantMessageAnnotations;
 use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
@@ -21,6 +24,7 @@ use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::memory_citation::MemoryCitation;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
@@ -130,6 +134,21 @@ pub(crate) async fn record_completed_response_item(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
+    record_completed_response_item_with_final_memory_citation(
+        sess,
+        turn_context,
+        item,
+        /*final_memory_citation*/ None,
+    )
+    .await;
+}
+
+pub(crate) async fn record_completed_response_item_with_final_memory_citation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+    final_memory_citation: Option<&MemoryCitation>,
+) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
     if completed_item_defers_mailbox_delivery_to_next_turn(
@@ -140,11 +159,16 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
-        sess.services.state_db.as_ref(),
-        item,
-    )
-    .await;
+    let has_memory_citation = if let Some(memory_citation) = final_memory_citation {
+        record_stage1_output_usage_for_memory_citation(
+            sess.services.state_db.as_ref(),
+            memory_citation,
+        )
+        .await
+    } else {
+        record_stage1_output_usage_and_detect_memory_citation(sess.services.state_db.as_ref(), item)
+            .await
+    };
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -190,7 +214,14 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
     let Some(memory_citation) = parse_memory_citation(citations) else {
         return false;
     };
-    let thread_ids = thread_ids_from_memory_citation(&memory_citation);
+    record_stage1_output_usage_for_memory_citation(state_db_ctx, &memory_citation).await
+}
+
+async fn record_stage1_output_usage_for_memory_citation(
+    state_db_ctx: Option<&state_db::StateDbHandle>,
+    memory_citation: &MemoryCitation,
+) -> bool {
+    let thread_ids = thread_ids_from_memory_citation(memory_citation);
     if thread_ids.is_empty() {
         return true;
     }
@@ -222,20 +253,92 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
-async fn apply_turn_item_contributors(
+pub(crate) struct FinalizedTurnItem {
+    pub item: TurnItem,
+    pub memory_citation: Option<MemoryCitation>,
+}
+
+fn agent_message_text(item: &AgentMessageItem) -> String {
+    item.content
+        .iter()
+        .map(|entry| match entry {
+            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect()
+}
+
+async fn apply_assistant_message_annotation_contributors(
     sess: &Session,
+    turn_context: &TurnContext,
     turn_store: &ExtensionData,
-    item: &mut TurnItem,
-) {
-    let contributors = sess.services.extensions.turn_item_contributors().to_vec();
+    raw_response_item: &ResponseItem,
+    visible_text: &str,
+    parsed_memory_citation: Option<&MemoryCitation>,
+    plan_mode: bool,
+) -> AssistantMessageAnnotations {
+    let contributors = sess
+        .services
+        .extensions
+        .assistant_message_annotation_contributors()
+        .to_vec();
+    let mut annotations = AssistantMessageAnnotations::default();
     for contributor in contributors {
-        if let Err(err) = contributor
-            .contribute(&sess.services.thread_extension_data, turn_store, item)
-            .await
-        {
-            warn!("turn item contributor failed: {err}");
+        let input = AssistantMessageAnnotationInput {
+            thread_id: sess.conversation_id,
+            turn_id: &turn_context.sub_id,
+            session_store: &sess.services.session_extension_data,
+            thread_store: &sess.services.thread_extension_data,
+            turn_store,
+            raw_response_item,
+            visible_text,
+            parsed_memory_citation,
+            plan_mode,
+        };
+        match contributor.contribute(input).await {
+            Ok(contribution) => {
+                if contribution.memory_citation.is_some() {
+                    annotations.memory_citation = contribution.memory_citation;
+                }
+            }
+            Err(err) => {
+                warn!("assistant message annotation contributor failed: {err}");
+            }
         }
     }
+    annotations
+}
+
+pub(crate) async fn finalize_non_tool_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_store: &ExtensionData,
+    item: &ResponseItem,
+    plan_mode: bool,
+) -> Option<FinalizedTurnItem> {
+    let mut turn_item = handle_non_tool_response_item(sess, turn_context, item, plan_mode).await?;
+    let mut memory_citation = None;
+    if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
+        let visible_text = agent_message_text(agent_message);
+        let parsed_memory_citation = agent_message.memory_citation.clone();
+        let annotations = apply_assistant_message_annotation_contributors(
+            sess,
+            turn_context,
+            turn_store,
+            item,
+            &visible_text,
+            parsed_memory_citation.as_ref(),
+            plan_mode,
+        )
+        .await;
+        if let Some(contributed_memory_citation) = annotations.memory_citation {
+            agent_message.memory_citation = Some(contributed_memory_citation);
+        }
+        memory_citation = agent_message.memory_citation.clone();
+    }
+    Some(FinalizedTurnItem {
+        item: turn_item,
+        memory_citation,
+    })
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -277,7 +380,7 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let turn_item = handle_non_tool_response_item(
+            let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 ctx.turn_store.as_ref(),
@@ -285,7 +388,10 @@ pub(crate) async fn handle_output_item_done(
                 plan_mode,
             )
             .await;
-            if let Some(turn_item) = turn_item {
+            let mut final_memory_citation = None;
+            if let Some(finalized_turn_item) = finalized_turn_item {
+                final_memory_citation = finalized_turn_item.memory_citation;
+                let turn_item = finalized_turn_item.item;
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -303,8 +409,13 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
             }
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+            record_completed_response_item_with_final_memory_citation(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                final_memory_citation.as_ref(),
+            )
+            .await;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
@@ -371,7 +482,6 @@ pub(crate) async fn handle_output_item_done(
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
     turn_context: &TurnContext,
-    turn_store: &ExtensionData,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
@@ -383,15 +493,8 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
-                let combined = agent_message
-                    .content
-                    .iter()
-                    .map(|entry| match entry {
-                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-                    })
-                    .collect::<String>();
+                let combined = agent_message_text(agent_message);
                 let (stripped, memory_citation) =
                     strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
                 agent_message.content =
