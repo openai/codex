@@ -1485,6 +1485,9 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "non_code_mode_only": {
+          "type": "boolean"
+        },
         "root_agent_usage_hint_text": {
           "type": "string"
         },

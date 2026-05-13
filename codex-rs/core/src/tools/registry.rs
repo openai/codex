@@ -263,6 +263,79 @@ where
     }
 }
 
+pub(crate) fn override_tool_exposure(
+    handler: Arc<dyn RegisteredTool>,
+    exposure: ToolExposure,
+) -> Arc<dyn RegisteredTool> {
+    if handler.exposure() == exposure {
+        return handler;
+    }
+
+    Arc::new(ExposureOverride { handler, exposure })
+}
+
+struct ExposureOverride {
+    handler: Arc<dyn RegisteredTool>,
+    exposure: ToolExposure,
+}
+
+impl RegisteredTool for ExposureOverride {
+    fn tool_name(&self) -> ToolName {
+        self.handler.tool_name()
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        self.handler.spec()
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        self.handler.pre_tool_use_payload(invocation)
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        invocation: ToolInvocation,
+        updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        self.handler
+            .with_updated_hook_input(invocation, updated_input)
+    }
+
+    fn telemetry_tags<'a>(
+        &'a self,
+        invocation: &'a ToolInvocation,
+    ) -> BoxFuture<'a, ToolTelemetryTags> {
+        self.handler.telemetry_tags(invocation)
+    }
+
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
+
+    fn handle_any<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>> {
+        self.handler.handle_any(invocation)
+    }
+}
+
 pub struct ToolRegistry {
     handlers: HashMap<ToolName, Arc<dyn RegisteredTool>>,
 }
@@ -288,6 +361,10 @@ impl ToolRegistry {
 
     fn handler(&self, name: &ToolName) -> Option<Arc<dyn RegisteredTool>> {
         self.handlers.get(name).map(Arc::clone)
+    }
+
+    pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
+        self.handlers.get(name).map(|handler| handler.exposure())
     }
 
     #[cfg(test)]
@@ -584,7 +661,7 @@ impl ToolRegistryBuilder {
         }
 
         if include_spec
-            && handler.exposure() == ToolExposure::Direct
+            && handler.exposure().is_direct()
             && let Some(spec) = handler.spec()
         {
             self.push_spec(spec);
