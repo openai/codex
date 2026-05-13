@@ -1579,20 +1579,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 
     let (tools, registry) = build_specs(
         &tools_config,
-        Some(HashMap::from([
-            (
-                ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
-                mcp_tool(
-                    "calendar_create_event",
-                    "Create calendar event",
-                    serde_json::json!({"type": "object"}),
-                ),
-            ),
-            (
-                ToolName::namespaced("mcp__rmcp__", "echo"),
-                mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
-            ),
-        ])),
+        /*mcp_tools*/ None,
         Some(vec![
             deferred_mcp_tool(
                 "_create_event",
@@ -1810,32 +1797,15 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
         panic!("expected tool_search tool");
     };
     assert!(description.contains("- Dynamic tools: Tools provided by the current Codex thread."));
-    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "codex_app"]);
-    assert_eq!(
-        tools
-            .iter()
-            .filter(|tool| tool.name() == "codex_app")
-            .count(),
-        1
-    );
-    assert_eq!(
-        namespace_function_names(&tools, "codex_app"),
-        vec![
-            "automation_update".to_string(),
-            "automation_list".to_string()
-        ]
-    );
-    for tool_name in ["automation_update", "automation_list"] {
-        let dynamic_tool = find_namespace_function_tool(&tools, "codex_app", tool_name);
-        assert_eq!(dynamic_tool.defer_loading, Some(true));
-    }
+    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
+    assert_lacks_tool_name(&tools, "codex_app");
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_update")));
     assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_list")));
 }
 
 #[test]
-fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
+fn search_tool_is_hidden_for_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -1875,9 +1845,12 @@ fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disab
         &dynamic_tools,
     );
 
-    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "plain_dynamic"]);
+    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
     assert_lacks_tool_name(&tools, "codex_app");
-    assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
+    assert_lacks_tool_name(&tools, "plain_dynamic");
+    assert!(!registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
+    assert!(registry.has_handler(&ToolName::namespaced("codex_app", "automation_update")));
+    assert!(registry.has_handler(&ToolName::plain("plain_dynamic")));
 }
 
 #[test]

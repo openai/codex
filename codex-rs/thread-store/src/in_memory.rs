@@ -22,6 +22,7 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadMetadataPatch;
 use crate::ThreadPage;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
@@ -127,6 +128,7 @@ struct InMemoryThreadStoreState {
     calls: InMemoryThreadStoreCalls,
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
+    metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
 }
@@ -271,9 +273,14 @@ impl ThreadStore for InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.update_thread_metadata += 1;
-        if let Some(name) = params.patch.name {
-            state.names.insert(params.thread_id, Some(name));
+        if let Some(name) = params.patch.name.clone() {
+            state.names.insert(params.thread_id, name);
         }
+        state
+            .metadata_updates
+            .entry(params.thread_id)
+            .or_default()
+            .merge(params.patch);
         stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
     }
 
@@ -307,6 +314,7 @@ fn stored_thread_from_state(
         items: history_items.clone(),
     });
     let name = state.names.get(&thread_id).cloned().flatten();
+    let metadata = state.metadata_updates.get(&thread_id);
     let rollout_path = state
         .rollout_paths
         .iter()
@@ -316,28 +324,65 @@ fn stored_thread_from_state(
 
     Ok(StoredThread {
         thread_id,
-        rollout_path,
+        rollout_path: metadata
+            .and_then(|metadata| metadata.rollout_path.clone())
+            .or(rollout_path),
         forked_from_id: created.forked_from_id,
-        preview: String::new(),
+        preview: metadata
+            .and_then(|metadata| metadata.preview.clone())
+            .unwrap_or_default(),
         name,
-        model_provider: "test".to_string(),
-        model: None,
-        reasoning_effort: None,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+        model_provider: metadata
+            .and_then(|metadata| metadata.model_provider.clone())
+            .unwrap_or_else(|| "test".to_string()),
+        model: metadata.and_then(|metadata| metadata.model.clone()),
+        reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort),
+        created_at: metadata
+            .and_then(|metadata| metadata.created_at)
+            .unwrap_or_else(Utc::now),
+        updated_at: metadata
+            .and_then(|metadata| metadata.updated_at)
+            .unwrap_or_else(Utc::now),
         archived_at: None,
-        cwd: PathBuf::new(),
-        cli_version: "test".to_string(),
-        source: created.source.clone(),
-        thread_source: created.thread_source,
-        agent_nickname: None,
-        agent_role: None,
-        agent_path: None,
-        git_info: None,
-        approval_mode: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        token_usage: None,
-        first_user_message: None,
+        cwd: metadata
+            .and_then(|metadata| metadata.cwd.clone())
+            .unwrap_or_default(),
+        cli_version: metadata
+            .and_then(|metadata| metadata.cli_version.clone())
+            .unwrap_or_else(|| "test".to_string()),
+        source: metadata
+            .and_then(|metadata| metadata.source.clone())
+            .unwrap_or_else(|| created.source.clone()),
+        thread_source: metadata
+            .and_then(|metadata| metadata.thread_source)
+            .unwrap_or(created.thread_source),
+        agent_nickname: metadata.and_then(|metadata| metadata.agent_nickname.clone().flatten()),
+        agent_role: metadata.and_then(|metadata| metadata.agent_role.clone().flatten()),
+        agent_path: metadata.and_then(|metadata| metadata.agent_path.clone().flatten()),
+        git_info: metadata.and_then(git_info_from_patch),
+        approval_mode: metadata
+            .and_then(|metadata| metadata.approval_mode)
+            .unwrap_or(AskForApproval::Never),
+        sandbox_policy: metadata
+            .and_then(|metadata| metadata.sandbox_policy.clone())
+            .unwrap_or_else(SandboxPolicy::new_read_only_policy),
+        token_usage: metadata.and_then(|metadata| metadata.token_usage.clone()),
+        first_user_message: metadata.and_then(|metadata| metadata.first_user_message.clone()),
         history,
+    })
+}
+
+fn git_info_from_patch(patch: &ThreadMetadataPatch) -> Option<codex_protocol::protocol::GitInfo> {
+    let git_info = patch.git_info.as_ref()?;
+    let sha = git_info.sha.clone().flatten();
+    let branch = git_info.branch.clone().flatten();
+    let origin_url = git_info.origin_url.clone().flatten();
+    if sha.is_none() && branch.is_none() && origin_url.is_none() {
+        return None;
+    }
+    Some(codex_protocol::protocol::GitInfo {
+        commit_hash: sha.as_deref().map(codex_git_utils::GitSha::new),
+        branch,
+        repository_url: origin_url,
     })
 }

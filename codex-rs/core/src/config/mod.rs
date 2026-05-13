@@ -465,6 +465,9 @@ pub struct Config {
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: bool,
 
+    /// Whether to inject the `<collaboration_mode>` developer block.
+    pub include_collaboration_mode_instructions: bool,
+
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
@@ -2816,6 +2819,10 @@ impl Config {
             .include_apps_instructions
             .or(cfg.include_apps_instructions)
             .unwrap_or(true);
+        let include_collaboration_mode_instructions = config_profile
+            .include_collaboration_mode_instructions
+            .or(cfg.include_collaboration_mode_instructions)
+            .unwrap_or(true);
         let include_skill_instructions = cfg
             .skills
             .as_ref()
@@ -3031,6 +3038,7 @@ impl Config {
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
+            include_collaboration_mode_instructions,
             include_skill_instructions,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"

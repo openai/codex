@@ -97,6 +97,7 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
+            "version": "0.1.0",
             "display_name": "Demo Plugin",
             "description": "Demo plugin description",
             "interface": {
@@ -590,6 +591,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_123".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
                         discoverability: RemotePluginShareDiscoverability::Private,
                         share_url: Some(
                             "https://chatgpt.example/plugins/share/share-key-1".to_string(),
@@ -628,6 +630,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
                         remote_plugin_id: "plugins_456".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
                         discoverability: RemotePluginShareDiscoverability::Private,
                         share_url: None,
                         creator_account_user_id: None,
