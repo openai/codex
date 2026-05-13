@@ -33,7 +33,13 @@ pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
 
-static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+struct TestArg0PathEntry {
+    _codex_home: TempDir,
+    arg0: Arg0PathEntryGuard,
+    _previous_codex_home: Option<std::ffi::OsString>,
+}
+
+static TEST_ARG0_PATH_ENTRY: OnceLock<Option<TestArg0PathEntry>> = OnceLock::new();
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
@@ -43,7 +49,30 @@ fn enable_deterministic_unified_exec_process_ids_for_tests() {
 
 #[ctor]
 fn configure_arg0_dispatch_for_test_binaries() {
-    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
+    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(|| {
+        let codex_home = TempDir::new().expect("create temp codex home for arg0 aliases");
+        let previous_codex_home = std::env::var_os("CODEX_HOME");
+        // Safety: this ctor runs at process startup before test threads begin.
+        unsafe {
+            std::env::set_var("CODEX_HOME", codex_home.path());
+        }
+
+        let arg0 = codex_arg0::arg0_dispatch().expect("configure arg0 aliases for test binary");
+        match previous_codex_home.as_ref() {
+            Some(value) => unsafe {
+                std::env::set_var("CODEX_HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_HOME");
+            },
+        }
+
+        Some(TestArg0PathEntry {
+            _codex_home: codex_home,
+            arg0,
+            _previous_codex_home: previous_codex_home,
+        })
+    });
 }
 
 #[ctor]
@@ -225,7 +254,7 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)
-        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+        .and_then(|path_entry| path_entry.arg0.paths().codex_linux_sandbox_exe.clone())
     {
         return Ok(path);
     }
