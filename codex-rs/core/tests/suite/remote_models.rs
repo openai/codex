@@ -594,12 +594,13 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
@@ -845,12 +846,13 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     wait_for_model_available(&models_manager, model).await;
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some(model.to_string()),
             effort: None,
