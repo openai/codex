@@ -813,9 +813,13 @@ impl Session {
                     });
             let (network_proxy, session_network_proxy) =
                 if let Some(spec) = config.permissions.network.as_ref() {
+                    let credentialed_routes =
+                        crate::credentialed_routes::load_for_session(&config.chatgpt_base_url, auth)
+                            .await;
                     let current_exec_policy = exec_policy.current();
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                         spec,
+                        &credentialed_routes,
                         current_exec_policy.as_ref(),
                         config.permissions.permission_profile(),
                         network_policy_decider.as_ref().map(Arc::clone),

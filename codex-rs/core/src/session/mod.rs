@@ -939,6 +939,7 @@ impl Session {
 
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
+        credentialed_routes: &[codex_backend_client::ResolvedCredentialRoute],
         exec_policy: &codex_execpolicy::Policy,
         permission_profile: &PermissionProfile,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
@@ -946,6 +947,10 @@ impl Session {
         managed_network_requirements_enabled: bool,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
+        debug!(
+            credentialed_routes = credentialed_routes.len(),
+            "starting managed network proxy"
+        );
         let spec = spec
             .with_exec_policy_network_rules(exec_policy)
             .map_err(|err| {
