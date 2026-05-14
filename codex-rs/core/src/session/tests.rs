@@ -2128,8 +2128,10 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     };
     let expected_sandbox_policy = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.permissions.permission_profile = codex_config::Constrained::allow_any(
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
+        config.permissions.replace_permission_profile_constraint(
+            codex_config::Constrained::allow_any(PermissionProfile::from_legacy_sandbox_policy(
+                &sandbox_policy,
+            )),
         );
         config
             .set_legacy_sandbox_policy(sandbox_policy)
@@ -2884,7 +2886,7 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -2988,7 +2990,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -3461,7 +3463,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -3994,7 +3996,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -4103,7 +4105,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -4150,7 +4152,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.permission_profile,
+            config.permissions.permission_profile_constraint(),
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -4335,7 +4337,7 @@ async fn make_session_with_config_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -4438,7 +4440,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -5955,7 +5957,7 @@ where
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile.clone(),
+        permission_profile: config.permissions.permission_profile_constraint().clone(),
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
@@ -6002,7 +6004,7 @@ where
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.permission_profile,
+            config.permissions.permission_profile_constraint(),
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
