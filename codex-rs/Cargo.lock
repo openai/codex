@@ -3785,6 +3785,7 @@ dependencies = [
  "codex-protocol",
  "codex-realtime-webrtc",
  "codex-rollout",
+ "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
@@ -3794,6 +3795,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-elapsed",
  "codex-utils-fuzzy-match",
+ "codex-utils-home-dir",
  "codex-utils-oss",
  "codex-utils-path",
  "codex-utils-plugins",
@@ -3913,6 +3915,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-protocol",
+ "codex-shell-command",
  "pretty_assertions",
  "serde",
  "toml 0.9.11+spec-1.1.0",

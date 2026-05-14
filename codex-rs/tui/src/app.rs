@@ -397,8 +397,7 @@ fn session_summary(
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
     let thread_id =
         resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
-    let resume_command =
-        crate::legacy_core::util::resume_command(/*thread_name*/ None, thread_id);
+    let resume_command = codex_utils_cli::resume_command(/*thread_name*/ None, thread_id);
 
     if usage_line.is_none() && resume_command.is_none() {
         return None;
