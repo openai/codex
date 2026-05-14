@@ -156,7 +156,6 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
-    use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
@@ -335,7 +334,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 cwd: PathBuf::from("/parent/workspace"),
                 current_date: None,
                 timezone: None,
@@ -349,11 +347,6 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: None,
-                summary: ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -375,7 +368,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 cwd: PathBuf::from("/fallback/workspace"),
                 current_date: None,
                 timezone: None,
@@ -389,11 +381,6 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
-                summary: ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -409,7 +396,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 cwd: PathBuf::from("/fallback/workspace"),
                 current_date: None,
                 timezone: None,
@@ -423,11 +409,6 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
-                summary: ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
