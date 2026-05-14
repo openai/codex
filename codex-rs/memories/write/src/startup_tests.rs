@@ -243,12 +243,13 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     assert_eq!(test.config.service_tier, None);
 
     test.codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
