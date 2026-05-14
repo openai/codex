@@ -131,7 +131,7 @@ async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Res
 }
 
 #[tokio::test]
-async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
+async fn process_spawn_exact_cap_does_not_report_buffered_cap_reached() -> Result<()> {
     let codex_home = TempDir::new()?;
     let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
@@ -153,7 +153,7 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
     };
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            output_bytes_cap: Some(Some(3)),
+            output_bytes_cap: Some(Some(5)),
             ..process_spawn_params(process_handle.clone(), codex_home.path(), command)?
         })
         .await?;
@@ -169,10 +169,10 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
         ProcessExitedNotification {
             process_handle,
             exit_code: 0,
-            stdout: "abc".to_string(),
-            stdout_cap_reached: true,
-            stderr: "123".to_string(),
-            stderr_cap_reached: true,
+            stdout: "abcde".to_string(),
+            stdout_cap_reached: false,
+            stderr: "12345".to_string(),
+            stderr_cap_reached: false,
         }
     );
 

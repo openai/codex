@@ -591,7 +591,7 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
                 }
                 None => chunk.as_slice(),
             };
-            let cap_reached = Some(observed_num_bytes) == output_bytes_cap;
+            let cap_reached = chunk.len() > capped_chunk.len();
             if let (true, Some(process_id)) = (stream_output, process_id.as_ref()) {
                 outgoing
                     .send_server_notification_to_connection_and_wait(

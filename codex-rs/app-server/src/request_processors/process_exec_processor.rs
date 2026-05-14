@@ -636,7 +636,7 @@ fn collect_spawn_process_output(
                 }
                 None => chunk.as_slice(),
             };
-            cap_reached = Some(observed_num_bytes) == output_bytes_cap;
+            cap_reached = chunk.len() > capped_chunk.len();
             if stream_output {
                 outgoing
                     .send_server_notification_to_connection_and_wait(

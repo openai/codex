@@ -742,6 +742,56 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
 }
 
 #[tokio::test]
+async fn command_exec_streaming_exact_cap_does_not_report_cap_reached() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_id = "stream-exact-cap-1".to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf abcde".to_string(),
+            ],
+            process_id: Some(process_id.clone()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: true,
+            output_bytes_cap: Some(5),
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let delta = read_command_exec_delta(&mut mcp).await?;
+    assert_eq!(delta.process_id, process_id);
+    assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
+    assert_eq!(
+        String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?,
+        "abcde"
+    );
+    assert!(!delta.cap_reached);
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
