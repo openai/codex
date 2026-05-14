@@ -33,6 +33,11 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
+        if !self.config.workspace_roots_explicit {
+            let workspace_roots = vec![session.cwd.clone()];
+            self.config.workspace_roots = workspace_roots.clone();
+            self.config.permissions.set_workspace_roots(workspace_roots);
+        }
         self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
             .config
