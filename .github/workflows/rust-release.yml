@@ -637,7 +637,9 @@ jobs:
           find dist -mindepth 1 -maxdepth 1 -type d \
             ! -name '*-apple-darwin*-unsigned' \
             ! -name 'aarch64-unknown-linux-musl' \
+            ! -name 'aarch64-unknown-linux-musl-app-server' \
             ! -name 'x86_64-unknown-linux-musl' \
+            ! -name 'x86_64-unknown-linux-musl-app-server' \
             ! -name 'aarch64-pc-windows-msvc' \
             ! -name 'x86_64-pc-windows-msvc' \
             -exec rm -rf {} +
