@@ -80,6 +80,26 @@ async fn turn_start_preserves_active_mcp_startup_header() {
 }
 
 #[tokio::test]
+async fn turn_start_replaces_idle_completed_mcp_startup_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Booting MCP server: schaltwerk"
+    );
+
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
 async fn app_server_mcp_startup_failure_renders_warning_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
