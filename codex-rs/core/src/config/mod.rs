@@ -257,6 +257,11 @@ pub struct Permissions {
     /// entries in `constrained_permissions_profile` are materialized against
     /// these roots.
     workspace_roots: Vec<AbsolutePathBuf>,
+    /// Immutable workspace roots configured directly on the selected profile.
+    /// These remain separate from thread-scoped runtime workspace roots so the
+    /// runtime can update only the latter without mutating the selected
+    /// profile.
+    profile_workspace_roots: Vec<AbsolutePathBuf>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -289,6 +294,7 @@ impl Permissions {
             constrained_permissions_profile: permission_profile,
             active_permission_profile: None,
             workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -312,6 +318,20 @@ impl Permissions {
     ) {
         self.constrained_permissions_profile = permission_profile;
         self.active_permission_profile = active_permission_profile;
+        self.profile_workspace_roots.clear();
+    }
+
+    /// Set the full constrained profile value together with the named profile
+    /// sidecar and its immutable profile-defined workspace roots.
+    pub fn set_constrained_permission_profile_with_active_profile_and_workspace_roots(
+        &mut self,
+        permission_profile: Constrained<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) {
+        self.constrained_permissions_profile = permission_profile;
+        self.active_permission_profile = active_permission_profile;
+        self.profile_workspace_roots = profile_workspace_roots;
     }
 
     pub fn set_workspace_roots(&mut self, workspace_roots: Vec<AbsolutePathBuf>) {
@@ -320,6 +340,14 @@ impl Permissions {
 
     pub fn workspace_roots(&self) -> &[AbsolutePathBuf] {
         &self.workspace_roots
+    }
+
+    pub fn set_profile_workspace_roots(&mut self, workspace_roots: Vec<AbsolutePathBuf>) {
+        self.profile_workspace_roots = workspace_roots;
+    }
+
+    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        &self.profile_workspace_roots
     }
 
     fn materialized_permission_profile(&self) -> PermissionProfile {
@@ -424,6 +452,7 @@ impl Permissions {
         self.constrained_permissions_profile
             .set(permission_profile)?;
         self.active_permission_profile = None;
+        self.profile_workspace_roots.clear();
         Ok(())
     }
 
@@ -448,6 +477,7 @@ impl Permissions {
         self.constrained_permissions_profile
             .set(permission_profile)?;
         self.active_permission_profile = active_permission_profile;
+        self.profile_workspace_roots.clear();
         Ok(())
     }
 }
@@ -1181,6 +1211,13 @@ impl Config {
             .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())?;
         self.workspace_roots = self.permissions.workspace_roots().to_vec();
         Ok(())
+    }
+
+    pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let mut workspace_roots = self.workspace_roots.clone();
+        workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
+        dedupe_absolute_paths(&mut workspace_roots);
+        workspace_roots
     }
 
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
@@ -2537,6 +2574,7 @@ impl Config {
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
+            mut profile_workspace_roots,
         ) = if let Some(mut permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
@@ -2589,6 +2627,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 None,
+                Vec::new(),
             )
         } else if profiles_are_active {
             let default_permissions = default_permissions.unwrap_or_else(|| {
@@ -2677,6 +2716,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 active_permission_profile,
+                configured_workspace_roots,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -2735,6 +2775,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 None,
+                Vec::new(),
             )
         };
         if enable_network_proxy && permission_profile.network_sandbox_policy().is_enabled() {
@@ -3156,6 +3197,7 @@ impl Config {
             // The selected profile no longer describes the effective
             // permissions after requirements forced a fallback.
             active_permission_profile = None;
+            profile_workspace_roots.clear();
         }
         apply_requirement_constrained_value(
             "web_search_mode",
@@ -3244,6 +3286,7 @@ impl Config {
                 constrained_permissions_profile: constrained_permission_profile.value,
                 active_permission_profile,
                 workspace_roots,
+                profile_workspace_roots,
                 network,
                 allow_login_shell,
                 shell_environment_policy,
