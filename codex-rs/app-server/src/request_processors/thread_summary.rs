@@ -177,21 +177,12 @@ pub(super) fn thread_response_active_permission_profile(
 
 pub(super) fn apply_permission_profile_selection_to_config_overrides(
     overrides: &mut ConfigOverrides,
-    permissions: Option<PermissionProfileSelectionParams>,
+    permissions: Option<String>,
 ) {
-    let Some(PermissionProfileSelectionParams::Profile { id, modifications }) = permissions else {
+    let Some(id) = permissions else {
         return;
     };
     overrides.default_permissions = Some(id);
-    overrides
-        .additional_writable_roots
-        .extend(modifications.unwrap_or_default().into_iter().map(
-            |modification| match modification {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path } => {
-                    path.to_path_buf()
-                }
-            },
-        ));
 }
 
 pub(super) fn thread_response_sandbox_policy(

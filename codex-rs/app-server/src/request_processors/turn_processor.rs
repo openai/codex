@@ -355,8 +355,16 @@ impl TurnRequestProcessor {
             .map(V2UserInput::into_core)
             .collect();
         let turn_has_input = !mapped_items.is_empty();
+        let runtime_workspace_roots_request = params.runtime_workspace_roots.clone();
+        let snapshot = if params.permissions.is_some() || runtime_workspace_roots_request.is_some()
+        {
+            Some(thread.config_snapshot().await)
+        } else {
+            None
+        };
 
         let has_any_overrides = params.cwd.is_some()
+            || runtime_workspace_roots_request.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -375,6 +383,29 @@ impl TurnRequestProcessor {
         }
 
         let cwd = params.cwd;
+        let runtime_workspace_roots = if let Some(workspace_roots) =
+            runtime_workspace_roots_request.clone()
+        {
+            let Some(snapshot) = snapshot.as_ref() else {
+                return Err(internal_error(
+                    "turn/start runtime workspace roots missing thread snapshot",
+                ));
+            };
+            let base_cwd = cwd
+                .as_ref()
+                .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path()))
+                .unwrap_or_else(|| snapshot.cwd.clone());
+            Some(
+                workspace_roots
+                    .into_iter()
+                    .map(|path| {
+                        AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path())
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
@@ -382,9 +413,22 @@ impl TurnRequestProcessor {
         let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
         let (permission_profile, active_permission_profile) =
             if let Some(permissions) = params.permissions {
-                let snapshot = thread.config_snapshot().await;
+                let Some(snapshot) = snapshot.as_ref() else {
+                    return Err(internal_error(
+                        "turn/start permission selection missing thread snapshot",
+                    ));
+                };
                 let mut overrides = ConfigOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
+                        || {
+                            snapshot
+                                .workspace_roots
+                                .iter()
+                                .map(AbsolutePathBuf::to_path_buf)
+                                .collect()
+                        },
+                    )),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
@@ -432,6 +476,7 @@ impl TurnRequestProcessor {
             thread
                 .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -457,6 +502,7 @@ impl TurnRequestProcessor {
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
                 cwd,
+                workspace_roots: runtime_workspace_roots,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
