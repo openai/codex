@@ -1426,7 +1426,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_permission_profile_override =
-                    Some(self.config.permissions.permission_profile());
+                    Some(self.config.permissions.permission_profile().get().clone());
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
@@ -1450,7 +1450,8 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let permission_profile = self.config.permissions.permission_profile();
+                        let permission_profile =
+                            self.config.permissions.effective_permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,

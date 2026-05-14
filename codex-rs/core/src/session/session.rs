@@ -769,7 +769,7 @@ impl Session {
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                         spec,
                         current_exec_policy.as_ref(),
-                        config.permissions.permission_profile.get(),
+                        config.permissions.permission_profile().get(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
@@ -833,7 +833,7 @@ impl Session {
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                     &config.permissions.approval_policy,
-                    &config.permissions.permission_profile,
+                    config.permissions.permission_profile(),
                 ))),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
