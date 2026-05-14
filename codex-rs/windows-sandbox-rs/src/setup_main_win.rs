@@ -579,6 +579,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             .ok_or_else(|| anyhow::anyhow!("convert workspace capability SID failed"))?
     };
     let mut refresh_errors: Vec<String> = Vec::new();
+    let mut refresh_warnings: Vec<String> = Vec::new();
     if !refresh_only {
         let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
             &offline_sid_str,
@@ -689,7 +690,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
                     Ok(h) => h,
                     Err(e) => {
-                        refresh_errors.push(format!(
+                        refresh_warnings.push(format!(
                             "write mask check failed on {} for {label}: {}",
                             root.display(),
                             e
@@ -758,7 +759,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             match res {
                 Ok(_) => {}
                 Err(e) => {
-                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
+                    refresh_warnings.push(format!("write ACE failed on {}: {}", root.display(), e));
                     if log_line(
                         log,
                         &format!("write ACE grant failed on {}: {}", root.display(), e),
@@ -839,8 +840,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         log_line(
             log,
             &format!(
-                "setup refresh: processed {} write roots (read roots delegated); errors={:?}",
+                "setup refresh: processed {} write roots (read roots delegated); warnings={:?}; errors={:?}",
                 payload.write_roots.len(),
+                refresh_warnings,
                 refresh_errors
             ),
         )?;
