@@ -5,6 +5,7 @@ use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
@@ -15,10 +16,10 @@ use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -70,8 +71,6 @@ impl ExecCommandHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
-    type Output = ExecCommandToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("exec_command")
     }
@@ -90,7 +89,10 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -234,7 +236,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         .await?
         {
             manager.release_process_id(process_id).await;
-            return Ok(ExecCommandToolOutput {
+            return Ok(boxed_tool_output(ExecCommandToolOutput {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
@@ -244,7 +246,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 exit_code: None,
                 original_token_count: None,
                 hook_command: None,
-            });
+            }));
         }
 
         emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
@@ -273,11 +275,11 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             )
             .await
         {
-            Ok(response) => Ok(response),
+            Ok(response) => Ok(boxed_tool_output(response)),
             Err(UnifiedExecError::SandboxDenied { output, .. }) => {
                 let output_text = output.aggregated_output.text;
                 let original_token_count = approx_token_count(&output_text);
-                Ok(ExecCommandToolOutput {
+                Ok(boxed_tool_output(ExecCommandToolOutput {
                     event_call_id: context.call_id.clone(),
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
@@ -289,7 +291,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     exit_code: Some(output.exit_code),
                     original_token_count: Some(original_token_count),
                     hook_command: Some(hook_command),
-                })
+                }))
             }
             Err(err) => Err(FunctionCallError::RespondToModel(format!(
                 "exec_command failed for `{command_for_display}`: {err:?}"
@@ -298,7 +300,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     }
 }
 
-impl ToolHandler for ExecCommandHandler {
+impl CoreToolRuntime for ExecCommandHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -340,7 +342,7 @@ impl ToolHandler for ExecCommandHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         post_unified_exec_tool_use_payload(invocation, result)
     }

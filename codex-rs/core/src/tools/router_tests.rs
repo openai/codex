@@ -7,7 +7,6 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
@@ -37,7 +36,7 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+    ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
         vec![Arc::new(ExtensionEchoExecutor)]
     }
 }
@@ -46,8 +45,6 @@ struct ExtensionEchoExecutor;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
-    type Output = codex_tools::JsonToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced("extension/", "echo")
     }
@@ -78,14 +75,14 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
     async fn handle(
         &self,
         call: ExtensionToolCall,
-    ) -> Result<Self::Output, codex_tools::FunctionCallError> {
+    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
         let arguments: serde_json::Value =
             serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
-        Ok(codex_tools::JsonToolOutput::new(json!({
+        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
             "arguments": arguments,
             "callId": call.call_id,
             "ok": true,
-        })))
+        }))))
     }
 }
 

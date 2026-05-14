@@ -38,8 +38,6 @@ impl<B> ToolExecutor<ToolCall> for ReadTool<B>
 where
     B: MemoriesBackend,
 {
-    type Output = JsonToolOutput;
-
     fn tool_name(&self) -> ToolName {
         memory_tool_name(READ_TOOL_NAME)
     }
@@ -54,7 +52,8 @@ where
     async fn handle(
         &self,
         call: ToolCall,
-    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
         let args: ReadArgs = parse_args(&call)?;
         let response = backend
@@ -66,6 +65,6 @@ where
             })
             .await
             .map_err(backend_error_to_function_call)?;
-        Ok(JsonToolOutput::new(json!(response)))
+        Ok(Box::new(JsonToolOutput::new(json!(response))))
     }
 }

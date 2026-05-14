@@ -10,19 +10,18 @@ use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -129,8 +128,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
     }
@@ -148,7 +145,10 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         self.options.is_some()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -201,10 +201,11 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await
+        .map(boxed_tool_output)
     }
 }
 
-impl ToolHandler for ShellCommandHandler {
+impl CoreToolRuntime for ShellCommandHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -240,7 +241,7 @@ impl ToolHandler for ShellCommandHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;

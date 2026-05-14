@@ -5,18 +5,16 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
-use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolArgumentDiffConsumer;
-use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::collect_tool_router_parts;
-use crate::tools::spec_plan::build_tool_registry_builder_from_executors;
-use codex_extension_api::ExtensionToolExecutor;
+use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
@@ -42,42 +40,16 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
-    pub(crate) extension_tool_executors: Vec<Arc<dyn ExtensionToolExecutor>>,
+    pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
-        let ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            discoverable_tools,
-            extension_tool_executors,
-            dynamic_tools,
-        } = params;
-        let parts = collect_tool_router_parts(
-            config,
-            mcp_tools,
-            deferred_mcp_tools,
-            discoverable_tools,
-            &extension_tool_executors,
-            dynamic_tools,
-        );
-        Self::from_executors(config, parts.executors, parts.hosted_specs)
+        build_tool_router(config, params)
     }
 
-    pub(crate) fn from_executors(
-        config: &ToolsConfig,
-        executors: Vec<Arc<dyn RegisteredTool>>,
-        hosted_specs: Vec<ToolSpec>,
-    ) -> Self {
-        let builder = build_tool_registry_builder_from_executors(config, executors, hosted_specs);
-        let (specs, registry) = builder.build();
-        let model_visible_specs = specs
-            .into_iter()
-            .filter(|spec| !is_hidden_by_code_mode_only(config, &registry, spec))
-            .collect();
-
+    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
             model_visible_specs,
@@ -182,22 +154,9 @@ impl ToolRouter {
     }
 }
 
-fn is_hidden_by_code_mode_only(
-    config: &ToolsConfig,
-    registry: &ToolRegistry,
-    spec: &ToolSpec,
-) -> bool {
-    if !config.code_mode_only_enabled || !codex_code_mode::is_code_mode_nested_tool(spec.name()) {
-        return false;
-    }
-
-    let exposure = registry
-        .tool_exposure(&ToolName::plain(spec.name()))
-        .unwrap_or(ToolExposure::Direct);
-    exposure != ToolExposure::DirectModelOnly
-}
-
-pub(crate) fn extension_tool_executors(session: &Session) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+pub(crate) fn extension_tool_executors(
+    session: &Session,
+) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
         .extensions
