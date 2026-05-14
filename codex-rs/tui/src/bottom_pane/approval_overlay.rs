@@ -956,7 +956,7 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     match value {
         FileSystemSpecialPath::Root => ":root".to_string(),
         FileSystemSpecialPath::Minimal => ":minimal".to_string(),
-        FileSystemSpecialPath::ProjectRoots { subpath } => path_label(":project_roots", subpath),
+        FileSystemSpecialPath::ProjectRoots { subpath } => path_label(":workspace_roots", subpath),
         FileSystemSpecialPath::Tmpdir => ":tmpdir".to_string(),
         FileSystemSpecialPath::SlashTmp => "/tmp".to_string(),
         FileSystemSpecialPath::Unknown { path, subpath } => path_label(path, subpath),
@@ -1768,6 +1768,31 @@ mod tests {
         assert_eq!(
             format_additional_permissions_rule(&additional_permissions),
             Some("write `:root`; deny read glob `**/*.env`".to_string())
+        );
+    }
+
+    #[test]
+    fn additional_permissions_rule_uses_workspace_roots_label() {
+        let additional_permissions = AdditionalPermissionProfile {
+            network: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: None,
+                write: None,
+                entries: Some(vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots {
+                            subpath: Some(".git".into()),
+                        },
+                    },
+                    access: FileSystemAccessMode::Read,
+                }]),
+                glob_scan_max_depth: None,
+            }),
+        };
+
+        assert_eq!(
+            format_additional_permissions_rule(&additional_permissions),
+            Some("read `:workspace_roots/.git`".to_string())
         );
     }
 

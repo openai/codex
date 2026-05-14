@@ -602,7 +602,9 @@ fn status_permissions_label(
             }
             _ => {}
         },
-        Some(":danger-no-sandbox") if permission_profile == &PermissionProfile::Disabled => {
+        Some(":danger-full-access" | ":danger-no-sandbox")
+            if permission_profile == &PermissionProfile::Disabled =>
+        {
             return if approval_policy == AskForApproval::Never {
                 "Full Access".to_string()
             } else {

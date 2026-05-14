@@ -474,7 +474,7 @@ mod thread_processor_behavior_tests {
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":danger-no-sandbox".to_string()),
+                default_permissions: Some(":danger-full-access".to_string()),
                 ..Default::default()
             },
             cwd.as_path()

@@ -718,7 +718,7 @@ default_permissions = "workspace"
 [permissions.workspace.filesystem]
 ":minimal" = "read"
 
-[permissions.workspace.filesystem.":project_roots"]
+[permissions.workspace.filesystem.":workspace_roots"]
 "." = "write"
 "docs" = "read"
 
@@ -749,7 +749,7 @@ allow_upstream_proxy = false
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
                             ),
                             (
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("docs".to_string(), FileSystemAccessMode::Read),
@@ -1303,7 +1303,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
                             ),
                             (
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("docs".to_string(), FileSystemAccessMode::Read),
@@ -1603,7 +1603,7 @@ async fn permission_profile_override_preserves_configured_network_policy_without
 }
 
 #[tokio::test]
-async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
+async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     tokio::fs::write(cwd.path().join(".git"), "gitdir: nowhere").await?;
@@ -1618,7 +1618,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: Some(2),
                             entries: BTreeMap::from([(
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("**/*.env".to_string(), FileSystemAccessMode::None),
@@ -2042,7 +2042,7 @@ async fn empty_config_defaults_to_builtin_read_only_without_trust_decision() -> 
 }
 
 #[tokio::test]
-async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io::Result<()> {
+async fn default_permissions_can_select_builtin_full_access_profile() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
 
@@ -2069,7 +2069,40 @@ async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io:
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some(":danger-no-sandbox")
+        Some(":danger-full-access")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_danger_no_sandbox_alias_canonicalizes_active_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":danger-full-access".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::Disabled
+    );
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(":danger-full-access")
     );
     Ok(())
 }
@@ -2194,7 +2227,8 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io::Result<()> {
+async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -2229,7 +2263,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> s
         codex_home.abs(),
     )
     .await
-    .expect_err("nested entries outside :project_roots should be rejected");
+    .expect_err("nested entries outside :workspace_roots should be rejected");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
@@ -2396,7 +2430,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Result<()> {
+async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -2411,7 +2445,7 @@ async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io:
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([(
                                     "../sibling".to_string(),
                                     FileSystemAccessMode::Read,
@@ -8990,7 +9024,7 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .harness_overrides(ConfigOverrides {
-            default_permissions: Some(":danger-no-sandbox".to_string()),
+            default_permissions: Some(":danger-full-access".to_string()),
             ..Default::default()
         })
         .cloud_requirements(CloudRequirementsLoader::new(async move {

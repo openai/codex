@@ -780,7 +780,7 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text_elements: Vec::new(),
             }],
             permissions: Some(PermissionProfileSelectionParams::Profile {
-                id: ":danger-no-sandbox".to_string(),
+                id: ":danger-full-access".to_string(),
                 modifications: None,
             }),
             ..Default::default()

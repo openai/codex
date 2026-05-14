@@ -115,6 +115,7 @@ use std::sync::Arc;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
+use crate::config::permissions::canonical_builtin_permission_profile_name;
 use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -2456,7 +2457,10 @@ impl Config {
                 let active_permission_profile = if !requested_additional_writable_roots.is_empty()
                     && matches!(permission_profile, PermissionProfile::Managed { .. })
                 {
-                    ActivePermissionProfile::new(default_permissions).with_modifications(
+                    ActivePermissionProfile::new(canonical_builtin_permission_profile_name(
+                        default_permissions,
+                    ))
+                    .with_modifications(
                         requested_additional_writable_roots
                             .iter()
                             .cloned()
@@ -2466,7 +2470,9 @@ impl Config {
                             .collect(),
                     )
                 } else {
-                    ActivePermissionProfile::new(default_permissions)
+                    ActivePermissionProfile::new(canonical_builtin_permission_profile_name(
+                        default_permissions,
+                    ))
                 };
                 Some(active_permission_profile)
             };

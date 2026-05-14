@@ -3903,7 +3903,7 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
 
     if matches!(
         overrides.default_permissions.as_deref(),
-        Some(":workspace" | ":danger-no-sandbox")
+        Some(":workspace" | ":danger-full-access" | ":danger-no-sandbox")
     ) {
         return true;
     }
