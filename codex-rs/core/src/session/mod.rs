@@ -617,7 +617,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            permission_profile: config.permissions.permission_profile.clone(),
+            permission_profile: config.permissions.permission_profile().clone(),
             active_permission_profile: config.permissions.active_permission_profile(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),

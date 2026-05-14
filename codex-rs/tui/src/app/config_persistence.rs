@@ -302,7 +302,7 @@ impl App {
         if permission_profile_override.is_some()
             && let Err(err) = self
                 .chat_widget
-                .set_permission_profile(self.config.permissions.permission_profile())
+                .set_permission_profile(self.config.permissions.effective_permission_profile())
         {
             tracing::error!(
                 error = %err,
@@ -313,7 +313,7 @@ impl App {
         }
         if permission_profile_override.is_some() {
             self.runtime_permission_profile_override =
-                Some(self.config.permissions.permission_profile());
+                Some(self.config.permissions.effective_permission_profile());
         }
 
         if approval_policy_override.is_some()
