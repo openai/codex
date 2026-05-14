@@ -588,9 +588,9 @@ pub async fn run_main_with_transport_options(
             range: None,
         });
     }
-    if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
-    {
+    if let Some(warning) = codex_core::config::system_bwrap_warning(
+        config.permissions.permission_profile_constraint().get(),
+    ) {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,
