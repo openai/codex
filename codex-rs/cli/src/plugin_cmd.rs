@@ -8,8 +8,14 @@ use codex_core_plugins::ConfiguredMarketplace;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
+use codex_core_plugins::marketplace::MarketplaceListError;
+use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_plugin::PluginId;
+use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
+use std::path::PathBuf;
 
 use crate::marketplace_cmd::MarketplaceCli;
 
@@ -73,6 +79,7 @@ pub async fn run_plugin_add(
     args: AddPluginArgs,
 ) -> Result<()> {
     let PluginCommandContext {
+        codex_home,
         plugins_input,
         manager,
     } = load_plugin_command_context(overrides).await?;
@@ -81,8 +88,13 @@ pub async fn run_plugin_add(
         marketplace_name,
         ..
     } = parse_plugin_selection(args.plugin, args.marketplace_name)?;
-    let marketplace =
-        find_marketplace_for_plugin(&manager, &plugins_input, &marketplace_name, &plugin_name)?;
+    let marketplace = find_marketplace_for_plugin(
+        &manager,
+        codex_home.as_path(),
+        &plugins_input,
+        &marketplace_name,
+        &plugin_name,
+    )?;
     let outcome = manager
         .install_plugin(PluginInstallRequest {
             plugin_name,
@@ -107,6 +119,7 @@ pub async fn run_plugin_list(
     args: ListPluginsArgs,
 ) -> Result<()> {
     let PluginCommandContext {
+        codex_home,
         plugins_input,
         manager,
         ..
@@ -114,6 +127,12 @@ pub async fn run_plugin_list(
     let outcome = manager
         .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list marketplace plugins")?;
+    ensure_configured_marketplace_snapshots_loaded(
+        codex_home.as_path(),
+        &plugins_input,
+        &outcome.errors,
+        None,
+    )?;
 
     let marketplaces = outcome
         .marketplaces
@@ -148,14 +167,6 @@ pub async fn run_plugin_list(
         }
     }
 
-    for error in outcome.errors {
-        eprintln!(
-            "Failed to load marketplace {}: {}",
-            error.path.as_path().display(),
-            error.message
-        );
-    }
-
     Ok(())
 }
 
@@ -176,6 +187,7 @@ pub async fn run_plugin_remove(
 }
 
 struct PluginCommandContext {
+    codex_home: PathBuf,
     plugins_input: PluginsConfigInput,
     manager: PluginsManager,
 }
@@ -190,6 +202,7 @@ async fn load_plugin_command_context(
     let plugins_input = config.plugins_config_input();
     let manager = PluginsManager::new(codex_home.to_path_buf());
     Ok(PluginCommandContext {
+        codex_home: codex_home.to_path_buf(),
         plugins_input,
         manager,
     })
@@ -241,13 +254,21 @@ fn parse_plugin_selection(
 
 fn find_marketplace_for_plugin(
     manager: &PluginsManager,
+    codex_home: &std::path::Path,
     plugins_input: &PluginsConfigInput,
     marketplace_name: &str,
     plugin_name: &str,
 ) -> Result<ConfiguredMarketplace> {
-    let matches = manager
+    let outcome = manager
         .list_marketplaces_for_config(plugins_input, &[])
-        .context("failed to list marketplace plugins")?
+        .context("failed to list marketplace plugins")?;
+    ensure_configured_marketplace_snapshots_loaded(
+        codex_home,
+        plugins_input,
+        &outcome.errors,
+        Some(marketplace_name),
+    )?;
+    let matches = outcome
         .marketplaces
         .into_iter()
         .filter(|marketplace| marketplace.name == marketplace_name)
@@ -266,4 +287,102 @@ fn find_marketplace_for_plugin(
             "plugin `{plugin_name}` in marketplace `{marketplace_name}` matched multiple marketplace roots"
         ),
     }
+}
+
+struct ConfiguredMarketplaceSnapshotIssue {
+    marketplace_name: String,
+    path: PathBuf,
+    message: String,
+}
+
+fn ensure_configured_marketplace_snapshots_loaded(
+    codex_home: &std::path::Path,
+    plugins_input: &PluginsConfigInput,
+    load_errors: &[MarketplaceListError],
+    marketplace_name: Option<&str>,
+) -> Result<()> {
+    let issues = configured_marketplace_snapshot_issues(
+        codex_home,
+        plugins_input,
+        load_errors,
+        marketplace_name,
+    );
+    if issues.is_empty() {
+        return Ok(());
+    }
+
+    let issue_lines = issues
+        .iter()
+        .map(|issue| {
+            format!(
+                "- `{}` at {}: {}",
+                issue.marketplace_name,
+                issue.path.display(),
+                issue.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    bail!("failed to load configured marketplace snapshot(s):\n{issue_lines}");
+}
+
+fn configured_marketplace_snapshot_issues(
+    codex_home: &std::path::Path,
+    plugins_input: &PluginsConfigInput,
+    load_errors: &[MarketplaceListError],
+    marketplace_name: Option<&str>,
+) -> Vec<ConfiguredMarketplaceSnapshotIssue> {
+    let Some(user_layer) = plugins_input.config_layer_stack.get_user_layer() else {
+        return Vec::new();
+    };
+    let Some(configured_marketplaces) = user_layer
+        .config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+    else {
+        return Vec::new();
+    };
+
+    let default_install_root = marketplace_install_root(codex_home);
+    let mut manifest_paths = Vec::new();
+    let mut issues = Vec::new();
+    for (configured_name, marketplace) in configured_marketplaces {
+        if marketplace_name.is_some_and(|name| configured_name != name) {
+            continue;
+        }
+        if !marketplace.is_table()
+            || validate_plugin_segment(configured_name, "marketplace name").is_err()
+        {
+            continue;
+        }
+        let Some(root) = resolve_configured_marketplace_root(
+            configured_name,
+            marketplace,
+            &default_install_root,
+        ) else {
+            continue;
+        };
+        match find_marketplace_manifest_path(&root) {
+            Some(path) => manifest_paths.push((configured_name.clone(), path)),
+            None => issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: root,
+                message: "marketplace root does not contain a supported manifest".to_string(),
+            }),
+        }
+    }
+
+    for error in load_errors {
+        if let Some((configured_name, _)) = manifest_paths
+            .iter()
+            .find(|(_, path)| path.as_path() == error.path.as_path())
+        {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: error.path.to_path_buf(),
+                message: error.message.clone(),
+            });
+        }
+    }
+    issues
 }
