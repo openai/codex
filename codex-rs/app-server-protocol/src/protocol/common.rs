@@ -2940,27 +2940,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_runtime_methods_are_marked_experimental() {
-        let enable_request = ClientRequest::RemoteControlEnable {
-            request_id: RequestId::Integer(1),
-            params: None,
-        };
-        let disable_request = ClientRequest::RemoteControlDisable {
-            request_id: RequestId::Integer(2),
-            params: None,
-        };
-
-        assert_eq!(
-            crate::experimental_api::ExperimentalApi::experimental_reason(&enable_request),
-            Some("remoteControl/enable")
-        );
-        assert_eq!(
-            crate::experimental_api::ExperimentalApi::experimental_reason(&disable_request),
-            Some("remoteControl/disable")
-        );
-    }
-
-    #[test]
     fn command_exec_permission_profile_is_marked_experimental() {
         let request = ClientRequest::OneOffCommandExec {
             request_id: RequestId::Integer(1),

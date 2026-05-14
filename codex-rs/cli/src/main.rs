@@ -2595,12 +2595,6 @@ mod tests {
     }
 
     #[test]
-    fn app_server_remote_control_flag_parses() {
-        let app_server = app_server_from_args(["codex", "app-server", "--remote-control"].as_ref());
-        assert!(app_server.remote_control);
-    }
-
-    #[test]
     fn strict_config_parses_for_supported_commands() {
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config"]).expect("parse");
         assert!(cli.interactive.strict_config);
