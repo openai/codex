@@ -164,7 +164,10 @@ impl CommandExecRequestProcessor {
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(
-                    self.config.permissions.permission_profile.get(),
+                    self.config
+                        .permissions
+                        .permission_profile_constraint()
+                        .get(),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
