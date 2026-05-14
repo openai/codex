@@ -60,7 +60,7 @@ impl SandboxViolationAuditContext {
             metadata,
             turn_id: Some(ctx.turn.sub_id.clone()),
             call_id: Some(ctx.call_id.clone()),
-            tool_name: Some(ctx.tool_name.clone()),
+            tool_name: Some(ctx.tool_name.to_string()),
         }
     }
 
