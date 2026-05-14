@@ -2715,6 +2715,11 @@ impl Session {
                 .render(),
             );
         }
+        if let Some(credentialed_routes_instructions) =
+            self.services.credentialed_routes.developer_instructions()
+        {
+            developer_sections.push(credentialed_routes_instructions);
+        }
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
