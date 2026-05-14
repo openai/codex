@@ -367,6 +367,7 @@ impl Session {
         }
         self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
 
+        let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.tasks.is_empty());
@@ -439,6 +440,7 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
+            turn_extension_data,
             _timer: timer,
         };
         turn.add_task(running_task);

@@ -7009,7 +7009,9 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new()),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
+            turn_context.sub_id.clone(),
+        )),
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
@@ -7062,7 +7064,9 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new()),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
+            turn_context.sub_id.clone(),
+        )),
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
@@ -8950,7 +8954,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
         turn_context: Arc::clone(&tc),
-        turn_store: Arc::new(codex_extension_api::ExtensionData::new()),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
         cancellation_token: CancellationToken::new(),
     };

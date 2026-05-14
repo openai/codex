@@ -43,7 +43,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
-    let turn_store = ExtensionData::new();
+    let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let mut state = PlanModeStreamState::new(&turn_context.sub_id);
     let mut last_agent_message = None;
     let item = assistant_output_text("original assistant text");

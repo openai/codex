@@ -214,7 +214,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(TestTurnItemContributor));
     session.services.extensions = Arc::new(builder.build());
-    let turn_store = ExtensionData::new();
+    let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let item = assistant_output_text(
         "hello<oai-mem-citation>ignored by memory parser</oai-mem-citation> world",
     );
@@ -288,8 +288,8 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let item = assistant_output_text("original assistant text");
     let mut ctx = HandleOutputCtx {
         sess: session,
-        turn_context,
-        turn_store: Arc::new(ExtensionData::new()),
+        turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
     };
@@ -310,7 +310,7 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
-    let turn_store = ExtensionData::new();
+    let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let item = assistant_output_text("<oai-mem-citation>hidden only</oai-mem-citation>");
 
     let finalized = finalize_non_tool_response_item(
@@ -336,7 +336,7 @@ async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
-    let turn_store = ExtensionData::new();
+    let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
 
     let finalized = finalize_non_tool_response_item(
