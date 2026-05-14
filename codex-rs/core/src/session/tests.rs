@@ -36,6 +36,7 @@ use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -2889,6 +2890,7 @@ async fn set_rate_limits_retains_previous_credits() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -2992,6 +2994,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3464,6 +3467,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3645,6 +3649,49 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
             exclude_slash_tmp: true,
         }
     );
+}
+
+#[tokio::test]
+async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspace_roots() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let old_root = tempfile::tempdir().expect("create old root");
+    let new_root = tempfile::tempdir().expect("create new root");
+    let profile_root = tempfile::tempdir().expect("create profile root");
+    let old_root = old_root.path().abs();
+    let new_root = new_root.path().abs();
+    let profile_root = profile_root.path().abs();
+    session_configuration.workspace_roots = vec![old_root.clone()];
+
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            workspace_roots: Some(vec![new_root.clone()]),
+            permission_profile: Some(permission_profile),
+            active_permission_profile: Some(ActivePermissionProfile::new("dev")),
+            profile_workspace_roots: Some(vec![profile_root.clone()]),
+            ..Default::default()
+        })
+        .expect("permission profile update should succeed");
+
+    let updated_policy = updated.file_system_sandbox_policy();
+    assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd.as_path()));
+    assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd.as_path()));
+    assert_eq!(
+        updated.active_permission_profile(),
+        Some(ActivePermissionProfile::new("dev"))
+    );
+    assert_eq!(updated.profile_workspace_roots(), &[profile_root]);
 }
 
 #[cfg_attr(windows, ignore)]
@@ -4004,6 +4051,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -4112,6 +4160,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4345,6 +4394,7 @@ async fn make_session_with_config_and_rx(
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4447,6 +4497,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -5096,6 +5147,8 @@ fn op_kind_distinguishes_turn_ops() {
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             cwd: None,
+            workspace_roots: None,
+            profile_workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
@@ -5963,6 +6016,7 @@ where
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,

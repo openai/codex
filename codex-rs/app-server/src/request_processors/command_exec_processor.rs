@@ -243,8 +243,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile()
-                .can_set(&effective_permission_profile)
+                .can_set_permission_profile(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
         } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
@@ -264,8 +263,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile()
-                .can_set(&permission_profile)
+                .can_set_permission_profile(&permission_profile)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             permission_profile
         } else {

@@ -621,6 +621,7 @@ impl Codex {
             permission_profile_state: config.permissions.permission_profile_state().clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
