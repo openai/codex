@@ -1,8 +1,10 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use codex_exec_server::InMemoryFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
@@ -80,6 +82,24 @@ async fn make_config_with_project_root_markers(
         .expect("defaults for test should always succeed");
 
     config.cwd = root.abs();
+    config.project_doc_max_bytes = limit;
+    config.user_instructions = instructions.map(ToOwned::to_owned);
+    config
+}
+
+async fn make_virtual_config(
+    cwd: AbsolutePathBuf,
+    limit: usize,
+    instructions: Option<&str>,
+) -> Config {
+    let codex_home = TempDir::new().unwrap();
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("defaults for test should always succeed");
+
+    config.cwd = cwd;
     config.project_doc_max_bytes = limit;
     config.user_instructions = instructions.map(ToOwned::to_owned);
     config
@@ -293,6 +313,30 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "parent doc\n\nchild doc");
+}
+
+#[tokio::test]
+async fn injected_filesystem_supports_virtual_absolute_agents_paths() {
+    let fs = InMemoryFileSystem::new();
+    let repo_root =
+        AbsolutePathBuf::try_from(test_path_buf("/virtual/repo")).expect("absolute repo root");
+    let nested = AbsolutePathBuf::try_from(test_path_buf("/virtual/repo/workspace/crate_a"))
+        .expect("absolute nested path");
+    assert!(!repo_root.as_path().exists());
+
+    fs.seed_file(&repo_root.join(".git"), b"gitdir: fake\n".to_vec())
+        .expect("seed repo marker");
+    fs.seed_file(&repo_root.join("AGENTS.md"), b"root doc".to_vec())
+        .expect("seed root doc");
+    fs.seed_file(&nested.join("AGENTS.md"), b"crate doc".to_vec())
+        .expect("seed nested doc");
+
+    let cfg = make_virtual_config(nested, /*limit*/ 4096, /*instructions*/ None).await;
+    let res = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(&fs)
+        .await
+        .expect("virtual doc expected");
+    assert_eq!(res, "root doc\n\ncrate doc");
 }
 
 #[tokio::test]

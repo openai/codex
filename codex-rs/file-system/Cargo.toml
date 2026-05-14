@@ -13,6 +13,11 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lib]
 test = false
 doctest = false

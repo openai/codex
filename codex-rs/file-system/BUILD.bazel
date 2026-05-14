@@ -3,4 +3,9 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "file-system",
     crate_name = "codex_file_system",
+    deps_extra = [
+        "@crates//:pretty_assertions",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
 )

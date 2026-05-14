@@ -12,6 +12,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
 
+mod in_memory;
+
+pub use in_memory::InMemoryFileSystem;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
     pub recursive: bool,
