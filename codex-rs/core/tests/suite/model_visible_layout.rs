@@ -474,12 +474,13 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: Some(resume_override_cwd),
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some("gpt-5.2".to_string()),
             effort: None,
