@@ -1346,6 +1346,7 @@ impl PluginRequestProcessor {
             let notification_name = name.clone();
 
             tokio::spawn(async move {
+                let oauth_client_id = server.oauth_client_id();
                 let first_attempt = perform_oauth_login_silent(
                     &name,
                     &oauth_config.url,
@@ -1353,6 +1354,7 @@ impl PluginRequestProcessor {
                     oauth_config.http_headers.clone(),
                     oauth_config.env_http_headers.clone(),
                     &resolved_scopes.scopes,
+                    oauth_client_id,
                     server.oauth_resource.as_deref(),
                     callback_port,
                     callback_url.as_deref(),
@@ -1368,6 +1370,7 @@ impl PluginRequestProcessor {
                             oauth_config.http_headers,
                             oauth_config.env_http_headers,
                             &[],
+                            oauth_client_id,
                             server.oauth_resource.as_deref(),
                             callback_port,
                             callback_url.as_deref(),

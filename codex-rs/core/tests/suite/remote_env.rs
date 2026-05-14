@@ -58,7 +58,7 @@ async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
             "unified exec should enable for test: {result:?}",
         );
     });
-    builder.build_remote_aware(server).await
+    builder.build_with_remote_and_local_env(server).await
 }
 
 async fn submit_turn_with_approval_and_environments(
@@ -77,7 +77,7 @@ async fn submit_turn_with_approval_and_environments(
             cwd: test.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
@@ -350,7 +350,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
     let mut builder = test_codex().with_config(|config| {
         config.include_apply_patch_tool = true;
     });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     let file_name = "apply_patch_remote_freeform.txt";
     let remote_cwd = PathBuf::from(format!(
@@ -439,7 +439,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::User;
     });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-remote-apply-patch-approval-cwd-{}",
