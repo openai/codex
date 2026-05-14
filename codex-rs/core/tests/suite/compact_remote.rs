@@ -2774,12 +2774,13 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     for user in ["USER_ONE", "USER_TWO", "USER_THREE"] {
         if user == "USER_THREE" {
             codex
-                .submit(Op::OverrideTurnContext {
+                .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
                     cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
                     approval_policy: None,
                     approvals_reviewer: None,
                     sandbox_policy: None,
                     permission_profile: None,
+                    active_permission_profile: None,
                     windows_sandbox_level: None,
                     model: None,
                     effort: None,
@@ -2892,12 +2893,13 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),
             effort: None,

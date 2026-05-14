@@ -3284,12 +3284,13 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

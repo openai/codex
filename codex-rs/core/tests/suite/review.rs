@@ -790,12 +790,13 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     .await;
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: Some(repo_path.to_path_buf()),
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

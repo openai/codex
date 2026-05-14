@@ -81,19 +81,6 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
-pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
-    if let Err(err) = sess.update_settings(updates).await {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: err.to_string(),
-                codex_error_info: Some(CodexErrorInfo::BadRequest),
-            }),
-        })
-        .await;
-    }
-}
-
 pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     user_input_or_turn_inner(
         sess,
@@ -721,50 +708,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::RealtimeConversationListVoices => {
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
-                    false
-                }
-                Op::OverrideTurnContext {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                } => {
-                    let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                        collab_mode
-                    } else {
-                        let state = sess.state.lock().await;
-                        state.session_configuration.collaboration_mode.with_updates(
-                            model.clone(),
-                            effort,
-                            /*developer_instructions*/ None,
-                        )
-                    };
-                    override_turn_context(
-                        &sess,
-                        sub.id.clone(),
-                        SessionSettingsUpdate {
-                            cwd,
-                            approval_policy,
-                            approvals_reviewer,
-                            sandbox_policy,
-                            permission_profile,
-                            windows_sandbox_level,
-                            collaboration_mode: Some(collaboration_mode),
-                            reasoning_summary: summary,
-                            service_tier,
-                            personality,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
                     false
                 }
                 Op::UserInput { .. } => {

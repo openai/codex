@@ -524,70 +524,6 @@ pub enum Op {
         communication: InterAgentCommunication,
     },
 
-    /// Override parts of the persistent turn context for subsequent turns.
-    ///
-    /// All fields are optional; when omitted, the existing value is preserved.
-    /// This does not enqueue any input – it only updates defaults used for
-    /// turns that rely on persistent session-level context (for example,
-    /// [`Op::UserInput`]).
-    OverrideTurnContext {
-        /// Updated `cwd` for sandbox/tool calls.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
-
-        /// Updated command approval policy.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        approval_policy: Option<AskForApproval>,
-
-        /// Updated approval reviewer for future approval prompts.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        approvals_reviewer: Option<ApprovalsReviewer>,
-
-        /// Updated sandbox policy for tool calls.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sandbox_policy: Option<SandboxPolicy>,
-
-        /// Updated permissions profile for tool calls.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        permission_profile: Option<PermissionProfile>,
-
-        /// Updated Windows sandbox mode for tool execution.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        windows_sandbox_level: Option<WindowsSandboxLevel>,
-
-        /// Updated model slug. When set, the model info is derived
-        /// automatically.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-
-        /// Updated reasoning effort (honored only for reasoning-capable models).
-        ///
-        /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
-        /// the effort, or `None` to leave the existing value unchanged.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<Option<ReasoningEffortConfig>>,
-
-        /// Updated reasoning summary preference (honored only for reasoning-capable models).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        summary: Option<ReasoningSummaryConfig>,
-
-        /// Updated service tier preference for future turns.
-        ///
-        /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
-        /// preference, or `None` to leave the existing value unchanged.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<String>>,
-
-        /// EXPERIMENTAL - set a pre-set collaboration mode.
-        /// Takes precedence over model, effort, and developer instructions if set.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        collaboration_mode: Option<CollaborationMode>,
-
-        /// Updated personality preference.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        personality: Option<Personality>,
-    },
-
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving
@@ -776,7 +712,6 @@ impl Op {
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
-            Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",

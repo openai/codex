@@ -9,7 +9,7 @@ use pretty_assertions::assert_eq;
 const CONFIG_TOML: &str = "config.toml";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_does_not_persist_when_config_exists() {
+async fn turn_context_update_does_not_persist_when_config_exists() {
     let server = start_mock_server().await;
     let initial_contents = "model = \"gpt-4o\"\n";
     let mut builder = test_codex()
@@ -25,12 +25,13 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
     let config_path = test.home.path().join(CONFIG_TOML);
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
@@ -52,7 +53,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_does_not_create_config_file() {
+async fn turn_context_update_does_not_create_config_file() {
     let server = start_mock_server().await;
     let mut builder = test_codex();
     let test = builder.build(&server).await.expect("create conversation");
@@ -64,12 +65,13 @@ async fn override_turn_context_does_not_create_config_file() {
     );
 
     codex
-        .submit(Op::OverrideTurnContext {
+        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
