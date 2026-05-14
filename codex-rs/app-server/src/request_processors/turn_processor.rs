@@ -519,21 +519,16 @@ impl TurnRequestProcessor {
                 },
             )
             .await?;
-        let after_turn_context = if resolved_overrides.has_any_overrides {
-            Some(thread_turn_context_from_snapshot(
-                &thread
-                    .preview_turn_context_overrides(resolved_overrides.overrides.clone())
-                    .await
-                    .map_err(|err| {
-                        invalid_request(format!("invalid turn context override: {err}"))
-                    })?,
-            ))
-        } else {
-            None
-        };
+        let has_turn_context_overrides = resolved_overrides.has_any_overrides;
+        if has_turn_context_overrides {
+            thread
+                .preview_turn_context_overrides(resolved_overrides.overrides.clone())
+                .await
+                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+        }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if resolved_overrides.has_any_overrides {
+        let turn_op = if has_turn_context_overrides {
             let overrides = resolved_overrides.overrides;
             Op::UserInputWithTurnContext {
                 items: mapped_items,
@@ -571,29 +566,27 @@ impl TurnRequestProcessor {
                 error
             })?;
 
-        if let Some(mut after_turn_context) = after_turn_context {
-            if before_turn_context != after_turn_context {
-                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-                let turn_started = {
-                    let mut thread_state = thread_state.lock().await;
-                    thread_state.turn_started_receiver(&turn_id)
-                };
-                if let Some(turn_started) = turn_started {
-                    // Bound how long the RPC waits for the core turn-start acknowledgement.
-                    tokio::time::timeout(TURN_STARTED_ACK_TIMEOUT, turn_started)
-                        .await
-                        .map_err(|_| {
-                            internal_error(
-                                "timed out waiting for turn context overrides to apply".to_string(),
-                            )
-                        })?
-                        .map_err(|_| {
-                            internal_error("turn context override waiter was cancelled".to_string())
-                        })?;
-                }
-                after_turn_context =
-                    thread_turn_context_from_snapshot(&thread.config_snapshot().await);
+        if has_turn_context_overrides {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let turn_started = {
+                let mut thread_state = thread_state.lock().await;
+                thread_state.turn_started_receiver(&turn_id)
+            };
+            if let Some(turn_started) = turn_started {
+                // Bound how long the RPC waits for the core turn-start acknowledgement.
+                tokio::time::timeout(TURN_STARTED_ACK_TIMEOUT, turn_started)
+                    .await
+                    .map_err(|_| {
+                        internal_error(
+                            "timed out waiting for turn context overrides to apply".to_string(),
+                        )
+                    })?
+                    .map_err(|_| {
+                        internal_error("turn context override waiter was cancelled".to_string())
+                    })?;
             }
+            let after_turn_context =
+                thread_turn_context_from_snapshot(&thread.config_snapshot().await);
             self.maybe_emit_turn_context_updated(
                 &params.thread_id,
                 &before_turn_context,

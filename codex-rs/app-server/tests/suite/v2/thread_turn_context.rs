@@ -252,8 +252,9 @@ async fn turn_start_emits_turn_context_updated_when_overrides_change_defaults() 
     Ok(())
 }
 
-#[tokio::test]
-async fn thread_turn_context_update_after_turn_start_preserves_newer_update() -> Result<()> {
+async fn assert_newer_update_survives_turn_start(
+    turn_start_overrides: TurnStartParams,
+) -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("Done")?,
     ])
@@ -272,9 +273,7 @@ async fn thread_turn_context_update_after_turn_start_preserves_newer_update() ->
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            model: Some("gpt-5.2".to_string()),
-            effort: Some(ReasoningEffort::Low),
-            ..Default::default()
+            ..turn_start_overrides
         })
         .await?;
     let update_request_id = mcp
@@ -329,4 +328,24 @@ async fn thread_turn_context_update_after_turn_start_preserves_newer_update() ->
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn thread_turn_context_update_after_turn_start_preserves_newer_update() -> Result<()> {
+    assert_newer_update_survives_turn_start(TurnStartParams {
+        model: Some("gpt-5.2".to_string()),
+        effort: Some(ReasoningEffort::Low),
+        ..Default::default()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn thread_turn_context_update_after_no_op_turn_start_override_preserves_newer_update()
+-> Result<()> {
+    assert_newer_update_survives_turn_start(TurnStartParams {
+        model: Some("mock-model".to_string()),
+        ..Default::default()
+    })
+    .await
 }
