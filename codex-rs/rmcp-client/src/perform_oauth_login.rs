@@ -650,13 +650,22 @@ mod tests {
             "token_endpoint": format!("{base_url}/oauth/token"),
             "scopes_supported": [""],
         });
-        let app = Router::new().route(
-            "/.well-known/oauth-authorization-server/mcp",
-            get(move || {
-                let metadata = metadata.clone();
-                async move { Json(metadata) }
-            }),
-        );
+        let path_scoped_metadata = metadata.clone();
+        let app = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server/mcp",
+                get(move || {
+                    let metadata = path_scoped_metadata.clone();
+                    async move { Json(metadata) }
+                }),
+            )
+            .route(
+                "/.well-known/oauth-authorization-server",
+                get(move || {
+                    let metadata = metadata.clone();
+                    async move { Json(metadata) }
+                }),
+            );
 
         tokio::spawn(async move {
             axum::serve(listener, app)
