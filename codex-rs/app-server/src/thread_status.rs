@@ -905,6 +905,7 @@ mod tests {
             source,
             thread_source: None,
             git_info: None,
+            artifacts: Vec::new(),
             name: None,
             turns: Vec::new(),
         }

@@ -43,6 +43,7 @@ pub use model::Stage1JobClaim;
 pub use model::Stage1JobClaimOutcome;
 pub use model::Stage1Output;
 pub use model::Stage1StartupClaimParams;
+pub use model::ThreadArtifact;
 pub use model::ThreadGoal;
 pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;

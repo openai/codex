@@ -493,6 +493,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_artifact_create(
+        &self,
+        params: ThreadArtifactCreateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_artifact_create_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_memory_mode_set(
         &self,
         params: ThreadMemoryModeSetParams,
@@ -1578,6 +1587,64 @@ impl ThreadRequestProcessor {
         );
 
         Ok(ThreadMetadataUpdateResponse { thread })
+    }
+
+    async fn thread_artifact_create_response_inner(
+        &self,
+        params: ThreadArtifactCreateParams,
+    ) -> Result<ThreadArtifactCreateResponse, JSONRPCErrorError> {
+        let thread_id = parse_artifact_thread_id(params.thread_id.as_str())?;
+        self.reject_ephemeral_artifact_write(thread_id).await?;
+        let artifact = parse_thread_artifact_write_params(params.artifact)?;
+        let artifact = self
+            .thread_store
+            .create_thread_artifact(StoreCreateThreadArtifactParams {
+                thread_id,
+                artifact,
+            })
+            .await
+            .map_err(|err| thread_store_write_error("create thread artifact", err))?;
+        self.notify_thread_artifacts_updated(thread_id).await?;
+        Ok(ThreadArtifactCreateResponse {
+            artifact: thread_artifact_from_stored_artifact(artifact),
+        })
+    }
+
+    async fn notify_thread_artifacts_updated(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        let artifacts = self
+            .thread_store
+            .list_thread_artifacts(StoreListThreadArtifactsParams { thread_id })
+            .await
+            .map_err(|err| thread_store_write_error("list thread artifacts", err))?
+            .into_iter()
+            .map(thread_artifact_from_stored_artifact)
+            .collect();
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadArtifactsUpdated(
+                ThreadArtifactsUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    artifacts,
+                },
+            ))
+            .await;
+        Ok(())
+    }
+
+    async fn reject_ephemeral_artifact_write(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
+            && thread.config_snapshot().await.ephemeral
+        {
+            return Err(invalid_request(format!(
+                "ephemeral thread does not support artifact updates: {thread_id}"
+            )));
+        }
+        Ok(())
     }
 
     fn normalize_thread_metadata_git_field(
@@ -3735,6 +3802,11 @@ pub(crate) fn thread_from_stored_thread(
         branch: info.branch,
         origin_url: info.repository_url,
     });
+    let artifacts = thread
+        .artifacts
+        .into_iter()
+        .map(thread_artifact_from_stored_artifact)
+        .collect::<Vec<_>>();
     let cwd = AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(
         thread.cwd,
     ))
@@ -3771,10 +3843,38 @@ pub(crate) fn thread_from_stored_thread(
         source: source.into(),
         thread_source: thread.thread_source.map(Into::into),
         git_info,
+        artifacts,
         name: thread.name,
         turns: Vec::new(),
     };
     (thread, history)
+}
+
+fn parse_artifact_thread_id(thread_id: &str) -> Result<ThreadId, JSONRPCErrorError> {
+    ThreadId::from_string(thread_id)
+        .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
+}
+
+fn parse_thread_artifact_write_params(
+    artifact: ThreadArtifactWriteParams,
+) -> Result<StoreNewThreadArtifact, JSONRPCErrorError> {
+    let artifact_type = artifact.artifact_type.trim();
+    if artifact_type.is_empty() {
+        return Err(invalid_request("thread artifact type must not be empty"));
+    }
+    Ok(StoreNewThreadArtifact {
+        artifact_type: artifact_type.to_string(),
+        payload: artifact.payload,
+    })
+}
+
+fn thread_artifact_from_stored_artifact(artifact: StoredThreadArtifact) -> ThreadArtifact {
+    ThreadArtifact {
+        id: artifact.id,
+        created_at: artifact.created_at,
+        artifact_type: artifact.artifact_type,
+        payload: artifact.payload,
+    }
 }
 
 fn summary_from_stored_thread(
@@ -3973,6 +4073,7 @@ fn build_thread_from_snapshot(
         source: config_snapshot.session_source.clone().into(),
         thread_source: config_snapshot.thread_source.map(Into::into),
         git_info: None,
+        artifacts: Vec::new(),
         name: None,
         turns: Vec::new(),
     }

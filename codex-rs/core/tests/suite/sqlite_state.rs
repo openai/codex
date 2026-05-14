@@ -154,6 +154,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     memory_mode: None,
                 },
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             };
 
             let lines = [

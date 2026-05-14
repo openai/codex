@@ -30,7 +30,8 @@ pub(super) async fn read_thread(
     params: ReadThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    if let Some(metadata) = read_sqlite_metadata(store, thread_id).await
+    let sqlite_metadata = read_sqlite_metadata(store, thread_id).await;
+    if let Some(metadata) = sqlite_metadata.clone()
         && (params.include_archived
             || (metadata.archived_at.is_none()
                 && !rollout_path_is_archived(
@@ -75,6 +76,9 @@ pub(super) async fn read_thread(
             message: format!("thread {} is archived", thread.thread_id),
         });
     }
+    if let Some(metadata) = sqlite_metadata {
+        apply_sqlite_git_info(&mut thread, metadata);
+    }
     attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
 }
@@ -109,23 +113,27 @@ pub(super) async fn read_thread_by_rollout_path(
         });
     }
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
-        let existing_git_info = thread.git_info.take();
-        let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
-            Some(info) => (
-                info.commit_hash.map(|sha| sha.0),
-                info.branch,
-                info.repository_url,
-            ),
-            None => (None, None, None),
-        };
-        thread.git_info = git_info_from_parts(
-            metadata.git_sha.or(fallback_sha),
-            metadata.git_branch.or(fallback_branch),
-            metadata.git_origin_url.or(fallback_origin_url),
-        );
+        apply_sqlite_git_info(&mut thread, metadata);
     }
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
+}
+
+fn apply_sqlite_git_info(thread: &mut StoredThread, metadata: ThreadMetadata) {
+    let existing_git_info = thread.git_info.take();
+    let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
+        Some(info) => (
+            info.commit_hash.map(|sha| sha.0),
+            info.branch,
+            info.repository_url,
+        ),
+        None => (None, None, None),
+    };
+    thread.git_info = git_info_from_parts(
+        metadata.git_sha.or(fallback_sha),
+        metadata.git_branch.or(fallback_branch),
+        metadata.git_origin_url.or(fallback_origin_url),
+    );
 }
 
 fn resolve_requested_rollout_path(
@@ -242,6 +250,8 @@ async fn read_thread_from_rollout_path(
     {
         set_thread_name_from_title(&mut thread, title);
     }
+    thread.artifacts =
+        super::thread_artifacts::rollout_thread_artifacts(path.as_path(), thread.thread_id).await?;
     Ok(thread)
 }
 
@@ -313,6 +323,11 @@ async fn stored_thread_from_sqlite_metadata(
             metadata.git_branch,
             metadata.git_origin_url,
         ),
+        artifacts: metadata
+            .artifacts
+            .into_iter()
+            .map(super::thread_artifacts::stored_artifact_from_state)
+            .collect(),
         approval_mode: parse_or_default(&metadata.approval_mode, AskForApproval::OnRequest),
         sandbox_policy: parse_or_default(
             &metadata.sandbox_policy,
@@ -334,9 +349,16 @@ async fn stored_thread_from_session_meta(
             message: format!("failed to read thread {}: {err}", path.display()),
         })?;
     let archived = rollout_path_is_archived(store.config.codex_home.as_path(), path.as_path());
-    Ok(stored_thread_from_meta_line(
-        store, meta_line, path, archived,
-    ))
+    let mut thread = stored_thread_from_meta_line(store, meta_line, path, archived);
+    thread.artifacts = super::thread_artifacts::rollout_thread_artifacts(
+        thread
+            .rollout_path
+            .as_deref()
+            .expect("session-meta thread should retain rollout path"),
+        thread.thread_id,
+    )
+    .await?;
+    Ok(thread)
 }
 
 fn stored_thread_from_meta_line(
@@ -375,6 +397,7 @@ fn stored_thread_from_meta_line(
         agent_role: meta_line.meta.agent_role,
         agent_path: meta_line.meta.agent_path,
         git_info: meta_line.git,
+        artifacts: Vec::new(),
         approval_mode: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,
@@ -418,6 +441,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::CreateThreadArtifactParams;
+    use crate::NewThreadArtifact;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -657,7 +682,6 @@ mod tests {
             .upsert_thread(&metadata)
             .await
             .expect("state db upsert should succeed");
-
         let thread = store
             .read_thread(ReadThreadParams {
                 thread_id,
@@ -668,6 +692,58 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.name, Some("Saved title".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_thread_preserves_sqlite_artifacts_with_rollout_preview() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(225);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        runtime
+            .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
+            .await
+            .expect("state db upsert should succeed");
+        let artifact = store
+            .create_thread_artifact(CreateThreadArtifactParams {
+                thread_id,
+                artifact: NewThreadArtifact {
+                    artifact_type: "github/pull_request".to_string(),
+                    payload: serde_json::json!({
+                    "repoOwner": "openai",
+                    "repoName": "codex",
+                    "number": 910887,
+                    "canonicalUrl": "https://github.com/openai/codex/pull/910887",
+                    }),
+                },
+            })
+            .await
+            .expect("artifact should create");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.preview, "Hello from user");
+        assert_eq!(thread.artifacts.len(), 1);
+        assert_eq!(thread.artifacts[0].id, artifact.id);
     }
 
     #[tokio::test]
@@ -868,6 +944,20 @@ mod tests {
             .upsert_thread(&metadata)
             .await
             .expect("state db upsert should succeed");
+        let artifact = store
+            .create_thread_artifact(CreateThreadArtifactParams {
+                thread_id,
+                artifact: NewThreadArtifact {
+                    artifact_type: "github/pull_request".to_string(),
+                    payload: serde_json::json!({
+                    "repoOwner": "openai",
+                    "repoName": "codex",
+                    "number": 910887,
+                    }),
+                },
+            })
+            .await
+            .expect("artifact should create");
 
         let thread = store
             .read_thread(ReadThreadParams {
@@ -882,9 +972,11 @@ mod tests {
         assert_eq!(thread.rollout_path, Some(rollout_path));
         assert_eq!(thread.preview, "Hello from user");
         assert_eq!(thread.model_provider, config.default_model_provider_id);
+        assert_eq!(thread.artifacts.len(), 1);
+        assert_eq!(thread.artifacts[0].id, artifact.id);
         let history = thread.history.expect("history should load");
         assert_eq!(history.thread_id, thread_id);
-        assert_eq!(history.items.len(), 2);
+        assert_eq!(history.items.len(), 3);
     }
 
     #[tokio::test]

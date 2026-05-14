@@ -42,6 +42,7 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
                 memory_mode: None,
             },
             git: None,
+            artifacts: std::collections::HashMap::new(),
         }),
     };
     let body = serde_json::to_string(&line).map_err(std::io::Error::other)?;

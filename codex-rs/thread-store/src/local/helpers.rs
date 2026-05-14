@@ -139,6 +139,7 @@ pub(super) fn stored_thread_from_rollout_item(
         agent_role: item.agent_role,
         agent_path: None,
         git_info,
+        artifacts: Vec::new(),
         approval_mode: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,

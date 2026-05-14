@@ -1393,6 +1393,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 memory_mode: None,
             },
             git: None,
+            artifacts: std::collections::HashMap::new(),
         }),
     };
     writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;

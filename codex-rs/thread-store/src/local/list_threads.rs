@@ -80,6 +80,8 @@ pub(super) async fn list_threads(
         .map(|thread| thread.thread_id)
         .collect::<HashSet<_>>();
     let mut names = HashMap::<ThreadId, String>::with_capacity(thread_ids.len());
+    let mut artifacts =
+        HashMap::<ThreadId, Vec<crate::StoredThreadArtifact>>::with_capacity(thread_ids.len());
     if let Some(state_db_ctx) = store.state_db().await {
         for &thread_id in &thread_ids {
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
@@ -88,6 +90,14 @@ pub(super) async fn list_threads(
             if let Some(title) = distinct_thread_metadata_title(&metadata) {
                 names.insert(thread_id, title);
             }
+            artifacts.insert(
+                thread_id,
+                metadata
+                    .artifacts
+                    .into_iter()
+                    .map(super::thread_artifacts::stored_artifact_from_state)
+                    .collect(),
+            );
         }
     }
     if names.len() < thread_ids.len()
@@ -101,6 +111,9 @@ pub(super) async fn list_threads(
     for thread in &mut items {
         if let Some(title) = names.get(&thread.thread_id).cloned() {
             set_thread_name_from_title(thread, title);
+        }
+        if let Some(thread_artifacts) = artifacts.remove(&thread.thread_id) {
+            thread.artifacts = thread_artifacts;
         }
     }
 
@@ -193,6 +206,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::CreateThreadArtifactParams;
+    use crate::NewThreadArtifact;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -225,7 +240,7 @@ mod tests {
                 cwd_filters: None,
                 archived: false,
                 search_term: None,
-                use_state_db_only: false,
+                use_state_db_only: true,
             })
             .await
             .expect("thread listing");
@@ -299,6 +314,78 @@ mod tests {
             page.items[0].first_user_message.as_deref(),
             Some("plain preview")
         );
+    }
+
+    #[tokio::test]
+    async fn list_threads_preserves_sqlite_artifacts_for_rollout_rows() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(107);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("backfill should be complete");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path,
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.title = "artifact thread".to_string();
+        metadata.first_user_message = Some("plain preview".to_string());
+        metadata.preview = metadata.first_user_message.clone();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+        let artifact = store
+            .create_thread_artifact(CreateThreadArtifactParams {
+                thread_id,
+                artifact: NewThreadArtifact {
+                    artifact_type: "github/pull_request".to_string(),
+                    payload: serde_json::json!({
+                    "repoOwner": "openai",
+                    "repoName": "codex",
+                    "number": 910887,
+                    "canonicalUrl": "https://github.com/openai/codex/pull/910887",
+                    }),
+                },
+            })
+            .await
+            .expect("artifact should create");
+
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                use_state_db_only: true,
+            })
+            .await
+            .expect("thread listing");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].thread_id, thread_id);
+        assert_eq!(page.items[0].artifacts.len(), 1);
+        assert_eq!(page.items[0].artifacts[0].id, artifact.id);
     }
 
     #[tokio::test]

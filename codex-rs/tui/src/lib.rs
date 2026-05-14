@@ -1990,6 +1990,7 @@ mod tests {
             let session_meta = serde_json::to_value(codex_protocol::protocol::SessionMetaLine {
                 meta: session_meta,
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             })?;
             let lines = [
                 serde_json::json!({

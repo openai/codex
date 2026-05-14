@@ -3032,6 +3032,14 @@
             "null"
           ]
         },
+        "artifacts": {
+          "default": [],
+          "description": "Model-managed artifacts associated with the thread.",
+          "items": {
+            "$ref": "#/definitions/ThreadArtifact"
+          },
+          "type": "array"
+        },
         "cliVersion": {
           "description": "Version of the CLI that created the thread.",
           "type": "string"
@@ -3138,16 +3146,6 @@
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
           "format": "int64",
           "type": "integer"
-        },
-        "artifacts": {
-          "description": "Model-managed artifacts associated with the thread.",
-          "items": {
-            "$ref": "#/definitions/ThreadArtifact"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         }
       },
       "required": [
@@ -3180,6 +3178,46 @@
         }
       },
       "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadArtifact": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "createdAt",
+        "id",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "ThreadArtifactsUpdatedNotification": {
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/definitions/ThreadArtifact"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifacts",
         "threadId"
       ],
       "type": "object"
@@ -4858,52 +4896,6 @@
         "samplePaths"
       ],
       "type": "object"
-    },
-    "ThreadArtifact": {
-      "properties": {
-        "artifactType": {
-          "type": "string"
-        },
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "id": {
-          "type": "string"
-        },
-        "payload": true
-      },
-      "required": [
-        "artifactType",
-        "createdAt",
-        "id",
-        "payload"
-      ],
-      "type": "object"
-    },
-    "ThreadArtifactsUpdatedNotification": {
-      "properties": {
-        "artifacts": {
-          "items": {
-            "$ref": "#/definitions/ThreadArtifact"
-          },
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "artifacts",
-        "threadId"
-      ],
-      "type": "object"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -5087,6 +5079,26 @@
         "params"
       ],
       "title": "Thread/goal/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/artifacts/updated"
+          ],
+          "title": "Thread/artifacts/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadArtifactsUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/artifacts/updatedNotification",
       "type": "object"
     },
     {
@@ -6174,26 +6186,6 @@
         "params"
       ],
       "title": "Account/login/completedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/artifacts/updated"
-          ],
-          "title": "Thread/artifacts/updatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadArtifactsUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/artifacts/updatedNotification",
       "type": "object"
     }
   ],

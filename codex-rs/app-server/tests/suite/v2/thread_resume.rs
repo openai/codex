@@ -1495,6 +1495,7 @@ stream_max_retries = 0
                 "payload": serde_json::to_value(SessionMetaLine {
                     meta: session_meta,
                     git: None,
+                    artifacts: std::collections::HashMap::new(),
                 })?,
             })
             .to_string(),

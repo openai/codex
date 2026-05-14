@@ -403,6 +403,30 @@
             },
             "method": {
               "enum": [
+                "thread/artifact/create"
+              ],
+              "title": "Thread/artifact/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadArtifactCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/artifact/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -2002,102 +2026,6 @@
             "params"
           ],
           "title": "FuzzyFileSearchRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/artifact/list"
-              ],
-              "title": "Thread/artifact/listRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadArtifactListParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/artifact/listRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/artifact/create"
-              ],
-              "title": "Thread/artifact/createRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadArtifactCreateParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/artifact/createRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/artifact/update"
-              ],
-              "title": "Thread/artifact/updateRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadArtifactUpdateParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/artifact/updateRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/artifact/delete"
-              ],
-              "title": "Thread/artifact/deleteRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadArtifactDeleteParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/artifact/deleteRequest",
           "type": "object"
         }
       ],
@@ -4063,6 +3991,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/artifacts/updated"
+              ],
+              "title": "Thread/artifacts/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadArtifactsUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/artifacts/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/goal/cleared"
               ],
               "title": "Thread/goal/clearedNotificationMethod",
@@ -5144,26 +5092,6 @@
             "params"
           ],
           "title": "Account/login/completedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/artifacts/updated"
-              ],
-              "title": "Thread/artifacts/updatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadArtifactsUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/artifacts/updatedNotification",
           "type": "object"
         }
       ],
@@ -15211,6 +15139,14 @@
               "null"
             ]
           },
+          "artifacts": {
+            "default": [],
+            "description": "Model-managed artifacts associated with the thread.",
+            "items": {
+              "$ref": "#/definitions/v2/ThreadArtifact"
+            },
+            "type": "array"
+          },
           "cliVersion": {
             "description": "Version of the CLI that created the thread.",
             "type": "string"
@@ -15317,16 +15253,6 @@
             "description": "Unix timestamp (in seconds) when the thread was last updated.",
             "format": "int64",
             "type": "integer"
-          },
-          "artifacts": {
-            "description": "Model-managed artifacts associated with the thread.",
-            "items": {
-              "$ref": "#/definitions/v2/ThreadArtifact"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
           }
         },
         "required": [
@@ -15403,6 +15329,91 @@
           "threadId"
         ],
         "title": "ThreadArchivedNotification",
+        "type": "object"
+      },
+      "ThreadArtifact": {
+        "properties": {
+          "artifactType": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "payload": true
+        },
+        "required": [
+          "artifactType",
+          "createdAt",
+          "id",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "ThreadArtifactCreateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "artifact": {
+            "$ref": "#/definitions/v2/ThreadArtifactWriteParams"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact",
+          "threadId"
+        ],
+        "title": "ThreadArtifactCreateParams",
+        "type": "object"
+      },
+      "ThreadArtifactCreateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "artifact": {
+            "$ref": "#/definitions/v2/ThreadArtifact"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "title": "ThreadArtifactCreateResponse",
+        "type": "object"
+      },
+      "ThreadArtifactWriteParams": {
+        "properties": {
+          "artifactType": {
+            "type": "string"
+          },
+          "payload": true
+        },
+        "required": [
+          "artifactType",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "ThreadArtifactsUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadArtifact"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifacts",
+          "threadId"
+        ],
+        "title": "ThreadArtifactsUpdatedNotification",
         "type": "object"
       },
       "ThreadClosedNotification": {
@@ -18614,182 +18625,6 @@
           "okOverridden"
         ],
         "type": "string"
-      },
-      "ThreadArtifact": {
-        "properties": {
-          "artifactType": {
-            "type": "string"
-          },
-          "createdAt": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "id": {
-            "type": "string"
-          },
-          "payload": true
-        },
-        "required": [
-          "artifactType",
-          "createdAt",
-          "id",
-          "payload"
-        ],
-        "type": "object"
-      },
-      "ThreadArtifactCreateParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifact": {
-            "$ref": "#/definitions/v2/ThreadArtifactWriteParams"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "artifact",
-          "threadId"
-        ],
-        "title": "ThreadArtifactCreateParams",
-        "type": "object"
-      },
-      "ThreadArtifactCreateResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifact": {
-            "$ref": "#/definitions/v2/ThreadArtifact"
-          }
-        },
-        "required": [
-          "artifact"
-        ],
-        "title": "ThreadArtifactCreateResponse",
-        "type": "object"
-      },
-      "ThreadArtifactDeleteParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifactId": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "artifactId",
-          "threadId"
-        ],
-        "title": "ThreadArtifactDeleteParams",
-        "type": "object"
-      },
-      "ThreadArtifactDeleteResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadArtifactDeleteResponse",
-        "type": "object"
-      },
-      "ThreadArtifactListParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadArtifactListParams",
-        "type": "object"
-      },
-      "ThreadArtifactListResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifacts": {
-            "items": {
-              "$ref": "#/definitions/v2/ThreadArtifact"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "artifacts"
-        ],
-        "title": "ThreadArtifactListResponse",
-        "type": "object"
-      },
-      "ThreadArtifactUpdateParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifact": {
-            "$ref": "#/definitions/v2/ThreadArtifactWriteParams"
-          },
-          "artifactId": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "artifact",
-          "artifactId",
-          "threadId"
-        ],
-        "title": "ThreadArtifactUpdateParams",
-        "type": "object"
-      },
-      "ThreadArtifactUpdateResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifact": {
-            "$ref": "#/definitions/v2/ThreadArtifact"
-          }
-        },
-        "required": [
-          "artifact"
-        ],
-        "title": "ThreadArtifactUpdateResponse",
-        "type": "object"
-      },
-      "ThreadArtifactWriteParams": {
-        "properties": {
-          "artifactType": {
-            "type": "string"
-          },
-          "payload": true
-        },
-        "required": [
-          "artifactType",
-          "payload"
-        ],
-        "type": "object"
-      },
-      "ThreadArtifactsUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "artifacts": {
-            "items": {
-              "$ref": "#/definitions/v2/ThreadArtifact"
-            },
-            "type": "array"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "artifacts",
-          "threadId"
-        ],
-        "title": "ThreadArtifactsUpdatedNotification",
-        "type": "object"
       }
     }
   },

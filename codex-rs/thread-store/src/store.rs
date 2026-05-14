@@ -4,9 +4,11 @@ use std::any::Any;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
+use crate::CreateThreadArtifactParams;
 use crate::CreateThreadParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
+use crate::ListThreadArtifactsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
@@ -14,6 +16,7 @@ use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
+use crate::StoredThreadArtifact;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
 use crate::ThreadStoreError;
@@ -71,6 +74,18 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Lists stored threads matching the supplied filters.
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage>;
+
+    /// Lists artifacts associated with a thread in insertion order.
+    async fn list_thread_artifacts(
+        &self,
+        params: ListThreadArtifactsParams,
+    ) -> ThreadStoreResult<Vec<StoredThreadArtifact>>;
+
+    /// Creates an artifact and returns the persisted record.
+    async fn create_thread_artifact(
+        &self,
+        params: CreateThreadArtifactParams,
+    ) -> ThreadStoreResult<StoredThreadArtifact>;
 
     /// Lists turns within a stored thread.
     async fn list_turns(&self, _params: ListTurnsParams) -> ThreadStoreResult<TurnPage> {

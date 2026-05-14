@@ -7,6 +7,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
+use serde::Deserialize;
+use serde::Serialize;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
@@ -107,6 +109,8 @@ pub struct ThreadMetadata {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Model-managed artifacts attached to the thread.
+    pub artifacts: Vec<crate::ThreadArtifact>,
 }
 
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
@@ -148,6 +152,8 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Model-managed artifacts attached to the thread.
+    pub artifacts: Vec<crate::ThreadArtifact>,
 }
 
 impl ThreadMetadataBuilder {
@@ -177,6 +183,7 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            artifacts: Vec::new(),
         }
     }
 
@@ -221,6 +228,7 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
+            artifacts: self.artifacts.clone(),
         }
     }
 }
@@ -311,6 +319,9 @@ impl ThreadMetadata {
         if self.git_origin_url != other.git_origin_url {
             diffs.push("git_origin_url");
         }
+        if self.artifacts != other.artifacts {
+            diffs.push("artifacts");
+        }
         diffs
     }
 }
@@ -345,6 +356,7 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
+    artifacts_json: String,
 }
 
 impl ThreadRow {
@@ -374,6 +386,7 @@ impl ThreadRow {
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
+            artifacts_json: row.try_get("artifacts_json")?,
         })
     }
 }
@@ -407,13 +420,15 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            artifacts_json,
         } = row;
         let thread_source = thread_source
             .map(|thread_source| thread_source.parse())
             .transpose()
             .map_err(anyhow::Error::msg)?;
+        let thread_id = ThreadId::try_from(id)?;
         Ok(Self {
-            id: ThreadId::try_from(id)?,
+            id: thread_id,
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
@@ -438,8 +453,47 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            artifacts: artifacts_from_json(thread_id, artifacts_json.as_str())?,
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredThreadArtifactMetadata {
+    id: String,
+    created_at: i64,
+    artifact_type: String,
+    payload: serde_json::Value,
+}
+
+pub(crate) fn artifacts_to_json(artifacts: &[crate::ThreadArtifact]) -> Result<String> {
+    serde_json::to_string(
+        &artifacts
+            .iter()
+            .map(|artifact| StoredThreadArtifactMetadata {
+                id: artifact.id.clone(),
+                created_at: artifact.created_at.timestamp(),
+                artifact_type: artifact.artifact_type.clone(),
+                payload: artifact.payload.clone(),
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(Into::into)
+}
+
+fn artifacts_from_json(thread_id: ThreadId, json: &str) -> Result<Vec<crate::ThreadArtifact>> {
+    serde_json::from_str::<Vec<StoredThreadArtifactMetadata>>(json)?
+        .into_iter()
+        .map(|artifact| {
+            Ok(crate::ThreadArtifact {
+                thread_id,
+                id: artifact.id,
+                created_at: epoch_seconds_to_datetime(artifact.created_at)?,
+                artifact_type: artifact.artifact_type,
+                payload: artifact.payload,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
@@ -524,6 +578,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            artifacts_json: "[]".to_string(),
         }
     }
 
@@ -554,6 +609,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            artifacts: Vec::new(),
         }
     }
 

@@ -29,6 +29,7 @@ pub(crate) async fn read_summary_from_rollout(
     let SessionMetaLine {
         meta: session_meta,
         git,
+        ..
     } = session_meta_line;
     let mut session_meta = session_meta;
     session_meta.source = with_thread_spawn_agent_metadata(
@@ -290,6 +291,7 @@ pub(crate) fn summary_to_thread(
         source: source.into(),
         thread_source: None,
         git_info,
+        artifacts: Vec::new(),
         name: None,
         turns: Vec::new(),
     }

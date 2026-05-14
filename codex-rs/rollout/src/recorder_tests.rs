@@ -101,6 +101,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             memory_mode: None,
         },
         git: None,
+        artifacts: std::collections::HashMap::new(),
     };
     let lines = [
         RolloutLine {

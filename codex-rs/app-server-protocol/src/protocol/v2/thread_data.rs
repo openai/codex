@@ -150,9 +150,8 @@ pub struct Thread {
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
     /// Model-managed artifacts associated with the thread.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub artifacts: Option<Vec<ThreadArtifact>>,
+    #[serde(default)]
+    pub artifacts: Vec<ThreadArtifact>,
     /// Optional user-facing thread title.
     pub name: Option<String>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`

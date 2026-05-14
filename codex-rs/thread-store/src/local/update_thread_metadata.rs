@@ -23,9 +23,9 @@ use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::local::read_thread;
 
-struct ResolvedRolloutPath {
-    path: PathBuf,
-    archived: bool,
+pub(super) struct ResolvedRolloutPath {
+    pub(super) path: PathBuf,
+    pub(super) archived: bool,
 }
 
 pub(super) async fn update_thread_metadata(
@@ -114,13 +114,13 @@ pub(super) async fn update_thread_metadata(
         apply_thread_git_info_to_rollout(
             resolved_rollout_path.path.as_path(),
             thread_id,
-            sha,
-            branch,
-            origin_url,
+            &sha,
+            &branch,
+            &origin_url,
             memory_mode.as_deref(),
         )
         .await?;
-        apply_thread_git_info(store, thread_id, sha, branch, origin_url).await?;
+        apply_thread_git_info(store, thread_id, &sha, &branch, &origin_url).await?;
     }
 
     let mut thread = match read_thread::read_thread(
@@ -228,6 +228,7 @@ async fn apply_thread_git_info_to_rollout(
         branch: branch.clone(),
         repository_url: origin_url.clone(),
     });
+    session_meta.artifacts.clear();
     session_meta.meta.memory_mode = memory_mode.map(str::to_string);
     append_rollout_item_to_path(rollout_path, &RolloutItem::SessionMeta(session_meta))
         .await
@@ -285,6 +286,7 @@ async fn apply_thread_memory_mode(
     // Memory-mode updates should not modify git metadata. The rollout replay
     // code will preserve the latest prior git marker when this field is absent.
     session_meta.git = None;
+    session_meta.artifacts.clear();
     session_meta.meta.memory_mode = Some(memory_mode_as_str(memory_mode).to_string());
     append_rollout_item_to_path(rollout_path, &RolloutItem::SessionMeta(session_meta))
         .await
@@ -300,7 +302,7 @@ fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
     }
 }
 
-async fn resolve_rollout_path(
+pub(super) async fn resolve_rollout_path(
     store: &LocalThreadStore,
     thread_id: ThreadId,
     include_archived: bool,
@@ -362,7 +364,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::CreateThreadArtifactParams;
     use crate::GitInfoPatch;
+    use crate::ListThreadArtifactsParams;
+    use crate::NewThreadArtifact;
     use crate::ResumeThreadParams;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
@@ -456,6 +461,17 @@ mod tests {
         .expect("state db should initialize");
         let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
 
+        let artifact = store
+            .create_thread_artifact(CreateThreadArtifactParams {
+                thread_id,
+                artifact: NewThreadArtifact {
+                    artifact_type: "github/pull_request".to_string(),
+                    payload: json!({ "number": 910887 }),
+                },
+            })
+            .await
+            .expect("create artifact");
+
         store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
@@ -491,6 +507,7 @@ mod tests {
         assert_eq!(appended["type"], "session_meta");
         assert_eq!(appended["payload"]["memory_mode"], "disabled");
         assert_eq!(appended["payload"]["git"]["branch"], "feature");
+        assert!(appended["payload"].get("artifacts").is_none());
 
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
@@ -507,6 +524,13 @@ mod tests {
             .await
             .expect("thread memory mode should be readable");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        assert_eq!(
+            store
+                .list_thread_artifacts(ListThreadArtifactsParams { thread_id })
+                .await
+                .expect("thread artifacts should remain readable"),
+            vec![artifact]
+        );
     }
 
     #[tokio::test]

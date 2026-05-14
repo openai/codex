@@ -321,7 +321,7 @@ async fn run_codex_tool_session_inner(
                         tracing::error!("unexpected SessionConfigured event");
                     }
                     EventMsg::ThreadGoalUpdated(_) => {
-                        // Ignore thread goal metadata updates in MCP tool runner.
+                        // Ignore thread metadata updates in MCP tool runner.
                     }
                     EventMsg::McpStartupUpdate(_) | EventMsg::McpStartupComplete(_) => {
                         // Ignored in MCP tool runner.

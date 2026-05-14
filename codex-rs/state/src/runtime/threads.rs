@@ -31,7 +31,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.artifacts_json
 FROM threads
 WHERE threads.id = ?
             "#,
@@ -479,6 +480,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
+        let artifacts_json = crate::model::artifacts_to_json(metadata.artifacts.as_slice())?;
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -509,8 +511,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    artifacts_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -550,6 +553,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(artifacts_json)
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -566,6 +570,23 @@ ON CONFLICT(id) DO NOTHING
         let result = sqlx::query("UPDATE threads SET memory_mode = ? WHERE id = ?")
             .bind(memory_mode)
             .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn append_thread_artifact(
+        &self,
+        artifact: crate::ThreadArtifact,
+    ) -> anyhow::Result<bool> {
+        let Some(mut metadata) = self.get_thread(artifact.thread_id).await? else {
+            return Ok(false);
+        };
+        metadata.artifacts.push(artifact);
+        let artifacts_json = crate::model::artifacts_to_json(metadata.artifacts.as_slice())?;
+        let result = sqlx::query("UPDATE threads SET artifacts_json = ? WHERE id = ?")
+            .bind(artifacts_json)
+            .bind(metadata.id.to_string())
             .execute(self.pool.as_ref())
             .await?;
         Ok(result.rows_affected() > 0)
@@ -685,6 +706,7 @@ WHERE id = ?
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
+        let artifacts_json = crate::model::artifacts_to_json(metadata.artifacts.as_slice())?;
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -715,8 +737,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    artifacts_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -743,7 +766,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
     git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url),
+    artifacts_json = excluded.artifacts_json
             "#,
         )
         .bind(metadata.id.to_string())
@@ -782,6 +806,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(artifacts_json)
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
@@ -998,7 +1023,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.artifacts_json
 "#,
     );
 }
@@ -1169,6 +1195,7 @@ mod tests {
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadArtifact as RolloutThreadArtifact;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -1208,6 +1235,124 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn thread_artifacts_restore_from_session_meta_in_creation_order() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000321").expect("valid thread id");
+        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("thread insert should succeed");
+
+        let builder = ThreadMetadataBuilder::new(
+            thread_id,
+            metadata.rollout_path.clone(),
+            metadata.created_at,
+            SessionSource::Cli,
+        );
+        runtime
+            .apply_rollout_items(
+                &builder,
+                &[
+                    RolloutItem::SessionMeta(SessionMetaLine {
+                        meta: SessionMeta {
+                            id: thread_id,
+                            timestamp: metadata.created_at.to_rfc3339(),
+                            source: SessionSource::Cli,
+                            ..Default::default()
+                        },
+                        git: None,
+                        artifacts: std::collections::HashMap::from([(
+                            "artifact-1".to_string(),
+                            Some(RolloutThreadArtifact {
+                                created_at: 1_700_000_001,
+                                artifact_type: "github/pull_request".to_string(),
+                                payload: serde_json::json!({ "number": 12 }),
+                            }),
+                        )]),
+                    }),
+                    RolloutItem::SessionMeta(SessionMetaLine {
+                        meta: SessionMeta {
+                            id: thread_id,
+                            timestamp: metadata.created_at.to_rfc3339(),
+                            source: SessionSource::Cli,
+                            ..Default::default()
+                        },
+                        git: None,
+                        artifacts: std::collections::HashMap::from([(
+                            "artifact-2".to_string(),
+                            Some(RolloutThreadArtifact {
+                                created_at: 1_700_000_002,
+                                artifact_type: "github/pull_request".to_string(),
+                                payload: serde_json::json!({ "number": 34 }),
+                            }),
+                        )]),
+                    }),
+                ],
+                /*new_thread_memory_mode*/ None,
+                /*updated_at_override*/ None,
+            )
+            .await
+            .expect("artifacts should restore from rollout metadata");
+
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("thread should load")
+                .expect("thread should exist")
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["artifact-1", "artifact-2"]
+        );
+
+        runtime
+            .apply_rollout_items(
+                &builder,
+                &[RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: SessionMeta {
+                        id: thread_id,
+                        timestamp: metadata.created_at.to_rfc3339(),
+                        source: SessionSource::Cli,
+                        ..Default::default()
+                    },
+                    git: None,
+                    artifacts: std::collections::HashMap::from([
+                        (
+                            "artifact-1".to_string(),
+                            Some(RolloutThreadArtifact {
+                                created_at: 1_700_000_001,
+                                artifact_type: "github/pull_request".to_string(),
+                                payload: serde_json::json!({ "number": 56 }),
+                            }),
+                        ),
+                        ("artifact-2".to_string(), None),
+                    ]),
+                })],
+                /*new_thread_memory_mode*/ None,
+                /*updated_at_override*/ None,
+            )
+            .await
+            .expect("artifact patches should apply from rollout metadata");
+
+        let artifacts = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist")
+            .artifacts;
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].id, "artifact-1");
+        assert_eq!(artifacts[0].payload, serde_json::json!({ "number": 56 }));
     }
 
     #[tokio::test]
@@ -1405,6 +1550,7 @@ mod tests {
                 memory_mode: Some("polluted".to_string()),
             },
             git: None,
+            artifacts: std::collections::HashMap::new(),
         })];
 
         runtime
@@ -1468,6 +1614,7 @@ mod tests {
                 branch: Some("rollout-branch".to_string()),
                 repository_url: Some("git@example.com:openai/codex.git".to_string()),
             }),
+            artifacts: std::collections::HashMap::new(),
         })];
 
         runtime

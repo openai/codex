@@ -516,25 +516,10 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
-    ThreadArtifactList => "thread/artifact/list" {
-        params: v2::ThreadArtifactListParams,
-        serialization: thread_id(params.thread_id),
-        response: v2::ThreadArtifactListResponse,
-    },
     ThreadArtifactCreate => "thread/artifact/create" {
         params: v2::ThreadArtifactCreateParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArtifactCreateResponse,
-    },
-    ThreadArtifactUpdate => "thread/artifact/update" {
-        params: v2::ThreadArtifactUpdateParams,
-        serialization: thread_id(params.thread_id),
-        response: v2::ThreadArtifactUpdateResponse,
-    },
-    ThreadArtifactDelete => "thread/artifact/delete" {
-        params: v2::ThreadArtifactDeleteParams,
-        serialization: thread_id(params.thread_id),
-        response: v2::ThreadArtifactDeleteResponse,
     },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
@@ -2286,7 +2271,7 @@ mod tests {
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
-                    artifacts: None,
+                    artifacts: Vec::new(),
                     name: None,
                     turns: Vec::new(),
                 },

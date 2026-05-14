@@ -2759,6 +2759,15 @@ pub struct SessionMetaLine {
     pub meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitInfo>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub artifacts: HashMap<String, Option<ThreadArtifact>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ThreadArtifact {
+    pub created_at: i64,
+    pub artifact_type: String,
+    pub payload: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]

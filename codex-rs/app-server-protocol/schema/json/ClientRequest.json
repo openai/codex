@@ -3322,6 +3322,34 @@
       ],
       "type": "object"
     },
+    "ThreadArtifactCreateParams": {
+      "properties": {
+        "artifact": {
+          "$ref": "#/definitions/ThreadArtifactWriteParams"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadArtifactWriteParams": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "payload"
+      ],
+      "type": "object"
+    },
     "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
@@ -4397,79 +4425,6 @@
         "mode"
       ],
       "type": "object"
-    },
-    "ThreadArtifactCreateParams": {
-      "properties": {
-        "artifact": {
-          "$ref": "#/definitions/ThreadArtifactWriteParams"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "artifact",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadArtifactDeleteParams": {
-      "properties": {
-        "artifactId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "artifactId",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadArtifactListParams": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadArtifactUpdateParams": {
-      "properties": {
-        "artifact": {
-          "$ref": "#/definitions/ThreadArtifactWriteParams"
-        },
-        "artifactId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "artifact",
-        "artifactId",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadArtifactWriteParams": {
-      "properties": {
-        "artifactType": {
-          "type": "string"
-        },
-        "payload": true
-      },
-      "required": [
-        "artifactType",
-        "payload"
-      ],
-      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -4665,6 +4620,30 @@
         "params"
       ],
       "title": "Thread/metadata/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/artifact/create"
+          ],
+          "title": "Thread/artifact/createRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadArtifactCreateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/artifact/createRequest",
       "type": "object"
     },
     {
@@ -6273,102 +6252,6 @@
         "params"
       ],
       "title": "FuzzyFileSearchRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/artifact/list"
-          ],
-          "title": "Thread/artifact/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadArtifactListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/artifact/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/artifact/create"
-          ],
-          "title": "Thread/artifact/createRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadArtifactCreateParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/artifact/createRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/artifact/update"
-          ],
-          "title": "Thread/artifact/updateRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadArtifactUpdateParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/artifact/updateRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/artifact/delete"
-          ],
-          "title": "Thread/artifact/deleteRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadArtifactDeleteParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/artifact/deleteRequest",
       "type": "object"
     }
   ],

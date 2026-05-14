@@ -1332,6 +1332,14 @@
             "null"
           ]
         },
+        "artifacts": {
+          "default": [],
+          "description": "Model-managed artifacts associated with the thread.",
+          "items": {
+            "$ref": "#/definitions/ThreadArtifact"
+          },
+          "type": "array"
+        },
         "cliVersion": {
           "description": "Version of the CLI that created the thread.",
           "type": "string"
@@ -1438,16 +1446,6 @@
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
           "format": "int64",
           "type": "integer"
-        },
-        "artifacts": {
-          "description": "Model-managed artifacts associated with the thread.",
-          "items": {
-            "$ref": "#/definitions/ThreadArtifact"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         }
       },
       "required": [
@@ -1472,6 +1470,28 @@
         "waitingOnUserInput"
       ],
       "type": "string"
+    },
+    "ThreadArtifact": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "createdAt",
+        "id",
+        "payload"
+      ],
+      "type": "object"
     },
     "ThreadId": {
       "type": "string"
@@ -2568,28 +2588,6 @@
           "type": "object"
         }
       ]
-    },
-    "ThreadArtifact": {
-      "properties": {
-        "artifactType": {
-          "type": "string"
-        },
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "id": {
-          "type": "string"
-        },
-        "payload": true
-      },
-      "required": [
-        "artifactType",
-        "createdAt",
-        "id",
-        "payload"
-      ],
-      "type": "object"
     }
   },
   "properties": {

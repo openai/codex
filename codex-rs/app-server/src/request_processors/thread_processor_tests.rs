@@ -375,6 +375,37 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn thread_artifacts_preserve_client_defined_payloads() {
+        let artifact = parse_thread_artifact_write_params(ThreadArtifactWriteParams {
+            artifact_type: "github/pull_request".to_string(),
+            payload: json!({
+                "repoOwner": "openai",
+                "repoName": "codex",
+                "number": 123,
+            }),
+        })
+        .expect("generic artifact payload should parse");
+
+        assert_eq!(artifact.artifact_type, "github/pull_request");
+        assert_eq!(artifact.payload["number"], 123);
+    }
+
+    #[test]
+    fn thread_artifacts_reject_empty_types() {
+        let err = parse_thread_artifact_write_params(ThreadArtifactWriteParams {
+            artifact_type: String::new(),
+            payload: json!({}),
+        })
+        .expect_err("empty artifact type should be rejected");
+
+        assert!(
+            err.message.contains("type"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn summary_from_stored_thread_preserves_millisecond_precision() {
         let created_at =
             DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
@@ -402,6 +433,7 @@ mod thread_processor_behavior_tests {
             agent_role: None,
             agent_path: None,
             git_info: None,
+            artifacts: Vec::new(),
             approval_mode: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             token_usage: None,
@@ -889,6 +921,7 @@ mod thread_processor_behavior_tests {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta.clone(),
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             }),
         };
 
@@ -955,6 +988,7 @@ mod thread_processor_behavior_tests {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta,
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             }),
         };
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
@@ -996,6 +1030,7 @@ mod thread_processor_behavior_tests {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta,
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             }),
         };
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;

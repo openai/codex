@@ -58,6 +58,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
             branch: Some("main".to_string()),
             repository_url: None,
         }),
+        artifacts: Vec::new(),
         approval_mode: AskForApproval::Never,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,

@@ -68,6 +68,34 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         metadata.git_branch = git.branch.clone();
         metadata.git_origin_url = git.repository_url.clone();
     }
+    for (id, artifact) in &meta_line.artifacts {
+        match artifact {
+            Some(artifact) => {
+                let Some(created_at) =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp(artifact.created_at, 0)
+                else {
+                    continue;
+                };
+                let updated_artifact = crate::ThreadArtifact {
+                    thread_id: metadata.id,
+                    id: id.clone(),
+                    created_at,
+                    artifact_type: artifact.artifact_type.clone(),
+                    payload: artifact.payload.clone(),
+                };
+                if let Some(existing) = metadata
+                    .artifacts
+                    .iter_mut()
+                    .find(|existing| existing.id == *id)
+                {
+                    *existing = updated_artifact;
+                } else {
+                    metadata.artifacts.push(updated_artifact);
+                }
+            }
+            None => metadata.artifacts.retain(|artifact| artifact.id != *id),
+        }
+    }
 }
 
 fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem) {
@@ -328,6 +356,7 @@ mod tests {
                     memory_mode: None,
                 },
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             }),
             "test-provider",
         );
@@ -462,6 +491,7 @@ mod tests {
                     memory_mode: None,
                 },
                 git: None,
+                artifacts: std::collections::HashMap::new(),
             }),
             "test-provider",
         );
@@ -498,6 +528,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            artifacts: Vec::new(),
         }
     }
 

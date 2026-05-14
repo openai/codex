@@ -200,7 +200,6 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(CreateGoalHandler));
         builder.register_handler(Arc::new(UpdateGoalHandler));
     }
-
     builder.register_handler(Arc::new(RequestUserInputHandler {
         available_modes: config.request_user_input_available_modes.clone(),
     }));

@@ -150,6 +150,7 @@ pub fn create_fake_rollout_with_source(
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
         git: git_info,
+        artifacts: std::collections::HashMap::new(),
     })?;
 
     let lines = [
@@ -234,6 +235,7 @@ pub fn create_fake_rollout_with_text_elements(
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
         git: git_info,
+        artifacts: std::collections::HashMap::new(),
     })?;
 
     let lines = [

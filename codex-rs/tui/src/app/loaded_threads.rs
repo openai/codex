@@ -134,6 +134,7 @@ mod tests {
             agent_nickname: None,
             agent_role: None,
             git_info: None,
+            artifacts: Vec::new(),
             name: None,
             turns: Vec::new(),
         }

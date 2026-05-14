@@ -16,6 +16,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 /// Controls how many event variants should be persisted for future replay.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +336,8 @@ pub struct StoredThread {
     pub agent_path: Option<String>,
     /// Optional Git metadata captured for the thread.
     pub git_info: Option<GitInfo>,
+    /// Model-managed artifacts attached to the thread.
+    pub artifacts: Vec<StoredThreadArtifact>,
     /// Approval mode captured for the thread.
     pub approval_mode: AskForApproval,
     /// Sandbox policy captured for the thread.
@@ -345,6 +348,39 @@ pub struct StoredThread {
     pub first_user_message: Option<String>,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
+}
+
+/// Store-owned model-managed thread artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredThreadArtifact {
+    /// Stable artifact id.
+    pub id: String,
+    /// Unix timestamp in seconds when the artifact was created.
+    pub created_at: i64,
+    /// Namespaced artifact kind chosen by the client.
+    pub artifact_type: String,
+    /// Opaque client-defined artifact payload.
+    pub payload: JsonValue,
+}
+
+/// Parameters for listing thread artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListThreadArtifactsParams {
+    pub thread_id: ThreadId,
+}
+
+/// Parameters for creating a thread artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateThreadArtifactParams {
+    pub thread_id: ThreadId,
+    pub artifact: NewThreadArtifact,
+}
+
+/// New artifact payload accepted by the store.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewThreadArtifact {
+    pub artifact_type: String,
+    pub payload: JsonValue,
 }
 
 /// Optional field patch where omission leaves a value unchanged and `Some(None)` clears it.

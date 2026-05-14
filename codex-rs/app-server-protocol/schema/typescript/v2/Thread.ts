@@ -77,7 +77,7 @@ gitInfo: GitInfo | null,
 /**
  * Model-managed artifacts associated with the thread.
  */
-artifacts?: Array<ThreadArtifact>,
+artifacts: Array<ThreadArtifact>,
 /**
  * Optional user-facing thread title.
  */
