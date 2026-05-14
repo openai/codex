@@ -760,7 +760,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
         && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.permission_profile().get())
+            codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         event_processor.process_warning(message);
     }
