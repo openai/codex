@@ -166,13 +166,21 @@ async fn experimental_feature_enablement_set_applies_to_global_and_thread_config
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let actual =
-        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
-            .await?;
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([
+            ("apps".to_string(), true),
+            ("apps_mcp_path_override".to_string(), true),
+        ]),
+    )
+    .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureEnablementSetResponse {
-            enablement: BTreeMap::from([("apps".to_string(), true)]),
+            enablement: BTreeMap::from([
+                ("apps".to_string(), true),
+                ("apps_mcp_path_override".to_string(), true),
+            ]),
         }
     );
 
@@ -184,6 +192,13 @@ async fn experimental_feature_enablement_set_applies_to_global_and_thread_config
                 .additional
                 .get("features")
                 .and_then(|features| features.get("apps")),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            config
+                .additional
+                .get("features")
+                .and_then(|features| features.get("apps_mcp_path_override")),
             Some(&json!(true))
         );
     }

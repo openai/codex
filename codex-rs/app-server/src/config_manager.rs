@@ -8,6 +8,7 @@ use codex_config::loader::load_config_layers_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_exec_server::LOCAL_FS;
+use codex_features::Feature;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
@@ -335,5 +336,75 @@ pub(crate) fn apply_runtime_feature_enablement(
                 "failed to apply runtime feature enablement"
             );
         }
+    }
+
+    let apps_mcp_path_override_key = Feature::AppsMcpPathOverride.key();
+    if !protected_features.contains(apps_mcp_path_override_key) {
+        config.apps_mcp_path_override =
+            config
+                .features
+                .enabled(Feature::AppsMcpPathOverride)
+                .then(|| {
+                    config
+                        .apps_mcp_path_override
+                        .clone()
+                        .unwrap_or_else(|| "/ps/mcp".to_string())
+                });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn runtime_feature_enablement_defaults_apps_mcp_path_override() -> std::io::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let manager =
+            ConfigManager::without_managed_config_for_tests(codex_home.path().to_path_buf());
+        manager
+            .extend_runtime_feature_enablement([(
+                Feature::AppsMcpPathOverride.key().to_string(),
+                true,
+            )])
+            .expect("runtime feature enablement should update");
+
+        let config = manager.load_latest_config(/*fallback_cwd*/ None).await?;
+
+        assert_eq!(config.features.enabled(Feature::AppsMcpPathOverride), true);
+        assert_eq!(config.apps_mcp_path_override.as_deref(), Some("/ps/mcp"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_feature_enablement_preserves_configured_apps_mcp_path_override()
+    -> std::io::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[features.apps_mcp_path_override]
+enabled = true
+path = "/custom/mcp"
+"#,
+        )?;
+        let manager =
+            ConfigManager::without_managed_config_for_tests(codex_home.path().to_path_buf());
+        manager
+            .extend_runtime_feature_enablement([(
+                Feature::AppsMcpPathOverride.key().to_string(),
+                false,
+            )])
+            .expect("runtime feature enablement should update");
+
+        let config = manager.load_latest_config(/*fallback_cwd*/ None).await?;
+
+        assert_eq!(config.features.enabled(Feature::AppsMcpPathOverride), true);
+        assert_eq!(
+            config.apps_mcp_path_override.as_deref(),
+            Some("/custom/mcp")
+        );
+        Ok(())
     }
 }

@@ -49,6 +49,7 @@ use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "apps",
+    "apps_mcp_path_override",
     "memories",
     "mentions_v2",
     "plugins",
