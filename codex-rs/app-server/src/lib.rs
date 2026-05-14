@@ -514,9 +514,16 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let state_db_result = rollout_state_db::try_init(&config).await;
-    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
-    let state_db = state_db_result.ok();
+    let state_db = match rollout_state_db::try_init(&config).await {
+        Ok(state_db) => Some(state_db),
+        Err(err) => {
+            let state_db_path = codex_state::state_db_path(config.sqlite_home.as_path());
+            return Err(std::io::Error::other(format!(
+                "failed to initialize sqlite state db at {}: {err}",
+                state_db_path.display()
+            )));
+        }
+    };
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -633,10 +640,6 @@ pub async fn run_main_with_transport_options(
         }
     }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    if let Some(err) = &state_db_init_error {
-        error!("failed to initialize sqlite state db: {err}");
-    }
-
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
