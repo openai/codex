@@ -1,4 +1,6 @@
 use super::*;
+use codex_backend_client::CredentialRouteAuthType;
+use codex_backend_client::ResolvedCredentialRoute;
 use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
 use codex_network_proxy::NetworkDomainPermission;
@@ -78,6 +80,37 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
         Some(vec!["*.example.com".to_string()])
     );
     assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(true));
+}
+
+#[test]
+fn credentialed_routes_add_runtime_allowlist_and_mitm_hooks() {
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        None,
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+    )
+    .expect("config should load");
+    let credentialed_routes = crate::credentialed_routes::CredentialedRoutesSessionConfig {
+        routes: vec![ResolvedCredentialRoute {
+            connector_id: "connector_123".to_string(),
+            link_id: "link_123".to_string(),
+            auth_type: CredentialRouteAuthType::OAuth,
+            base_url: "https://api.example.com/v1".to_string(),
+        }],
+        proxy_url: Some("https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string()),
+    };
+
+    let spec = spec
+        .with_credentialed_routes(&credentialed_routes)
+        .expect("credentialed routes should fit unconstrained config");
+
+    assert_eq!(
+        spec.config.network.allowed_domains(),
+        Some(vec!["api.example.com".to_string()])
+    );
+    assert!(spec.config.network.mitm);
+    assert_eq!(spec.config.network.mitm_hooks.len(), 1);
+    assert_eq!(spec.config.network.mitm_hooks[0].host, "api.example.com");
 }
 
 #[test]

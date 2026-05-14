@@ -47,6 +47,7 @@ use std::task::Context as TaskContext;
 use std::task::Poll;
 use tracing::info;
 use tracing::warn;
+use url::Url;
 
 /// State needed to terminate a CONNECT tunnel and enforce policy on inner HTTPS requests.
 pub struct MitmState {
@@ -228,10 +229,22 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
     let (mut parts, body) = req.into_parts();
     apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
     let authority = authority_header_value(&target_host, target_port);
-    parts.uri = build_https_uri(&authority, &path)?;
-    parts
-        .headers
-        .insert(HOST, HeaderValue::from_str(&authority)?);
+    let original_request_uri = build_https_uri(&authority, &path)?;
+    if let Some(actions) = hook_actions.as_ref()
+        && let Some(credentialed_route_proxy) = actions.credentialed_route_proxy.as_ref()
+    {
+        let (proxy_uri, proxy_authority) =
+            credentialed_route_proxy_request(credentialed_route_proxy, &original_request_uri)?;
+        parts.uri = proxy_uri;
+        parts
+            .headers
+            .insert(HOST, HeaderValue::from_str(&proxy_authority)?);
+    } else {
+        parts.uri = original_request_uri;
+        parts
+            .headers
+            .insert(HOST, HeaderValue::from_str(&authority)?);
+    }
 
     let inspect = mitm.inspect_enabled();
     let max_body_bytes = mitm.max_body_bytes();
@@ -545,6 +558,31 @@ fn authority_header_value(host: &str, port: u16) -> String {
 fn build_https_uri(authority: &str, path: &str) -> Result<Uri> {
     let target = format!("https://{authority}{path}");
     Ok(target.parse()?)
+}
+
+fn credentialed_route_proxy_request(
+    action: &crate::mitm_hook::CredentialedRouteProxyAction,
+    request_uri: &Uri,
+) -> Result<(Uri, String)> {
+    let mut proxy_url = Url::parse(&action.proxy_url)
+        .with_context(|| format!("invalid credentialed route proxy URL {}", action.proxy_url))?;
+    proxy_url
+        .query_pairs_mut()
+        .append_pair("link_id", &action.link_id)
+        .append_pair("connector_id", &action.connector_id)
+        .append_pair("request_url", &request_uri.to_string());
+    let proxy_authority = url_authority_header_value(&proxy_url)?;
+    Ok((proxy_url.as_str().parse()?, proxy_authority))
+}
+
+fn url_authority_header_value(url: &Url) -> Result<String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("URL must include a host"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("URL must include a known port"))?;
+    Ok(authority_header_value(host, port))
 }
 
 fn path_and_query(uri: &Uri) -> String {

@@ -177,6 +177,37 @@ impl NetworkProxySpec {
         Ok(spec)
     }
 
+    pub(crate) fn with_credentialed_routes(
+        &self,
+        credentialed_routes: &crate::credentialed_routes::CredentialedRoutesSessionConfig,
+    ) -> std::io::Result<Self> {
+        let mut spec = self.clone();
+        let credentialed_route_hooks = credentialed_routes.mitm_hooks();
+        let mut allowed_domains = spec.config.network.allowed_domains().unwrap_or_default();
+        for hook in &credentialed_route_hooks {
+            if !allowed_domains
+                .iter()
+                .any(|allowed_domain| normalize_host(allowed_domain) == normalize_host(&hook.host))
+            {
+                allowed_domains.push(hook.host.clone());
+            }
+        }
+        spec.config.network.set_allowed_domains(allowed_domains);
+        let mut mitm_hooks = credentialed_route_hooks;
+        mitm_hooks.extend(spec.config.network.mitm_hooks);
+        spec.config.network.mitm_hooks = mitm_hooks;
+        spec.config.network.mitm = spec.config.network.mode
+            == codex_network_proxy::NetworkMode::Limited
+            || !spec.config.network.mitm_hooks.is_empty();
+        validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("network proxy constraints are invalid: {err}"),
+            )
+        })?;
+        Ok(spec)
+    }
+
     pub(crate) async fn apply_to_started_proxy(
         &self,
         started_proxy: &StartedNetworkProxy,

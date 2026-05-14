@@ -877,7 +877,7 @@ async fn thread_title_from_thread_store(
 
 struct ManagedNetworkProxyStartParams<'a> {
     spec: &'a crate::config::NetworkProxySpec,
-    credentialed_routes: &'a [codex_backend_client::ResolvedCredentialRoute],
+    credentialed_routes: &'a crate::credentialed_routes::CredentialedRoutesSessionConfig,
     exec_policy: &'a codex_execpolicy::Policy,
     permission_profile: &'a PermissionProfile,
     network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
@@ -961,10 +961,18 @@ impl Session {
         }: ManagedNetworkProxyStartParams<'_>,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
         debug!(
-            credentialed_routes = credentialed_routes.len(),
+            credentialed_routes = credentialed_routes.routes.len(),
             "starting managed network proxy"
         );
         let spec = spec
+            .with_credentialed_routes(credentialed_routes)
+            .map_err(|err| {
+                tracing::warn!(
+                    "failed to apply credentialed routes to managed proxy; continuing without credentialed routes: {err}"
+                );
+                err
+            })
+            .unwrap_or_else(|_| spec.clone())
             .with_exec_policy_network_rules(exec_policy)
             .map_err(|err| {
                 tracing::warn!(
@@ -1020,6 +1028,15 @@ impl Session {
             Ok(spec) => spec,
             Err(err) => {
                 warn!("failed to rebuild managed network proxy policy for sandbox change: {err}");
+                return;
+            }
+        };
+        let spec = match spec.with_credentialed_routes(&self.services.credentialed_routes) {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!(
+                    "failed to apply credentialed routes while refreshing managed network proxy: {err}"
+                );
                 return;
             }
         };

@@ -685,7 +685,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
 
     let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
         spec: &spec,
-        credentialed_routes: &[],
+        credentialed_routes: &crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         exec_policy: &exec_policy,
         permission_profile: &permission_profile_for_sandbox_policy(
             &SandboxPolicy::new_workspace_write_policy(),
@@ -732,7 +732,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 
     let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
         spec: &spec,
-        credentialed_routes: &[],
+        credentialed_routes: &crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         exec_policy: &exec_policy,
         permission_profile: &permission_profile_for_sandbox_policy(
             &SandboxPolicy::new_workspace_write_policy(),
@@ -774,7 +774,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
 
     let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
         spec: &spec,
-        credentialed_routes: &[],
+        credentialed_routes: &crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         exec_policy: &exec_policy,
         permission_profile: &permission_profile_for_sandbox_policy(
             &SandboxPolicy::DangerFullAccess,
@@ -849,7 +849,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     )?;
     let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
         spec: &spec,
-        credentialed_routes: &[],
+        credentialed_routes: &crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         exec_policy: &Policy::empty(),
         permission_profile: &permission_profile_for_sandbox_policy(&initial_policy),
         network_policy_decider: None,
@@ -4352,6 +4352,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
+        credentialed_routes: crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
@@ -6208,6 +6209,7 @@ where
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
+        credentialed_routes: crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,
