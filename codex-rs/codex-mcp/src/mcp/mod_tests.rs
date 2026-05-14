@@ -279,6 +279,7 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
             disabled_tools: None,
             scopes: None,
             oauth: None,
+            oauth_resource: None,
             tools: HashMap::new(),
         },
     );
@@ -303,6 +304,7 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
             disabled_tools: None,
             scopes: None,
             oauth: None,
+            oauth_resource: None,
             tools: HashMap::new(),
         },
     );

@@ -350,10 +350,10 @@ mod document_helpers {
             oauth_table["client_id"] = value(client_id.clone());
             entry["oauth"] = TomlItem::Table(oauth_table);
         }
-        if let Some(resource) = config.oauth_resource()
+        if let Some(resource) = &config.oauth_resource
             && !resource.is_empty()
         {
-            entry["oauth_resource"] = value(resource);
+            entry["oauth_resource"] = value(resource.clone());
         }
         if !config.tools.is_empty() {
             let mut tools = new_implicit_table();

@@ -277,31 +277,10 @@ fn deserialize_streamable_http_server_config_with_oauth_resource() {
     )
     .expect("should deserialize http config with oauth_resource");
 
-    assert_eq!(cfg.oauth_resource(), Some("https://api.example.com"));
-}
-
-#[test]
-fn serialize_preserves_top_level_oauth_resource_for_refresh_payloads() {
-    let cfg: McpServerConfig = toml::from_str(
-        r#"
-            url = "https://example.com/mcp"
-            oauth_resource = "https://api.example.com"
-        "#,
-    )
-    .expect("should deserialize http config with oauth_resource");
-
-    let serialized = serde_json::to_value(&cfg).expect("should serialize MCP config");
     assert_eq!(
-        serialized.get("oauth_resource"),
-        Some(&serde_json::Value::String(
-            "https://api.example.com".to_string()
-        ))
+        cfg.oauth_resource,
+        Some("https://api.example.com".to_string())
     );
-    assert!(serialized.get("oauth").is_none());
-
-    let round_tripped: McpServerConfig =
-        serde_json::from_value(serialized).expect("should deserialize serialized MCP config");
-    assert_eq!(round_tripped, cfg);
 }
 
 #[test]
@@ -320,7 +299,6 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
         cfg.oauth,
         Some(McpServerOAuthConfig {
             client_id: Some("eci-prd-pub-codex-123".to_string()),
-            resource: None,
         })
     );
 }
@@ -436,6 +414,7 @@ fn deserialize_ignores_unknown_server_fields() {
             disabled_tools: None,
             scopes: None,
             oauth: None,
+            oauth_resource: None,
             tools: HashMap::new(),
         }
     );

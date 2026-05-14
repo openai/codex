@@ -333,6 +333,7 @@ fn insert_mcp_server(
             disabled_tools: None,
             scopes: None,
             oauth: None,
+            oauth_resource: None,
             tools: HashMap::new(),
         },
     );

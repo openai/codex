@@ -231,6 +231,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     disabled_tools: None,
                     scopes: None,
                     oauth: None,
+                    oauth_resource: None,
                     tools: HashMap::new(),
                 },
             )]),
@@ -696,6 +697,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                 disabled_tools: None,
                 scopes: None,
                 oauth: None,
+                oauth_resource: None,
                 tools: HashMap::new(),
             },
         )])
@@ -807,6 +809,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 disabled_tools: None,
                 scopes: None,
                 oauth: None,
+                oauth_resource: None,
                 tools: HashMap::new(),
             },
         )])
@@ -968,6 +971,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         disabled_tools: None,
         scopes: None,
         oauth: None,
+        oauth_resource: None,
         tools: HashMap::new(),
     };
     let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
