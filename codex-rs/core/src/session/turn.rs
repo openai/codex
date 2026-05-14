@@ -9,7 +9,6 @@ use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
@@ -40,7 +39,6 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
-use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -241,15 +239,6 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let config = turn_context.config.clone();
-    if config
-        .features
-        .enabled(Feature::SkillEnvVarDependencyPrompt)
-    {
-        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
-        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
-    }
-
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
         turn_context.as_ref(),

@@ -168,7 +168,7 @@ pub enum Feature {
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
-    /// Prompt for missing skill env var dependencies.
+    /// Removed compatibility flag for deleted skill env var dependency prompting.
     SkillEnvVarDependencyPrompt,
     /// Enable the unified mention popup prototype.
     MentionsV2,
@@ -429,6 +429,9 @@ impl Features {
                     continue;
                 }
                 "image_detail_original" => {
+                    continue;
+                }
+                "skill_env_var_dependency_prompt" => {
                     continue;
                 }
                 "use_legacy_landlock" => {
@@ -1037,7 +1040,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
