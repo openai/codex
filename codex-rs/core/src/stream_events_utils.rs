@@ -131,32 +131,40 @@ pub(crate) async fn record_completed_response_item(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
-    record_completed_response_item_with_final_memory_citation(
+    record_completed_response_item_with_finalized_facts(
         sess,
         turn_context,
         item,
-        /*final_memory_citation*/ None,
+        /*finalized_facts*/ None,
     )
     .await;
 }
 
-pub(crate) async fn record_completed_response_item_with_final_memory_citation(
+pub(crate) async fn record_completed_response_item_with_finalized_facts(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
-    final_memory_citation: Option<&MemoryCitation>,
+    finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
-    if completed_item_defers_mailbox_delivery_to_next_turn(
-        item,
-        turn_context.collaboration_mode.mode == ModeKind::Plan,
-    ) {
+    let defers_mailbox_delivery = finalized_facts.map_or_else(
+        || {
+            completed_item_defers_mailbox_delivery_to_next_turn(
+                item,
+                turn_context.collaboration_mode.mode == ModeKind::Plan,
+            )
+        },
+        |facts| facts.defers_mailbox_delivery_to_next_turn,
+    );
+    if defers_mailbox_delivery {
         sess.defer_mailbox_delivery_to_next_turn(&turn_context.sub_id)
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation = if let Some(memory_citation) = final_memory_citation {
+    let has_memory_citation = if let Some(memory_citation) =
+        finalized_facts.and_then(|facts| facts.memory_citation.as_ref())
+    {
         record_stage1_output_usage_for_memory_citation(
             sess.services.state_db.as_ref(),
             memory_citation,
@@ -271,28 +279,63 @@ pub(crate) enum TurnItemContributorPolicy<'a> {
     Run(&'a ExtensionData),
 }
 
-fn turn_item_memory_citation(item: &TurnItem) -> Option<MemoryCitation> {
-    if let TurnItem::AgentMessage(agent_message) = item {
-        return agent_message.memory_citation.clone();
-    }
-    None
+pub(crate) struct FinalizedTurnItem {
+    pub(crate) turn_item: TurnItem,
+    pub(crate) facts: FinalizedTurnItemFacts,
 }
 
-pub(crate) fn last_agent_message_from_turn_item(item: &TurnItem) -> Option<String> {
-    let TurnItem::AgentMessage(agent_message) = item else {
-        return None;
-    };
-    let combined = agent_message
-        .content
-        .iter()
-        .map(|entry| match entry {
-            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-        })
-        .collect::<String>();
-    if combined.trim().is_empty() {
-        return None;
-    }
-    Some(combined)
+#[derive(Clone, Default)]
+pub(crate) struct FinalizedTurnItemFacts {
+    pub(crate) memory_citation: Option<MemoryCitation>,
+    pub(crate) last_agent_message: Option<String>,
+    pub(crate) defers_mailbox_delivery_to_next_turn: bool,
+}
+
+pub(crate) async fn finalize_non_tool_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    contributor_policy: TurnItemContributorPolicy<'_>,
+    item: &ResponseItem,
+    plan_mode: bool,
+) -> Option<FinalizedTurnItem> {
+    let turn_item =
+        handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
+            .await?;
+    let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
+        match &turn_item {
+            TurnItem::AgentMessage(agent_message) => {
+                let combined = agent_message
+                    .content
+                    .iter()
+                    .map(|entry| match entry {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<String>();
+                let last_agent_message = if combined.trim().is_empty() {
+                    None
+                } else {
+                    Some(combined)
+                };
+                let defers_mailbox_delivery_to_next_turn =
+                    !matches!(agent_message.phase, Some(MessagePhase::Commentary))
+                        && last_agent_message.is_some();
+                (
+                    agent_message.memory_citation.clone(),
+                    last_agent_message,
+                    defers_mailbox_delivery_to_next_turn,
+                )
+            }
+            TurnItem::ImageGeneration(_) => (None, None, true),
+            _ => (None, None, false),
+        };
+    Some(FinalizedTurnItem {
+        turn_item,
+        facts: FinalizedTurnItemFacts {
+            memory_citation,
+            last_agent_message,
+            defers_mailbox_delivery_to_next_turn,
+        },
+    })
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -334,7 +377,7 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let turn_item = handle_non_tool_response_item(
+            let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
@@ -342,13 +385,12 @@ pub(crate) async fn handle_output_item_done(
                 plan_mode,
             )
             .await;
-            let mut final_memory_citation = None;
-            let mut last_agent_message = None;
-            if let Some(turn_item) = turn_item {
-                final_memory_citation = turn_item_memory_citation(&turn_item);
-                last_agent_message = last_agent_message_from_turn_item(&turn_item);
+            let finalized_facts = finalized_turn_item
+                .as_ref()
+                .map(|finalized| finalized.facts.clone());
+            if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
-                    let mut started_item = turn_item.clone();
+                    let mut started_item = finalized_turn_item.turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
                         item.status = "in_progress".to_string();
                         item.revised_prompt = None;
@@ -361,18 +403,18 @@ pub(crate) async fn handle_output_item_done(
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed(&ctx.turn_context, turn_item)
+                    .emit_turn_item_completed(&ctx.turn_context, finalized_turn_item.turn_item)
                     .await;
             }
-            record_completed_response_item_with_final_memory_citation(
+            record_completed_response_item_with_finalized_facts(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
-                final_memory_citation.as_ref(),
+                finalized_facts.as_ref(),
             )
             .await;
 
-            output.last_agent_message = last_agent_message;
+            output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }
         // Guardrail: the model issued a LocalShellCall without an id; surface the error back into history.
         Err(FunctionCallError::MissingLocalShellCallId) => {

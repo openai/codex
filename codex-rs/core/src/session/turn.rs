@@ -45,13 +45,13 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
+use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
-use crate::stream_events_utils::last_agent_message_from_turn_item;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
-use crate::stream_events_utils::record_completed_response_item_with_final_memory_citation;
+use crate::stream_events_utils::record_completed_response_item_with_finalized_facts;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -1730,8 +1730,7 @@ async fn emit_turn_item_in_plan_mode(
     turn_item: TurnItem,
     previously_active_item: Option<&TurnItem>,
     state: &mut PlanModeStreamState,
-) -> Option<String> {
-    let last_agent_message = last_agent_message_from_turn_item(&turn_item);
+) {
     match turn_item {
         TurnItem::AgentMessage(agent_message) => {
             emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
@@ -1743,7 +1742,6 @@ async fn emit_turn_item_in_plan_mode(
             sess.emit_turn_item_completed(turn_context, turn_item).await;
         }
     }
-    last_agent_message
 }
 
 /// Handle a completed assistant response item in plan mode, returning true if handled.
@@ -1761,9 +1759,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        let mut final_memory_citation = None;
-        let mut final_last_agent_message = None;
-        if let Some(turn_item) = handle_non_tool_response_item(
+        let mut finalized_facts = None;
+        if let Some(finalized_turn_item) = finalize_non_tool_response_item(
             sess,
             turn_context,
             TurnItemContributorPolicy::Run(turn_store),
@@ -1772,24 +1769,25 @@ async fn handle_assistant_item_done_in_plan_mode(
         )
         .await
         {
-            if let TurnItem::AgentMessage(agent_message) = &turn_item {
-                final_memory_citation = agent_message.memory_citation.clone();
-            }
-            final_last_agent_message = emit_turn_item_in_plan_mode(
+            finalized_facts = Some(finalized_turn_item.facts.clone());
+            emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
-                turn_item,
+                finalized_turn_item.turn_item,
                 previously_active_item,
                 state,
             )
             .await;
         }
+        let final_last_agent_message = finalized_facts
+            .as_ref()
+            .and_then(|facts| facts.last_agent_message.clone());
 
-        record_completed_response_item_with_final_memory_citation(
+        record_completed_response_item_with_finalized_facts(
             sess,
             turn_context,
             item,
-            final_memory_citation.as_ref(),
+            finalized_facts.as_ref(),
         )
         .await;
         if let Some(agent_message) = final_last_agent_message {

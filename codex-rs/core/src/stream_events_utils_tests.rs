@@ -1,6 +1,7 @@
 use super::HandleOutputCtx;
 use super::TurnItemContributorPolicy;
 use super::completed_item_defers_mailbox_delivery_to_next_turn;
+use super::finalize_non_tool_response_item;
 use super::handle_non_tool_response_item;
 use super::handle_output_item_done;
 use super::image_generation_artifact_path;
@@ -301,6 +302,58 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         output.last_agent_message.as_deref(),
         Some("contributed assistant text")
     );
+}
+
+#[tokio::test]
+async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
+    session.services.extensions = Arc::new(builder.build());
+    let turn_store = ExtensionData::new();
+    let item = assistant_output_text("<oai-mem-citation>hidden only</oai-mem-citation>");
+
+    let finalized = finalize_non_tool_response_item(
+        &session,
+        &turn_context,
+        TurnItemContributorPolicy::Run(&turn_store),
+        &item,
+        /*plan_mode*/ false,
+    )
+    .await
+    .expect("assistant message should parse");
+
+    assert_eq!(
+        finalized.facts.last_agent_message.as_deref(),
+        Some("contributed assistant text")
+    );
+    assert!(finalized.facts.defers_mailbox_delivery_to_next_turn);
+}
+
+#[tokio::test]
+async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
+    session.services.extensions = Arc::new(builder.build());
+    let turn_store = ExtensionData::new();
+    let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
+
+    let finalized = finalize_non_tool_response_item(
+        &session,
+        &turn_context,
+        TurnItemContributorPolicy::Run(&turn_store),
+        &item,
+        /*plan_mode*/ false,
+    )
+    .await
+    .expect("assistant message should parse");
+
+    assert_eq!(
+        finalized.facts.last_agent_message.as_deref(),
+        Some("contributed assistant text")
+    );
+    assert!(!finalized.facts.defers_mailbox_delivery_to_next_turn);
 }
 
 #[test]
