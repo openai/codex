@@ -321,10 +321,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
-    let user_config_path = match config_profile_v2.as_ref() {
-        Some(profile_v2) => Some(resolve_profile_v2_config_path(&codex_home, profile_v2)),
-        None => None,
-    };
+    let user_config_path = config_profile_v2
+        .as_ref()
+        .map(|profile_v2| resolve_profile_v2_config_path(&codex_home, profile_v2));
     let loader_overrides = LoaderOverrides {
         user_config_path,
         user_config_profile: config_profile_v2,
