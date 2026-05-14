@@ -78,6 +78,7 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    pending_turn_started_waiters: HashMap<String, Vec<oneshot::Sender<()>>>,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -112,6 +113,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
+        self.pending_turn_started_waiters.clear();
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
@@ -131,16 +133,45 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn turn_started_receiver(&mut self, turn_id: &str) -> Option<oneshot::Receiver<()>> {
+        if self
+            .active_turn_snapshot()
+            .is_some_and(|turn| turn.id == turn_id)
+            || self.last_terminal_turn_id.as_deref() == Some(turn_id)
+        {
+            return None;
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.pending_turn_started_waiters
+            .entry(turn_id.to_string())
+            .or_default()
+            .push(tx);
+        Some(rx)
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
+        if let EventMsg::TurnStarted(payload) = event {
+            self.notify_turn_started(&payload.turn_id);
+        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
+            self.notify_turn_started(event_turn_id);
+        }
+    }
+
+    fn notify_turn_started(&mut self, turn_id: &str) {
+        if let Some(waiters) = self.pending_turn_started_waiters.remove(turn_id) {
+            for waiter in waiters {
+                let _ = waiter.send(());
+            }
         }
     }
 }
