@@ -107,7 +107,7 @@ impl ChatWidget {
             mask.model = Some(current_model);
             mask.reasoning_effort = Some(Some(next_effort));
             self.app_event_tx.send(AppEvent::CodexOp(
-                self.collaboration_mode_override_command(&mut mask),
+                self.explicit_collaboration_mode_override_command(&mask),
             ));
             self.app_event_tx
                 .send(AppEvent::UpdatePlanModeReasoningEffort(Some(next_effort)));

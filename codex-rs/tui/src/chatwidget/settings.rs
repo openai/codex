@@ -565,6 +565,13 @@ impl ChatWidget {
         mask: &mut CollaborationModeMask,
     ) -> AppCommand {
         self.apply_plan_reasoning_override_to_mask(mask);
+        self.explicit_collaboration_mode_override_command(mask)
+    }
+
+    pub(super) fn explicit_collaboration_mode_override_command(
+        &self,
+        mask: &CollaborationModeMask,
+    ) -> AppCommand {
         AppCommand::override_collaboration_mode(self.current_collaboration_mode.apply_mask(mask))
     }
 

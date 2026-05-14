@@ -306,7 +306,7 @@ impl ChatWidget {
             mask.mode = Some(ModeKind::Plan);
             mask.model = Some(model.clone());
             mask.reasoning_effort = Some(effort);
-            let override_command = self.collaboration_mode_override_command(&mut mask);
+            let override_command = self.explicit_collaboration_mode_override_command(&mask);
             move |tx| {
                 tx.send(AppEvent::CodexOp(override_command.clone()));
                 tx.send(AppEvent::UpdateModel(model.clone()));
@@ -319,7 +319,7 @@ impl ChatWidget {
             mask.mode = Some(ModeKind::Plan);
             mask.model = Some(model.clone());
             mask.reasoning_effort = Some(effort);
-            let override_command = self.collaboration_mode_override_command(&mut mask);
+            let override_command = self.explicit_collaboration_mode_override_command(&mask);
             move |tx| {
                 tx.send(AppEvent::CodexOp(override_command.clone()));
                 tx.send(AppEvent::UpdateModel(model.clone()));

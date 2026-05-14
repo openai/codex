@@ -2,16 +2,20 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 fn assert_collaboration_override(events: &[AppEvent], expected: ModeKind) {
-    assert!(
-        events.iter().any(|event| match event {
+    assert_eq!(collaboration_override(events).mode, expected);
+}
+
+fn collaboration_override(events: &[AppEvent]) -> &CollaborationMode {
+    events
+        .iter()
+        .find_map(|event| match event {
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                collaboration_mode: Some(CollaborationMode { mode, .. }),
+                collaboration_mode: Some(mode),
                 ..
-            }) => mode == &expected,
-            _ => false,
-        }),
-        "expected {expected:?} mode next-turn state override; events: {events:?}"
-    );
+            }) => Some(mode),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected next-turn state override; events: {events:?}"))
 }
 
 #[test]
@@ -683,12 +687,17 @@ async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_overr
 #[tokio::test]
 async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
     chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = drain_app_events(&mut rx);
     assert_collaboration_override(&events, ModeKind::Plan);
+    assert_eq!(
+        collaboration_override(&events).settings.reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
     assert!(
         events.iter().any(|event| matches!(
             event,
