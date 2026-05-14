@@ -141,14 +141,7 @@ fn full_disk_read_policy_keeps_appkit_platform_ipc_allowances() {
     );
 
     for required in [
-        "(sysctl-name \"kern.bootargs\")",
-        "(sysctl-name \"kern.iossupportversion\")",
-        "(sysctl-name \"kern.willshutdown\")",
-        "(sysctl-name \"security.mac.lockdown_mode_state\")",
-        "(global-name \"com.apple.CoreServices.coreservicesd\")",
         "(global-name \"com.apple.coreservices.launchservicesd\")",
-        "(global-name \"com.apple.hiservices-xpcservice\")",
-        "(global-name \"com.apple.lsd.mapdb\")",
         "(global-name \"com.apple.windowserver.active\")",
         "(allow system-socket (socket-domain AF_UNIX))",
         "(allow network-bind (prefix \"/private/tmp/OSL_PIPE_\"))",
@@ -160,6 +153,13 @@ fn full_disk_read_policy_keeps_appkit_platform_ipc_allowances() {
     }
 
     for overly_broad in [
+        "(sysctl-name \"kern.bootargs\")",
+        "(sysctl-name \"kern.iossupportversion\")",
+        "(sysctl-name \"kern.willshutdown\")",
+        "(sysctl-name \"security.mac.lockdown_mode_state\")",
+        "(global-name \"com.apple.CoreServices.coreservicesd\")",
+        "(global-name \"com.apple.hiservices-xpcservice\")",
+        "(global-name \"com.apple.lsd.mapdb\")",
         "(global-name \"com.apple.windowserver\")",
         "(global-name \"com.apple.ViewBridgeAuxiliary\")",
         "(allow network-bind (local unix-socket (subpath \"/private/tmp\")))",
