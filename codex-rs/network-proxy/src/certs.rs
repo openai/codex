@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use base64::Engine as _;
 use codex_utils_home_dir::find_codex_home;
 use rama_net::tls::ApplicationProtocol;
 use rama_tls_rustls::dep::pki_types::CertificateDer;
@@ -19,6 +20,7 @@ use rama_tls_rustls::dep::rcgen::PKCS_ECDSA_P256_SHA256;
 use rama_tls_rustls::dep::rcgen::SanType;
 use rama_tls_rustls::dep::rustls;
 use rama_tls_rustls::server::TlsAcceptorData;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -29,6 +31,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::info;
+use tracing::warn;
 
 pub(super) struct ManagedMitmCa {
     issuer: Issuer<'static, KeyPair>,
@@ -95,6 +98,20 @@ fn issue_host_certificate_pem(
 const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
+const MANAGED_MITM_CA_TRUST_BUNDLE: &str = "ca-bundle.pem";
+
+const CUSTOM_CA_ENV_KEYS: &[&str] = &[
+    "CODEX_CA_CERTIFICATE",
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "GIT_SSL_CAINFO",
+    "PIP_CERT",
+    "BUNDLE_SSL_CA_CERT",
+    "npm_config_cafile",
+    "NPM_CONFIG_CAFILE",
+];
 
 fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
     let codex_home =
@@ -104,6 +121,85 @@ fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
         proxy_dir.join(MANAGED_MITM_CA_CERT).to_path_buf(),
         proxy_dir.join(MANAGED_MITM_CA_KEY).to_path_buf(),
     ))
+}
+
+pub(crate) fn managed_ca_trust_bundle_path(env: &HashMap<String, String>) -> Result<PathBuf> {
+    let (cert_path, _) = managed_ca_paths()?;
+    let trust_bundle_path = cert_path
+        .parent()
+        .ok_or_else(|| anyhow!("managed MITM CA cert path is missing a parent"))?
+        .join(MANAGED_MITM_CA_TRUST_BUNDLE);
+    let trust_bundle = build_managed_ca_trust_bundle(&cert_path, env)?;
+    write_atomic_replace(
+        &trust_bundle_path,
+        trust_bundle.as_bytes(),
+        /*mode*/ 0o644,
+    )
+    .with_context(|| {
+        format!(
+            "failed to persist managed MITM CA trust bundle {}",
+            trust_bundle_path.display()
+        )
+    })?;
+    Ok(trust_bundle_path)
+}
+
+fn build_managed_ca_trust_bundle(
+    managed_ca_cert_path: &Path,
+    env: &HashMap<String, String>,
+) -> Result<String> {
+    let mut trust_bundle = String::new();
+    let rustls_native_certs::CertificateResult { certs, errors, .. } =
+        rustls_native_certs::load_native_certs();
+    if !errors.is_empty() {
+        warn!(
+            native_root_error_count = errors.len(),
+            "encountered errors while loading native root certificates for MITM trust bundle"
+        );
+    }
+    for cert in certs {
+        push_certificate_pem(&mut trust_bundle, cert.as_ref());
+    }
+
+    let mut custom_ca_paths = Vec::new();
+    for key in CUSTOM_CA_ENV_KEYS {
+        let Some(path) = env.get(*key).filter(|path| !path.is_empty()) else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        if path == managed_ca_cert_path || custom_ca_paths.contains(&path) {
+            continue;
+        }
+        custom_ca_paths.push(path);
+    }
+    for path in custom_ca_paths {
+        append_pem_file(&mut trust_bundle, &path)?;
+    }
+    append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
+    Ok(trust_bundle)
+}
+
+fn append_pem_file(bundle: &mut String, path: &Path) -> Result<()> {
+    if !bundle.ends_with('\n') {
+        bundle.push('\n');
+    }
+    let pem = fs::read_to_string(path)
+        .with_context(|| format!("failed to read CA bundle {}", path.display()))?;
+    bundle.push_str(&pem);
+    if !bundle.ends_with('\n') {
+        bundle.push('\n');
+    }
+    Ok(())
+}
+
+fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
+    bundle.push_str("-----BEGIN CERTIFICATE-----\n");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    for chunk in encoded.as_bytes().chunks(64) {
+        bundle.push_str(&String::from_utf8_lossy(chunk));
+        bundle.push('\n');
+    }
+    bundle.push_str("-----END CERTIFICATE-----\n");
 }
 
 fn load_or_create_ca() -> Result<(String, String)> {
@@ -235,6 +331,55 @@ fn write_atomic_create_new(path: &Path, contents: &[u8], mode: u32) -> Result<()
     dir.sync_all()
         .with_context(|| format!("failed to fsync {}", parent.display()))?;
 
+    Ok(())
+}
+
+fn write_atomic_replace(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
+    if fs::read(path).ok().as_deref() == Some(contents) {
+        return Ok(());
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("missing parent directory"))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    if fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(anyhow!("refusing to overwrite symlink {}", path.display()));
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp_path = parent.join(format!(".{file_name}.tmp.{pid}.{nanos}"));
+
+    let mut file = open_create_new_with_mode(&tmp_path, mode)?;
+    file.write_all(contents)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", tmp_path.display()))?;
+    drop(file);
+
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    }
+    fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+
+    let dir = File::open(parent).with_context(|| format!("failed to open {}", parent.display()))?;
+    dir.sync_all()
+        .with_context(|| format!("failed to fsync {}", parent.display()))?;
     Ok(())
 }
 
