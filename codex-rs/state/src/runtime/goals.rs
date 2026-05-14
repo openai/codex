@@ -182,6 +182,10 @@ RETURNING
 UPDATE thread_goals
 SET
     objective = COALESCE(?, objective),
+    time_used_seconds = time_used_seconds + CASE
+        WHEN status = 'active' THEN MAX(0, (? - updated_at_ms) / 1000)
+        ELSE 0
+    END,
     status = CASE
         WHEN status = ? AND ? = ? THEN status
         WHEN ? = 'active' AND ? IS NOT NULL AND tokens_used >= ? THEN ?
@@ -194,6 +198,7 @@ WHERE thread_id = ?
             "#,
                 )
                 .bind(objective)
+                .bind(now_ms)
                 .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
                 .bind(status.as_str())
                 .bind(crate::ThreadGoalStatus::Paused.as_str())
@@ -216,6 +221,10 @@ WHERE thread_id = ?
 UPDATE thread_goals
 SET
     objective = COALESCE(?, objective),
+    time_used_seconds = time_used_seconds + CASE
+        WHEN status = 'active' THEN MAX(0, (? - updated_at_ms) / 1000)
+        ELSE 0
+    END,
     status = CASE
         WHEN status = ? AND ? = ? THEN status
         WHEN ? = 'active' AND token_budget IS NOT NULL AND tokens_used >= token_budget THEN ?
@@ -227,6 +236,7 @@ WHERE thread_id = ?
             "#,
                 )
                 .bind(objective)
+                .bind(now_ms)
                 .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
                 .bind(status.as_str())
                 .bind(crate::ThreadGoalStatus::Paused.as_str())
@@ -246,6 +256,10 @@ WHERE thread_id = ?
 UPDATE thread_goals
 SET
     objective = COALESCE(?, objective),
+    time_used_seconds = time_used_seconds + CASE
+        WHEN status = 'active' THEN MAX(0, (? - updated_at_ms) / 1000)
+        ELSE 0
+    END,
     token_budget = ?,
     status = CASE
         WHEN status = 'active' AND ? IS NOT NULL AND tokens_used >= ? THEN ?
@@ -257,6 +271,7 @@ WHERE thread_id = ?
             "#,
                 )
                 .bind(objective)
+                .bind(now_ms)
                 .bind(token_budget)
                 .bind(token_budget)
                 .bind(token_budget)
@@ -275,12 +290,17 @@ WHERE thread_id = ?
 UPDATE thread_goals
 SET
     objective = ?,
+    time_used_seconds = time_used_seconds + CASE
+        WHEN status = 'active' THEN MAX(0, (? - updated_at_ms) / 1000)
+        ELSE 0
+    END,
     updated_at_ms = ?
 WHERE thread_id = ?
   AND (? IS NULL OR goal_id = ?)
             "#,
                     )
                     .bind(objective)
+                    .bind(now_ms)
                     .bind(now_ms)
                     .bind(thread_id.to_string())
                     .bind(expected_goal_id)
@@ -341,12 +361,14 @@ WHERE id = ? AND preview = ''
 UPDATE thread_goals
 SET
     status = ?,
+    time_used_seconds = time_used_seconds + MAX(0, (? - updated_at_ms) / 1000),
     updated_at_ms = ?
 WHERE thread_id = ?
   AND status = 'active'
             "#,
         )
         .bind(crate::ThreadGoalStatus::Paused.as_str())
+        .bind(now_ms)
         .bind(now_ms)
         .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
@@ -510,6 +532,20 @@ mod tests {
             .upsert_thread(&metadata)
             .await
             .expect("test thread should be upserted");
+    }
+
+    async fn rewind_goal_updated_at(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+        elapsed_seconds: i64,
+    ) {
+        let updated_at_ms = datetime_to_epoch_millis(Utc::now()) - elapsed_seconds * 1000;
+        sqlx::query("UPDATE thread_goals SET updated_at_ms = ? WHERE thread_id = ?")
+            .bind(updated_at_ms)
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("goal updated_at should rewind");
     }
 
     #[tokio::test]
@@ -855,6 +891,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_thread_goal_accounts_active_elapsed_time_before_refreshing_timestamp() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "finish the work",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100),
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 10).await;
+        let paused = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    objective: Some("finish the work carefully".to_string()),
+                    status: Some(crate::ThreadGoalStatus::Paused),
+                    token_budget: Some(Some(200)),
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        assert_eq!("finish the work carefully", paused.objective);
+        assert_eq!(crate::ThreadGoalStatus::Paused, paused.status);
+        assert_eq!(Some(200), paused.token_budget);
+        assert!(paused.time_used_seconds >= 10);
+
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "complete the work",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 11).await;
+        let complete = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    objective: None,
+                    status: Some(crate::ThreadGoalStatus::Complete),
+                    token_budget: None,
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        assert_eq!(crate::ThreadGoalStatus::Complete, complete.status);
+        assert!(complete.time_used_seconds >= 11);
+
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "budget the work",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100),
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 12).await;
+        let budgeted = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    objective: None,
+                    status: None,
+                    token_budget: Some(Some(200)),
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        assert_eq!(crate::ThreadGoalStatus::Active, budgeted.status);
+        assert_eq!(Some(200), budgeted.token_budget);
+        assert!(budgeted.time_used_seconds >= 12);
+
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "rename the work",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 13).await;
+        let renamed = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    objective: Some("rename the work clearly".to_string()),
+                    status: None,
+                    token_budget: None,
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        assert_eq!("rename the work clearly", renamed.objective);
+        assert_eq!(crate::ThreadGoalStatus::Active, renamed.status);
+        assert!(renamed.time_used_seconds >= 13);
+    }
+
+    #[tokio::test]
+    async fn update_thread_goal_does_not_account_elapsed_time_when_not_active() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        let goal = runtime
+            .replace_thread_goal(
+                thread_id,
+                "keep the pause still",
+                crate::ThreadGoalStatus::Paused,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 60).await;
+
+        let updated = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    objective: Some("keep the pause still, with notes".to_string()),
+                    status: None,
+                    token_budget: None,
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        assert_eq!(crate::ThreadGoalStatus::Paused, updated.status);
+        assert_eq!(goal.time_used_seconds, updated.time_used_seconds);
+    }
+
+    #[tokio::test]
     async fn concurrent_partial_updates_preserve_independent_fields() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
@@ -952,6 +1137,32 @@ mod tests {
                 .await
                 .expect("goal read should succeed")
         );
+    }
+
+    #[tokio::test]
+    async fn pause_active_thread_goal_accounts_active_elapsed_time_before_pausing() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "pause with elapsed time",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+        rewind_goal_updated_at(&runtime, thread_id, /*elapsed_seconds*/ 15).await;
+
+        let paused = runtime
+            .pause_active_thread_goal(thread_id)
+            .await
+            .expect("active pause should succeed")
+            .expect("active goal should be paused");
+
+        assert_eq!(crate::ThreadGoalStatus::Paused, paused.status);
+        assert!(paused.time_used_seconds >= 15);
     }
 
     #[tokio::test]
