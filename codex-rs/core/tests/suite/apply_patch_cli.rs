@@ -3,8 +3,8 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use core_test_support::responses::ev_apply_patch_call;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
+use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
@@ -45,7 +45,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
-use test_case::test_case;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -184,11 +183,35 @@ pub async fn mount_apply_patch(
     call_id: &str,
     patch: &str,
     assistant_msg: &str,
-    output_type: ApplyPatchModelOutput,
 ) {
     mount_sse_sequence(
         harness.server(),
-        apply_patch_responses(call_id, patch, assistant_msg, output_type),
+        apply_patch_responses(
+            call_id,
+            patch,
+            assistant_msg,
+            ev_apply_patch_custom_tool_call,
+        ),
+    )
+    .await;
+}
+
+async fn mount_apply_patch_model_output(
+    harness: &TestCodexHarness,
+    call_id: &str,
+    patch: &str,
+    assistant_msg: &str,
+    model_output: ApplyPatchModelOutput,
+) {
+    let apply_patch_call = match model_output {
+        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ev_apply_patch_shell_command_call_via_heredoc
+        }
+    };
+
+    mount_sse_sequence(
+        harness.server(),
+        apply_patch_responses(call_id, patch, assistant_msg, apply_patch_call),
     )
     .await;
 }
@@ -197,12 +220,12 @@ fn apply_patch_responses(
     call_id: &str,
     patch: &str,
     assistant_msg: &str,
-    output_type: ApplyPatchModelOutput,
+    apply_patch_call: fn(&str, &str) -> serde_json::Value,
 ) -> Vec<String> {
     vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_apply_patch_call(call_id, patch, output_type),
+            apply_patch_call(call_id, patch),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -233,20 +256,11 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
 
     let patch = "*** Begin Patch\n*** Add File: helper-alias.txt\n+hello\n*** End Patch";
     let call_id = "apply-helper-alias";
-    mount_apply_patch(
-        &harness,
-        call_id,
-        patch,
-        "done",
-        ApplyPatchModelOutput::Freeform,
-    )
-    .await;
+    mount_apply_patch(&harness, call_id, patch, "done").await;
 
     harness.submit("please apply helper alias patch").await?;
 
-    let out = harness
-        .apply_patch_output(call_id, ApplyPatchModelOutput::Freeform)
-        .await;
+    let out = harness.apply_patch_output(call_id).await;
     assert_regex_match(
         r"(?s)^Exit code: 0.*Success\. Updated the following files:\nA helper-alias\.txt\n?$",
         &out,
@@ -257,10 +271,7 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-async fn apply_patch_cli_multiple_operations_integration(
-    output_type: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_multiple_operations_integration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
@@ -272,11 +283,11 @@ async fn apply_patch_cli_multiple_operations_integration(
     let patch = "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch";
 
     let call_id = "apply-multi-ops";
-    mount_apply_patch(&harness, call_id, patch, "done", output_type).await;
+    mount_apply_patch(&harness, call_id, patch, "done").await;
 
     harness.submit("please apply multi-ops patch").await?;
 
-    let out = harness.apply_patch_output(call_id, output_type).await;
+    let out = harness.apply_patch_output(call_id).await;
 
     let expected = r"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
@@ -299,9 +310,7 @@ D delete.txt
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) -> Result<()> {
+async fn apply_patch_cli_multiple_chunks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -312,7 +321,7 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
 
     let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch";
     let call_id = "apply-multi-chunks";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply multi-chunk patch").await?;
 
@@ -324,11 +333,7 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_moves_file_to_new_directory(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -337,7 +342,7 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch";
     let call_id = "apply-move";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply move patch").await?;
 
@@ -350,11 +355,7 @@ async fn apply_patch_cli_moves_file_to_new_directory(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_updates_file_appends_trailing_newline(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -365,7 +366,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 
     let patch = "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch";
     let call_id = "apply-append-nl";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply newline patch").await?;
 
@@ -376,11 +377,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_insert_only_hunk_modifies_file(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_insert_only_hunk_modifies_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -391,7 +388,7 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 
     let patch = "*** Begin Patch\n*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch";
     let call_id = "apply-insert-only";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("insert lines via apply_patch").await?;
 
@@ -403,11 +400,7 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_move_overwrites_existing_destination(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_move_overwrites_existing_destination() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -419,7 +412,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch";
     let call_id = "apply-move-overwrite";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply move overwrite patch").await?;
 
@@ -432,11 +425,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_move_without_content_change_has_no_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -447,7 +436,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
 
     let patch = "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/name.txt\n@@\n same\n*** End Patch";
     let call_id = "apply-move-no-change";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     submit_without_wait(&harness, "rename without content change").await?;
 
@@ -469,11 +458,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_add_overwrites_existing_file(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_add_overwrites_existing_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -482,7 +467,7 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 
     let patch = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch";
     let call_id = "apply-add-overwrite";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply add overwrite patch").await?;
 
@@ -494,22 +479,18 @@ async fn apply_patch_cli_add_overwrites_existing_file(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_rejects_invalid_hunk_header(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_rejects_invalid_hunk_header() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Frobnicate File: foo\n*** End Patch";
     let call_id = "apply-invalid-header";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply invalid header patch").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
 
     assert!(
         out.contains("apply_patch verification failed"),
@@ -523,11 +504,7 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_reports_missing_context(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_reports_missing_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -537,11 +514,11 @@ async fn apply_patch_cli_reports_missing_context(
     let patch =
         "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch";
     let call_id = "apply-missing-context";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply missing context patch").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
 
     assert!(
         out.contains("apply_patch verification failed"),
@@ -556,22 +533,18 @@ async fn apply_patch_cli_reports_missing_context(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_reports_missing_target_file(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_reports_missing_target_file() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Update File: missing.txt\n@@\n-nope\n+better\n*** End Patch";
     let call_id = "apply-missing-file";
-    mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("attempt to update a missing file").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(
         out.contains("apply_patch verification failed"),
         "expected verification failure message"
@@ -589,22 +562,18 @@ async fn apply_patch_cli_reports_missing_target_file(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_delete_missing_file_reports_error(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_delete_missing_file_reports_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch";
     let call_id = "apply-delete-missing";
-    mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("attempt to delete missing file").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
 
     assert!(
         out.contains("apply_patch verification failed"),
@@ -623,20 +592,18 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput) -> Result<()> {
+async fn apply_patch_cli_rejects_empty_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
 
     let patch = "*** Begin Patch\n*** End Patch";
     let call_id = "apply-empty";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply empty patch").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(
         out.contains("patch rejected: empty patch"),
         "expected rejection for empty patch: {out}"
@@ -645,11 +612,7 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_delete_directory_reports_verification_error(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_delete_directory_reports_verification_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -658,22 +621,18 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
 
     let patch = "*** Begin Patch\n*** Delete File: dir\n*** End Patch";
     let call_id = "apply-delete-dir";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("delete a directory via apply_patch").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(out.contains("apply_patch verification failed"));
     assert!(out.contains("Failed to read"));
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -689,7 +648,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
     let patch = "*** Begin Patch\n*** Add File: ../escape.txt\n+outside\n*** End Patch";
     let call_id = "apply-path-traversal";
-    mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness
         .submit_with_permission_profile(
@@ -698,7 +657,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
         )
         .await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(
         out.contains(
             "patch rejected: writing outside of the project; rejected by user approval settings"
@@ -714,10 +673,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
-async fn intercepted_apply_patch_verification_uses_local_sandbox(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn intercepted_apply_patch_verification_uses_local_sandbox() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(Ok(()), "symlink setup needs local filesystem link creation");
 
@@ -737,7 +693,14 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
 *** End Patch"#
     );
     let call_id = "apply-sandboxed-read";
-    mount_apply_patch(&harness, call_id, &patch, "fail", model_output).await;
+    mount_apply_patch_model_output(
+        &harness,
+        call_id,
+        &patch,
+        "fail",
+        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+    )
+    .await;
 
     harness
         .submit_with_permission_profile(
@@ -746,7 +709,11 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
         )
         .await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.function_call_stdout(call_id).await;
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&out).is_err(),
+        "expected heredoc apply_patch output to be plain text"
+    );
     assert!(
         out.contains("apply_patch verification failed"),
         "expected sandboxed verification failure: {out}"
@@ -764,11 +731,7 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
-async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
         Ok(()),
@@ -812,7 +775,7 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
 *** End Patch"#
     );
     let call_id = "apply-symlink-escape";
-    mount_apply_patch(&harness, call_id, &patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, &patch, "fail").await;
 
     harness
         .submit_with_permission_profile(
@@ -821,7 +784,7 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
         )
         .await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert_eq!(
         std::fs::read_to_string(&outside_file)?,
         original_contents,
@@ -833,11 +796,7 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform ; "freeform")]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc ; "shell_command_heredoc")]
-async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
         Ok(()),
@@ -873,7 +832,7 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
 *** End Patch"#
     );
     let call_id = "apply-hard-link";
-    mount_apply_patch(&harness, call_id, &patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, &patch, "ok").await;
 
     harness
         .submit_with_permission_profile(
@@ -882,7 +841,7 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
         )
         .await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     if cfg!(windows) {
         assert!(
             out.contains("patch rejected: writing outside of the project"),
@@ -935,11 +894,7 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -957,7 +912,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
     let patch = "*** Begin Patch\n*** Update File: stay.txt\n*** Move to: ../escape-move.txt\n@@\n-from\n+to\n*** End Patch";
     let call_id = "apply-move-traversal";
-    mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness
         .submit_with_permission_profile(
@@ -966,7 +921,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
         )
         .await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(
         out.contains(
             "patch rejected: writing outside of the project; rejected by user approval settings"
@@ -982,11 +937,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_verification_failure_has_no_side_effects(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| {
@@ -1003,7 +954,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
     let call_id = "apply-partial-no-side-effects";
     let patch = "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch";
 
-    mount_apply_patch(&harness, call_id, patch, "failed", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "failed").await;
 
     harness.submit("attempt partial apply patch").await?;
 
@@ -1403,14 +1354,7 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
 
     let call_id = "apply-nested-cwd-repo-relative";
     let patch = "*** Begin Patch\n*** Update File: ../repo.txt\n@@\n-before\n+after\n*** End Patch";
-    mount_apply_patch(
-        &harness,
-        call_id,
-        patch,
-        "updated repo-relative path",
-        ApplyPatchModelOutput::Freeform,
-    )
-    .await;
+    mount_apply_patch(&harness, call_id, patch, "updated repo-relative path").await;
 
     submit_without_wait(&harness, "update file outside nested cwd but inside repo").await?;
 
@@ -1495,10 +1439,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1507,18 +1448,36 @@ async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch(
     let patch_inner =
         format!("*** Begin Patch\n*** Add File: {file_name}\n+lenient\n*** End Patch\n");
     let call_id = "apply-lenient";
-    mount_apply_patch(&harness, call_id, patch_inner.as_str(), "ok", model_output).await;
+    mount_apply_patch_model_output(
+        &harness,
+        call_id,
+        patch_inner.as_str(),
+        "ok",
+        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+    )
+    .await;
 
     harness.submit("apply lenient heredoc patch").await?;
 
+    let out = harness.function_call_stdout(call_id).await;
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&out).is_err(),
+        "expected heredoc apply_patch output to be plain text"
+    );
+    assert!(
+        out.contains("Success. Updated the following files:"),
+        "expected successful apply_patch output: {out}"
+    );
+    assert!(
+        out.contains(&format!("A {file_name}")),
+        "expected created file in apply_patch output: {out}"
+    );
     assert_eq!(harness.read_file_text(file_name).await?, "lenient\n");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput) -> Result<()> {
+async fn apply_patch_cli_end_of_file_anchor() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1527,7 +1486,7 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
 
     let patch = "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch";
     let call_id = "apply-eof";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply EOF-anchored patch").await?;
     assert_eq!(harness.read_file_text("tail.txt").await?, "alpha\nend\n");
@@ -1535,11 +1494,7 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_missing_second_chunk_context_rejected(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_cli_missing_second_chunk_context_rejected() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1550,11 +1505,11 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
     let patch =
         "*** Begin Patch\n*** Update File: two_chunks.txt\n@@\n-b\n+B\n\n-d\n+D\n*** End Patch";
     let call_id = "apply-missing-ctx-2nd";
-    mount_apply_patch(&harness, call_id, patch, "fail", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
 
     harness.submit("apply missing context second chunk").await?;
 
-    let out = harness.apply_patch_output(call_id, model_output).await;
+    let out = harness.apply_patch_output(call_id).await;
     assert!(out.contains("apply_patch verification failed"));
     assert!(
         out.contains("Failed to find expected lines in"),
@@ -1569,11 +1524,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_emits_turn_diff_event_with_unified_diff(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1583,7 +1534,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     let call_id = "apply-diff-event";
     let file = "udiff.txt";
     let patch = format!("*** Begin Patch\n*** Add File: {file}\n+hello\n*** End Patch\n");
-    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch.as_str(), "ok").await;
 
     submit_without_wait(&harness, "emit diff").await?;
 
@@ -1799,11 +1750,7 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_change_context_disambiguates_target(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
+async fn apply_patch_change_context_disambiguates_target() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1815,7 +1762,7 @@ async fn apply_patch_change_context_disambiguates_target(
     let patch =
         "*** Begin Patch\n*** Update File: multi_ctx.txt\n@@ fn b\n-x=10\n+x=11\n*** End Patch";
     let call_id = "apply-ctx";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+    mount_apply_patch(&harness, call_id, patch, "ok").await;
 
     harness.submit("apply with change_context").await?;
 
