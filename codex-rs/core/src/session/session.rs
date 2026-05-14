@@ -63,11 +63,10 @@ pub(crate) struct SessionConfiguration {
     /// When to escalate for approval for execution
     pub(super) approval_policy: Constrained<AskForApproval>,
     pub(super) approvals_reviewer: ApprovalsReviewer,
-    /// Canonical permission profile for the session.
-    pub(super) permission_profile: Constrained<PermissionProfile>,
-    /// Named or implicit built-in permissions profile selected from config, if
-    /// any.
-    pub(super) active_permission_profile: Option<ActivePermissionProfile>,
+    /// Permission profile state for the session. Keep the constrained profile,
+    /// active profile id, and profile-defined workspace roots in sync by using
+    /// the methods below instead of mutating the fields independently.
+    pub(super) permission_profile_state: SessionPermissionProfileState,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
     /// Absolute working directory that should be treated as the *root* of the
@@ -75,6 +74,9 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     pub(super) cwd: AbsolutePathBuf,
+    /// Thread-scoped runtime workspace roots for materializing symbolic
+    /// workspace permissions at session runtime.
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -98,17 +100,103 @@ pub(crate) struct SessionConfiguration {
     pub(super) user_shell_override: Option<shell::Shell>,
 }
 
+#[derive(Clone)]
+pub(super) struct SessionPermissionProfileState {
+    /// Canonical permission profile for the session.
+    constrained_permission_profile: Constrained<PermissionProfile>,
+    /// Named or implicit built-in permissions profile selected from config, if
+    /// any.
+    active_permission_profile: Option<ActivePermissionProfile>,
+    /// Immutable workspace roots configured directly on the selected
+    /// permissions profile.
+    profile_workspace_roots: Vec<AbsolutePathBuf>,
+}
+
+impl SessionPermissionProfileState {
+    pub(super) fn new(
+        constrained_permission_profile: Constrained<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> Self {
+        Self {
+            constrained_permission_profile,
+            active_permission_profile,
+            profile_workspace_roots,
+        }
+    }
+
+    fn constrained_permission_profile(&self) -> &Constrained<PermissionProfile> {
+        &self.constrained_permission_profile
+    }
+
+    fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.active_permission_profile.clone()
+    }
+
+    fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        &self.profile_workspace_roots
+    }
+
+    fn set_permission_profile(
+        &mut self,
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> ConstraintResult<()> {
+        self.constrained_permission_profile
+            .set(permission_profile)?;
+        self.active_permission_profile = active_permission_profile;
+        self.profile_workspace_roots = profile_workspace_roots;
+        Ok(())
+    }
+}
+
 impl SessionConfiguration {
     pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
         &self.codex_home
     }
 
+    pub(super) fn constrained_permission_profile(&self) -> &Constrained<PermissionProfile> {
+        self.permission_profile_state
+            .constrained_permission_profile()
+    }
+
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.get().clone()
+        self.constrained_permission_profile()
+            .get()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
-        self.active_permission_profile.clone()
+        self.permission_profile_state.active_permission_profile()
+    }
+
+    pub(super) fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.permission_profile_state.profile_workspace_roots()
+    }
+
+    pub(super) fn apply_permission_profile_to_permissions(
+        &self,
+        permissions: &mut crate::config::Permissions,
+    ) {
+        permissions.set_constrained_permission_profile_with_active_profile_and_workspace_roots(
+            self.constrained_permission_profile().clone(),
+            self.active_permission_profile(),
+            self.profile_workspace_roots().to_vec(),
+        );
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_permission_profile_for_tests(
+        &mut self,
+        permission_profile: PermissionProfile,
+    ) -> ConstraintResult<()> {
+        self.permission_profile_state.set_permission_profile(
+            permission_profile,
+            /*active_permission_profile*/ None,
+            Vec::new(),
+        )
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
@@ -117,7 +205,7 @@ impl SessionConfiguration {
             .unwrap_or_else(|_| {
                 let file_system_sandbox_policy = self.file_system_sandbox_policy();
                 codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile.get(),
+                    self.constrained_permission_profile().get(),
                     &file_system_sandbox_policy,
                     self.network_sandbox_policy(),
                     &self.cwd,
@@ -126,11 +214,13 @@ impl SessionConfiguration {
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.get().file_system_sandbox_policy()
+        self.permission_profile().file_system_sandbox_policy()
     }
 
     pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.permission_profile.get().network_sandbox_policy()
+        self.constrained_permission_profile()
+            .get()
+            .network_sandbox_policy()
     }
 
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -143,6 +233,8 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
+            profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -222,21 +314,25 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
+        if let Some(workspace_roots) = updates.workspace_roots.clone() {
+            next_configuration.workspace_roots = workspace_roots;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
                 updates.active_permission_profile.clone().or_else(|| {
                     if permission_profile == self.permission_profile() {
-                        self.active_permission_profile.clone()
+                        self.active_permission_profile()
                     } else {
                         None
                     }
                 });
             next_configuration.set_permission_profile_projection(
                 permission_profile,
+                active_permission_profile,
+                updates.profile_workspace_roots.clone().unwrap_or_default(),
                 Some(&current_file_system_sandbox_policy),
             )?;
-            next_configuration.active_permission_profile = active_permission_profile;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -245,14 +341,17 @@ impl SessionConfiguration {
                     &current_file_system_sandbox_policy,
                 );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            next_configuration.permission_profile.set(
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                ),
-            )?;
-            next_configuration.active_permission_profile = None;
+            next_configuration
+                .permission_profile_state
+                .set_permission_profile(
+                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                        &file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    ),
+                    /*active_permission_profile*/ None,
+                    Vec::new(),
+                )?;
         } else if cwd_changed
             && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
@@ -266,13 +365,17 @@ impl SessionConfiguration {
                     &next_configuration.cwd,
                     &current_file_system_sandbox_policy,
                 );
-            next_configuration.permission_profile.set(
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
-                    &file_system_sandbox_policy,
-                    current_network_sandbox_policy,
-                ),
-            )?;
+            next_configuration
+                .permission_profile_state
+                .set_permission_profile(
+                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                        SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
+                        &file_system_sandbox_policy,
+                        current_network_sandbox_policy,
+                    ),
+                    /*active_permission_profile*/ None,
+                    Vec::new(),
+                )?;
         }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
@@ -286,6 +389,8 @@ impl SessionConfiguration {
     fn set_permission_profile_projection(
         &mut self,
         permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
         preserve_deny_reads_from: Option<&FileSystemSandboxPolicy>,
     ) -> ConstraintResult<()> {
         let enforcement = permission_profile.enforcement();
@@ -301,14 +406,19 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        self.permission_profile.set(effective_permission_profile)?;
-        Ok(())
+        self.permission_profile_state.set_permission_profile(
+            effective_permission_profile,
+            active_permission_profile,
+            profile_workspace_roots,
+        )
     }
 }
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
@@ -939,7 +1049,7 @@ impl Session {
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {
                         Self::managed_network_proxy_active_for_permission_profile(
-                            session_configuration.permission_profile.get(),
+                            session_configuration.constrained_permission_profile().get(),
                         )
                     }),
                     rollout_path,
