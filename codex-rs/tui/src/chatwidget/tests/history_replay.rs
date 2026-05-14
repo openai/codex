@@ -282,7 +282,9 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
     assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
-        AppServerPermissionProfile::from(chat.config_ref().permissions.permission_profile()),
+        AppServerPermissionProfile::from(
+            chat.config_ref().permissions.effective_permission_profile()
+        ),
         expected_app_server_permission_profile
     );
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
@@ -291,9 +293,65 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.set_permission_profile(updated_profile.clone())
         .expect("set permission profile");
     assert_eq!(
-        chat.config_ref().permissions.permission_profile(),
-        updated_profile,
-        "local permission changes should replace SessionConfigured profile-derived runtime permissions"
+        chat.config_ref().permissions.permission_profile().get(),
+        &updated_profile,
+        "local permission changes should replace SessionConfigured canonical permissions"
+    );
+    assert_eq!(
+        chat.config_ref().permissions.effective_permission_profile(),
+        updated_profile
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&expected_cwd)),
+        "effective permissions should still use the current thread runtime workspace roots"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_preserves_profile_workspace_roots() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let previous_cwd = test_path_buf("/home/user/main").abs();
+    let profile_root = test_path_buf("/home/user/shared").abs();
+    chat.config.cwd = previous_cwd.clone();
+    chat.config.workspace_roots = vec![previous_cwd, profile_root.clone()];
+    chat.config.workspace_roots_explicit = false;
+    chat.config
+        .permissions
+        .set_workspace_roots(chat.config.workspace_roots.clone());
+
+    let session_cwd = test_path_buf("/home/user/sub-agent").abs();
+    let session_workspace_roots = vec![session_cwd.clone(), profile_root];
+    let session_permission_profile = PermissionProfile::workspace_write()
+        .materialize_project_roots_with_workspace_roots(&session_workspace_roots);
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: session_permission_profile.clone(),
+        active_permission_profile: None,
+        cwd: session_cwd.clone(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_thread_session(configured);
+
+    assert_eq!(&chat.config_ref().cwd, &session_cwd);
+    assert_eq!(
+        chat.config_ref().permissions.user_visible_workspace_roots(),
+        session_workspace_roots.as_slice()
+    );
+    assert_eq!(
+        chat.config_ref().permissions.effective_permission_profile(),
+        session_permission_profile
     );
 }
 
@@ -334,7 +392,9 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
     assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
-        AppServerPermissionProfile::from(chat.config_ref().permissions.permission_profile()),
+        AppServerPermissionProfile::from(
+            chat.config_ref().permissions.effective_permission_profile()
+        ),
         expected_app_server_permission_profile
     );
 }

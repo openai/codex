@@ -413,7 +413,7 @@ impl TurnRequestProcessor {
                     )));
                 }
                 (
-                    Some(config.permissions.permission_profile()),
+                    Some(config.permissions.effective_permission_profile()),
                     config.permissions.active_permission_profile(),
                 )
             } else {

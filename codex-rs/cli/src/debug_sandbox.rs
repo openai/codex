@@ -230,7 +230,7 @@ async fn run_command_under_sandbox(
     let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
             spec.start_proxy(
-                config.permissions.permission_profile.get(),
+                config.permissions.permission_profile().get(),
                 /*policy_decider*/ None,
                 /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
@@ -285,7 +285,7 @@ async fn run_command_under_sandbox(
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
@@ -962,10 +962,19 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(
-            config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+        let actual = config
+            .permissions
+            .permission_profile()
+            .get()
+            .file_system_sandbox_policy();
+        let expected = codex_protocol::models::PermissionProfile::workspace_write()
+            .file_system_sandbox_policy();
+        assert!(
+            expected
+                .entries
+                .iter()
+                .all(|entry| actual.entries.contains(entry)),
+            "explicit workspace profile should preserve the built-in workspace rules"
         );
 
         Ok(())
@@ -996,10 +1005,19 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(
-            config.permissions.file_system_sandbox_policy(),
-            codex_protocol::models::PermissionProfile::workspace_write()
-                .file_system_sandbox_policy()
+        let actual = config
+            .permissions
+            .permission_profile()
+            .get()
+            .file_system_sandbox_policy();
+        let expected = codex_protocol::models::PermissionProfile::workspace_write()
+            .file_system_sandbox_policy();
+        assert!(
+            expected
+                .entries
+                .iter()
+                .all(|entry| actual.entries.contains(entry)),
+            "explicit workspace profile should preserve the built-in workspace rules"
         );
 
         Ok(())
