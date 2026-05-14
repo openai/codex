@@ -690,6 +690,14 @@ impl App {
             }
         };
         let bootstrap = app_server.bootstrap(&config).await?;
+        if !bootstrap.plugins_enabled
+            && let Err(err) = config.features.disable(Feature::Plugins)
+        {
+            tracing::warn!(
+                error = %err,
+                "failed to apply app-server plugin visibility to the TUI config"
+            );
+        }
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
         let exit_info = handle_model_migration_prompt_if_needed(

@@ -390,10 +390,6 @@ impl CatalogRequestProcessor {
         };
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
@@ -425,17 +421,13 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
-                        let plugins_input = config.plugins_config_input();
-                        plugins_manager
-                            .effective_skill_roots_for_layer_stack(
-                                &config_layer_stack,
-                                &plugins_input,
-                            )
-                            .await
-                    } else {
-                        Vec::new()
-                    };
+                    let plugins_input = config.plugins_config_input();
+                    let effective_skill_roots = plugins_manager
+                        .effective_skill_roots_for_layer_stack(
+                            &config_layer_stack,
+                            &plugins_input,
+                        )
+                        .await;
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,

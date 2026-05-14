@@ -40,22 +40,6 @@ fn write_skill(root: &TempDir, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_plugins_enabled_config_with_base_url(
-    codex_home: &std::path::Path,
-    base_url: &str,
-) -> std::io::Result<()> {
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"chatgpt_base_url = "{base_url}"
-
-[features]
-plugins = true
-"#,
-        ),
-    )
-}
-
 fn write_remote_plugins_enabled_config_with_base_url(
     codex_home: &std::path::Path,
     base_url: &str,
@@ -73,32 +57,17 @@ remote_plugin = true
     )
 }
 
-fn write_plugin_with_skill(
-    repo_root: &std::path::Path,
+fn write_cached_local_plugin_with_skill(
+    codex_home: &std::path::Path,
+    marketplace_name: &str,
     plugin_name: &str,
     skill_name: &str,
 ) -> Result<()> {
-    std::fs::create_dir_all(repo_root.join(".git"))?;
-    std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
-    std::fs::write(
-        repo_root.join(".agents/plugins/marketplace.json"),
-        format!(
-            r#"{{
-  "name": "local-marketplace",
-  "plugins": [
-    {{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./{plugin_name}"
-      }}
-    }}
-  ]
-}}"#
-        ),
-    )?;
-
-    let plugin_root = repo_root.join(plugin_name);
+    let plugin_root = codex_home
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join("local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
@@ -316,15 +285,30 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 }
 
 #[tokio::test]
-async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disabled() -> Result<()> {
+async fn skills_list_keeps_plugin_skills_when_workspace_codex_plugins_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let repo_root = TempDir::new()?;
+    let cwd = TempDir::new()?;
     let server = MockServer::start().await;
     write_skill(&codex_home, "home-skill")?;
-    write_plugin_with_skill(repo_root.path(), "demo-plugin", "plugin-skill")?;
-    write_plugins_enabled_config_with_base_url(
+    write_cached_local_plugin_with_skill(
         codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
+        "debug",
+        "demo-plugin",
+        "plugin-skill",
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+
+[plugins."demo-plugin@debug"]
+enabled = true
+"#,
+            server.uri()
+        ),
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -351,7 +335,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
 
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
-            cwds: vec![repo_root.path().to_path_buf()],
+            cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
         })
         .await?;
@@ -374,8 +358,8 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         data[0]
             .skills
             .iter()
-            .all(|skill| skill.name != "demo-plugin:plugin-skill"),
-        "plugin skills should be hidden when workspace Codex plugins are disabled"
+            .any(|skill| skill.name == "demo-plugin:plugin-skill"),
+        "plugin-backed skills should remain available when workspace Codex plugins are disabled"
     );
     Ok(())
 }

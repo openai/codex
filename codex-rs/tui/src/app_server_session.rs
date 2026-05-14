@@ -20,6 +20,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
+use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
@@ -104,6 +106,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -145,6 +148,7 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) default_model: String,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) has_chatgpt_account: bool,
+    pub(crate) plugins_enabled: bool,
     pub(crate) available_models: Vec<ModelPreset>,
 }
 
@@ -218,6 +222,7 @@ impl AppServerSession {
             .into_iter()
             .map(model_preset_from_api_model)
             .collect::<Vec<_>>();
+        let plugins_enabled = self.plugins_enabled_for_cli(config).await;
         let default_model = config
             .model
             .clone()
@@ -278,8 +283,30 @@ impl AppServerSession {
             default_model,
             feedback_audience,
             has_chatgpt_account,
+            plugins_enabled,
             available_models,
         })
+    }
+
+    async fn plugins_enabled_for_cli(&mut self, config: &Config) -> bool {
+        let request_id = self.next_request_id();
+        match self
+            .client
+            .request_typed(ClientRequest::ExperimentalFeatureList {
+                request_id,
+                params: ExperimentalFeatureListParams::default(),
+            })
+            .await
+        {
+            Ok(response) => plugins_enabled_from_feature_list(config, &response),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "experimentalFeature/list failed during TUI bootstrap; keeping local plugin feature state"
+                );
+                config.features.enabled(Feature::Plugins)
+            }
+        }
     }
 
     /// Fetches the current account info without refreshing the auth token.
@@ -1022,6 +1049,20 @@ fn thread_realtime_start_params(
         .wrap_err("mapping TUI realtime start params to app-server params")
 }
 
+fn plugins_enabled_from_feature_list(
+    config: &Config,
+    response: &ExperimentalFeatureListResponse,
+) -> bool {
+    response
+        .data
+        .iter()
+        .find(|feature| feature.name == Feature::Plugins.key())
+        .map_or_else(
+            || config.features.enabled(Feature::Plugins),
+            |feature| feature.enabled,
+        )
+}
+
 pub(crate) fn status_account_display_from_auth_mode(
     auth_mode: Option<AuthMode>,
     plan_type: Option<codex_protocol::account::PlanType>,
@@ -1606,6 +1647,45 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    #[tokio::test]
+    async fn plugins_enabled_from_feature_list_uses_app_server_effective_state() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        assert!(config.features.enabled(Feature::Plugins));
+
+        let response = ExperimentalFeatureListResponse {
+            data: vec![codex_app_server_protocol::ExperimentalFeature {
+                name: Feature::Plugins.key().to_string(),
+                stage: codex_app_server_protocol::ExperimentalFeatureStage::Stable,
+                display_name: None,
+                description: None,
+                announcement: None,
+                enabled: false,
+                default_enabled: true,
+            }],
+            next_cursor: None,
+        };
+
+        assert!(!plugins_enabled_from_feature_list(&config, &response));
+    }
+
+    #[tokio::test]
+    async fn plugins_enabled_from_feature_list_falls_back_to_local_feature_state() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config
+            .features
+            .disable(Feature::Plugins)
+            .expect("plugins feature should be mutable in tests");
+
+        let response = ExperimentalFeatureListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        };
+
+        assert!(!plugins_enabled_from_feature_list(&config, &response));
     }
 
     #[tokio::test]
