@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpServerOAuthConfig;
 use crate::McpServerToolConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -33,6 +34,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::from([
                 (
@@ -72,6 +74,66 @@ approval_mode = "prompt"
 
 [mcp_servers.docs.tools.search]
 approval_mode = "approve"
+"#
+    );
+
+    let loaded = load_global_mcp_servers(&codex_home).await?;
+    assert_eq!(loaded, servers);
+
+    std::fs::remove_dir_all(&codex_home)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> {
+    let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let codex_home = std::env::temp_dir().join(format!(
+        "codex-config-mcp-oauth-edit-test-{}-{unique_suffix}",
+        std::process::id()
+    ));
+    let servers = BTreeMap::from([(
+        "maas_outlook".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: Some(McpServerOAuthConfig {
+                client_id: Some("eci-prd-pub-codex-123".to_string()),
+            }),
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]);
+
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
+        .await?;
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = std::fs::read_to_string(&config_path)?;
+    assert_eq!(
+        serialized,
+        r#"[mcp_servers.maas_outlook]
+url = "https://example.com/mcp"
+
+[mcp_servers.maas_outlook.oauth]
+client_id = "eci-prd-pub-codex-123"
 "#
     );
 
