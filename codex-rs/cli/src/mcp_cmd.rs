@@ -436,10 +436,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         http_headers,
         env_http_headers,
         &resolved_scopes,
-        server
-            .oauth
-            .as_ref()
-            .and_then(|oauth| oauth.client_id.as_deref()),
+        server.oauth_client_id(),
         server.oauth_resource.as_deref(),
         config.mcp_oauth_callback_port,
         config.mcp_oauth_callback_url.as_deref(),

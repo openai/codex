@@ -151,6 +151,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             server_config.scopes.clone(),
             oauth_config.discovered_scopes.clone(),
         );
+        let oauth_client_id = server_config.oauth_client_id();
         let first_attempt = perform_oauth_login(
             &name,
             &oauth_config.url,
@@ -158,10 +159,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_config.http_headers.clone(),
             oauth_config.env_http_headers.clone(),
             &resolved_scopes.scopes,
-            server_config
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.client_id.as_deref()),
+            oauth_client_id,
             server_config.oauth_resource.as_deref(),
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
@@ -177,10 +175,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     oauth_config.http_headers,
                     oauth_config.env_http_headers,
                     &[],
-                    server_config
-                        .oauth
-                        .as_ref()
-                        .and_then(|oauth| oauth.client_id.as_deref()),
+                    oauth_client_id,
                     server_config.oauth_resource.as_deref(),
                     config.mcp_oauth_callback_port,
                     config.mcp_oauth_callback_url.as_deref(),

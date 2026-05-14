@@ -634,12 +634,10 @@ mod tests {
 
     use super::CallbackOutcome;
     use super::OAuthProviderError;
-    use super::OauthHeaders;
-    use super::OauthLoginFlow;
     use super::append_query_param;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
-    use codex_config::types::OAuthCredentialsStoreMode;
+    use super::start_authorization;
 
     async fn spawn_oauth_metadata_server() -> String {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -670,29 +668,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_login_flow_uses_configured_client_id() {
+    async fn start_authorization_uses_configured_client_id() {
         let base_url = spawn_oauth_metadata_server().await;
-        let flow = OauthLoginFlow::new(
-            "maas_outlook",
+        let oauth_state = start_authorization(
             &format!("{base_url}/mcp"),
-            OAuthCredentialsStoreMode::File,
-            OauthHeaders {
-                http_headers: None,
-                env_http_headers: None,
-            },
+            reqwest::Client::new(),
             &[],
+            "http://127.0.0.1/callback",
             Some("eci-prd-pub-codex-123"),
-            /*oauth_resource*/ None,
-            /*launch_browser*/ false,
-            /*callback_port*/ None,
-            /*callback_url*/ None,
-            Some(1),
         )
         .await
-        .expect("build oauth login flow");
+        .expect("start oauth authorization");
 
-        let auth_url =
-            Url::parse(&flow.authorization_url()).expect("authorization url should parse");
+        let authorization_url = oauth_state
+            .get_authorization_url()
+            .await
+            .expect("read authorization url");
+        let auth_url = Url::parse(&authorization_url).expect("authorization url should parse");
         let client_id = auth_url
             .query_pairs()
             .find(|(key, _)| key == "client_id")

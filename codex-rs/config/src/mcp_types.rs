@@ -189,6 +189,14 @@ pub struct McpServerConfig {
     pub tools: HashMap<String, McpServerToolConfig>,
 }
 
+impl McpServerConfig {
+    pub fn oauth_client_id(&self) -> Option<&str> {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.client_id.as_deref())
+    }
+}
+
 /// Raw MCP config shape used for deserialization and supported-field JSON
 /// Schema generation.
 ///

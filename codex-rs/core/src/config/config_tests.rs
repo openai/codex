@@ -5505,12 +5505,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
         docs.oauth_resource.as_deref(),
         Some("https://resource.example.com")
     );
-    assert_eq!(
-        docs.oauth
-            .as_ref()
-            .and_then(|oauth| oauth.client_id.as_deref()),
-        Some("eci-prd-pub-codex-123")
-    );
+    assert_eq!(docs.oauth_client_id(), Some("eci-prd-pub-codex-123"));
 
     Ok(())
 }
