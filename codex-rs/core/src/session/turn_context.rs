@@ -432,6 +432,10 @@ impl Session {
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
+        per_turn_config.workspace_roots = session_configuration.workspace_roots.clone();
+        per_turn_config
+            .permissions
+            .set_workspace_roots(session_configuration.workspace_roots.clone());
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
@@ -440,9 +444,10 @@ impl Session {
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         per_turn_config
             .permissions
-            .set_constrained_permission_profile_with_active_profile(
+            .set_constrained_permission_profile_with_active_profile_and_workspace_roots(
                 session_configuration.permission_profile.clone(),
                 session_configuration.active_permission_profile.clone(),
+                session_configuration.profile_workspace_roots.clone(),
             );
         let permission_profile = session_configuration.permission_profile();
         let resolved_web_search_mode =
@@ -470,6 +475,10 @@ impl Session {
             Self::build_per_turn_config(session_configuration, session_configuration.cwd.clone());
         config.model = Some(session_configuration.collaboration_mode.model().to_string());
         config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        config.workspace_roots = session_configuration.workspace_roots.clone();
+        config
+            .permissions
+            .set_workspace_roots(session_configuration.workspace_roots.clone());
         config
             .permissions
             .set_active_permission_profile_for_current_profile(

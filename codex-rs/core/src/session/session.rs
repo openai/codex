@@ -75,6 +75,12 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     pub(super) cwd: AbsolutePathBuf,
+    /// Thread-scoped runtime workspace roots for materializing symbolic
+    /// workspace permissions at session runtime.
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+    /// Immutable workspace roots configured directly on the selected
+    /// permissions profile.
+    pub(super) profile_workspace_roots: Vec<AbsolutePathBuf>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -104,7 +110,10 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.get().clone()
+        self.permission_profile
+            .get()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -126,7 +135,7 @@ impl SessionConfiguration {
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile.get().file_system_sandbox_policy()
+        self.permission_profile().file_system_sandbox_policy()
     }
 
     pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
@@ -143,6 +152,8 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
+            profile_workspace_roots: self.profile_workspace_roots.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -222,6 +233,9 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
+        if let Some(workspace_roots) = updates.workspace_roots.clone() {
+            next_configuration.workspace_roots = workspace_roots;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -237,6 +251,8 @@ impl SessionConfiguration {
                 Some(&current_file_system_sandbox_policy),
             )?;
             next_configuration.active_permission_profile = active_permission_profile;
+            next_configuration.profile_workspace_roots =
+                updates.profile_workspace_roots.clone().unwrap_or_default();
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -253,6 +269,7 @@ impl SessionConfiguration {
                 ),
             )?;
             next_configuration.active_permission_profile = None;
+            next_configuration.profile_workspace_roots.clear();
         } else if cwd_changed
             && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
@@ -309,6 +326,8 @@ impl SessionConfiguration {
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
