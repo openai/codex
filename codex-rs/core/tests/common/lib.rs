@@ -35,7 +35,7 @@ pub mod zsh_fork;
 
 struct TestArg0PathEntry {
     _codex_home: TempDir,
-    arg0: Arg0PathEntryGuard,
+    _arg0: Arg0PathEntryGuard,
     _previous_codex_home: Option<std::ffi::OsString>,
 }
 
@@ -69,7 +69,7 @@ fn configure_arg0_dispatch_for_test_binaries() {
 
         Some(TestArg0PathEntry {
             _codex_home: codex_home,
-            arg0,
+            _arg0: arg0,
             _previous_codex_home: previous_codex_home,
         })
     });
@@ -254,7 +254,7 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)
-        .and_then(|path_entry| path_entry.arg0.paths().codex_linux_sandbox_exe.clone())
+        .and_then(|path_entry| path_entry._arg0.paths().codex_linux_sandbox_exe.clone())
     {
         return Ok(path);
     }
