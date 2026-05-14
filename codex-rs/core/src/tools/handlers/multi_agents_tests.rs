@@ -2111,7 +2111,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
-        turn.config.permissions.permission_profile(),
+        turn.config.permissions.effective_permission_profile(),
         "test requires a runtime profile override that differs from base config"
     );
 
@@ -3948,7 +3948,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.permission_profile,
+        turn.config.permissions.permission_profile(),
         turn.config.legacy_sandbox_policy(),
         turn_cwd.as_path(),
     );

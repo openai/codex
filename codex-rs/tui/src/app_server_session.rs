@@ -34,7 +34,6 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
@@ -108,7 +107,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -1175,18 +1173,9 @@ fn sandbox_mode_from_permission_profile(
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
 ) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
-        .collect::<Vec<_>>();
     PermissionProfileSelectionParams::Profile {
         id: active.id,
-        modifications: (!modifications.is_empty()).then_some(modifications),
+        modifications: None,
     }
 }
 
@@ -1243,7 +1232,7 @@ fn thread_start_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1277,7 +1266,7 @@ fn thread_resume_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1309,7 +1298,7 @@ fn thread_fork_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1499,7 +1488,7 @@ fn permission_profile_from_thread_response(
         return permission_profile.clone().into();
     }
     match thread_params_mode {
-        ThreadParamsMode::Embedded => config.permissions.permission_profile(),
+        ThreadParamsMode::Embedded => config.permissions.effective_permission_profile(),
         ThreadParamsMode::Remote => {
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
         }
@@ -1723,7 +1712,7 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
 
@@ -1830,7 +1819,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let remote_cwd = PathBuf::from("repo/on/server");
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
 

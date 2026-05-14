@@ -334,7 +334,7 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = self.config.permissions.permission_profile();
+        let permission_profile = self.config.permissions.effective_permission_profile();
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
