@@ -347,7 +347,6 @@ impl ConfigRequestProcessor {
             .extend_runtime_feature_enablement(
                 enablement
                     .iter()
-                    .filter(|(name, _enabled)| name.as_str() != "remote_control")
                     .map(|(name, enabled)| (name.clone(), *enabled)),
             )
             .map_err(|_| internal_error("failed to update feature enablement"))?;

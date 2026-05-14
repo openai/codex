@@ -100,16 +100,7 @@ impl RemoteControlHandle {
     }
 
     pub fn status(&self) -> RemoteControlStatusChangedNotification {
-        let status_rx = self.status_tx.subscribe();
-        status_rx.borrow().clone()
-    }
-
-    pub fn set_enabled(&self, enabled: bool) {
-        if enabled {
-            let _ = self.enable();
-        } else {
-            self.disable();
-        }
+        self.status_tx.borrow().clone()
     }
 
     pub fn status_receiver(&self) -> watch::Receiver<RemoteControlStatusChangedNotification> {

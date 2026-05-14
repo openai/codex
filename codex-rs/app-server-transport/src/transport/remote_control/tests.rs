@@ -643,7 +643,6 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         remote_handle.enable().expect_err("enable should fail"),
         super::RemoteControlUnavailable
     );
-    remote_handle.set_enabled(/*enabled*/ true);
     timeout(Duration::from_millis(100), listener.accept())
         .await
         .expect_err("remote control should remain disabled without sqlite state db");
