@@ -81,6 +81,8 @@ impl ThreadConfigSnapshot {
 #[derive(Clone, Default)]
 pub struct CodexThreadTurnContextOverrides {
     pub cwd: Option<PathBuf>,
+    pub current_date: Option<String>,
+    pub timezone: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -240,6 +242,8 @@ impl CodexThread {
     ) -> ConstraintResult<()> {
         let CodexThreadTurnContextOverrides {
             cwd,
+            current_date,
+            timezone,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -265,6 +269,8 @@ impl CodexThread {
 
         let updates = SessionSettingsUpdate {
             cwd,
+            current_date,
+            timezone,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,

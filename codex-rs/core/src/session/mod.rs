@@ -620,6 +620,8 @@ impl Codex {
             active_permission_profile: config.permissions.active_permission_profile(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            current_date: None,
+            timezone: None,
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),

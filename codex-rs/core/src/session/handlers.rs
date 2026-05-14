@@ -143,6 +143,8 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd: Some(cwd),
+                    current_date: None,
+                    timezone: None,
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
@@ -163,6 +165,8 @@ pub(super) async fn user_input_or_turn_inner(
         }
         Op::UserInputWithTurnContext {
             cwd,
+            current_date,
+            timezone,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -195,6 +199,8 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd,
+                    current_date,
+                    timezone,
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,

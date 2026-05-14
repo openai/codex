@@ -75,6 +75,10 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     pub(super) cwd: AbsolutePathBuf,
+    /// Optional current date override for the model-visible environment context.
+    pub(super) current_date: Option<String>,
+    /// Optional timezone override for the model-visible environment context.
+    pub(super) timezone: Option<String>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -199,6 +203,12 @@ impl SessionConfiguration {
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
         }
+        if let Some(current_date) = updates.current_date.clone() {
+            next_configuration.current_date = Some(current_date);
+        }
+        if let Some(timezone) = updates.timezone.clone() {
+            next_configuration.timezone = Some(timezone);
+        }
         if let Some(approvals_reviewer) = updates.approvals_reviewer {
             next_configuration.approvals_reviewer = approvals_reviewer;
         }
@@ -309,6 +319,8 @@ impl SessionConfiguration {
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) current_date: Option<String>,
+    pub(crate) timezone: Option<String>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,

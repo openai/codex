@@ -2581,6 +2581,8 @@ async fn set_rate_limits_retains_previous_credits() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -2685,6 +2687,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3126,6 +3130,22 @@ async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_
     );
 }
 
+#[tokio::test]
+async fn session_configuration_apply_updates_environment_context_overrides() {
+    let session_configuration = make_session_configuration_for_tests().await;
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            current_date: Some("2026-05-13".to_string()),
+            timezone: Some("America/Los_Angeles".to_string()),
+            ..Default::default()
+        })
+        .expect("time context update should succeed");
+
+    assert_eq!(updated.current_date.as_deref(), Some("2026-05-13"));
+    assert_eq!(updated.timezone.as_deref(), Some("America/Los_Angeles"));
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3162,6 +3182,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3688,6 +3710,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3797,6 +3821,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4026,6 +4052,8 @@ async fn make_session_with_config_and_rx(
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4129,6 +4157,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -4776,6 +4806,8 @@ fn op_kind_distinguishes_turn_ops() {
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             cwd: None,
+            current_date: None,
+            timezone: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
@@ -5516,6 +5548,8 @@ where
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        current_date: None,
+        timezone: None,
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,
@@ -6002,6 +6036,63 @@ async fn build_settings_update_items_omits_environment_item_when_disabled() {
             .any(|text| text.contains("<environment_context>")),
         "did not expect environment context updates when disabled, got {user_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_emits_developer_item_for_developer_instruction_changes() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    previous_context.developer_instructions = Some("old developer guidance".to_string());
+    let previous_context = Arc::new(previous_context);
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.developer_instructions = Some("new developer guidance".to_string());
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("new developer guidance")),
+        "expected changed developer instructions to be appended, got {developer_texts:?}"
+    );
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("old developer guidance")),
+        "did not expect previous developer instructions to be re-appended, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_omits_unchanged_developer_instruction_item() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    previous_context.developer_instructions = Some("stable developer guidance".to_string());
+    let previous_context = Arc::new(previous_context);
+    let current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    assert!(developer_input_texts(&update_items).is_empty());
 }
 
 #[tokio::test]

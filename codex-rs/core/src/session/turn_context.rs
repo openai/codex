@@ -536,7 +536,15 @@ impl Session {
             session_configuration.windows_sandbox_level,
             network.is_some(),
         ));
-        let (current_date, timezone) = local_time_context();
+        let (local_current_date, local_timezone) = local_time_context();
+        let current_date = session_configuration
+            .current_date
+            .clone()
+            .unwrap_or(local_current_date);
+        let timezone = session_configuration
+            .timezone
+            .clone()
+            .unwrap_or(local_timezone);
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),

@@ -462,6 +462,14 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
 
+        /// Updated current date shown in the model-visible environment context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_date: Option<String>,
+
+        /// Updated timezone shown in the model-visible environment context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timezone: Option<String>,
+
         /// Updated command approval policy.
         #[serde(skip_serializing_if = "Option::is_none")]
         approval_policy: Option<AskForApproval>,

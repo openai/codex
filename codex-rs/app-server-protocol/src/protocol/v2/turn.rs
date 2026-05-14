@@ -64,6 +64,14 @@ pub struct TurnStartParams {
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Override the current date shown in the model-visible environment context
+    /// for this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub current_date: Option<String>,
+    /// Override the timezone shown in the model-visible environment context for
+    /// this turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub timezone: Option<String>,
     /// Override the approval policy for this turn and subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
