@@ -4356,7 +4356,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
-        credentialed_routes: crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
+        credentialed_routes: RwLock::new(
+            crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
+        ),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
@@ -6213,7 +6215,9 @@ where
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
         network_proxy: None,
-        credentialed_routes: crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
+        credentialed_routes: RwLock::new(
+            crate::credentialed_routes::CredentialedRoutesSessionConfig::default(),
+        ),
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,

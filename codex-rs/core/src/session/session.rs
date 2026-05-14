@@ -926,7 +926,7 @@ impl Session {
                 thread_extension_data,
                 agent_control,
                 network_proxy,
-                credentialed_routes,
+                credentialed_routes: RwLock::new(credentialed_routes),
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),

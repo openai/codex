@@ -763,6 +763,7 @@ impl Session {
             mcp_connection_manager
                 .set_permission_profile(session_configuration.permission_profile());
         }
+        self.refresh_credentialed_routes_for_managed_proxy().await;
 
         let model_info = self
             .services

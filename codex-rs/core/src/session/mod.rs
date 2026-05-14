@@ -1031,7 +1031,8 @@ impl Session {
                 return;
             }
         };
-        let spec = match spec.with_credentialed_routes(&self.services.credentialed_routes) {
+        let credentialed_routes = self.services.credentialed_routes.read().await.clone();
+        let spec = match spec.with_credentialed_routes(&credentialed_routes) {
             Ok(spec) => spec,
             Err(err) => {
                 warn!(
@@ -1053,6 +1054,63 @@ impl Session {
         if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
             warn!("failed to refresh managed network proxy for sandbox change: {err}");
         }
+    }
+
+    async fn refresh_credentialed_routes_for_managed_proxy(&self) {
+        let Some(started_proxy) = self.services.network_proxy.as_ref() else {
+            return;
+        };
+        let (chatgpt_base_url, permission_profile, spec) = {
+            let state = self.state.lock().await;
+            let session_configuration = &state.session_configuration;
+            let Some(spec) = session_configuration
+                .original_config_do_not_use
+                .permissions
+                .network
+                .as_ref()
+            else {
+                return;
+            };
+            (
+                session_configuration
+                    .original_config_do_not_use
+                    .chatgpt_base_url
+                    .clone(),
+                session_configuration.permission_profile(),
+                spec.clone(),
+            )
+        };
+        let auth = self.services.auth_manager.auth().await;
+        let credentialed_routes =
+            crate::credentialed_routes::load_for_session(&chatgpt_base_url, auth.as_ref()).await;
+        let previous_routes = self.services.credentialed_routes.read().await.clone();
+        if credentialed_routes.routes == previous_routes.routes
+            && credentialed_routes.proxy_url == previous_routes.proxy_url
+        {
+            return;
+        }
+
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            error!("managed network proxy refresh semaphore closed");
+            return;
+        };
+        let current_exec_policy = self.services.exec_policy.current();
+        let spec = match spec
+            .recompute_for_permission_profile(&permission_profile)
+            .and_then(|spec| spec.with_credentialed_routes(&credentialed_routes))
+            .and_then(|spec| spec.with_exec_policy_network_rules(current_exec_policy.as_ref()))
+        {
+            Ok(spec) => spec,
+            Err(err) => {
+                warn!("failed to rebuild managed network proxy for credentialed routes: {err}");
+                return;
+            }
+        };
+        if let Err(err) = spec.apply_to_started_proxy(started_proxy).await {
+            warn!("failed to refresh managed network proxy for credentialed routes: {err}");
+            return;
+        }
+        *self.services.credentialed_routes.write().await = credentialed_routes;
     }
 
     #[cfg(test)]
@@ -1493,6 +1551,8 @@ impl Session {
         ) {
             self.services.hooks.store(Arc::new(hooks));
         }
+        drop(state);
+        self.refresh_credentialed_routes_for_managed_proxy().await;
     }
 
     fn emit_config_changed_contributors(
@@ -2715,8 +2775,12 @@ impl Session {
                 .render(),
             );
         }
-        if let Some(credentialed_routes_instructions) =
-            self.services.credentialed_routes.developer_instructions()
+        if let Some(credentialed_routes_instructions) = self
+            .services
+            .credentialed_routes
+            .read()
+            .await
+            .developer_instructions()
         {
             developer_sections.push(credentialed_routes_instructions);
         }

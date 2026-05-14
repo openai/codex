@@ -66,7 +66,8 @@ pub(crate) struct SessionServices {
     pub(crate) thread_extension_data: ExtensionData,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
-    pub(crate) credentialed_routes: crate::credentialed_routes::CredentialedRoutesSessionConfig,
+    pub(crate) credentialed_routes:
+        RwLock<crate::credentialed_routes::CredentialedRoutesSessionConfig>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,
