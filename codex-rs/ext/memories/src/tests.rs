@@ -290,14 +290,17 @@ async fn search_tool_rejects_legacy_single_query() {
         .to_string(),
     };
 
-    let err = tool
+    let result = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             payload,
         })
-        .await
-        .expect_err("legacy query field should be rejected");
+        .await;
+    let err = match result {
+        Ok(_) => panic!("legacy query field should be rejected"),
+        Err(err) => err,
+    };
 
     assert!(err.to_string().contains("unknown field"));
     assert!(err.to_string().contains("query"));
