@@ -1214,7 +1214,7 @@
     },
     "McpServerOAuthConfig": {
       "additionalProperties": false,
-      "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
+      "description": "OAuth settings used when Codex launches an MCP OAuth flow.",
       "properties": {
         "client_id": {
           "description": "Explicit OAuth client identifier to present during authorization and token exchange.",

@@ -114,79 +114,128 @@ impl AsRef<str> for McpServerEnvVar {
     }
 }
 
-/// OAuth client settings used when Codex launches an MCP OAuth flow.
+/// OAuth settings used when Codex launches an MCP OAuth flow.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct McpServerOAuthConfig {
     /// Explicit OAuth client identifier to present during authorization and token exchange.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// OAuth resource parameter to include during MCP login (RFC 8707).
+    #[serde(skip)]
+    pub resource: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
-    #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
     /// Experimental environment selector for where Codex should start this MCP server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental_environment: Option<String>,
 
     /// When `false`, Codex skips initializing this MCP server.
-    #[serde(default = "default_enabled")]
     pub enabled: bool,
 
     /// When `true`, `codex exec` exits with an error if this MCP server fails to initialize.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
 
     /// When `true`, every tool from this server is advertised as safe for parallel tool calls.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_parallel_tool_calls: bool,
 
     /// Reason this server was disabled after applying requirements.
-    #[serde(skip)]
     pub disabled_reason: Option<McpServerDisabledReason>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
+    pub startup_timeout_sec: Option<Duration>,
+
+    /// Default timeout for MCP tool calls initiated via this server.
+    pub tool_timeout_sec: Option<Duration>,
+
+    /// Approval mode for tools in this server unless a tool override exists.
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
+    /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
+    pub disabled_tools: Option<Vec<String>>,
+
+    /// Optional OAuth scopes to request during MCP login.
+    pub scopes: Option<Vec<String>>,
+
+    /// Optional OAuth settings for MCP login.
+    pub oauth: Option<McpServerOAuthConfig>,
+
+    /// Per-tool approval settings keyed by tool name.
+    pub tools: HashMap<String, McpServerToolConfig>,
+}
+
+/// Serialize the cooked model back through the public config shape.
+///
+/// `oauth_resource` stays top-level on the wire even though runtime code keeps
+/// it beside the other OAuth settings in [`McpServerOAuthConfig`].
+#[derive(Serialize)]
+struct SerializableMcpServerConfig {
+    #[serde(flatten)]
+    transport: McpServerTransportConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    experimental_environment: Option<String>,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    required: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    supports_parallel_tool_calls: bool,
     #[serde(
         default,
         with = "option_duration_secs",
         skip_serializing_if = "Option::is_none"
     )]
-    pub startup_timeout_sec: Option<Duration>,
-
-    /// Default timeout for MCP tool calls initiated via this server.
+    startup_timeout_sec: Option<Duration>,
     #[serde(default, with = "option_duration_secs")]
-    pub tool_timeout_sec: Option<Duration>,
-
-    /// Approval mode for tools in this server unless a tool override exists.
+    tool_timeout_sec: Option<Duration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_tools_approval_mode: Option<AppToolApproval>,
-
-    /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
+    default_tools_approval_mode: Option<AppToolApproval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enabled_tools: Option<Vec<String>>,
-
-    /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
+    enabled_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disabled_tools: Option<Vec<String>>,
-
-    /// Optional OAuth scopes to request during MCP login.
+    disabled_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scopes: Option<Vec<String>>,
-
-    /// Optional OAuth client settings for MCP login.
+    scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth: Option<McpServerOAuthConfig>,
-
-    /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
+    oauth: Option<McpServerOAuthConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth_resource: Option<String>,
-
-    /// Per-tool approval settings keyed by tool name.
+    oauth_resource: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tools: HashMap<String, McpServerToolConfig>,
+    tools: HashMap<String, McpServerToolConfig>,
+}
+
+impl Serialize for McpServerConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        SerializableMcpServerConfig {
+            transport: self.transport.clone(),
+            experimental_environment: self.experimental_environment.clone(),
+            enabled: self.enabled,
+            required: self.required,
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            startup_timeout_sec: self.startup_timeout_sec,
+            tool_timeout_sec: self.tool_timeout_sec,
+            default_tools_approval_mode: self.default_tools_approval_mode,
+            enabled_tools: self.enabled_tools.clone(),
+            disabled_tools: self.disabled_tools.clone(),
+            scopes: self.scopes.clone(),
+            oauth: self
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.as_ref().map(|_| oauth.clone())),
+            oauth_resource: self.oauth_resource().map(str::to_string),
+            tools: self.tools.clone(),
+        }
+        .serialize(serializer)
+    }
 }
 
 impl McpServerConfig {
@@ -194,6 +243,12 @@ impl McpServerConfig {
         self.oauth
             .as_ref()
             .and_then(|oauth| oauth.client_id.as_deref())
+    }
+
+    pub fn oauth_resource(&self) -> Option<&str> {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.resource.as_deref())
     }
 }
 
@@ -350,6 +405,19 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             return Err("invalid transport".to_string());
         };
 
+        let oauth = match (oauth, oauth_resource) {
+            (Some(mut oauth), Some(resource)) => {
+                oauth.resource = Some(resource);
+                Some(oauth)
+            }
+            (Some(oauth), None) => Some(oauth),
+            (None, Some(resource)) => Some(McpServerOAuthConfig {
+                client_id: None,
+                resource: Some(resource),
+            }),
+            (None, None) => None,
+        };
+
         Ok(Self {
             transport,
             experimental_environment,
@@ -364,7 +432,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             disabled_tools,
             scopes,
             oauth,
-            oauth_resource,
             tools: tools.unwrap_or_default(),
         })
     }

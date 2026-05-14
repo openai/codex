@@ -245,7 +245,6 @@ async fn run_code_mode_turn_with_rmcp_config(
                 disabled_tools: None,
                 scopes: None,
                 oauth: None,
-                oauth_resource: None,
                 tools: HashMap::new(),
             },
         );

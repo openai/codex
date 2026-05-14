@@ -35,7 +35,6 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
             disabled_tools: None,
             scopes: None,
             oauth: None,
-            oauth_resource: None,
             tools: HashMap::from([
                 (
                     "search".to_string(),
@@ -114,8 +113,8 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                resource: None,
             }),
-            oauth_resource: None,
             tools: HashMap::new(),
         },
     )]);
