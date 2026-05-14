@@ -72,6 +72,61 @@ async fn list_tool_suggest_discoverable_plugins_returns_microsoft_curated_plugin
 }
 
 #[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_returns_browser_use_from_bundled_marketplace() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let marketplace_name = OPENAI_BUNDLED_MARKETPLACE_NAME;
+    let marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{marketplace_name}"));
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-bundled",
+  "plugins": [
+    {
+      "name": "browser-use",
+      "source": {
+        "source": "local",
+        "path": "./plugins/browser-use"
+      }
+    }
+  ]
+}
+"#,
+    );
+    write_curated_plugin(&marketplace_root, "browser-use");
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.openai-bundled]
+source_type = "git"
+source = "/tmp/openai-bundled"
+"#,
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        discoverable_plugins,
+        vec![DiscoverablePluginInfo {
+            id: "browser-use@openai-bundled".to_string(),
+            name: "browser-use".to_string(),
+            description: Some(
+                "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: vec!["connector_calendar".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_deduplicates_allowlisted_configured_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let plugin_id = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST

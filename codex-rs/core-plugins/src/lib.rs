@@ -33,6 +33,7 @@ pub const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "outlook-calendar@openai-curated",
     "linear@openai-curated",
     "figma@openai-curated",
+    "browser-use@openai-bundled",
     "chrome@openai-bundled",
     "computer-use@openai-bundled",
 ];
