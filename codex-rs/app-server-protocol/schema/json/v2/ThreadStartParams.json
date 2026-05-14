@@ -231,6 +231,13 @@
         "null"
       ]
     },
+    "currentDate": {
+      "description": "Override the current date shown in the model-visible environment context for this thread and subsequent turns.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "cwd": {
       "type": [
         "string",
@@ -313,6 +320,13 @@
         }
       ],
       "description": "Optional client-supplied analytics source classification for this thread."
+    },
+    "timezone": {
+      "description": "Override the timezone shown in the model-visible environment context for this thread and subsequent turns.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ThreadStartParams",

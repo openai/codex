@@ -1194,6 +1194,8 @@ fn thread_start_params_from_config(
         sandbox,
         permissions,
         config: config_request_overrides_from_config(config),
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         ephemeral: Some(config.ephemeral),
         session_start_source,
         thread_source: Some(ThreadSource::User),
@@ -1228,6 +1230,8 @@ fn thread_resume_params_from_config(
         sandbox,
         permissions,
         config: config_request_overrides_from_config(&config),
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         persist_extended_history: false,
         ..ThreadResumeParams::default()
     }

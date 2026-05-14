@@ -13,7 +13,15 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, sessionStartSource?: ThreadStartSource | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
+ * Override the current date shown in the model-visible environment
+ * context for this thread and subsequent turns.
+ */
+currentDate?: string | null, /**
+ * Override the timezone shown in the model-visible environment context
+ * for this thread and subsequent turns.
+ */
+timezone?: string | null, personality?: Personality | null, ephemeral?: boolean | null, sessionStartSource?: ThreadStartSource | null, /**
  * Optional client-supplied analytics source classification for this thread.
  */
 threadSource?: ThreadSource | null};

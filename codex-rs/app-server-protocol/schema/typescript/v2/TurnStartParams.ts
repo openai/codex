@@ -14,6 +14,14 @@ export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**
+ * Override the current date shown in the model-visible environment context
+ * for this turn and subsequent turns.
+ */
+currentDate?: string | null, /**
+ * Override the timezone shown in the model-visible environment context for
+ * this turn and subsequent turns.
+ */
+timezone?: string | null, /**
  * Override the approval policy for this turn and subsequent turns.
  */
 approvalPolicy?: AskForApproval | null, /**

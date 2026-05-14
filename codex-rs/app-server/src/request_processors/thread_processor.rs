@@ -806,6 +806,8 @@ impl ThreadRequestProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -837,6 +839,8 @@ impl ThreadRequestProcessor {
             permissions,
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
@@ -1201,6 +1205,8 @@ impl ThreadRequestProcessor {
         permissions: Option<PermissionProfileSelectionParams>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
+        current_date: Option<String>,
+        timezone: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
         let mut overrides = ConfigOverrides {
@@ -1217,6 +1223,8 @@ impl ThreadRequestProcessor {
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             personality,
             ..Default::default()
         };
@@ -2369,6 +2377,8 @@ impl ThreadRequestProcessor {
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             personality,
             exclude_turns,
             persist_extended_history: _persist_extended_history,
@@ -2403,6 +2413,8 @@ impl ThreadRequestProcessor {
             permissions,
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             personality,
         );
         self.load_and_apply_persisted_resume_metadata(
@@ -3063,6 +3075,8 @@ impl ThreadRequestProcessor {
             permissions,
             base_instructions,
             developer_instructions,
+            /*current_date*/ None,
+            /*timezone*/ None,
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);

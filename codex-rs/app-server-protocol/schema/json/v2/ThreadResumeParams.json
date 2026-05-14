@@ -1048,6 +1048,13 @@
         "null"
       ]
     },
+    "currentDate": {
+      "description": "Override the current date shown in the model-visible environment context for this thread and subsequent turns.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "cwd": {
       "type": [
         "string",
@@ -1101,6 +1108,13 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "timezone": {
+      "description": "Override the timezone shown in the model-visible environment context for this thread and subsequent turns.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

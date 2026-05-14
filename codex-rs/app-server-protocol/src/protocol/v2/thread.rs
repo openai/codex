@@ -130,6 +130,14 @@ pub struct ThreadStartParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    /// Override the current date shown in the model-visible environment
+    /// context for this thread and subsequent turns.
+    #[ts(optional = nullable)]
+    pub current_date: Option<String>,
+    /// Override the timezone shown in the model-visible environment context
+    /// for this thread and subsequent turns.
+    #[ts(optional = nullable)]
+    pub timezone: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
@@ -285,6 +293,14 @@ pub struct ThreadResumeParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    /// Override the current date shown in the model-visible environment
+    /// context for this thread and subsequent turns.
+    #[ts(optional = nullable)]
+    pub current_date: Option<String>,
+    /// Override the timezone shown in the model-visible environment context
+    /// for this thread and subsequent turns.
+    #[ts(optional = nullable)]
+    pub timezone: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// When true, return only thread metadata and live-resume state without

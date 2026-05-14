@@ -449,6 +449,14 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
+    /// Optional current date override shown in the model-visible environment
+    /// context for this session.
+    pub current_date: Option<String>,
+
+    /// Optional timezone override shown in the model-visible environment
+    /// context for this session.
+    pub timezone: Option<String>,
+
     /// Guardian-specific policy config override from requirements.toml or config.toml.
     /// This is inserted into the fixed guardian prompt template under the
     /// `# Policy Configuration` section rather than replacing the whole
@@ -1867,6 +1875,8 @@ pub struct ConfigOverrides {
     pub zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub current_date: Option<String>,
+    pub timezone: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
@@ -2142,6 +2152,8 @@ impl Config {
             zsh_path: zsh_path_override,
             base_instructions,
             developer_instructions,
+            current_date,
+            timezone,
             personality,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
@@ -2999,6 +3011,8 @@ impl Config {
             base_instructions,
             personality,
             developer_instructions,
+            current_date,
+            timezone,
             compact_prompt,
             commit_attribution,
             include_permissions_instructions,

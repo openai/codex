@@ -2581,8 +2581,8 @@ async fn set_rate_limits_retains_previous_credits() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        current_date: None,
-        timezone: None,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -2687,8 +2687,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        current_date: None,
-        timezone: None,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3146,6 +3146,25 @@ async fn session_configuration_apply_updates_environment_context_overrides() {
     assert_eq!(updated.timezone.as_deref(), Some("America/Los_Angeles"));
 }
 
+#[tokio::test]
+async fn turn_context_uses_initial_environment_context_overrides() {
+    let (_session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.current_date = Some("2026-05-13".to_string());
+            config.timezone = Some("America/Los_Angeles".to_string());
+        },
+    )
+    .await;
+
+    assert_eq!(turn_context.current_date.as_deref(), Some("2026-05-13"));
+    assert_eq!(
+        turn_context.timezone.as_deref(),
+        Some("America/Los_Angeles")
+    );
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3182,8 +3201,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        current_date: None,
-        timezone: None,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3710,8 +3729,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        current_date: None,
-        timezone: None,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: Vec::new(),
@@ -3821,8 +3840,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        current_date: None,
-        timezone: None,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         environments: default_environments,

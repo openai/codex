@@ -16815,6 +16815,13 @@
               "null"
             ]
           },
+          "currentDate": {
+            "description": "Override the current date shown in the model-visible environment context for this thread and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "type": [
               "string",
@@ -16868,6 +16875,13 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "timezone": {
+            "description": "Override the timezone shown in the model-visible environment context for this thread and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -17097,6 +17111,13 @@
               "null"
             ]
           },
+          "currentDate": {
+            "description": "Override the current date shown in the model-visible environment context for this thread and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "type": [
               "string",
@@ -17179,6 +17200,13 @@
               }
             ],
             "description": "Optional client-supplied analytics source classification for this thread."
+          },
+          "timezone": {
+            "description": "Override the timezone shown in the model-visible environment context for this thread and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "ThreadStartParams",
@@ -17846,6 +17874,13 @@
             ],
             "description": "Override where approval requests are routed for review on this turn and subsequent turns."
           },
+          "currentDate": {
+            "description": "Override the current date shown in the model-visible environment context for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -17922,6 +17957,13 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "timezone": {
+            "description": "Override the timezone shown in the model-visible environment context for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

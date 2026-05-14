@@ -951,6 +951,8 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         sandbox: sandbox.flatten(),
         permissions,
         config: config_request_overrides_from_config(config),
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
     }
@@ -973,6 +975,8 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
+        current_date: config.current_date.clone(),
+        timezone: config.timezone.clone(),
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
     }

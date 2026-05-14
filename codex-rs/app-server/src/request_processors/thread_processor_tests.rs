@@ -637,6 +637,8 @@ mod thread_processor_behavior_tests {
             config: None,
             base_instructions: None,
             developer_instructions: None,
+            current_date: None,
+            timezone: None,
             personality: None,
             exclude_turns: false,
             persist_extended_history: false,
