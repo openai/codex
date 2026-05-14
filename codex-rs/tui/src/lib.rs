@@ -1047,7 +1047,7 @@ pub async fn run_main(
 
     if let Some(warning) = add_dir_warning_message(
         &cli.add_dir,
-        &config.permissions.permission_profile(),
+        &config.permissions.effective_permission_profile(),
         config.cwd.as_path(),
     ) {
         #[allow(clippy::print_stderr)]

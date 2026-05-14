@@ -901,8 +901,12 @@ fn permissions_display(config: &Config) -> String {
         return active_permission_profile.id.clone();
     }
 
-    let permission_profile = config.permissions.permission_profile();
-    let summary = summarize_permission_profile(&permission_profile, config.cwd.as_path());
+    let permission_profile = config.permissions.effective_permission_profile();
+    let summary = summarize_permission_profile(
+        &permission_profile,
+        &config.cwd,
+        config.permissions.workspace_roots(),
+    );
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")
     {
