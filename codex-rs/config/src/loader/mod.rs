@@ -1,6 +1,8 @@
 mod layer_io;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(test)]
+mod tests;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
@@ -211,19 +213,33 @@ pub async fn load_config_layers_state(
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
     // contain overrides.
-    let base_user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    layers.push(
-        load_user_config_layer(
-            fs,
-            &base_user_file,
-            /*profile*/ None,
-            ignore_user_config,
-            strict_config,
-        )
-        .await?,
-    );
-
     let active_user_file = overrides.user_config_path(codex_home)?;
+    let base_user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
+    let base_user_layer = load_user_config_layer(
+        fs,
+        &base_user_file,
+        /*profile*/ None,
+        ignore_user_config,
+        strict_config,
+    )
+    .await?;
+    if active_user_profile.is_some()
+        && base_user_layer
+            .config
+            .as_table()
+            .is_some_and(|config| config.contains_key("profiles"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "--profile-v2 cannot be used while {} contains legacy `[profiles]` config; move those profile settings into a profile-v2 file such as {} or remove `[profiles]`",
+                base_user_file.as_path().display(),
+                active_user_file.as_path().display()
+            ),
+        ));
+    }
+    layers.push(base_user_layer);
+
     if active_user_file != base_user_file {
         layers.push(
             load_user_config_layer(
